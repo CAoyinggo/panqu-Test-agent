@@ -1,0 +1,29 @@
+{
+  "default_env": "test",
+  "session_cookies_path": "/Users/mac/agents/test-Configuration/session-cookies.json",
+  "environments": {
+    "test": {
+      "base_url": "https://test.panqu.com/",
+      "submit_url": "aivideo/videonew/add",
+      "status_url": "aivideo/v2/task_status/apiGetStatus",
+      "detail_url": "aivideo/v2/video/getTaskDetail",
+      "billing_url": "billing/personal",
+      "csrf_page": "aivideo/v2/videohub/pipeline"
+    },
+    "preonline": {
+      "base_url": "https://preonline.panqu.com/",
+      "submit_url": "aivideo/videonew/add",
+      "status_url": "aivideo/v2/task_status/apiGetStatus",
+      "detail_url": "aivideo/v2/video/getTaskDetail",
+      "billing_url": "billing/personal",
+      "csrf_page": "aivideo/v2/videohub/pipeline"
+    }
+  },
+  "poll_interval_ms": 3000,
+  "status_text": {
+    "0": "待处理",
+    "1": "生成中",
+    "2": "已完成",
+    "3": "失败"
+  }
+}

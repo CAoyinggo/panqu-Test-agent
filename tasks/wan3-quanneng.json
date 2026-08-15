@@ -1,0 +1,31 @@
+{
+  "name": "Wan3.0全能参考-视频音频",
+  "scene": "全能参考",
+  "scene_detail": "Wan 3.0 全能参考（task_type=105）带参考视频 ref_videos 与参考音频 ref_audios，验证多素材上传落库",
+  "type": 6,
+  "model_id": "84",
+  "model_name": "Wan 3.0",
+  "task_type": "105",
+  "task_id": null,
+  "selmodelsId": 84,
+  "extra": {
+    "selmodels": "84-Wan 3.0",
+    "selmodelsId": "84",
+    "selmodelsName": "Wan 3.0",
+    "task_type": "105",
+    "workflow_type": "qntk",
+    "cueword": "参考视频中的人物动作与舞蹈节奏保持，背景音乐融合钢琴旋律，风格统一",
+    "duration": "4",
+    "video_resolution": "720p",
+    "video_aspect_ratio": "9:16",
+    "ref_videos": ["video/女团_副本.mp4"],
+    "ref_audios": ["audio/01_钢琴.wav"]
+  },
+  "expected_points": 240,
+  "manual_cases": [
+    {
+      "id": "WAN3-QN-UI-01",
+      "steps": "浏览器视频制作页 Wan 3.0 全能参考 Tab，上传参考视频与音频并生成，核对视频/音频预览与生成结果"
+    }
+  ]
+}

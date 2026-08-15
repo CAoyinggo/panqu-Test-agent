@@ -1,0 +1,33 @@
+{
+  "_note": "示例任务定义（通用格式）。所有任务统一使用本结构：name/scene/type/model_id/task_type 决定执行逻辑，extra 为提交参数，task_id 存在则复用（不重复扣费），manual_cases 为浏览器人工用例。",
+  "name": "Wan3.0文生视频-夕阳城市",
+  "scene": "文生视频",
+  "scene_detail": "全能参考（task_type=105）",
+  "type": 6,
+  "model_id": 84,
+  "model_name": "Wan 3.0",
+  "task_type": 105,
+  "task_id": 238585,
+  "selmodelsId": 84,
+  "extra": {
+    "selmodels": "84-Wan 3.0",
+    "selmodelsId": "84",
+    "selmodelsName": "Wan 3.0",
+    "task_type": "105",
+    "cueword": "夕阳下的城市天际线，无人机航拍，金色光线洒在建筑上，缓缓推进",
+    "duration": "4",
+    "video_resolution": "720p",
+    "video_aspect_ratio": "9:16"
+  },
+  "expected_points": 240,
+  "manual_cases": [
+    {
+      "id": "WAN3-UI-01",
+      "steps": "进入视频制作页 → 任务列表 → 找到本任务 → 若已生成可播放/下载，若失败查看错误提示"
+    },
+    {
+      "id": "WAN3-UI-02",
+      "steps": "打开个人账单页 → 核对 Wan 3.0 消费/回退流水展示"
+    }
+  ]
+}

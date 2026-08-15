@@ -1,0 +1,35 @@
+/* eslint-disable */
+// 由 scripts/migrate-json-to-ts.ts 自动生成（幂等；源 JSON 见 tasks/ 对应文件）
+// @ts-ignore // 若因未导入类型导致报错，可取消本行注释（按需启用）
+import { defineCase } from '../define.js';
+
+export default defineCase({
+  name: 'Wan3.0图生视频-海岸参考图',
+  scene: '图生视频',
+  scene_detail: 'Wan 3.0 全能参考（task_type=105）带参考图片 ref_images，验证素材上传与落库',
+  type: 6,
+  model_id: '84',
+  model_name: 'Wan 3.0',
+  task_type: '105',
+  task_id: null,
+  selmodelsId: 84,
+  extra: {
+    selmodels: '84-Wan 3.0',
+    selmodelsId: '84',
+    selmodelsName: 'Wan 3.0',
+    task_type: '105',
+    workflow_type: 'qntk',
+    cueword: '让照片中的人物缓缓转头微笑，海浪在背景轻轻涌动，自然真实',
+    duration: '4',
+    video_resolution: '720p',
+    video_aspect_ratio: '9:16',
+    ref_images: ['photo/微信图片_20260810145218_6561_473_副本.jpg']
+  },
+  expected_points: 240,
+  manual_cases: [
+    {
+      id: 'WAN3-TS-UI-01',
+      steps: '浏览器视频制作页 Wan 3.0 图生视频 Tab，上传参考图并生成，核对图片预览与生成结果一致性'
+    }
+  ]
+});

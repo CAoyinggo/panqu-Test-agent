@@ -1,0 +1,22 @@
+{
+  "name": "test-flow",
+  "version": "3.0.0",
+  "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
+  "type": "module",
+  "main": "dist/bin/run-test.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "start": "node dist/bin/run-test.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "migrate": "node scripts/migrate-json-to-ts.ts",
+    "test": "node --test dist/**/*.test.js",
+    "test:all": "npm run build && node scripts/verify-migration.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
+  }
+}

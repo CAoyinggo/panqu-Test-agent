@@ -1,0 +1,36 @@
+/* eslint-disable */
+// 由 scripts/migrate-json-to-ts.ts 自动生成（幂等；源 JSON 见 tasks/ 对应文件）
+// @ts-ignore // 若因未导入类型导致报错，可取消本行注释（按需启用）
+import { defineCase } from '../define.js';
+
+export default defineCase({
+  name: 'Wan3.0首尾帧-日出日落',
+  scene: '首尾帧',
+  scene_detail: 'Wan 3.0 首尾帧（task_type=106，workflow_type=swzsp），带 first_frame/last_frame，验证首尾帧提交链路',
+  type: 6,
+  model_id: '84',
+  model_name: 'Wan 3.0',
+  task_type: '106',
+  task_id: null,
+  selmodelsId: 84,
+  extra: {
+    selmodels: '84-Wan 3.0',
+    selmodelsId: '84',
+    selmodelsName: 'Wan 3.0',
+    task_type: '106',
+    workflow_type: 'swzsp',
+    cueword: '从日出到日落的自然过渡，云层流动，光线柔和变化',
+    duration: '4',
+    video_resolution: '720p',
+    video_aspect_ratio: '9:16',
+    first_frame: 'photo/微信图片_20260810145218_6561_473_副本.jpg',
+    last_frame: 'photo/微信图片_20260810145355_6572_473_副本.jpg'
+  },
+  expected_points: 240,
+  manual_cases: [
+    {
+      id: 'WAN3-SW-UI-01',
+      steps: '浏览器视频制作页 Wan 3.0 首尾帧 Tab，上传首帧与尾帧图片并生成，核对两帧图片展示与过渡效果'
+    }
+  ]
+});
