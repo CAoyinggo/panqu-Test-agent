@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v3.0（TypeScript 重构版）｜ 更新：2026-08-15 ｜ 维护：AI 测试智能体
+> 版本：v3.1（TypeScript 重构版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
 > 标准化、可一键执行的功能测试流程交付包。**所有 AI 功能测试任务强制按此流程执行**。
 > 本流程为**多模块通用框架**：视频生成、剧本分镜、账单、其他 AI 能力等模块均可接入（见 `docs/01-测试流程SOP.md` 的「新模块接入指引」）。
 
@@ -10,6 +10,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v3.1 | 2026-08-16 | 结构整理：旧 v2.0 JS 运行时（run-test.js / lib / config.json / examples）归档到 `scripts/_legacy/`；`scripts/` 顶层仅保留构建/迁移工具；docs 命令与路径统一指向新 CLI 入口 |
 | v3.0 | 2026-08-15 | TypeScript 重构：模块化分层 `src/`（core 引擎 / cases 用例 / assertions 断言 / reports 报告 / integrations 集成 / utils 工具 / plugins 场景 / config 配置）；插件式场景处理器 + 7 标准钩子 + 断言注册表；三格式报告（HTML/JSON/JUnit）；`--task` 支持文件或目录批量；渐进式迁移（旧 `scripts/` 保留） |
 | v2.0 | 2026-08-15 | 插件式重构：新增 `lib/scenes/` 场景处理器（video.js），run-test.js 通用化按 scene 路由；docs/05 模板通用化（去 Wan3.0 专属）；SOP 新增「新模块接入指引」；README 去 Wan3.0 化 |
 | v1.3 | 2026-08-15 | 优化去重：删除与 docs/05 模板完全重复的章节；合并 docs/02+03+04 为模板合集；代码层重构（素材函数迁入 assets.js、修复步骤编号、删除未用方法） |
@@ -31,23 +32,28 @@
 ```
 test-flow/
 ├── README.md                    # 本文件（流程说明）
-├── docs/
+├── docs/                        # 流程与模板文档
 │   ├── 01-测试流程SOP.md        # 完整流程规范（含「新模块接入指引」）
 │   ├── 02-模板合集.md           # 测试用例 / 数据需求清单 / 启动检查清单 三合一模板
+│   ├── 02-测试用例模板.md       # 测试用例模板（独立版）
+│   ├── 03-数据需求清单模板.md   # 数据需求清单模板
+│   ├── 04-新任务启动检查清单模板.md  # 新任务启动检查清单模板
 │   └── 05-项目说明模板.md       # 项目说明统一格式模板（通用）
 ├── src/                         # ★ TypeScript 源码（模块化分层）
 │   ├── core/                    # 核心引擎：types / engine / pipeline / hooks / scene-handler
-│   ├── cases/                   # 用例层：define / registry / loader + tasks/（TS 用例脚本）
+│   ├── cases/                   # 用例层：define / registry / loader
+│   │   └── tasks/               # TS 用例脚本（wan3-wensheng / tusheng / quanneng / shouwei）
 │   ├── assertions/              # 断言库：db-check / billing-check / isolation-check / account-check / impact
 │   ├── reports/                 # 报告器：html / json / junit + factory
-│   ├── integrations/            # 外部集成：http / billing / assets
+│   ├── integrations/            # 外部集成：http / billing / assets / isolation
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
 │   │   └── video.ts             # 视频场景处理器（文生/图生/全能参考/首尾帧）
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）
 │   └── utils/                   # 工具：logger / fs-utils / time
 ├── bin/run-test.ts              # CLI 入口（编译为 dist/bin/run-test.js）
-├── scripts/                     # 构建/迁移工具（copy-assets / migrate-json-to-ts / verify-migration）+ _legacy/（旧版 v2.0 JS 已归档）
-├── tasks/                       # JSON 任务定义（渐进迁移保留）
+├── scripts/                     # 构建/迁移工具（copy-assets / migrate-json-to-ts / verify-migration）
+│   └── _legacy/                 # 旧版 v2.0 JS 运行时归档（已停用，仅备查）
+├── tasks/                       # JSON 任务定义（迁移源，保留）
 │   ├── _template.json           # 新任务定义模板
 │   ├── wan3-wensheng.json       # Wan3.0 文生视频
 │   ├── wan3-tusheng.json        # Wan3.0 图生视频
@@ -126,10 +132,19 @@ node dist/bin/run-test.js --help
 ## 架构扩展点（新模块接入）
 
 1. **场景处理器**：新建 `src/plugins/scenes/<name>.ts`，实现 `SceneHandler`（`match/submit/detail/status/analyzeBilling`），在 `src/core/engine.ts` 的 `SCENES` 注册表登记。
-2. **用例定义**：JSON 放 `tasks/`，TS 脚本放 `src/cases/tasks/`（`defineCase` 包裹，编译期类型检查）。
+2. **用例定义**：JSON 放 `tasks/`（迁移源，见 `tasks/_template.json`），TS 脚本放 `src/cases/tasks/`（`defineCase` 包裹，编译期类型检查）。
 3. **钩子（Hook）**：7 标准钩子 `beforeAll/beforeScene/beforeStep/afterStep/afterScene/afterAll/beforeReport`，按需挂载自定义逻辑。
 4. **断言**：用 `registerAssertion(name, fn)` 注册自定义核验项。
 5. **报告器**：实现 `Reporter` 接口（`name/write`），在 `src/reports/factory.ts` 登记即可多格式输出。
+
+## 常用命令
+
+| 命令 | 说明 |
+|---|---|
+| `npm run build` | 编译 TS 到 `dist/` 并复制非 TS 资源（environments.json） |
+| `npm run test:all` | 编译 + 校验 JSON 源与 TS 用例一致性（离线，不扣积分） |
+| `npm run migrate -- [--force]` | 将 `tasks/*.json` 迁移为 `src/cases/tasks/*.ts`（幂等，已存在自动跳过） |
+| `node dist/bin/run-test.js --help` | 查看执行参数 |
 
 ## 项目说明格式规范
 
@@ -147,6 +162,9 @@ docs/ 文档索引：
 |---|---|
 | `01-测试流程SOP.md` | 完整流程规范 + 新模块接入指引，所有任务执行依据 |
 | `02-模板合集.md` | 测试用例 / 数据需求清单 / 启动检查清单三合一模板 |
+| `02-测试用例模板.md` | 单份测试用例模板 |
+| `03-数据需求清单模板.md` | 编写数据需求清单时参考 |
+| `04-新任务启动检查清单模板.md` | 新任务启动前输出检查清单时参考 |
 | `05-项目说明模板.md` | 编写交付包 `README-项目说明.md` 时参考（通用格式） |
 
 报告内容章节（脚本自动生成的 HTML 报告包含）：
