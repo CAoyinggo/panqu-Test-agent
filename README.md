@@ -2,7 +2,7 @@
 
 > 版本：v3.2（多功能模块化版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
 > 标准化、可一键执行的功能测试流程交付包。**所有 AI 功能测试任务强制按此流程执行**。
-> 本流程为**多模块通用框架**：视频生成、剧本分镜、账单、其他 AI 能力等模块均可接入（见 `docs/01-测试流程SOP.md` 的「新模块接入指引」）。
+> 本流程为**多业务、即插即用的测试智能体框架**：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入。当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
 
 流程：`[0 启动清单] → [1 需求输入] → [2 编写用例] → [3 代码核对] → [4 数据隔离分析] → [5 数据需求清单] → [6 脚本执行] → [7 输出报告]`
 
@@ -22,7 +22,7 @@
 
 1. **所有任务**（视频生成、剧本分镜、账单调整、模型接入、其他 AI 能力等）都必须走本流程，无例外。
 2. 每个新任务开始前，**必须先输出《新任务启动检查清单》并等你确认**，确认后才进入用例编写与执行。
-3. 任务定义放 `tasks/<任务名>.json`（JSON 格式，见 `tasks/_template.json`）或 `src/cases/<功能>/<任务名>.ts`（TS 脚本，类型安全，按功能分子文件夹，见 `src/cases/wan3/wensheng.ts`）。
+3. 任务定义放 `tasks/{功能}-{任务名}.json`（JSON 格式，见 `tasks/_template.json`）或 `src/cases/{功能}/{任务名}.ts`（TS 脚本，类型安全，按功能分子文件夹；示例见 `src/cases/wan3/wensheng.ts`）。
 4. **素材来源**：上传文件（图片/音频/视频）默认从测试素材库 `/Users/mac/agents/Test-panqu/` 取用；任务定义中用相对路径引用，脚本自动扫描并解析。
 5. **输出位置（强制）**：所有输出文件按 `output/<YYYY-MM-DD>/<功能名>/` 结构存放，执行脚本用 `--func <功能名>` 指定功能名并自动创建目录写入，禁止输出到其他位置。
 6. **项目说明格式**：所有功能交付包的 `README-项目说明.md` 必须按 `docs/05-项目说明模板.md`（v2.1，通用格式）编写。
@@ -42,8 +42,9 @@ test-flow/
 ├── src/                         # ★ TypeScript 源码（模块化分层）
 │   ├── core/                    # 核心引擎：types / engine / pipeline / hooks / scene-handler
 │   ├── cases/                   # 用例层：define / registry / loader（多功能模块化）
-│   │   ├── wan3/                # 功能模块：TS 用例脚本（wensheng / tusheng / quanneng / shouwei）
-│   │   └── (新功能)              # 新增功能在 src/cases/ 下新建子文件夹即可即插即用
+│   │   ├── {feature}/           # ★ 功能模块：每个子文件夹 = 一个独立业务功能（wan3 / user / order / payment ...）
+│   │   │   └── {任务名}.ts      # 功能内用例脚本（如 wan3 下：wensheng / tusheng / quanneng / shouwei）
+│   │   └── (新功能)              # 新增功能只需在 src/cases/ 下新建子文件夹即可即插即用
 │   ├── assertions/              # 断言库：db-check / billing-check / isolation-check / account-check / impact
 │   ├── reports/                 # 报告器：html / json / junit + factory
 │   ├── integrations/            # 外部集成：http / billing / assets / isolation
@@ -56,10 +57,7 @@ test-flow/
 │   └── _legacy/                 # 旧版 v2.0 JS 运行时归档（已停用，仅备查）
 ├── tasks/                       # JSON 任务定义（迁移源，保留）
 │   ├── _template.json           # 新任务定义模板
-│   ├── wan3-wensheng.json       # Wan3.0 文生视频
-│   ├── wan3-tusheng.json        # Wan3.0 图生视频
-│   ├── wan3-quanneng.json       # Wan3.0 全能参考
-│   └── wan3-shouwei.json        # Wan3.0 首尾帧
+│   └── {功能}-{任务名}.json     # 按「功能-任务名」命名，如 wan3-wensheng / user-login / order-create
 ├── dist/                        # tsc 编译产物（npm run build 生成，可独立运行）
 ├── package.json / tsconfig.json # 工程配置（ESM + NodeNext + strict）
 └── output/                      # 旧版报告目录（已停用；新报告输出到 /Users/mac/agents/output/<日期>/<功能名>/）
@@ -67,6 +65,8 @@ test-flow/
 
 测试素材库（固定）：
 `/Users/mac/agents/Test-panqu/`（`audio/` `photo/` `txt/` `video/`）
+
+> **功能模块约定**：`src/cases/` 下每个子文件夹 `{feature}/` 对应一个**独立业务功能**（如 `wan3` 视频生成、`user` 用户体系、`order` 订单、`payment` 支付），加载器自动递归扫描并识别，归档到 `output/<日期>/{功能名}/`。**新增功能只需新建一个子文件夹并放入用例脚本，无需改动任何框架代码**。
 
 ## 快速开始
 
@@ -78,13 +78,14 @@ npm run build
 
 # 1. 你提供需求 → 我输出《启动检查清单》+ 任务定义，你确认
 # 2. 一键执行（--task 支持：功能子目录 / 根目录全量 / 单文件）
-node dist/bin/run-test.js --task tasks/<任务名>.json --func <功能名>
-node dist/bin/run-test.js --task src/cases/wan3                     # 执行单个功能模块（自动归档到 wan3/）
-node dist/bin/run-test.js --task src/cases                           # 递归全量执行所有功能模块
+#    ⚠ 以下以 wan3 为例：如果您的功能名为 user，则将 wan3 替换为 user（命令同理）
+node dist/bin/run-test.js --task tasks/wan3-wensheng.json --func wan3      # 单文件执行（user 示例：--task tasks/user-login.json --func user）
+node dist/bin/run-test.js --task src/cases/wan3                            # 单功能模块执行（user 示例：--task src/cases/user）
+node dist/bin/run-test.js --task src/cases                                 # 递归全量执行所有功能模块
 
 # 3. 切换到 preonline 环境 / 多格式报告（可叠加）
-node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline --func <功能名>
-node dist/bin/run-test.js --task tasks/<任务名>.json --func <功能名> --reporter html,json,junit
+node dist/bin/run-test.js --task src/cases/wan3 --env=preonline --func wan3
+node dist/bin/run-test.js --task src/cases/wan3 --func wan3 --reporter html,json,junit
 
 # 4. 查看可用参数
 node dist/bin/run-test.js --help
@@ -94,7 +95,7 @@ node dist/bin/run-test.js --help
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
-| `--task` | 是 | 任务定义路径：功能子目录 `src/cases/wan3`（单功能）、根目录 `src/cases`（全量递归）、或单个文件（`.json` / TS 编译的 `.js`，向后兼容） |
+| `--task` | 是 | 任务定义路径：功能子目录 `src/cases/{功能}`（如 `src/cases/wan3`，单功能）、根目录 `src/cases`（全量递归）、或单个文件（`.json` / TS 编译的 `.js`，向后兼容） |
 | `--env` | 否 | 执行环境，默认 `test`，可选 `preonline` |
 | `--func` | 否 | 功能名称，用于归档目录 `output/<日期>/<功能名>/`（强制约定） |
 | `--reporter` | 否 | 报告格式，默认 `html`，可选 `html,json,junit`（逗号分隔多份） |
@@ -134,10 +135,20 @@ node dist/bin/run-test.js --help
 
 1. **场景处理器**：新建 `src/plugins/scenes/<name>.ts`，实现 `SceneHandler`（`match/submit/detail/status/analyzeBilling`），在 `src/core/engine.ts` 的 `SCENES` 注册表登记。
 2. **用例定义**：JSON 放 `tasks/`（迁移源，见 `tasks/_template.json`），TS 脚本放 `src/cases/<功能>/`（`defineCase` 包裹，编译期类型检查；每个子文件夹 = 一个功能模块，新增功能在 `src/cases/` 下新建子文件夹即可）。
-3. **迁移**：`node scripts/migrate-json-to-ts.ts` 按文件名前缀自动建子文件夹（如 `wan3-xxx.json` → `src/cases/wan3/xxx.ts`）。
+3. **迁移**：`node scripts/migrate-json-to-ts.ts` 按文件名前缀自动建子文件夹（如 `{功能}-xxx.json` → `src/cases/{功能}/xxx.ts`，例：`wan3-wensheng.json` → `src/cases/wan3/wensheng.ts`）。
 4. **钩子（Hook）**：7 标准钩子 `beforeAll/beforeScene/beforeStep/afterStep/afterScene/afterAll/beforeReport`，按需挂载自定义逻辑。
 5. **断言**：用 `registerAssertion(name, fn)` 注册自定义核验项。
 6. **报告器**：实现 `Reporter` 接口（`name/write`），在 `src/reports/factory.ts` 登记即可多格式输出。
+
+## 新增业务功能（三步即插即用）
+
+以新增 `user`（用户体系）功能为例：
+
+1. **建目录**：在 `src/cases/` 下新建 `user/` 子文件夹；
+2. **放用例**：在 `tasks/` 放入 `user-login.json` 后执行迁移 `node scripts/migrate-json-to-ts.ts`，自动生成 `src/cases/user/login.ts`（或手写 TS 用例）；
+3. **执行**：`npm run test:user`（等价于 `node dist/bin/run-test.js --task src/cases/user`），报告自动归档到 `output/<日期>/user/`。
+
+> 全程无需改动 loader / engine / 任何框架代码——框架按目录结构自动识别新功能。其余业务（`order`、`payment` 等）同理。
 
 ## 常用命令
 
@@ -145,7 +156,7 @@ node dist/bin/run-test.js --help
 |---|---|
 | `npm run build` | 编译 TS 到 `dist/` 并复制非 TS 资源（environments.json） |
 | `npm run test:all` | 编译 + 校验 JSON 源与 TS 用例一致性（离线，不扣积分） |
-| `npm run test:wan3` | 真机执行 wan3 功能全部用例（归档到 `output/<日期>/wan3/`） |
+| `npm run test:wan3` | 示例：真机执行 wan3 功能全部用例（归档到 `output/<日期>/wan3/`）。**如果您的功能名为 `user`，请替换为 `npm run test:user`**——每个功能对应一条 `test:<功能名>` 脚本 |
 | `npm run migrate -- [--force]` | 将 `tasks/*.json` 迁移为 `src/cases/<功能>/*.ts`（按前缀自动分目录，幂等） |
 | `node dist/bin/run-test.js --help` | 查看执行参数 |
 
