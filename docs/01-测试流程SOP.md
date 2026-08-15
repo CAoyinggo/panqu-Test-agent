@@ -2,7 +2,7 @@
 
 > 版本：v2.0 | 更新：2026-08-15 | 维护：AI测试智能体
 > **适用范围：所有 AI 功能测试任务强制执行**（视频生成、图生视频、全能参考、首尾帧、剧本分镜、账单调整、模型接入等）
-> 配套：`../scripts/run-test.js` 一键执行脚本（插件式，按 scene 分发）+ `docs/` 各模板 + `../tasks/` 任务定义
+> 配套：`../dist/bin/run-test.js` 一键执行脚本（编译后 CLI，插件式，按 scene 分发）+ `docs/` 各模板 + `../tasks/` 任务定义
 > **多模块通用框架**：新模块接入方法见第 11 节「新模块接入指引」。
 
 ---
@@ -159,9 +159,9 @@
 ### 7.1 一键执行
 
 ```bash
-cd /Users/mac/agents/test-flow/scripts
-node run-test.js --task ../tasks/<任务名>.json          # 默认 test 环境
-node run-test.js --task ../tasks/<任务名>.json --env=preonline  # 切换环境
+cd /Users/mac/agents/test-flow
+node dist/bin/run-test.js --task tasks/<任务名>.json          # 默认 test 环境
+node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline  # 切换环境
 ```
 
 ### 7.2 执行内容
@@ -177,12 +177,12 @@ node run-test.js --task ../tasks/<任务名>.json --env=preonline  # 切换环�
 
 ### 7.3 场景分发（插件式）
 
-任务定义中的 `scene` 字段决定执行逻辑。脚本内置**场景处理器注册表**（`scripts/lib/scenes/`），按 `scene` 匹配对应处理器：
+任务定义中的 `scene` 字段决定执行逻辑。引擎内置**场景处理器注册表**（`src/plugins/scenes/`），按 `scene` 匹配对应处理器：
 
 | 处理器 | 支持场景 | 位置 |
 |---|---|---|
-| video | 文生视频 / 图生视频 / 全能参考 / 首尾帧 | `lib/scenes/video.js` |
-| （待接入） | 剧本分镜 / 账单 / 其他 AI 能力 | `lib/scenes/<name>.js` |
+| video | 文生视频 / 图生视频 / 全能参考 / 首尾帧 | `src/plugins/scenes/video.ts` |
+| （待接入） | 剧本分镜 / 账单 / 其他 AI 能力 | `src/plugins/scenes/<name>.ts` |
 
 **半自动模式**：场景未接入处理器时，脚本仍执行通用骨架（登录态/素材/影响分析/计费/报告），并将提交/状态标记为「待人工」，不影响出报告。新模块接入方法见第 11 节。
 
@@ -249,49 +249,51 @@ node run-test.js --task ../tasks/<任务名>.json --env=preonline  # 切换环�
 
 ### 11.2 新增场景处理器
 
-在 `scripts/lib/scenes/` 新建 `<scene>.js`，实现与 `video.js` 相同的接口：
+在 `src/plugins/scenes/` 新建 `<name>.ts`，实现 `SceneHandler` 接口（见 `src/core/scene-handler.ts`）：
 
-```js
-const { resolveExtraValue } = require('../assets');
+```ts
+import type { RunContext, SubmitResult, BillingData } from '../../core/types.js';
+import type { SceneHandler } from '../../core/scene-handler.js';
 
-class XxxSceneHandler {
-  constructor() {
-    this.name = 'xxx';   // 处理器标识
-    this.scenes = ['剧本分镜', '账单调整', '...'];  // 支持的 scene 值（用于 match 匹配）
+export class XxxSceneHandler implements SceneHandler {
+  name = 'xxx';   // 处理器标识
+  scenes = ['剧本分镜', '账单调整', '...'];  // 支持的 scene 值（用于 match 匹配）
+
+  match(scene: string): boolean {
+    return this.scenes.some((s) => (scene || '').includes(s));
   }
-  match(scene) { return this.scenes.some(s => (scene || '').includes(s)); }
 
-  async submit(ctx) { /* 提交任务，返回 { taskId, submit }，submit 含 status/err */ }
-  async detail(ctx) { /* 查询详情（落库核对），更新 ctx.submit.detail */ }
-  async status(ctx) { /* 查询状态，更新 ctx.submit.status/progress/videoUrl/err */ }
-  analyzeBilling(billingData, session) { /* 返回 { ...billingData, modelTrend:{found,lastValue,modelName}, net } */ }
+  async submit(ctx: RunContext): Promise<{ taskId: number | null; submit: Partial<SubmitResult> }> { /* 提交任务 */ }
+  async detail(ctx: RunContext): Promise<void> { /* 查询详情（落库核对） */ }
+  async status(ctx: RunContext): Promise<void> { /* 查询状态 */ }
+  analyzeBilling(billingData: BillingData, session: any): BillingData { /* 计费分析 */ }
 }
-module.exports = { XxxSceneHandler };
 ```
 
-`ctx` 约定（run-test.js 传入）：`{ http, session, taskDef, assets, CFG, env, responses, submit, taskId }`。
+`ctx` 约定（引擎传入）：`{ http, session, taskDef, assets, CFG, env, responses, submit, taskId }`。
 - `http.api(name, method, path, { form })`：发起带登录态的请求，返回 `{ status, json }`。
-- `responses.push({ name, method, status, code, summary })`：记录接口响应供报告展示。
+- `ctx.responses.push(...)`：记录接口响应供报告展示。
 - `assets`：素材库对象（`resolve(relPath)` 解析路径、上传用 `uploadAsset`）。
-- 新接口若需要新环境配置，在 `scripts/config.json` 的对应环境补 `submit_url/status_url/detail_url` 等字段。
+- 新接口若需要新环境配置，在 `src/config/environments.json` 的对应环境补 `submit_url/status_url/detail_url` 等字段。
 
 ### 11.3 注册处理器
 
-在 `scripts/run-test.js` 顶部的场景处理器注册表中注册：
+在 `src/core/engine.ts` 顶部的场景处理器注册表中注册：
 
-```js
-const { XxxSceneHandler } = require('./lib/scenes/xxx');
-const SCENES = {
+```ts
+import { XxxSceneHandler } from '../plugins/scenes/xxx.js';
+
+export const SCENES: Record<string, SceneHandler> = {
   video: new VideoSceneHandler(),
   xxx: new XxxSceneHandler(),
 };
 ```
 
-主流程无需任何改动，脚本自动按 `taskDef.scene` 匹配到新处理器。
+主流程无需任何改动，引擎自动按 `taskDef.scene` 匹配到新处理器。
 
 ### 11.4 扩展影响分析（可选）
 
-`scripts/lib/isolation.js` 的 `buildImpactList()` 按场景类型补充涉及的数据表与模块。新模块如有专属数据表/模块，在对应条件分支中追加（参考现有 `isVideo`/`图生|全能参考|首尾帧` 分支）。
+`src/integrations/isolation.ts` 的 `buildImpactList()` 按场景类型补充涉及的数据表与模块。新模块如有专属数据表/模块，在对应条件分支中追加（参考现有 `isVideo`/`图生|全能参考|首尾帧` 分支）。
 
 ### 11.5 编写任务定义
 
@@ -300,6 +302,6 @@ const SCENES = {
 ### 11.6 验证与归档
 
 1. 先用已有任务 ID 或最小提交验证处理器逻辑正确。
-2. 正式执行：`node run-test.js --task ../tasks/<任务名>.json --func <功能名>`。
+2. 正式执行：`node dist/bin/run-test.js --task tasks/<任务名>.json --func <功能名>`。
 3. 报告输出到 `/Users/mac/agents/output/<日期>/<功能名>/`。
 4. 交付包 `README-项目说明.md` 按 `docs/05-项目说明模板.md`（v2.1 通用格式）编写，第 11/12/13/14/15 章替换为新模块实际数据。

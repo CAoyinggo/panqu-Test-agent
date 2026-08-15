@@ -46,7 +46,7 @@ test-flow/
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）
 │   └── utils/                   # 工具：logger / fs-utils / time
 ├── bin/run-test.ts              # CLI 入口（编译为 dist/bin/run-test.js）
-├── scripts/                     # 旧版 JS 脚本（渐进迁移保留；新架构见 src/）
+├── scripts/                     # 构建/迁移工具（copy-assets / migrate-json-to-ts / verify-migration）+ _legacy/（旧版 v2.0 JS 已归档）
 ├── tasks/                       # JSON 任务定义（渐进迁移保留）
 │   ├── _template.json           # 新任务定义模板
 │   ├── wan3-wensheng.json       # Wan3.0 文生视频
