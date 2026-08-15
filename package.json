@@ -10,7 +10,10 @@
     "dev": "tsc -p tsconfig.json --watch",
     "migrate": "node scripts/migrate-json-to-ts.ts",
     "test": "node --test dist/**/*.test.js",
-    "test:all": "npm run build && node scripts/verify-migration.mjs"
+    "test:all": "npm run build && node scripts/verify-migration.mjs",
+    "test:wan3": "node dist/bin/run-test.js --task src/cases/wan3",
+    "test:user": "node dist/bin/run-test.js --task src/cases/user",
+    "test:order": "node dist/bin/run-test.js --task src/cases/order"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-// 存量 JSON 用例 → 类型安全 TS 用例 迁移脚本（幂等）
+// 存量 JSON 用例 → 类型安全 TS 用例 迁移脚本（幂等，多功能模块化）
 // ---------------------------------------------------------------------------
 // 用法：
-//   node scripts/migrate-json-to-ts.ts                     # 读 tasks/*.json → 输出 src/cases/tasks/*.ts（跳过已有）
-//   node scripts/migrate-json-to-ts.ts --dir tasks --out src/cases/tasks --force
+//   node scripts/migrate-json-to-ts.ts                     # 读 tasks/*.json → 按功能分目录输出 src/cases/<feature>/<name>.ts
+//   node scripts/migrate-json-to-ts.ts --dir tasks --out src/cases --force
 //   node scripts/migrate-json-to-ts.ts --dry-run           # 只打印将要生成的文件内容，不写入
 //   node scripts/migrate-json-to-ts.ts --camel             # 对非 TaskDef 已知键做 snake_case → camelCase
+//
+// 输出规则（多功能模块化）：
+//   wan3-wensheng.json → src/cases/wan3/wensheng.ts   （以第一个 '-' 前为功能名）
+//   foo.json           → src/cases/foo.ts             （无 '-' 前缀时平铺到 out 根）
+//   _template.json     → 跳过（_ 前缀模板）
 //
 // 设计约束：
 //   1. 幂等：目标 .ts 已存在且未加 --force 时跳过，重复运行不会重复生成。
@@ -39,7 +44,7 @@ interface CliOpts {
 }
 
 function parseArgs(argv: string[]): CliOpts {
-  const o: CliOpts = { dir: 'tasks', out: 'src/cases/tasks', force: false, dryRun: false, camel: false };
+  const o: CliOpts = { dir: 'tasks', out: 'src/cases', force: false, dryRun: false, camel: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dir') o.dir = argv[++i] ?? o.dir;
@@ -49,9 +54,9 @@ function parseArgs(argv: string[]): CliOpts {
     else if (a === '--camel') o.camel = true;
     else if (a === '--help') {
       console.log(`用法：
-  node scripts/migrate-json-to-ts.ts [--dir <JSON目录>] [--out <TS输出目录>] [--force] [--dry-run] [--camel]
+  node scripts/migrate-json-to-ts.ts [--dir <JSON目录>] [--out <TS功能根目录>] [--force] [--dry-run] [--camel]
   --dir       JSON 用例目录，默认 tasks
-  --out       TS 输出目录，默认 src/cases/tasks
+  --out       TS 功能根目录，默认 src/cases（自动按文件名前缀建子目录）
   --force     覆盖已存在的 .ts（默认跳过，保证幂等）
   --dry-run   只打印将生成的文件内容，不写入
   --camel     对非 TaskDef 已知键做 snake_case → camelCase（请求体内容始终原样）`);
@@ -133,17 +138,28 @@ function buildTsContent(json: Record<string, unknown>, camel: boolean, outAbs: s
   ].join('\n');
 }
 
+/**
+ * 按文件名解析功能名与用例名：
+ *   wan3-wensheng.json → { feature: 'wan3', caseName: 'wensheng' }
+ *   foo.json           → { feature: null,  caseName: 'foo' }
+ */
+function parseFeature(basename: string): { feature: string | null; caseName: string } {
+  const idx = basename.indexOf('-');
+  if (idx > 0) return { feature: basename.slice(0, idx), caseName: basename.slice(idx + 1) };
+  return { feature: null, caseName: basename };
+}
+
 // ── 主流程 ──
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
 
   const srcDir = path.resolve(ROOT, opts.dir);
-  const outAbs = path.resolve(ROOT, opts.out);
+  const outRoot = path.resolve(ROOT, opts.out);
   if (!fs.existsSync(srcDir)) {
     console.error(`[migrate] JSON 目录不存在：${srcDir}`);
     process.exit(1);
   }
-  fs.mkdirSync(outAbs, { recursive: true });
+  fs.mkdirSync(outRoot, { recursive: true });
 
   const files = fs
     .readdirSync(srcDir)
@@ -161,23 +177,28 @@ async function main(): Promise<void> {
 
   for (const f of files) {
     const jsonPath = path.join(srcDir, f);
-    const tsName = f.replace(/\.json$/, '.ts');
-    const tsPath = path.join(outAbs, tsName);
+    const base = f.replace(/\.json$/, '');
+    const { feature, caseName } = parseFeature(base);
+    const outDir = feature ? path.join(outRoot, feature) : outRoot;
+    fs.mkdirSync(outDir, { recursive: true });
+    const tsName = caseName + '.ts';
+    const tsPath = path.join(outDir, tsName);
+    const relPath = path.relative(outRoot, tsPath).replace(/\\/g, '/');
 
     if (fs.existsSync(tsPath) && !opts.force) {
-      console.log(`[migrate] 跳过（已存在，幂等）：${tsName}`);
+      console.log(`[migrate] 跳过（已存在，幂等）：${relPath}`);
       skipped++;
       continue;
     }
 
     try {
       const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-      const content = buildTsContent(raw, opts.camel, outAbs);
+      const content = buildTsContent(raw, opts.camel, outDir);
       if (opts.dryRun) {
-        console.log(`\n===== 将生成：${tsName} =====\n${content}`);
+        console.log(`\n===== 将生成：${relPath} =====\n${content}`);
       } else {
         fs.writeFileSync(tsPath, content, 'utf-8');
-        console.log(`[migrate] 已生成：${tsName}`);
+        console.log(`[migrate] 已生成：${relPath}`);
       }
       converted++;
     } catch (e: any) {
@@ -187,7 +208,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`\n[migrate] 完成：转换 ${converted} 个，跳过 ${skipped} 个，失败 ${failed} 个${opts.dryRun ? '（dry-run，未写入）' : ''}`);
-  console.log(`[migrate] 输出目录：${outAbs}`);
+  console.log(`[migrate] 输出根目录：${outRoot}`);
 }
 
 main().catch((e) => {

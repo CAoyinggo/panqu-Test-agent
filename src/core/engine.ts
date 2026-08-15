@@ -90,7 +90,10 @@ export class Engine {
   node dist/bin/run-test.js --task <任务定义> [--env=test|preonline] [--func=<功能名>] [--reporter=html,json,junit]
 
 参数：
-  --task      任务定义路径（必填）。支持单个文件（.json 或 TS 编译的 .js）或目录（批量执行全部用例），示例见 tasks/ 与 src/cases/tasks/
+  --task      任务定义路径（必填）。支持：
+              · 功能子目录：src/cases/wan3（执行该功能全部用例）
+              · 根目录：src/cases（递归全量执行所有功能模块）
+              · 单个文件：tasks/xxx.json 或 src/cases/wan3/xxx.ts（向后兼容）
   --env       执行环境，默认 test，可选 preonline
   --func      功能名称（归档目录 output/<日期>/<功能名>/，强制约定）
   --reporter  报告格式，默认 html，可选 html,json,junit（逗号分隔多份）
@@ -109,9 +112,12 @@ export class Engine {
 
     let allFiles: string[] = [];
     for (const c of cases) {
-      logger.step(`---- 加载用例：${c.name}（${c.file}） ----`);
+      const tag = c.feature ? `[${c.feature}]` : '';
+      logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
       try {
-        const files = await this.runTask(cfg, c.def, env, args.func || undefined, args.reporter);
+        // --func 未显式指定时，自动取所属功能模块作为归档目录
+        const func = args.func || c.feature || undefined;
+        const files = await this.runTask(cfg, c.def, env, func, args.reporter);
         allFiles.push(...files);
       } catch (e: any) {
         logger.error(`用例执行失败：${c.name} - ${e.message}`);

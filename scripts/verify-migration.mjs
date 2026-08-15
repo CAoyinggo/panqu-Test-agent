@@ -1,6 +1,6 @@
-// 迁移一致性校验：对比 JSON 用例（tasks/）与 TS 用例（dist/src/cases/tasks/）
+// 迁移一致性校验：对比 JSON 用例（tasks/）与 TS 用例（dist/src/cases/，递归全部功能模块）
 // 供 `npm run test:all` 使用：离线校验结构一致，不提交任务、不消耗积分。
-// 用法：node scripts/verify-migration.mjs [--dir dist/src/cases/tasks]
+// 用法：node scripts/verify-migration.mjs [--dir dist/src/cases]
 import { loadCases } from '../dist/src/cases/loader.js';
 
 /** 规范化：递归排序对象键后 JSON 化，忽略键顺序差异 */
@@ -40,10 +40,10 @@ function findDiff(a, b, p = '') {
 }
 
 async function main() {
-  const tsDir = process.argv[2] || 'dist/src/cases/tasks';
+  const tsDir = process.argv[2] || 'dist/src/cases';
 
   const jsons = await loadCases('tasks'); // 旧：JSON
-  const tss = await loadCases(tsDir); // 新：TS（编译产物）
+  const tss = await loadCases(tsDir); // 新：TS（编译产物，递归全部功能模块）
   console.log(`[verify] JSON 用例 ${jsons.length} 个 / TS 用例 ${tss.length} 个`);
 
   const tsByName = new Map(tss.map((c) => [c.name, c]));
