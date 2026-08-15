@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v3.1（TypeScript 重构版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
+> 版本：v3.2（多功能模块化版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
 > 标准化、可一键执行的功能测试流程交付包。**所有 AI 功能测试任务强制按此流程执行**。
 > 本流程为**多模块通用框架**：视频生成、剧本分镜、账单、其他 AI 能力等模块均可接入（见 `docs/01-测试流程SOP.md` 的「新模块接入指引」）。
 
@@ -10,7 +10,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
-| v3.1 | 2026-08-16 | 结构整理：旧 v2.0 JS 运行时（run-test.js / lib / config.json / examples）归档到 `scripts/_legacy/`；`scripts/` 顶层仅保留构建/迁移工具；docs 命令与路径统一指向新 CLI 入口 |
+| v3.2 | 2026-08-16 | 多功能模块化：用例目录按功能分子文件夹 `src/cases/<功能>/`（wan3-*.ts 去前缀移入 `wan3/`）；loader 递归扫描全部功能模块 + ignore 配置（common/base/shared）；`--task` 支持功能子目录 / 根目录全量 / 单文件（向后兼容）；迁移脚本按 JSON 文件名前缀自动建子文件夹；新增 `test:wan3/test:user/test:order` 脚本；真机回归 4 个 Wan3.0 任务报告与改动前完全一致（passRate 86%、步骤数、检查项结构） |
 | v3.0 | 2026-08-15 | TypeScript 重构：模块化分层 `src/`（core 引擎 / cases 用例 / assertions 断言 / reports 报告 / integrations 集成 / utils 工具 / plugins 场景 / config 配置）；插件式场景处理器 + 7 标准钩子 + 断言注册表；三格式报告（HTML/JSON/JUnit）；`--task` 支持文件或目录批量；渐进式迁移（旧 `scripts/` 保留） |
 | v2.0 | 2026-08-15 | 插件式重构：新增 `lib/scenes/` 场景处理器（video.js），run-test.js 通用化按 scene 路由；docs/05 模板通用化（去 Wan3.0 专属）；SOP 新增「新模块接入指引」；README 去 Wan3.0 化 |
 | v1.3 | 2026-08-15 | 优化去重：删除与 docs/05 模板完全重复的章节；合并 docs/02+03+04 为模板合集；代码层重构（素材函数迁入 assets.js、修复步骤编号、删除未用方法） |
