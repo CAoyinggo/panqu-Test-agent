@@ -129,6 +129,16 @@ export class Pipeline {
       const billing = new Billing(http, cfg.environments[env].billing_url!);
       ctx.http = http;
 
+      // 4.1 提交前积分快照（用于快照差值断言）
+      let beforeBalance: { available_points: number; consumed_7d: number } | undefined;
+      try {
+        const bs = await billing.summary();
+        beforeBalance = { available_points: Number(bs.available_points) || 0, consumed_7d: Number(bs.consumed_7d) || 0 };
+        logger.info(`  提交前快照：available_points=${beforeBalance.available_points}，consumed_7d=${beforeBalance.consumed_7d}`);
+      } catch (e: any) {
+        logger.warn(`提交前积分快照失败（已降级）：${e.message}`);
+      }
+
       // 5. 素材引用解析
       logger.step('[4/10] 素材引用解析...');
       for (const [k, v] of Object.entries(taskDef.extra || {})) {
@@ -192,16 +202,25 @@ export class Pipeline {
         const trend = await billing.modelTrend();
         const top = await billing.modelTop();
         const records = await billing.records(50);
+
+        // 提交后积分快照 + 差值计算
+        const afterBalance = { available_points: Number(summary.available_points) || 0, consumed_7d: Number(summary.consumed_7d) || 0 };
+        let actualConsumed: number | undefined;
+        if (beforeBalance) {
+          actualConsumed = beforeBalance.available_points - afterBalance.available_points;
+          logger.info(`  快照差值：before=${beforeBalance.available_points} → after=${afterBalance.available_points}，实际消耗=${actualConsumed}`);
+        }
+
         billingData = handler
-          ? handler.analyzeBilling({ summary, trend, top, records }, session)
-          : { summary, trend, top, records, modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0 };
+          ? handler.analyzeBilling({ summary, trend, top, records, beforeBalance, afterBalance, actualConsumed }, session)
+          : { summary, trend, top, records, modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance, afterBalance, actualConsumed };
         const mt = billingData.modelTrend;
         logger.info(`  summary: consumed_7d=${summary.consumed_7d}, available_points=${summary.available_points}`);
         logger.info(`  模型趋势: ${mt?.found ? mt.modelName + ' 最新值=' + mt.lastValue : '未找到对应模型系列'}`);
-        logger.info(`  近50条明细净消耗=${billingData.net}`);
+        logger.info(`  近50条明细净消耗=${billingData.net}，快照差值净消耗=${actualConsumed ?? 'N/A'}`);
       } catch (e: any) {
         logger.warn(`计费核验异常（已降级跳过）：${e.message}`);
-        billingData = { modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0 };
+        billingData = { modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance };
       }
 
       // 数据隔离核验

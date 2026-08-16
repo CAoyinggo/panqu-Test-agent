@@ -30,10 +30,10 @@ export function runAssertion(name: string, taskDef: TaskDef, submit: SubmitResul
   return fn(taskDef, submit, billingData);
 }
 
-/** 执行默认断言集（落库/计费/隔离/账号），供引擎使用 */
+/** 执行默认断言集（落库/计费/状态流转/隔离/账号），供引擎使用 */
 export function runDefaultAssertions(taskDef: TaskDef, submit: SubmitResult, billingData: BillingData): CheckResult[] {
   const checks: CheckResult[] = [];
-  for (const name of ['db-check', 'billing-check', 'isolation-check', 'account-check']) {
+  for (const name of ['db-check', 'billing-check', 'status-flow-check', 'isolation-check', 'account-check']) {
     if (registry[name]) checks.push(...registry[name](taskDef, submit, billingData));
   }
   return checks;

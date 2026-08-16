@@ -86,23 +86,51 @@ export class VideoSceneHandler implements SceneHandler {
   }
 
   async status(ctx: RunContext): Promise<void> {
-    const { http, session, CFG, env, submit, taskId } = ctx;
-    const stFd = new FormData();
-    stFd.append('type', 'video');
-    stFd.append('ids', String(taskId));
-    const stRes = await http.api('任务状态', 'POST', CFG.environments[env].status_url, { form: stFd });
-    const sj = stRes.json;
-    ctx.responses.push({ name: '任务状态', method: 'POST', status: stRes.status, code: sj.code, summary: JSON.stringify(sj.data || sj).slice(0, 300) });
-    const st = (sj.data && sj.data[0] && sj.data[0].status) || {};
-    const stText = CFG.status_text[st.task_status] || ('未知(' + st.task_status + ')');
-    submit.status = stText;
-    submit.progress = st.progress;
-    submit.videoUrl = st.video_url || '';
-    submit.err = st.err || '';
-    logger.info(
-      `  任务状态=${stText}（${st.task_status}），progress=${st.progress}` + (st.video_url ? '，video_url=' + st.video_url : ''),
-    );
-    if (st.err) logger.warn('  错误信息：' + st.err);
+    const { http, session, CFG, env, submit, taskId, taskDef } = ctx;
+    const maxWaitMs = ((taskDef.max_wait_seconds as number) || 120) * 1000;
+    const pollIntervalMs = 3000;
+    const startedAt = Date.now();
+    const history: string[] = [];
+
+    while (true) {
+      const stFd = new FormData();
+      stFd.append('type', 'video');
+      stFd.append('ids', String(taskId));
+      const stRes = await http.api('任务状态', 'POST', CFG.environments[env].status_url, { form: stFd });
+      const sj = stRes.json;
+      // 仅首次轮询记录到 responses（避免刷屏）
+      if (history.length === 0) {
+        ctx.responses.push({ name: '任务状态', method: 'POST', status: stRes.status, code: sj.code, summary: JSON.stringify(sj.data || sj).slice(0, 300) });
+      }
+      const st = (sj.data && sj.data[0] && sj.data[0].status) || {};
+      const stText = CFG.status_text[st.task_status] || ('未知(' + st.task_status + ')');
+      submit.status = stText;
+      submit.progress = st.progress;
+      submit.videoUrl = st.video_url || '';
+      submit.err = st.err || '';
+      history.push(stText);
+      submit.statusHistory = history;
+
+      logger.info(
+        `  任务状态=${stText}（${st.task_status}），progress=${st.progress}` + (st.video_url ? '，video_url=' + st.video_url : ''),
+      );
+      if (st.err) logger.warn('  错误信息：' + st.err);
+
+      // 终态判断：完成 / 失败
+      const isTerminal = stText.includes('完成') || stText.includes('失败');
+      if (isTerminal) {
+        logger.info(`  任务到达终态：${stText}（轮询 ${history.length} 次，耗时 ${Date.now() - startedAt}ms）`);
+        break;
+      }
+
+      // 超时判断
+      if (Date.now() - startedAt >= maxWaitMs) {
+        logger.warn(`  任务未在 ${maxWaitMs / 1000}s 内到达终态（当前状态=${stText}），继续出报告`);
+        break;
+      }
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
   }
 
   analyzeBilling(billingData: BillingData, _session: any): BillingData {

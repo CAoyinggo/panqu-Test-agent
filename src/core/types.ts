@@ -58,6 +58,8 @@ export interface SubmitResult {
   progress?: number | string;
   videoUrl?: string;
   detail?: Record<string, any>;
+  /** 状态流转序列（status-flow-check 断言使用） */
+  statusHistory?: string[];
   [key: string]: unknown;
 }
 
@@ -69,6 +71,12 @@ export interface BillingData {
   records?: any[];
   modelTrend?: { found: boolean; lastValue?: number | null; modelName?: string };
   net?: number;
+  /** 提交前积分快照（available_points / consumed_7d） */
+  beforeBalance?: { available_points: number; consumed_7d: number };
+  /** 提交后积分快照 */
+  afterBalance?: { available_points: number; consumed_7d: number };
+  /** 快照差值计算的本次实际净消耗 = before - after */
+  actualConsumed?: number;
   [key: string]: unknown;
 }
 

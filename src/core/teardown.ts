@@ -29,23 +29,28 @@ export function runTeardownCheck(ctx: RunContext, billingData: BillingData): Che
   });
 
   // 核对 2：积分回退（若任务失败，净消耗应为 0）
+  // 优先使用快照差值 actualConsumed，降级使用流水汇总 net
+  const actualConsumed = typeof billingData.actualConsumed === 'number' ? billingData.actualConsumed : undefined;
   const net = typeof billingData.net === 'number' ? billingData.net : undefined;
-  if (net !== undefined) {
+  const consumed = actualConsumed ?? net;
+  const source = actualConsumed !== undefined ? '快照差值' : '流水汇总';
+
+  if (consumed !== undefined) {
     const taskFailed = status === '失败';
     const taskSucceeded = status === '已完成' || status === '成功';
 
-    if (taskFailed && net !== 0) {
+    if (taskFailed && consumed !== 0) {
       checks.push({
         name: '执行后核对：失败任务积分回退',
         pass: false,
-        detail: `任务失败但积分净消耗=${net}（应回退为 0），请人工确认是否需手动回退`,
+        detail: `任务失败但积分净消耗=${consumed}（${source}，应回退为 0），请人工确认是否需手动回退`,
         level: 'P1',
       });
     } else {
       checks.push({
         name: '执行后核对：积分净消耗',
         pass: true,
-        detail: `净消耗=${net}${taskFailed ? '（任务失败，已回退）' : ''}`,
+        detail: `净消耗=${consumed}（${source}）${taskFailed ? '（任务失败，已回退）' : ''}`,
         level: 'P2',
       });
     }

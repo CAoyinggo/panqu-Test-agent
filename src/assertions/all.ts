@@ -4,6 +4,7 @@ import './db-check.js';
 import './billing-check.js';
 import './isolation-check.js';
 import './account-check.js';
+import './status-flow-check.js';
 
 export * from './index.js';
 export * from './impact.js';
