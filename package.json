@@ -13,7 +13,8 @@
     "test:all": "npm run build && node scripts/verify-migration.mjs",
     "test:wan3": "node dist/bin/run-test.js --task src/cases/wan3",
     "test:user": "node dist/bin/run-test.js --task src/cases/user",
-    "test:order": "node dist/bin/run-test.js --task src/cases/order"
+    "test:order": "node dist/bin/run-test.js --task src/cases/order",
+    "test:regression": "npm run build && node dist/bin/run-test.js --task src/cases --ci"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -47,6 +47,14 @@ export interface TaskDef {
   expected_points?: number;
   uploads?: Array<{ field: string; path: string }>;
   manual_cases?: Array<{ id: string; steps: string }>;
+  /** 用例标签（用于 --grep 筛选，如 ['regression', 'P0']） */
+  tags?: string[];
+  /** 数据集预留（数据工厂接口，暂未实现） */
+  dataset?: Record<string, unknown>;
+  /** setup 预留（前置数据准备，暂未实现） */
+  setup?: string;
+  /** teardown 预留（后置数据清理，暂未实现） */
+  teardown?: string;
   [key: string]: unknown;
 }
 
@@ -171,4 +179,18 @@ export interface ReportData {
   traceId?: string;
   /** 执行度量数据（Phase 3） */
   metrics?: Record<string, unknown>;
+}
+
+/**
+ * 数据工厂接口（预留，暂未实现）。
+ * 未来用于：自动构造测试数据、清理残留数据、批量生成参数化用例。
+ * 当前业务数据由登录态带入，无需自动构造。
+ */
+export interface DataFactory {
+  /** 构造测试数据（预留） */
+  setup?(ctx: RunContext): Promise<void>;
+  /** 清理测试数据（预留） */
+  teardown?(ctx: RunContext): Promise<void>;
+  /** 批量生成参数化用例（预留） */
+  generate?(): TaskDef[];
 }
