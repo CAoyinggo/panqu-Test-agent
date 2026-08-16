@@ -195,6 +195,29 @@ export class Pipeline {
         await this.hooks.run('afterStep', ctx);
       }
 
+      // 7.1 安全探针：跨账号只读越权检测（用错误 project_id 访问任务详情）
+      let securityProbe: { attempted: boolean; rejected: boolean; detail: string } = { attempted: false, rejected: false, detail: '未执行' };
+      if (taskId) {
+        try {
+          const wrongPid = (session.project_id || 0) + 999999;
+          const probeUrl = `${cfg.environments[env].detail_url}?id=${taskId}&project_id=${wrongPid}&task_log_id=0`;
+          const probeRes = await http.api('安全探针(跨账号)', 'GET', probeUrl);
+          const pj = probeRes.json;
+          securityProbe.attempted = true;
+          const rejected = pj.code !== 1 || !pj.data;
+          securityProbe.rejected = rejected;
+          securityProbe.detail = rejected
+            ? `跨账号访问被拒绝（code=${pj.code}）`
+            : `⚠ 跨账号访问未拒绝（code=${pj.code}，返回了数据），存在越权风险`;
+          logger.info(`  安全探针：${securityProbe.detail}`);
+        } catch (e: any) {
+          securityProbe.attempted = true;
+          securityProbe.rejected = true;
+          securityProbe.detail = `跨账号访问抛出异常（视为拒绝）：${e.message}`;
+          logger.info(`  安全探针：${securityProbe.detail}`);
+        }
+      }
+
       // 计费核验（非关键接口，失败降级为 warning 不阻塞）
       logger.step('[8/10] 计费核验...');
       try {
@@ -212,15 +235,15 @@ export class Pipeline {
         }
 
         billingData = handler
-          ? handler.analyzeBilling({ summary, trend, top, records, beforeBalance, afterBalance, actualConsumed }, session)
-          : { summary, trend, top, records, modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance, afterBalance, actualConsumed };
+          ? handler.analyzeBilling({ summary, trend, top, records, beforeBalance, afterBalance, actualConsumed, securityProbe }, session)
+          : { summary, trend, top, records, modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance, afterBalance, actualConsumed, securityProbe };
         const mt = billingData.modelTrend;
         logger.info(`  summary: consumed_7d=${summary.consumed_7d}, available_points=${summary.available_points}`);
         logger.info(`  模型趋势: ${mt?.found ? mt.modelName + ' 最新值=' + mt.lastValue : '未找到对应模型系列'}`);
         logger.info(`  近50条明细净消耗=${billingData.net}，快照差值净消耗=${actualConsumed ?? 'N/A'}`);
       } catch (e: any) {
         logger.warn(`计费核验异常（已降级跳过）：${e.message}`);
-        billingData = { modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance };
+        billingData = { modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance, securityProbe };
       }
 
       // 数据隔离核验

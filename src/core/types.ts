@@ -77,6 +77,12 @@ export interface BillingData {
   afterBalance?: { available_points: number; consumed_7d: number };
   /** 快照差值计算的本次实际净消耗 = before - after */
   actualConsumed?: number;
+  /** 安全探针结果（跨账号只读越权检测） */
+  securityProbe?: {
+    attempted: boolean;
+    rejected: boolean;
+    detail: string;
+  };
   [key: string]: unknown;
 }
 
