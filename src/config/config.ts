@@ -35,6 +35,8 @@ export interface CliArgs {
   concurrency?: number | null;
   /** 自动并发（取 CPU 核心数，上限 4） */
   parallel?: boolean;
+  /** 启用数据工厂（执行 setup/teardown，默认关闭） */
+  autoSetup?: boolean;
 }
 
 /** schema 校验错误：缺失字段/未知环境 */
@@ -75,9 +77,9 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
   return env;
 }
 
-/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--help） */
+/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--auto-setup/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, autoSetup: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
@@ -92,6 +94,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === '--scene') args.scene = argv[++i] ?? null;
     else if (a === '--concurrency') args.concurrency = Number(argv[++i]) || 1;
     else if (a === '--parallel') args.parallel = true;
+    else if (a === '--auto-setup') args.autoSetup = true;
     else if (a === '--help') args.help = true;
   }
   return args;

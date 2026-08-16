@@ -1,7 +1,7 @@
 // 流水线编排：固定 10 步流程 + 生命周期钩子触发 + teardown 核对
 // 通用骨架（登录态/素材/影响分析/计费/报告）与场景处理器（提交/详情/状态）解耦
 // 健壮性：try/catch 保证异常时仍出报告；计费等非关键接口失败降级不阻塞
-import type { AppConfig, TaskDef, Session, SubmitResult, BillingData, RunContext, CheckResult } from './types.js';
+import type { AppConfig, TaskDef, Session, SubmitResult, BillingData, RunContext, CheckResult, DataContext, EnvDiff } from './types.js';
 import { HookRegistry } from './hooks.js';
 import { SceneHandler } from './scene-handler.js';
 import { Http } from '../integrations/http.js';
@@ -10,6 +10,7 @@ import { Assets, collectAssetRefs } from '../integrations/assets.js';
 import { buildImpactList } from '../assertions/impact.js';
 import { runDefaultAssertions } from '../assertions/all.js';
 import { runTeardownCheck } from './teardown.js';
+import { resolveDataFactory, isNoop } from './data-factory.js';
 import { logger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
 import { writeJson } from '../utils/fs-utils.js';
@@ -23,6 +24,10 @@ export interface PipelineOptions {
   func?: string;
   /** debug 目录路径（仅 --debug 模式传入，否则 undefined） */
   debugDir?: string;
+  /** 是否启用数据工厂（--auto-setup） */
+  autoSetup?: boolean;
+  /** 环境差异检测结果（由 engine 传入） */
+  envDiff?: EnvDiff;
 }
 
 export interface PipelineResult {
@@ -37,6 +42,8 @@ export interface PipelineResult {
   assetInfo: any;
   semiAuto: boolean;
   taskId: number | null;
+  /** 数据上下文（--auto-setup 模式产出） */
+  dataContext?: DataContext;
 }
 
 export class Pipeline {
@@ -99,6 +106,29 @@ export class Pipeline {
     await this.hooks.run('beforeAll', ctx);
     logger.step(`========== 开始执行：${taskDef.name}（${env} 环境） ==========`);
     logger.info(`场景类型：${taskDef.scene} → ${handler ? `已接入（${handler.name}）` : '未接入（半自动执行）'}`);
+
+    // ── 数据工厂 setup（--auto-setup 模式） ──
+    let dataContext: DataContext | undefined;
+    if (this.opts.autoSetup) {
+      const { factory, name } = resolveDataFactory(taskDef);
+      if (!isNoop(factory)) {
+        logger.info(`数据工厂 setup（${name}）...`);
+        try {
+          dataContext = await factory.setup(ctx);
+          ctx.data = dataContext;
+          logger.info(`  数据准备完成：${dataContext.taskIds?.length ?? 0} 个任务，${dataContext.assets?.length ?? 0} 个素材`);
+        } catch (e: any) {
+          logger.warn(`数据工厂 setup 失败（已降级继续执行）：${e.message}`);
+        }
+      }
+    }
+
+    // ── 环境一致性断言（若有 envDiff） ──
+    if (this.opts.envDiff && this.opts.envDiff.changed) {
+      const { assertEnvConsistency } = await import('./env-checker.js');
+      const envChecks = assertEnvConsistency(this.opts.envDiff);
+      checks.push(...envChecks);
+    }
 
     try {
       // ── 通用骨架 ──
@@ -265,6 +295,20 @@ export class Pipeline {
     checks.push(...teardownChecks);
     teardownChecks.forEach((c) => logger.info(`  ${c.pass ? '✅' : '❌'} ${c.name}：${c.detail}`));
 
+    // ── 数据工厂 teardown（--auto-setup 模式，无论成功失败都执行） ──
+    if (this.opts.autoSetup && dataContext) {
+      const { factory, name } = resolveDataFactory(taskDef);
+      if (!isNoop(factory)) {
+        logger.info(`数据工厂 teardown（${name}）...`);
+        try {
+          await factory.teardown(ctx, dataContext);
+          logger.info('  数据清理完成');
+        } catch (e: any) {
+          logger.warn(`数据工厂 teardown 失败（不影响报告）：${e.message}`);
+        }
+      }
+    }
+
     // ── 汇总报告数据 ──
     const manual = (taskDef.manual_cases || []).map((m: any) => ({ id: m.id, steps: m.steps }));
     const issues: any[] = [];
@@ -309,6 +353,7 @@ export class Pipeline {
       assetInfo,
       semiAuto,
       taskId: ctx.taskId,
+      dataContext,
     };
   }
 }

@@ -4,7 +4,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import pLimit from 'p-limit';
-import type { AppConfig, TaskDef, ReportData } from './types.js';
+import type { AppConfig, TaskDef, ReportData, EnvDiff } from './types.js';
 import { HookRegistry } from './hooks.js';
 import type { SceneHandler } from './scene-handler.js';
 import { Pipeline, PipelineResult } from './pipeline.js';
@@ -21,6 +21,8 @@ import { generateTraceId, getTraceId } from '../utils/trace.js';
 import { metrics } from '../utils/metrics.js';
 import { autoLoadScenes } from '../plugins/loader.js';
 import { FeishuNotifier } from '../integrations/notifiers/feishu.js';
+import { snapshot as envSnapshot, compare as envCompare, saveBaseline as saveEnvBaseline, loadBaseline as loadEnvBaseline } from './env-checker.js';
+import { Billing } from '../integrations/billing.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -62,7 +64,7 @@ export class Engine {
   }
 
   /** 运行单个任务，返回报告文件路径列表与执行结果 */
-  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string): Promise<RunTaskResult> {
+  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff): Promise<RunTaskResult> {
     const handler = findHandler(taskDef.scene);
     const session = applyEnvSessionOverrides(Http.loadSession(cfg.session_cookies_path, env));
     session.env = env;
@@ -81,7 +83,7 @@ export class Engine {
     // debug 目录（仅 --debug 模式使用）
     const dbgDir = debug ? debugDir(func) : undefined;
 
-    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir }, this.hooks);
+    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff }, this.hooks);
     const result: PipelineResult = await pipeline.run();
 
     const hasBlockingIssue = result.issues.some((i) => i.level === '阻塞');
@@ -105,6 +107,8 @@ export class Engine {
       assetInfo: result.assetInfo,
       traceId: getTraceId(),
       metrics: metrics.toJSON(),
+      envDiff,
+      dataContext: result.dataContext,
     };
 
     // 报告写入：并发模式用 caseId 子目录，串行模式用平铺目录
@@ -130,6 +134,7 @@ export class Engine {
     startTime: number,
     timeoutMs: number,
     concurrency: number,
+    envDiff?: EnvDiff,
   ): Promise<void> {
     // 超时检查
     if (Date.now() - startTime > timeoutMs) {
@@ -150,7 +155,7 @@ export class Engine {
     try {
       const func = args.func || c.feature || undefined;
       const { files, passRate, hasBlockingIssue } = await this.runTask(
-        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined,
+        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff,
       );
       tracker.addResult({
         name: c.name,
@@ -195,6 +200,7 @@ export class Engine {
   --scene     按场景类型筛选用例
   --concurrency <N>  并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行
   --parallel         自动并发，并发数取 CPU 核心数（上限 4）。优先于 --concurrency
+  --auto-setup       启用数据工厂（执行 setup/teardown，默认关闭）
   --help      显示帮助
 
 退出码：
@@ -271,10 +277,37 @@ export class Engine {
       logger.warn('未加载到任何场景处理器，所有任务将以半自动模式执行');
     }
 
+    // ── 环境一致性检测 ──
+    let envDiff: EnvDiff | undefined;
+    try {
+      const session = applyEnvSessionOverrides(Http.loadSession(cfg.session_cookies_path, env));
+      const http = new Http(cfg.environments[env].base_url, session.cookie_string);
+      const billing = new Billing(http, cfg.environments[env].billing_url!);
+      const func = args.func || cases[0]?.feature || undefined;
+      const current = await envSnapshot(env, cfg, billing);
+      const baseline = loadEnvBaseline(func);
+      if (baseline) {
+        envDiff = envCompare(baseline, current);
+        if (envDiff.changed) {
+          logger.warn(`环境变更检测：${envDiff.changes.length} 项差异`);
+          envDiff.changes.forEach((c) => logger.warn(`  ${c.severity === 'error' ? '⚠' : 'ℹ'} ${c.field}: ${c.before} → ${c.after}`));
+        } else {
+          logger.info('环境一致性检测：与基线一致');
+        }
+        // 更新基线（每次执行后刷新）
+        saveEnvBaseline(current, func);
+      } else {
+        logger.info('环境基线不存在，首次执行将保存为基线');
+        saveEnvBaseline(current, func);
+      }
+    } catch (e: any) {
+      logger.warn(`环境一致性检测失败（已降级跳过）：${e.message}`);
+    }
+
     if (concurrency === 1) {
       // ── 串行模式（向后兼容，行为与改造前完全一致） ──
       for (const c of cases) {
-        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency);
+        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff);
       }
     } else {
       // ── 并发模式：按 feature 分组，组内串行 + 组间并行 ──
@@ -292,7 +325,7 @@ export class Engine {
         limit(async () => {
           logger.info(`▶ 开始执行 feature=${feature}（${groupCases.length} 个用例，串行）`);
           for (const c of groupCases) {
-            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency);
+            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff);
           }
           logger.info(`✔ feature=${feature} 执行完毕`);
         }),

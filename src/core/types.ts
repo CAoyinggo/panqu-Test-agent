@@ -49,6 +49,8 @@ export interface TaskDef {
   manual_cases?: Array<{ id: string; steps: string }>;
   /** 用例标签（用于 --grep 筛选，如 ['regression', 'P0']） */
   tags?: string[];
+  /** 数据工厂名称（--auto-setup 模式下按名称查找注册的 DataFactory） */
+  dataFactory?: string;
   /** 数据集预留（数据工厂接口，暂未实现） */
   dataset?: Record<string, unknown>;
   /** setup 预留（前置数据准备，暂未实现） */
@@ -158,6 +160,8 @@ export interface RunContext {
   responses: ResponseSummary[];
   submit: SubmitResult;
   taskId: number | null;
+  /** 数据工厂产出的上下文（--auto-setup 模式） */
+  data?: DataContext;
   [key: string]: unknown;
 }
 
@@ -179,18 +183,69 @@ export interface ReportData {
   traceId?: string;
   /** 执行度量数据（Phase 3） */
   metrics?: Record<string, unknown>;
+  /** 环境一致性检测结果 */
+  envDiff?: EnvDiff;
+  /** 数据上下文快照（--auto-setup 模式） */
+  dataContext?: DataContext;
 }
 
 /**
- * 数据工厂接口（预留，暂未实现）。
- * 未来用于：自动构造测试数据、清理残留数据、批量生成参数化用例。
- * 当前业务数据由登录态带入，无需自动构造。
+ * 数据上下文：DataFactory.setup() 产出的测试数据快照
+ * 在 pipeline 执行期间通过 RunContext.data 传递，teardown 时用于清理
+ */
+export interface DataContext {
+  /** 账号信息 */
+  account?: { id: string; nickname: string; project_id: number };
+  /** 积分快照 */
+  balance?: { initial: number; consumed: number; remaining: number };
+  /** 素材列表 */
+  assets?: Array<{ id: string; type: string; url: string }>;
+  /** 创建的任务 ID 列表（teardown 时清理用） */
+  taskIds?: string[];
+  /** 扩展数据 */
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * 数据工厂接口：自动构造测试数据、清理残留数据、批量生成参数化用例。
+ * - setup()：在用例执行前准备数据（如充值、上传素材、创建辅助任务）
+ * - teardown()：在用例执行后清理数据（如删除任务、回退积分）
+ * - generate()：批量生成参数化用例（预留，暂未集成到 loader）
  */
 export interface DataFactory {
-  /** 构造测试数据（预留） */
-  setup?(ctx: RunContext): Promise<void>;
-  /** 清理测试数据（预留） */
-  teardown?(ctx: RunContext): Promise<void>;
-  /** 批量生成参数化用例（预留） */
-  generate?(): TaskDef[];
+  /** 准备测试数据：创建账号、充值、上传素材等 */
+  setup(ctx: RunContext): Promise<DataContext>;
+  /** 清理测试数据：删除任务、回退积分、删除素材等 */
+  teardown(ctx: RunContext, data: DataContext): Promise<void>;
+  /** 生成测试数据集（用于参数化） */
+  generate(params: Record<string, unknown>): Promise<DataContext>;
+}
+
+/** 环境快照（用于一致性检测） */
+export interface EnvSnapshot {
+  /** 快照时间戳 */
+  timestamp: string;
+  /** 环境名称 */
+  env: string;
+  /** 积分余额 */
+  availablePoints: number;
+  /** 近 7 天消耗 */
+  consumed7d: number;
+  /** 模型列表与单价 */
+  models: Array<{ id: string | number; name: string; price?: number }>;
+  /** 环境配置摘要（base_url / project_id / account） */
+  config: { base_url: string; project_id: number; account: string };
+}
+
+/** 环境差异检测结果 */
+export interface EnvDiff {
+  /** 是否有差异 */
+  changed: boolean;
+  /** 差异详情 */
+  changes: Array<{
+    field: string;
+    before: string;
+    after: string;
+    severity: 'info' | 'warning' | 'error';
+  }>;
 }
