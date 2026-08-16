@@ -1,6 +1,9 @@
 // 核心引擎：加载配置/会话/任务 → 匹配场景处理器 → 执行 pipeline → 生成报告
 // 支持：退出码规范、CI 模式、整体超时、环境变量注入、trace-id、metrics、JSON 日志
+// 并发：--parallel/--concurrency，按 feature 分组串行 + 组间并行
 import path from 'node:path';
+import os from 'node:os';
+import pLimit from 'p-limit';
 import type { AppConfig, TaskDef, ReportData } from './types.js';
 import { HookRegistry } from './hooks.js';
 import type { SceneHandler } from './scene-handler.js';
@@ -8,8 +11,8 @@ import { Pipeline, PipelineResult } from './pipeline.js';
 import { Http } from '../integrations/http.js';
 import { loadConfig, parseArgs, CliArgs } from '../config/config.js';
 import { getReporters } from '../reports/factory.js';
-import { outputDir, logsDir, debugDir, writeJson } from '../utils/fs-utils.js';
-import { logger, setCiMode, setLogLevel, setLogFile, setLogContext } from '../utils/logger.js';
+import { outputDir, caseOutputDir, logsDir, debugDir, writeJson } from '../utils/fs-utils.js';
+import { logger, setCiMode, setLogLevel, setLogFile, setLogContext, setCaseId } from '../utils/logger.js';
 import { loadCases, LoadedCase } from '../cases/loader.js';
 import { filterCases } from '../cases/filter.js';
 import { ResultTracker, EXIT_CODE, type ExecutionSummary } from '../utils/exit-code.js';
@@ -59,15 +62,21 @@ export class Engine {
   }
 
   /** 运行单个任务，返回报告文件路径列表与执行结果 */
-  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean): Promise<RunTaskResult> {
+  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string): Promise<RunTaskResult> {
     const handler = findHandler(taskDef.scene);
     const session = applyEnvSessionOverrides(Http.loadSession(cfg.session_cookies_path, env));
     session.env = env;
 
-    // 设置日志上下文与日志文件
+    // 设置日志上下文（并发模式下 caseId 前缀隔离）
     setLogContext({ task: taskDef.name, scene: taskDef.scene, trace: getTraceId() });
-    const logFile = path.join(logsDir(func), 'run.log');
-    setLogFile(logFile);
+    if (caseId) {
+      setCaseId(caseId);
+    } else {
+      setCaseId('');
+      // 串行模式：每条用例独立日志文件（原始行为）
+      const logFile = path.join(logsDir(func), 'run.log');
+      setLogFile(logFile);
+    }
 
     // debug 目录（仅 --debug 模式使用）
     const dbgDir = debug ? debugDir(func) : undefined;
@@ -98,13 +107,66 @@ export class Engine {
       metrics: metrics.toJSON(),
     };
 
-    const dir = outputDir(func);
+    // 报告写入：并发模式用 caseId 子目录，串行模式用平铺目录
+    const dir = caseId ? caseOutputDir(func, caseId) : outputDir(func);
     const reporters = getReporters(reporter);
     const files: string[] = [];
     for (const r of reporters) {
       files.push(...r.write(dir, taskDef.name, reportData));
     }
     return { files, passRate: result.passRate, hasBlockingIssue };
+  }
+
+  /**
+   * 执行单个用例的完整链路（含超时检查、日志隔离、报告生成）。
+   * 并发模式下由 p-limit 调度调用，串行模式下直接调用。
+   */
+  private async runOneCase(
+    c: LoadedCase,
+    cfg: AppConfig,
+    env: string,
+    args: CliArgs,
+    tracker: ResultTracker,
+    startTime: number,
+    timeoutMs: number,
+    concurrency: number,
+  ): Promise<void> {
+    // 超时检查
+    if (Date.now() - startTime > timeoutMs) {
+      logger.warn(`执行超时（${args.timeout ?? 600}s），用例 ${c.name} 标记为超时中断`);
+      tracker.addTimeout(c.name, c.feature);
+      return;
+    }
+
+    // 生成 caseId（并发模式下用于日志前缀和报告隔离）
+    const concurrencyOn = concurrency > 1;
+    const caseId = concurrencyOn
+      ? `${c.feature || 'default'}-${Date.now()}-${c.name.replace(/[\s\\/:*?"<>|]/g, '_').slice(0, 30)}`
+      : '';
+
+    const tag = c.feature ? `[${c.feature}]` : '';
+    logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
+
+    try {
+      const func = args.func || c.feature || undefined;
+      const { files, passRate, hasBlockingIssue } = await this.runTask(
+        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined,
+      );
+      tracker.addResult({
+        name: c.name,
+        feature: c.feature,
+        pass: passRate === 100 && !hasBlockingIssue,
+        pending: false,
+        passRate,
+      });
+      tracker.reports.push(...files);
+    } catch (e: any) {
+      logger.error(`用例执行失败：${c.name} - ${e.message}`);
+      tracker.addResult({ name: c.name, feature: c.feature, pass: false, pending: false, passRate: 0 });
+    }
+
+    // 清除 caseId 前缀（避免影响后续用例日志）
+    if (concurrencyOn) setCaseId('');
   }
 
   /** CLI 主入口：解析参数 → 加载配置/任务 → 执行 → 返回退出码 */
@@ -131,6 +193,8 @@ export class Engine {
   --grep      按标签筛选用例（如 P0），支持与 --filter/--scene 组合（AND）
   --filter    按名称子串筛选用例
   --scene     按场景类型筛选用例
+  --concurrency <N>  并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行
+  --parallel         自动并发，并发数取 CPU 核心数（上限 4）。优先于 --concurrency
   --help      显示帮助
 
 退出码：
@@ -186,6 +250,20 @@ export class Engine {
     const startTime = Date.now();
     const timeoutMs = (args.timeout ?? 600) * 1000;
 
+    // 计算并发数：--parallel 优先于 --concurrency
+    const concurrency = args.parallel
+      ? Math.min(4, os.cpus().length)
+      : (args.concurrency ?? 1);
+
+    if (concurrency > 1) {
+      logger.info(`并发模式：concurrency=${concurrency}（同一 feature 串行，不同 feature 并行）`);
+      // 并发模式：设置共享日志文件
+      const logFunc = args.func || cases[0]?.feature;
+      if (logFunc) {
+        setLogFile(path.join(logsDir(logFunc), 'run.log'));
+      }
+    }
+
     // 自动扫描加载场景处理器
     const loadedScenes = await autoLoadScenes();
     Object.assign(SCENES, loadedScenes);
@@ -193,31 +271,34 @@ export class Engine {
       logger.warn('未加载到任何场景处理器，所有任务将以半自动模式执行');
     }
 
-    for (const c of cases) {
-      // 超时检查：已超时则标记剩余用例
-      if (Date.now() - startTime > timeoutMs) {
-        logger.warn(`执行超时（${args.timeout ?? 600}s），剩余用例标记为超时中断`);
-        tracker.addTimeout(c.name, c.feature);
-        continue;
+    if (concurrency === 1) {
+      // ── 串行模式（向后兼容，行为与改造前完全一致） ──
+      for (const c of cases) {
+        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency);
+      }
+    } else {
+      // ── 并发模式：按 feature 分组，组内串行 + 组间并行 ──
+      const groups = new Map<string, LoadedCase[]>();
+      for (const c of cases) {
+        const key = c.feature || 'default';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(c);
       }
 
-      const tag = c.feature ? `[${c.feature}]` : '';
-      logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
-      try {
-        const func = args.func || c.feature || undefined;
-        const { files, passRate, hasBlockingIssue } = await this.runTask(cfg, c.def, env, func, args.reporter, args.debug);
-        tracker.addResult({
-          name: c.name,
-          feature: c.feature,
-          pass: passRate === 100 && !hasBlockingIssue,
-          pending: false,
-          passRate,
-        });
-        tracker.reports.push(...files);
-      } catch (e: any) {
-        logger.error(`用例执行失败：${c.name} - ${e.message}`);
-        tracker.addResult({ name: c.name, feature: c.feature, pass: false, pending: false, passRate: 0 });
-      }
+      logger.info(`用例分组：${groups.size} 个 feature 组（${Array.from(groups.keys()).join(', ')}）`);
+
+      const limit = pLimit(concurrency);
+      const groupTasks = Array.from(groups.entries()).map(([feature, groupCases]) =>
+        limit(async () => {
+          logger.info(`▶ 开始执行 feature=${feature}（${groupCases.length} 个用例，串行）`);
+          for (const c of groupCases) {
+            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency);
+          }
+          logger.info(`✔ feature=${feature} 执行完毕`);
+        }),
+      );
+
+      await Promise.all(groupTasks);
     }
 
     const summary = tracker.getSummary();

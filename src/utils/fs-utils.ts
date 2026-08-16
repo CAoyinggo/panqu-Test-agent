@@ -52,6 +52,18 @@ export function outputDir(func?: string): string {
   return dir;
 }
 
+/**
+ * 计算用例级归档目录：output/<日期>/<功能名>/<caseId>/
+ * 并发模式下每个用例独立子目录，避免报告文件互相覆盖。
+ * caseId 为空时退化为 outputDir(func)（向后兼容串行模式）。
+ */
+export function caseOutputDir(func?: string, caseId?: string): string {
+  if (!caseId) return outputDir(func);
+  const dir = path.join(outputDir(func), caseId);
+  ensureDir(dir);
+  return dir;
+}
+
 /** 计算日志目录：output/<日期>/<功能名>/logs/ */
 export function logsDir(func?: string): string {
   const dir = path.join(outputDir(func), 'logs');

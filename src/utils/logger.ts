@@ -22,6 +22,7 @@ let ciMode = false;
 let logStream: fs.WriteStream | null = null;
 let logContext: { task?: string; scene?: string; trace?: string } = {};
 let currentStep = '';
+let currentCaseId = '';
 
 export function setLogLevel(level: LogLevel): void {
   currentLevel = level;
@@ -53,6 +54,11 @@ export function setLogContext(ctx: { task?: string; scene?: string; trace?: stri
   logContext = ctx;
 }
 
+/** 设置当前用例 ID（并发模式下日志前缀隔离） */
+export function setCaseId(caseId: string): void {
+  currentCaseId = caseId || '';
+}
+
 function shouldLog(level: LogLevel): boolean {
   return LEVELS.indexOf(level) >= LEVELS.indexOf(currentLevel);
 }
@@ -67,6 +73,7 @@ function writeJsonLine(level: string, msg: string): void {
     task: logContext.task || '',
     scene: logContext.scene || '',
     trace: logContext.trace || '',
+    caseId: currentCaseId || '',
     msg,
   };
   logStream.write(JSON.stringify(entry) + '\n');
@@ -75,12 +82,13 @@ function writeJsonLine(level: string, msg: string): void {
 function write(level: LogLevel, msg: string): void {
   if (!shouldLog(level)) return;
   const prefix = `[${level.toUpperCase()}]`;
+  const caseTag = currentCaseId ? `[${currentCaseId}] ` : '';
   if (noColor) {
     // eslint-disable-next-line no-console
-    console.log(`${prefix} ${msg}`);
+    console.log(`${prefix} ${caseTag}${msg}`);
   } else {
     // eslint-disable-next-line no-console
-    console.log(level === 'error' ? COLORS.error + prefix + RESET + ' ' + msg : COLORS[level] + prefix + RESET + ' ' + msg);
+    console.log(level === 'error' ? COLORS.error + prefix + RESET + ' ' + caseTag + msg : COLORS[level] + prefix + RESET + ' ' + caseTag + msg);
   }
   writeJsonLine(level, msg);
 }

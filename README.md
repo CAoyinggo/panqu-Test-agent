@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v3.2（多功能模块化版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
+> 版本：v3.3（并发执行版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
 > 标准化、可一键执行的功能测试流程交付包。**所有 AI 功能测试任务强制按此流程执行**。
 > 本流程为**多业务、即插即用的测试智能体框架**：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入。当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
 
@@ -10,6 +10,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v3.3 | 2026-08-16 | 并发执行：新增 `--concurrency <N>` / `--parallel` 参数；按 feature 分组（组内串行 + 组间并行）；`p-limit` 并发池；并发模式下报告写入 caseId 子目录 `output/<日期>/<功能名>/<caseId>/`；日志增加 `[caseId]` 前缀隔离；串行模式（默认）完全向后兼容 |
 | v3.2 | 2026-08-16 | 多功能模块化：用例目录按功能分子文件夹 `src/cases/<功能>/`（wan3-*.ts 去前缀移入 `wan3/`）；loader 递归扫描全部功能模块 + ignore 配置（common/base/shared）；`--task` 支持功能子目录 / 根目录全量 / 单文件（向后兼容）；迁移脚本按 JSON 文件名前缀自动建子文件夹；新增 `test:wan3/test:user/test:order` 脚本；真机回归 4 个 Wan3.0 任务报告与改动前完全一致（passRate 86%、步骤数、检查项结构） |
 | v3.0 | 2026-08-15 | TypeScript 重构：模块化分层 `src/`（core 引擎 / cases 用例 / assertions 断言 / reports 报告 / integrations 集成 / utils 工具 / plugins 场景 / config 配置）；插件式场景处理器 + 7 标准钩子 + 断言注册表；三格式报告（HTML/JSON/JUnit）；`--task` 支持文件或目录批量；渐进式迁移（旧 `scripts/` 保留） |
 | v2.0 | 2026-08-15 | 插件式重构：新增 `lib/scenes/` 场景处理器（video.js），run-test.js 通用化按 scene 路由；docs/05 模板通用化（去 Wan3.0 专属）；SOP 新增「新模块接入指引」；README 去 Wan3.0 化 |
@@ -99,6 +100,8 @@ node dist/bin/run-test.js --help
 | `--env` | 否 | 执行环境，默认 `test`，可选 `preonline` |
 | `--func` | 否 | 功能名称，用于归档目录 `output/<日期>/<功能名>/`（强制约定） |
 | `--reporter` | 否 | 报告格式，默认 `html`，可选 `html,json,junit`（逗号分隔多份） |
+| `--concurrency` | 否 | 并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行 |
+| `--parallel` | 否 | 自动并发，并发数取 CPU 核心数（上限 4）。优先于 `--concurrency` |
 | `--help` | 否 | 显示帮助 |
 
 ## 依赖
@@ -157,8 +160,11 @@ node dist/bin/run-test.js --help
 | `npm run build` | 编译 TS 到 `dist/` 并复制非 TS 资源（environments.json） |
 | `npm run test:all` | 编译 + 校验 JSON 源与 TS 用例一致性（离线，不扣积分） |
 | `npm run test:wan3` | 示例：真机执行 wan3 功能全部用例（归档到 `output/<日期>/wan3/`）。**如果您的功能名为 `user`，请替换为 `npm run test:user`**——每个功能对应一条 `test:<功能名>` 脚本 |
+| `npm run test:regression` | 全量回归：编译 + 执行所有功能模块（CI 模式，归档到各自功能目录） |
 | `npm run migrate -- [--force]` | 将 `tasks/*.json` 迁移为 `src/cases/<功能>/*.ts`（按前缀自动分目录，幂等） |
 | `node dist/bin/run-test.js --help` | 查看执行参数 |
+
+> **并发执行**：`--parallel` 或 `--concurrency <N>` 开启并发模式。按 feature 分组（组内串行避免积分冲突，组间并行缩短回归时间）。并发模式下报告写入 `<功能名>/<caseId>/` 子目录，日志加 `[caseId]` 前缀。不传参数时默认串行，行为与改造前完全一致。
 
 ## 项目说明格式规范
 

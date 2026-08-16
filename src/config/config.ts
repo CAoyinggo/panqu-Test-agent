@@ -31,6 +31,10 @@ export interface CliArgs {
   grep?: string | null;
   filter?: string | null;
   scene?: string | null;
+  /** 并发数（默认 1 = 串行） */
+  concurrency?: number | null;
+  /** 自动并发（取 CPU 核心数，上限 4） */
+  parallel?: boolean;
 }
 
 /** schema 校验错误：缺失字段/未知环境 */
@@ -71,9 +75,9 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
   return env;
 }
 
-/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--help） */
+/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
@@ -86,6 +90,8 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === '--grep') args.grep = argv[++i] ?? null;
     else if (a === '--filter') args.filter = argv[++i] ?? null;
     else if (a === '--scene') args.scene = argv[++i] ?? null;
+    else if (a === '--concurrency') args.concurrency = Number(argv[++i]) || 1;
+    else if (a === '--parallel') args.parallel = true;
     else if (a === '--help') args.help = true;
   }
   return args;
