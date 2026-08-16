@@ -13,6 +13,7 @@ export class JsonReporter implements Reporter {
     const payload = {
       schema: 'test-flow/report/json@1',
       generatedAt: new Date().toISOString(),
+      traceId: data.traceId || '',
       title: data.title,
       env: data.env,
       task: {
@@ -38,6 +39,7 @@ export class JsonReporter implements Reporter {
         net: data.billingData?.net,
         modelTrend: data.billingData?.modelTrend,
       },
+      metrics: data.metrics || {},
     };
     fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf-8');
     return [file];

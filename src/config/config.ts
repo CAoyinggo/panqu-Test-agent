@@ -25,6 +25,12 @@ export interface CliArgs {
   func?: string | null;
   reporter?: string | null;
   help?: boolean;
+  ci?: boolean;
+  timeout?: number | null;
+  debug?: boolean;
+  grep?: string | null;
+  filter?: string | null;
+  scene?: string | null;
 }
 
 /** schema 校验错误：缺失字段/未知环境 */
@@ -65,15 +71,21 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
   return env;
 }
 
-/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--help） */
+/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
     else if (a === '--env') args.env = argv[++i] ?? null;
     else if (a === '--func') args.func = argv[++i] ?? null;
     else if (a === '--reporter') args.reporter = argv[++i] ?? null;
+    else if (a === '--ci') args.ci = true;
+    else if (a === '--timeout') args.timeout = Number(argv[++i]) || null;
+    else if (a === '--debug') args.debug = true;
+    else if (a === '--grep') args.grep = argv[++i] ?? null;
+    else if (a === '--filter') args.filter = argv[++i] ?? null;
+    else if (a === '--scene') args.scene = argv[++i] ?? null;
     else if (a === '--help') args.help = true;
   }
   return args;

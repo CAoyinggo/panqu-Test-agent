@@ -153,4 +153,8 @@ export interface ReportData {
   issues: IssueItem[];
   passRate: number;
   assetInfo: AssetInfo;
+  /** 执行追踪 ID（Phase 3） */
+  traceId?: string;
+  /** 执行度量数据（Phase 3） */
+  metrics?: Record<string, unknown>;
 }

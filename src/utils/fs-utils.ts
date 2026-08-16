@@ -51,3 +51,17 @@ export function outputDir(func?: string): string {
   ensureDir(dir);
   return dir;
 }
+
+/** 计算日志目录：output/<日期>/<功能名>/logs/ */
+export function logsDir(func?: string): string {
+  const dir = path.join(outputDir(func), 'logs');
+  ensureDir(dir);
+  return dir;
+}
+
+/** 计算调试目录：output/<日期>/<功能名>/debug/ */
+export function debugDir(func?: string): string {
+  const dir = path.join(outputDir(func), 'debug');
+  ensureDir(dir);
+  return dir;
+}

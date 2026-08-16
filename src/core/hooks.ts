@@ -9,18 +9,20 @@ export type HookName =
   | 'beforeStep'
   | 'afterStep'
   | 'afterScene'
+  | 'teardown'
   | 'afterAll'
   | 'beforeReport';
 
 export type HookFn = (ctx: RunContext) => Promise<void> | void;
 
-/** 标准 7 钩子点（按执行顺序） */
+/** 标准 8 钩子点（按执行顺序） */
 export const HOOK_ORDER: HookName[] = [
   'beforeAll',
   'beforeScene',
   'beforeStep',
   'afterStep',
   'afterScene',
+  'teardown',
   'afterAll',
   'beforeReport',
 ];
