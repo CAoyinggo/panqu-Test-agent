@@ -16,6 +16,16 @@ export interface CaseResult {
   timedOut: boolean;
   pending: boolean;
   passRate: number;
+  /** 错误信息（失败/超时时填充） */
+  error?: string;
+  /** 错误堆栈（失败时填充） */
+  stack?: string;
+  /** 执行耗时（毫秒） */
+  durationMs?: number;
+  /** 用例场景类型 */
+  scene?: string;
+  /** 用例标签（用于优先级映射，如 ['P0', 'regression']） */
+  tags?: string[];
 }
 
 /** 执行结果汇总 */
@@ -27,6 +37,8 @@ export interface ExecutionSummary {
   timedOut: number;
   exitCode: ExitCode;
   reports: string[];
+  /** 全部用例明细（用于 JUnit/Allure 报告生成） */
+  results: CaseResult[];
 }
 
 /** 执行结果追踪器：逐条记录用例结果，最终汇总为退出码 */
@@ -41,8 +53,8 @@ export class ResultTracker {
   }
 
   /** 记录一条超时未完成的用例 */
-  addTimeout(name: string, feature?: string): void {
-    this.results.push({ name, feature, pass: false, timedOut: true, pending: false, passRate: 0 });
+  addTimeout(name: string, feature?: string, error?: string): void {
+    this.results.push({ name, feature, pass: false, timedOut: true, pending: false, passRate: 0, error });
     this.hasTimeout = true;
   }
 
@@ -63,7 +75,7 @@ export class ResultTracker {
     if (this.hasTimeout) exitCode = EXIT_CODE.TIMEOUT;
     else if (failed > 0) exitCode = EXIT_CODE.CASE_FAILED;
 
-    return { total, passed, failed, pending, timedOut, exitCode, reports: this.reports };
+    return { total, passed, failed, pending, timedOut, exitCode, reports: this.reports, results: this.results };
   }
 
   /** 格式化一行摘要（CI 模式用） */

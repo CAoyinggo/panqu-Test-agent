@@ -27,6 +27,8 @@ import { Billing } from '../integrations/billing.js';
 import { runDryRun } from './dry-run.js';
 import { Watcher, defaultWatchPaths, type WatchSummary } from './watcher.js';
 import { uploadReports, getOssConfigFromEnv } from '../utils/oss-uploader.js';
+import { generateJUnitXml } from '../utils/junit-reporter.js';
+import { generateAllureResults } from '../utils/allure-reporter.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -145,7 +147,7 @@ export class Engine {
     // 超时检查
     if (Date.now() - startTime > timeoutMs) {
       logger.warn(`执行超时（${args.timeout ?? 600}s），用例 ${c.name} 标记为超时中断`);
-      tracker.addTimeout(c.name, c.feature);
+      tracker.addTimeout(c.name, c.feature, `整体超时 ${args.timeout ?? 600}s`);
       return;
     }
 
@@ -158,22 +160,40 @@ export class Engine {
     const tag = c.feature ? `[${c.feature}]` : '';
     logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
 
+    const caseStart = Date.now();
+
     try {
       const func = args.func || c.feature || undefined;
       const { files, passRate, hasBlockingIssue } = await this.runTask(
         cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel,
       );
+      const durationMs = Date.now() - caseStart;
       tracker.addResult({
         name: c.name,
         feature: c.feature,
         pass: passRate === 100 && !hasBlockingIssue,
         pending: false,
         passRate,
+        durationMs,
+        scene: c.def.scene,
+        tags: c.def.tags,
       });
       tracker.reports.push(...files);
     } catch (e: any) {
+      const durationMs = Date.now() - caseStart;
       logger.error(`用例执行失败：${c.name} - ${e.message}`);
-      tracker.addResult({ name: c.name, feature: c.feature, pass: false, pending: false, passRate: 0 });
+      tracker.addResult({
+        name: c.name,
+        feature: c.feature,
+        pass: false,
+        pending: false,
+        passRate: 0,
+        error: e.message,
+        stack: e.stack,
+        durationMs,
+        scene: c.def.scene,
+        tags: c.def.tags,
+      });
     }
 
     // 清除 caseId 前缀（避免影响后续用例日志）
@@ -395,6 +415,25 @@ export class Engine {
       const metricsPath = path.join(outputDir(funcName), 'metrics.json');
       writeJson(metricsPath, metrics.toJSON());
       logger.info(`度量数据已写入：${metricsPath}`);
+    }
+
+    // ── 生成 JUnit XML 报告（跨用例级，供 CI 平台解析） ──
+    if (funcName) {
+      const junitDir = outputDir(funcName);
+      const junitFile = generateJUnitXml(summary, summary.results, {
+        outputDir: junitDir,
+        suiteName: 'test-flow',
+      });
+      if (junitFile) {
+        summary.reports.push(junitFile);
+      }
+
+      // ── 生成 Allure 结果 JSON ──
+      const allureFiles = generateAllureResults(summary, summary.results, {
+        outputDir: junitDir,
+        env,
+      });
+      summary.reports.push(...allureFiles);
     }
 
     // ── 上传报告到 OSS（--upload-reports 启用时） ──

@@ -28,7 +28,9 @@
     "security:local": "bash scripts/security/local-scan.sh",
     "security:full": "npm run security:audit && npm run security:semgrep && npm run security:gitleaks && npm run security:license",
     "deploy:smoke": "bash scripts/deploy/smoke-test-local.sh",
-    "deploy:notify": "node scripts/deploy/notify-feishu.mjs"
+    "deploy:notify": "node scripts/deploy/notify-feishu.mjs",
+    "ci:allure": "bash scripts/ci/generate-allure-html.sh",
+    "ci:summary": "bash scripts/ci/github-summary.sh"
   },
   "lint-staged": {
     "*.{ts,js,tsx,jsx}": "bash scripts/security/pre-commit-scan.sh"
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "allure-commandline": "^2.30.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
     "typescript": "^5.9.3"

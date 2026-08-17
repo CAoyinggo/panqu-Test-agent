@@ -80,6 +80,14 @@ jobs:
             ${{ github.event.inputs.func && format('--func {0}', github.event.inputs.func) || '' }} \
             --ci --upload-reports
 
+      - name: Generate Allure HTML report
+        if: always()
+        run: bash scripts/ci/generate-allure-html.sh || echo "Allure HTML generation skipped"
+
+      - name: Generate test summary
+        if: always()
+        run: bash scripts/ci/github-summary.sh
+
       - name: Upload report artifacts
         if: always()
         uses: actions/upload-artifact@v4
