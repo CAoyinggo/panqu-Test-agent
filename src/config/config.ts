@@ -1,8 +1,9 @@
-// 配置管理：加载 environments.json + 环境合并 + schema 校验 + 运行时参数覆盖
+// 配置管理：加载 environments.json + 环境变量覆盖（env-loader）+ schema 校验
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AppConfig, EnvironmentConfig } from '../core/types.js';
 import { logger } from '../utils/logger.js';
+import { loadConfigFromEnv } from './env-loader.js';
 
 // 环境文件定位：兼容源码运行（src/）与编译产物（dist/）
 function resolveConfigPath(): string {
@@ -45,6 +46,8 @@ export interface CliArgs {
   dryRun?: boolean;
   /** Debug 级别（basic/verbose/full，默认 basic） */
   debugLevel?: string | null;
+  /** 上传报告到 OSS（--upload-reports） */
+  uploadReports?: boolean;
 }
 
 /** schema 校验错误：缺失字段/未知环境 */
@@ -68,14 +71,16 @@ function validate(cfg: AppConfig, envName?: string): void {
   }
 }
 
-/** 加载并校验配置，返回合并后的 AppConfig */
+/** 加载并校验配置，返回合并后的 AppConfig（环境变量覆盖已合并） */
 export function loadConfig(envOverride?: string | null): AppConfig {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
   const cfg = JSON.parse(raw) as AppConfig;
   const envName = envOverride || cfg.default_env;
-  validate(cfg, envName);
-  logger.debug(`配置已加载：default_env=${cfg.default_env}, session=${cfg.session_cookies_path}`);
-  return cfg;
+  // 环境变量覆盖（TESTFLOW_* 前缀变量，优先级 > environments.json）
+  const merged = loadConfigFromEnv(cfg);
+  validate(merged, envName);
+  logger.debug(`配置已加载：default_env=${merged.default_env}, session=${merged.session_cookies_path}`);
+  return merged;
 }
 
 /** 获取指定环境配置（带校验） */
@@ -87,7 +92,7 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
 
 /** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--auto-setup/--watch/--watch-delay/--dry-run/--debug-level/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, autoSetup: false, watch: false, watchDelay: null, dryRun: false, debugLevel: null };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, autoSetup: false, watch: false, watchDelay: null, dryRun: false, debugLevel: null, uploadReports: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
@@ -107,6 +112,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === '--watch') args.watch = true;
     else if (a === '--watch-delay') args.watchDelay = Number(argv[++i]) || 300;
     else if (a === '--dry-run') args.dryRun = true;
+    else if (a === '--upload-reports') args.uploadReports = true;
     else if (a === '--help') args.help = true;
   }
   return args;

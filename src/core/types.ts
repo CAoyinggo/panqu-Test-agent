@@ -35,6 +35,7 @@ export interface EnvironmentConfig {
 export interface AppConfig {
   default_env: string;
   session_cookies_path: string;
+  poll_interval_ms?: number;
   status_text: Record<number | string, string>;
   environments: Record<string, EnvironmentConfig>;
 }

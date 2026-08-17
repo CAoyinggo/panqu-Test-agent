@@ -12,14 +12,14 @@ export class FeishuNotifier implements Notifier {
     this.mentionMobiles = mentionMobiles;
   }
 
-  async notify(summary: ExecutionSummary): Promise<void> {
+  async notify(summary: ExecutionSummary, reportUrls?: string[]): Promise<void> {
     if (!this.webhook) {
       logger.warn('飞书 webhook 未配置，跳过通知');
       return;
     }
 
     const failed = summary.failed > 0;
-    const payload = this.buildCard(summary, failed);
+    const payload = this.buildCard(summary, failed, reportUrls);
 
     try {
       const res = await fetch(this.webhook, {
@@ -39,12 +39,22 @@ export class FeishuNotifier implements Notifier {
   }
 
   /** 构建飞书卡片消息 */
-  private buildCard(summary: ExecutionSummary, failed: boolean): any {
+  private buildCard(summary: ExecutionSummary, failed: boolean, reportUrls?: string[]): any {
     const statusText = failed ? '❌ 有失败' : summary.pending > 0 ? '⚠ 待人工' : '✅ 全通过';
-    const reportLinks = summary.reports
-      .filter((r) => r.endsWith('.html'))
-      .map((r) => `报告：${r}`)
-      .join('\n');
+    
+    // 报告链接：优先使用 OSS 上传后的可分享 URL，降级到本地路径
+    let reportLinks: string;
+    if (reportUrls && reportUrls.length > 0) {
+      reportLinks = reportUrls
+        .filter((u) => u.endsWith('.html'))
+        .map((u) => `📄 [查看报告](${u})`)
+        .join('\n');
+    } else {
+      reportLinks = summary.reports
+        .filter((r) => r.endsWith('.html'))
+        .map((r) => `报告：${r}`)
+        .join('\n');
+    }
 
     const elements: any[] = [
       {

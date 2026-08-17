@@ -16,7 +16,10 @@
     "test:wan3": "node dist/bin/run-test.js --task src/cases/wan3",
     "test:user": "node dist/bin/run-test.js --task src/cases/user",
     "test:order": "node dist/bin/run-test.js --task src/cases/order",
-    "test:regression": "npm run build && node dist/bin/run-test.js --task src/cases --ci"
+    "test:regression": "npm run build && node dist/bin/run-test.js --task src/cases --ci",
+    "docker:build": "docker build -t test-flow:latest .",
+    "docker:run": "docker run --rm -v $(pwd)/output:/app/output -v $(pwd)/src/cases:/app/src/cases:ro --env-file .env test-flow:latest",
+    "docker:test": "docker run --rm -v $(pwd)/output:/app/output --env-file .env test-flow:latest --task src/cases --ci --upload-reports"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -26,6 +29,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "ali-oss": "^6.23.0",
     "chokidar": "^3.6.0",
     "p-limit": "^7.3.1"
   }

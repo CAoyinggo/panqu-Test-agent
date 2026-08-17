@@ -26,6 +26,7 @@ import { snapshot as envSnapshot, compare as envCompare, saveBaseline as saveEnv
 import { Billing } from '../integrations/billing.js';
 import { runDryRun } from './dry-run.js';
 import { Watcher, defaultWatchPaths, type WatchSummary } from './watcher.js';
+import { uploadReports, getOssConfigFromEnv } from '../utils/oss-uploader.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -210,6 +211,7 @@ export class Engine {
   --watch            Watch 模式：监听 src/ 文件变更，自动重新编译并执行匹配用例
   --watch-delay <ms> 文件变更后防抖延迟（默认 300ms）
   --dry-run          Dry-run 模式：仅解析校验用例定义，不执行任何 HTTP 请求
+  --upload-reports   上传报告到 OSS（需配置 TESTFLOW_OSS_* 环境变量），飞书通知附带可分享链接
   --help      显示帮助
 
 退出码：
@@ -395,11 +397,37 @@ export class Engine {
       logger.info(`度量数据已写入：${metricsPath}`);
     }
 
+    // ── 上传报告到 OSS（--upload-reports 启用时） ──
+    let reportUrls: string[] | undefined;
+    if (args.uploadReports) {
+      const ossConfig = getOssConfigFromEnv();
+      if (ossConfig) {
+        try {
+          // output 根目录：outputDir 返回 .../output/<日期>/<功能>，上溯两级即 output 根
+          const outputBase = path.resolve(outputDir(funcName), '../..');
+          const uploadResult = await uploadReports(outputBase, ossConfig);
+          if (uploadResult.urls.length > 0) {
+            reportUrls = uploadResult.urls;
+            logger.info(`报告已上传 OSS（${uploadResult.uploaded.length} 个文件），可分享链接：`);
+            uploadResult.urls.forEach((u) => logger.info(`  ${u}`));
+          }
+          if (uploadResult.errors.length > 0) {
+            logger.warn(`部分报告上传失败（${uploadResult.errors.length} 个）：`);
+            uploadResult.errors.forEach((e) => logger.warn(`  ${e}`));
+          }
+        } catch (e: any) {
+          logger.warn(`报告上传 OSS 失败：${e.message}`);
+        }
+      } else {
+        logger.warn('--upload-reports 已启用但 OSS 配置不完整（需设置 TESTFLOW_OSS_ENDPOINT/BUCKET/ACCESS_KEY_ID/ACCESS_KEY_SECRET 环境变量）');
+      }
+    }
+
     // 通知器推送（飞书等，若配置开启）
     const notifierConfig = getNotifierConfig();
     if (notifierConfig.enabled && notifierConfig.webhook) {
       const notifier = new FeishuNotifier(notifierConfig.webhook, notifierConfig.mentionMobiles);
-      await notifier.notify(summary);
+      await notifier.notify(summary, reportUrls);
     }
 
     return summary;

@@ -1,0 +1,13 @@
+node_modules/
+output/
+.git/
+*.log
+*.md
+docs/
+scripts/_legacy/
+dist/
+test-flow-*.tgz
+.env
+.env.*
+!.env.example
+debug/

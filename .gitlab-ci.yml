@@ -1,0 +1,92 @@
+# GitLab CI 流水线：MR / main 分支自动触发回归测试
+# 使用方式：将此文件提交到仓库根目录即可自动生效
+# 需要 CI/CD Variables（Settings → CI/CD → Variables）：
+#   TESTFLOW_COOKIE           - test 环境 cookie_string
+#   TESTFLOW_PROJECT_ID        - test 环境 project_id
+#   TESTFLOW_OSS_ENDPOINT      - OSS endpoint（如需上传报告）
+#   TESTFLOW_OSS_BUCKET        - OSS bucket
+#   TESTFLOW_OSS_ACCESS_KEY_ID - OSS AK
+#   TESTFLOW_OSS_ACCESS_KEY_SECRET - OSS SK
+#   TESTFLOW_REPORT_BASE_URL  - 报告公开访问前缀
+#   TESTFLOW_FEISHU_WEBHOOK    - 飞书通知 webhook（可选）
+
+stages:
+  - build
+  - test
+
+variables:
+  NODE_ENV: "production"
+
+# ── 构建阶段：安装依赖 + 编译 TypeScript ──
+build:
+  stage: build
+  image: node:18-alpine
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  script:
+    - npm ci
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"  # 手动触发
+
+# ── 测试阶段：执行回归 + 生成报告 ──
+test:
+  stage: test
+  image: node:18-alpine
+  needs:
+    - build
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+    policy: pull
+  script:
+    - npm run build  # 确保 dist/ 最新（cache miss 时兜底）
+    # 执行全量回归（CI 模式），可按需调整 --task 参数
+    - node dist/bin/run-test.js --task src/cases --ci --upload-reports
+  after_script:
+    - echo "测试执行完成，退出码 $?"
+    - |
+      if [ -d "output/$(date +%Y-%m-%d)/" ]; then
+        echo "报告目录内容："
+        find "output/$(date +%Y-%m-%d)/" -name "*.html" -o -name "*.json" | head -20
+      fi
+  artifacts:
+    paths:
+      - output/
+    reports:
+      junit: output/**/*.xml
+    expire_in: 7 days
+    when: always  # 即使测试失败也保存报告
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  # 允许手动触发（调试用）
+  when: on_success
+
+# ── 手动触发：单功能调试 ──
+test:wan3:
+  stage: test
+  image: node:18-alpine
+  needs:
+    - build
+  script:
+    - npm run build
+    - node dist/bin/run-test.js --task src/cases/wan3 --func wan3 --ci --upload-reports
+  artifacts:
+    paths:
+      - output/
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+  when: manual

@@ -1,0 +1,73 @@
+# GitHub Actions: push 到 main / PR 自动触发回归测试
+# 需要 Repository Secrets（Settings → Secrets and variables → Actions）：
+#   TESTFLOW_COOKIE           - test 环境 cookie_string
+#   TESTFLOW_PROJECT_ID        - test 环境 project_id
+#   TESTFLOW_OSS_ENDPOINT      - OSS endpoint
+#   TESTFLOW_OSS_BUCKET        - OSS bucket
+#   TESTFLOW_OSS_ACCESS_KEY_ID - OSS AK
+#   TESTFLOW_OSS_ACCESS_KEY_SECRET - OSS SK
+#   TESTFLOW_REPORT_BASE_URL   - 报告公开访问前缀
+#   TESTFLOW_FEISHU_WEBHOOK    - 飞书通知 webhook（可选）
+
+name: Test Flow CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # 手动触发
+    inputs:
+      task:
+        description: '任务路径（默认 src/cases）'
+        required: false
+        default: 'src/cases'
+      func:
+        description: '功能名（可选）'
+        required: false
+        default: ''
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        env:
+          TESTFLOW_COOKIE: ${{ secrets.TESTFLOW_COOKIE }}
+          TESTFLOW_PROJECT_ID: ${{ secrets.TESTFLOW_PROJECT_ID }}
+          TESTFLOW_FEISHU_WEBHOOK: ${{ secrets.TESTFLOW_FEISHU_WEBHOOK }}
+          TESTFLOW_OSS_ENDPOINT: ${{ secrets.TESTFLOW_OSS_ENDPOINT }}
+          TESTFLOW_OSS_BUCKET: ${{ secrets.TESTFLOW_OSS_BUCKET }}
+          TESTFLOW_OSS_ACCESS_KEY_ID: ${{ secrets.TESTFLOW_OSS_ACCESS_KEY_ID }}
+          TESTFLOW_OSS_ACCESS_KEY_SECRET: ${{ secrets.TESTFLOW_OSS_ACCESS_KEY_SECRET }}
+          TESTFLOW_REPORT_BASE_URL: ${{ secrets.TESTFLOW_REPORT_BASE_URL }}
+        run: |
+          node dist/bin/run-test.js \
+            --task ${{ github.event.inputs.task || 'src/cases' }} \
+            ${{ github.event.inputs.func && format('--func {0}', github.event.inputs.func) || '' }} \
+            --ci --upload-reports
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_id }}
+          path: output/
+          retention-days: 7

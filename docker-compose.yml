@@ -1,0 +1,53 @@
+# Docker Compose：一键运行测试智能体，支持多环境切换
+# 使用方式：
+#   docker compose run --rm test-flow --task src/cases/wan3 --func wan3 --ci
+#   docker compose --profile preonline run --rm test-flow --task src/cases --ci
+
+services:
+  test-flow:
+    build: .
+    image: test-flow:latest
+    container_name: test-flow
+    volumes:
+      # 报告输出挂载到宿主机，方便查看
+      - ./output:/app/output
+      # 用例目录挂载（开发时热更新用例，无需重新构建镜像）
+      - ./src/cases:/app/src/cases:ro
+    environment:
+      - TESTFLOW_ENV=${TESTFLOW_ENV:-test}
+      - TESTFLOW_COOKIE=${TESTFLOW_COOKIE:-}
+      - TESTFLOW_PROJECT_ID=${TESTFLOW_PROJECT_ID:-}
+      - TESTFLOW_ACCOUNT=${TESTFLOW_ACCOUNT:-}
+      - TESTFLOW_BASE_URL=${TESTFLOW_BASE_URL:-}
+      - TESTFLOW_FEISHU_WEBHOOK=${TESTFLOW_FEISHU_WEBHOOK:-}
+      - TESTFLOW_FEISHU_MENTION=${TESTFLOW_FEISHU_MENTION:-}
+      - TESTFLOW_OSS_ENDPOINT=${TESTFLOW_OSS_ENDPOINT:-}
+      - TESTFLOW_OSS_BUCKET=${TESTFLOW_OSS_BUCKET:-}
+      - TESTFLOW_OSS_ACCESS_KEY_ID=${TESTFLOW_OSS_ACCESS_KEY_ID:-}
+      - TESTFLOW_OSS_ACCESS_KEY_SECRET=${TESTFLOW_OSS_ACCESS_KEY_SECRET:-}
+      - TESTFLOW_REPORT_BASE_URL=${TESTFLOW_REPORT_BASE_URL:-}
+    profiles:
+      - default
+
+  # 预发布环境
+  test-flow-preonline:
+    build: .
+    image: test-flow:latest
+    container_name: test-flow-preonline
+    volumes:
+      - ./output:/app/output
+      - ./src/cases:/app/src/cases:ro
+    environment:
+      - TESTFLOW_ENV=preonline
+      - TESTFLOW_COOKIE=${TESTFLOW_COOKIE_PREONLINE:-}
+      - TESTFLOW_PROJECT_ID=${TESTFLOW_PROJECT_ID_PREONLINE:-}
+      - TESTFLOW_ACCOUNT=${TESTFLOW_ACCOUNT_PREONLINE:-}
+      - TESTFLOW_BASE_URL=${TESTFLOW_BASE_URL_PREONLINE:-}
+      - TESTFLOW_FEISHU_WEBHOOK=${TESTFLOW_FEISHU_WEBHOOK:-}
+      - TESTFLOW_OSS_ENDPOINT=${TESTFLOW_OSS_ENDPOINT:-}
+      - TESTFLOW_OSS_BUCKET=${TESTFLOW_OSS_BUCKET:-}
+      - TESTFLOW_OSS_ACCESS_KEY_ID=${TESTFLOW_OSS_ACCESS_KEY_ID:-}
+      - TESTFLOW_OSS_ACCESS_KEY_SECRET=${TESTFLOW_OSS_ACCESS_KEY_SECRET:-}
+      - TESTFLOW_REPORT_BASE_URL=${TESTFLOW_REPORT_BASE_URL:-}
+    profiles:
+      - preonline
