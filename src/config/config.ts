@@ -37,6 +37,14 @@ export interface CliArgs {
   parallel?: boolean;
   /** 启用数据工厂（执行 setup/teardown，默认关闭） */
   autoSetup?: boolean;
+  /** Watch 模式：监听文件变更自动重跑 */
+  watch?: boolean;
+  /** Watch 防抖延迟（毫秒，默认 300） */
+  watchDelay?: number | null;
+  /** Dry-run 模式：仅解析校验，不执行 */
+  dryRun?: boolean;
+  /** Debug 级别（basic/verbose/full，默认 basic） */
+  debugLevel?: string | null;
 }
 
 /** schema 校验错误：缺失字段/未知环境 */
@@ -77,9 +85,9 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
   return env;
 }
 
-/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--auto-setup/--help） */
+/** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--auto-setup/--watch/--watch-delay/--dry-run/--debug-level/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, autoSetup: false };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, autoSetup: false, watch: false, watchDelay: null, dryRun: false, debugLevel: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
@@ -89,12 +97,16 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === '--ci') args.ci = true;
     else if (a === '--timeout') args.timeout = Number(argv[++i]) || null;
     else if (a === '--debug') args.debug = true;
+    else if (a === '--debug-level') args.debugLevel = argv[++i] ?? null;
     else if (a === '--grep') args.grep = argv[++i] ?? null;
     else if (a === '--filter') args.filter = argv[++i] ?? null;
     else if (a === '--scene') args.scene = argv[++i] ?? null;
     else if (a === '--concurrency') args.concurrency = Number(argv[++i]) || 1;
     else if (a === '--parallel') args.parallel = true;
     else if (a === '--auto-setup') args.autoSetup = true;
+    else if (a === '--watch') args.watch = true;
+    else if (a === '--watch-delay') args.watchDelay = Number(argv[++i]) || 300;
+    else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--help') args.help = true;
   }
   return args;

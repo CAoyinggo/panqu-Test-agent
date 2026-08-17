@@ -1,5 +1,23 @@
 // 核心类型定义：贯穿引擎/用例/断言/报告各层
 
+/** Debug 级别（--debug-level 参数） */
+export type DebugLevel = 'basic' | 'verbose' | 'full';
+
+/** HTTP 请求/响应记录（--debug verbose/full 模式下保存） */
+export interface HttpRecord {
+  step: string;
+  timestamp: string;
+  name: string;
+  method: string;
+  url: string;
+  requestHeaders?: Record<string, string>;
+  requestBody?: unknown;
+  responseStatus: number;
+  responseBody?: unknown;
+  durationMs: number;
+  error?: string;
+}
+
 /** 环境配置 */
 export interface EnvironmentConfig {
   base_url: string;
@@ -57,6 +75,8 @@ export interface TaskDef {
   setup?: string;
   /** teardown 预留（后置数据清理，暂未实现） */
   teardown?: string;
+  /** 外部数据文件路径（dry-run 模式校验文件是否存在） */
+  dataFile?: string;
   [key: string]: unknown;
 }
 
@@ -187,6 +207,8 @@ export interface ReportData {
   envDiff?: EnvDiff;
   /** 数据上下文快照（--auto-setup 模式） */
   dataContext?: DataContext;
+  /** debug 产物目录路径（供报告器生成链接） */
+  debugProducts?: string;
 }
 
 /**

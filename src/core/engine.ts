@@ -1,17 +1,18 @@
 // 核心引擎：加载配置/会话/任务 → 匹配场景处理器 → 执行 pipeline → 生成报告
 // 支持：退出码规范、CI 模式、整体超时、环境变量注入、trace-id、metrics、JSON 日志
 // 并发：--parallel/--concurrency，按 feature 分组串行 + 组间并行
+// DX 优化：--watch（文件监听自动重跑）、--dry-run（仅校验不执行）、--debug-level（增强调试）
 import path from 'node:path';
 import os from 'node:os';
 import pLimit from 'p-limit';
-import type { AppConfig, TaskDef, ReportData, EnvDiff } from './types.js';
+import type { AppConfig, TaskDef, ReportData, EnvDiff, DebugLevel } from './types.js';
 import { HookRegistry } from './hooks.js';
 import type { SceneHandler } from './scene-handler.js';
 import { Pipeline, PipelineResult } from './pipeline.js';
 import { Http } from '../integrations/http.js';
 import { loadConfig, parseArgs, CliArgs } from '../config/config.js';
 import { getReporters } from '../reports/factory.js';
-import { outputDir, caseOutputDir, logsDir, debugDir, writeJson } from '../utils/fs-utils.js';
+import { outputDir, caseOutputDir, logsDir, debugDir, caseDebugDir, writeJson } from '../utils/fs-utils.js';
 import { logger, setCiMode, setLogLevel, setLogFile, setLogContext, setCaseId } from '../utils/logger.js';
 import { loadCases, LoadedCase } from '../cases/loader.js';
 import { filterCases } from '../cases/filter.js';
@@ -23,6 +24,8 @@ import { autoLoadScenes } from '../plugins/loader.js';
 import { FeishuNotifier } from '../integrations/notifiers/feishu.js';
 import { snapshot as envSnapshot, compare as envCompare, saveBaseline as saveEnvBaseline, loadBaseline as loadEnvBaseline } from './env-checker.js';
 import { Billing } from '../integrations/billing.js';
+import { runDryRun } from './dry-run.js';
+import { Watcher, defaultWatchPaths, type WatchSummary } from './watcher.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -64,7 +67,7 @@ export class Engine {
   }
 
   /** 运行单个任务，返回报告文件路径列表与执行结果 */
-  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff): Promise<RunTaskResult> {
+  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff, debugLevel?: DebugLevel): Promise<RunTaskResult> {
     const handler = findHandler(taskDef.scene);
     const session = applyEnvSessionOverrides(Http.loadSession(cfg.session_cookies_path, env));
     session.env = env;
@@ -80,10 +83,10 @@ export class Engine {
       setLogFile(logFile);
     }
 
-    // debug 目录（仅 --debug 模式使用）
-    const dbgDir = debug ? debugDir(func) : undefined;
+    // debug 目录（仅 --debug 模式使用；verbose/full 级别按用例隔离到 caseId 子目录）
+    const dbgDir = debug ? caseDebugDir(func, caseId) : undefined;
 
-    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff }, this.hooks);
+    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff, debugLevel }, this.hooks);
     const result: PipelineResult = await pipeline.run();
 
     const hasBlockingIssue = result.issues.some((i) => i.level === '阻塞');
@@ -109,6 +112,7 @@ export class Engine {
       metrics: metrics.toJSON(),
       envDiff,
       dataContext: result.dataContext,
+      debugProducts: result.debugProducts,
     };
 
     // 报告写入：并发模式用 caseId 子目录，串行模式用平铺目录
@@ -135,6 +139,7 @@ export class Engine {
     timeoutMs: number,
     concurrency: number,
     envDiff?: EnvDiff,
+    debugLevel?: DebugLevel,
   ): Promise<void> {
     // 超时检查
     if (Date.now() - startTime > timeoutMs) {
@@ -155,7 +160,7 @@ export class Engine {
     try {
       const func = args.func || c.feature || undefined;
       const { files, passRate, hasBlockingIssue } = await this.runTask(
-        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff,
+        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel,
       );
       tracker.addResult({
         name: c.name,
@@ -195,12 +200,16 @@ export class Engine {
   --ci        CI 模式：关闭彩色输出、抑制分隔线、末尾打印摘要、严格退出码
   --timeout   整体执行超时（秒），默认 600。超时后未完成用例标记「超时中断」，退出码 3
   --debug     调试模式：日志降到 debug 级别，中间产物落盘到 debug/ 目录
+  --debug-level <level>  调试级别：basic（默认）/ verbose（HTTP+上下文快照）/ full（全部+堆栈）
   --grep      按标签筛选用例（如 P0），支持与 --filter/--scene 组合（AND）
   --filter    按名称子串筛选用例
   --scene     按场景类型筛选用例
   --concurrency <N>  并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行
   --parallel         自动并发，并发数取 CPU 核心数（上限 4）。优先于 --concurrency
   --auto-setup       启用数据工厂（执行 setup/teardown，默认关闭）
+  --watch            Watch 模式：监听 src/ 文件变更，自动重新编译并执行匹配用例
+  --watch-delay <ms> 文件变更后防抖延迟（默认 300ms）
+  --dry-run          Dry-run 模式：仅解析校验用例定义，不执行任何 HTTP 请求
   --help      显示帮助
 
 退出码：
@@ -217,12 +226,6 @@ export class Engine {
     if (args.ci) setCiMode(true);
     // Debug 模式：日志降到 debug 级别
     if (args.debug) setLogLevel('debug');
-
-    // 生成 trace-id，初始化 metrics
-    const traceId = generateTraceId();
-    metrics.reset();
-    metrics.start();
-    logger.info(`Trace ID: ${traceId}`);
 
     // 环境优先级：CLI --env > TESTFLOW_ENV > 配置 default_env
     const envName = args.env || getEnvFromEnv() || undefined;
@@ -251,7 +254,56 @@ export class Engine {
       return EXIT_CODE.CONFIG_ERROR;
     }
 
+    // ── Dry-run 模式：仅解析校验，不执行任何 HTTP 请求 ──
+    if (args.dryRun) {
+      const result = runDryRun(cases);
+      return result.failed > 0 ? EXIT_CODE.CONFIG_ERROR : EXIT_CODE.SUCCESS;
+    }
+
+    // 自动扫描加载场景处理器
+    const loadedScenes = await autoLoadScenes();
+    Object.assign(SCENES, loadedScenes);
+    if (Object.keys(SCENES).length === 0) {
+      logger.warn('未加载到任何场景处理器，所有任务将以半自动模式执行');
+    }
+
     const env = envName || cfg.default_env;
+
+    // ── Watch 模式：监听文件变更自动重跑 ──
+    if (args.watch) {
+      if (args.ci) {
+        logger.warn('--watch 与 --ci 不兼容，已忽略 --watch（CI 模式不支持 watch）');
+      } else {
+        return await this.startWatch(args, cfg, env);
+      }
+    }
+
+    // ── 正常执行 ──
+    const summary = await this.executeCases(args, cfg, env, cases);
+
+    if (args.ci) {
+      // CI 模式：打印一行摘要
+      // eslint-disable-next-line no-console
+      console.log(ResultTracker.formatSummary(summary));
+    } else {
+      logger.step('========== 执行完成 ==========');
+      for (const f of summary.reports) logger.info('报告已生成：' + f);
+    }
+
+    return summary.exitCode;
+  }
+
+  /**
+   * 执行用例（串行/并发），返回执行汇总。
+   * 可被 main()（正常执行）和 Watcher（watch 重跑）复用。
+   */
+  private async executeCases(args: CliArgs, cfg: AppConfig, env: string, cases: LoadedCase[]): Promise<ExecutionSummary> {
+    // 生成 trace-id，初始化 metrics
+    const traceId = generateTraceId();
+    metrics.reset();
+    metrics.start();
+    logger.info(`Trace ID: ${traceId}`);
+
     const tracker = new ResultTracker();
     const startTime = Date.now();
     const timeoutMs = (args.timeout ?? 600) * 1000;
@@ -261,6 +313,12 @@ export class Engine {
       ? Math.min(4, os.cpus().length)
       : (args.concurrency ?? 1);
 
+    // Debug 级别（--debug-level）
+    const debugLevel = (args.debugLevel as DebugLevel) || 'basic';
+    if (args.debug && debugLevel !== 'basic') {
+      logger.info(`Debug 级别：${debugLevel}（${debugLevel === 'verbose' ? '保存 HTTP 请求/响应 + 上下文快照' : '保存全部数据 + 堆栈追踪'}）`);
+    }
+
     if (concurrency > 1) {
       logger.info(`并发模式：concurrency=${concurrency}（同一 feature 串行，不同 feature 并行）`);
       // 并发模式：设置共享日志文件
@@ -268,13 +326,6 @@ export class Engine {
       if (logFunc) {
         setLogFile(path.join(logsDir(logFunc), 'run.log'));
       }
-    }
-
-    // 自动扫描加载场景处理器
-    const loadedScenes = await autoLoadScenes();
-    Object.assign(SCENES, loadedScenes);
-    if (Object.keys(SCENES).length === 0) {
-      logger.warn('未加载到任何场景处理器，所有任务将以半自动模式执行');
     }
 
     // ── 环境一致性检测 ──
@@ -307,7 +358,7 @@ export class Engine {
     if (concurrency === 1) {
       // ── 串行模式（向后兼容，行为与改造前完全一致） ──
       for (const c of cases) {
-        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff);
+        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff, debugLevel);
       }
     } else {
       // ── 并发模式：按 feature 分组，组内串行 + 组间并行 ──
@@ -325,7 +376,7 @@ export class Engine {
         limit(async () => {
           logger.info(`▶ 开始执行 feature=${feature}（${groupCases.length} 个用例，串行）`);
           for (const c of groupCases) {
-            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff);
+            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff, debugLevel);
           }
           logger.info(`✔ feature=${feature} 执行完毕`);
         }),
@@ -351,16 +402,52 @@ export class Engine {
       await notifier.notify(summary);
     }
 
-    if (args.ci) {
-      // CI 模式：打印一行摘要
-      // eslint-disable-next-line no-console
-      console.log(ResultTracker.formatSummary(summary));
-    } else {
-      logger.step('========== 执行完成 ==========');
-      for (const f of summary.reports) logger.info('报告已生成：' + f);
-    }
+    return summary;
+  }
 
-    return summary.exitCode;
+  /**
+   * 启动 Watch 模式：监听源码变更，自动重新编译并执行匹配用例。
+   * 首次执行后进入 watch 循环，按 Ctrl+C 退出。
+   */
+  private async startWatch(args: CliArgs, cfg: AppConfig, env: string): Promise<number> {
+    const delay = args.watchDelay ?? 300;
+
+    const executeFn = async (): Promise<WatchSummary> => {
+      // 重新加载用例（拾取文件修改）
+      let cases: LoadedCase[];
+      try {
+        cases = await this.loadTask(args.task!);
+      } catch (e: any) {
+        logger.error(`用例加载失败：${e.message}`);
+        return { exitCode: 2, passed: 0, failed: 0, pending: 0, reports: [] };
+      }
+      cases = filterCases(cases, { grep: args.grep, filter: args.filter, scene: args.scene });
+      if (cases.length === 0) {
+        logger.warn('筛选后无匹配用例');
+        return { exitCode: 2, passed: 0, failed: 0, pending: 0, reports: [] };
+      }
+
+      // 重新加载场景处理器（拾取 handler 修改）
+      const loadedScenes = await autoLoadScenes();
+      Object.assign(SCENES, loadedScenes);
+
+      const summary = await this.executeCases(args, cfg, env, cases);
+      return {
+        exitCode: summary.exitCode,
+        passed: summary.passed,
+        failed: summary.failed,
+        pending: summary.pending,
+        reports: summary.reports,
+      };
+    };
+
+    const watcher = new Watcher(executeFn, {
+      watchPaths: defaultWatchPaths(),
+      delay,
+      ci: args.ci ?? false,
+    });
+
+    return watcher.start();
   }
 }
 

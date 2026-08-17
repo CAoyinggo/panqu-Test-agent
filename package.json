@@ -7,9 +7,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "start": "node dist/bin/run-test.js",
-    "dev": "tsc -p tsconfig.json --watch",
+    "dev": "node dist/bin/run-test.js --watch --debug",
+    "dev:ts": "tsc -p tsconfig.json --watch",
     "migrate": "node scripts/migrate-json-to-ts.ts",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node dist/bin/run-test.js --task src/cases --ci",
+    "test:unit": "node --test dist/**/*.test.js",
     "test:all": "npm run build && node scripts/verify-migration.mjs",
     "test:wan3": "node dist/bin/run-test.js --task src/cases/wan3",
     "test:user": "node dist/bin/run-test.js --task src/cases/user",
@@ -24,6 +26,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "chokidar": "^3.6.0",
     "p-limit": "^7.3.1"
   }
 }

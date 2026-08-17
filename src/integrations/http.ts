@@ -1,5 +1,6 @@
 // HTTP 封装：登录态注入、CSRF token 获取、统一请求日志、重试与超时
 import type { Session } from '../core/types.js';
+import type { HttpRecord } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { readJson } from '../utils/fs-utils.js';
 import { withRetry, type RetryOptions } from '../utils/retry.js';
@@ -27,13 +28,30 @@ export interface ApiOpts {
   retryable?: boolean;
 }
 
+/** HTTP 请求记录回调类型（debug verbose/full 模式使用） */
+export type HttpRecorder = (record: HttpRecord) => void;
+
 export class Http {
   baseUrl: string;
   cookieString: string;
+  /** 请求记录器（设置后每个请求/响应都会被记录） */
+  recorder?: HttpRecorder;
+  /** 当前步骤名（用于记录关联） */
+  currentStep: string = 'unknown';
 
   constructor(baseUrl: string, cookieString: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '') + '/';
     this.cookieString = cookieString;
+  }
+
+  /** 设置请求记录器（--debug-level verbose/full 模式） */
+  setRecorder(recorder: HttpRecorder): void {
+    this.recorder = recorder;
+  }
+
+  /** 设置当前步骤名（供 recorder 关联步骤） */
+  setStep(step: string): void {
+    this.currentStep = step;
   }
 
   /** 从页面 HTML 提取 CSRF token */
@@ -62,12 +80,17 @@ export class Http {
       const t0 = Date.now();
       const h: Record<string, string> = { ...API_HEADERS, ...(opts.headers || {}), cookie: this.cookieString };
       const fOpts: RequestInit = { method, headers: h };
-      if (opts.form) fOpts.body = opts.form as any;
-      else if (opts.body !== undefined && opts.body !== null) {
+      let reqBodyPreview: unknown = undefined;
+      if (opts.form) {
+        fOpts.body = opts.form as any;
+        reqBodyPreview = '(FormData)';
+      } else if (opts.body !== undefined && opts.body !== null) {
         fOpts.body = JSON.stringify(opts.body);
         h['content-type'] = 'application/json';
+        reqBodyPreview = opts.body;
       }
-      const res = await fetch(this.baseUrl + path, fOpts);
+      const fullUrl = this.baseUrl + path;
+      const res = await fetch(fullUrl, fOpts);
       const txt = await res.text();
       let j: any = {};
       try {
@@ -75,7 +98,25 @@ export class Http {
       } catch {
         j = { raw: txt.slice(0, 300) };
       }
-      logger.debug(`  [${name}] ${method} ${path} -> ${res.status} (${Date.now() - t0}ms)`);
+      const durationMs = Date.now() - t0;
+      logger.debug(`  [${name}] ${method} ${path} -> ${res.status} (${durationMs}ms)`);
+
+      // 记录请求/响应（debug verbose/full 模式）
+      if (this.recorder) {
+        this.recorder({
+          step: this.currentStep,
+          timestamp: new Date().toISOString(),
+          name,
+          method: methodUpper,
+          url: fullUrl,
+          requestHeaders: { ...h, cookie: '(hidden)' },
+          requestBody: reqBodyPreview,
+          responseStatus: res.status,
+          responseBody: j,
+          durationMs,
+        });
+      }
+
       return { status: res.status, json: j };
     }, retryOpts);
   }

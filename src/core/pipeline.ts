@@ -1,7 +1,7 @@
 // 流水线编排：固定 10 步流程 + 生命周期钩子触发 + teardown 核对
 // 通用骨架（登录态/素材/影响分析/计费/报告）与场景处理器（提交/详情/状态）解耦
 // 健壮性：try/catch 保证异常时仍出报告；计费等非关键接口失败降级不阻塞
-import type { AppConfig, TaskDef, Session, SubmitResult, BillingData, RunContext, CheckResult, DataContext, EnvDiff } from './types.js';
+import type { AppConfig, TaskDef, Session, SubmitResult, BillingData, RunContext, CheckResult, DataContext, EnvDiff, DebugLevel } from './types.js';
 import { HookRegistry } from './hooks.js';
 import { SceneHandler } from './scene-handler.js';
 import { Http } from '../integrations/http.js';
@@ -28,6 +28,8 @@ export interface PipelineOptions {
   autoSetup?: boolean;
   /** 环境差异检测结果（由 engine 传入） */
   envDiff?: EnvDiff;
+  /** Debug 级别（--debug-level，basic/verbose/full） */
+  debugLevel?: DebugLevel;
 }
 
 export interface PipelineResult {
@@ -44,6 +46,8 @@ export interface PipelineResult {
   taskId: number | null;
   /** 数据上下文（--auto-setup 模式产出） */
   dataContext?: DataContext;
+  /** debug 产物目录路径（供报告器生成链接） */
+  debugProducts?: string;
 }
 
 export class Pipeline {
@@ -76,6 +80,41 @@ export class Pipeline {
     if (this.opts.debugDir) {
       writeJson(path.join(this.opts.debugDir, filename), data);
     }
+  }
+
+  /** 是否启用 verbose/full 级别 debug */
+  private isVerboseDebug(): boolean {
+    return this.opts.debugLevel === 'verbose' || this.opts.debugLevel === 'full';
+  }
+
+  /** 保存 RunContext 快照（verbose/full 模式） */
+  private snapshotCtx(step: string, ctx: RunContext): void {
+    if (!this.isVerboseDebug()) return;
+    const safe: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(ctx)) {
+      // 跳过不可序列化的实例对象
+      if (v instanceof Http || (v && typeof v === 'object' && 'baseUrl' in v)) continue;
+      if (v && typeof v === 'object' && 'byType' in v) continue; // Assets 实例
+      if (v && typeof v === 'object' && 'environments' in v) continue; // AppConfig
+      try {
+        JSON.stringify(v);
+        safe[k] = v;
+      } catch {
+        safe[k] = `(不可序列化: ${typeof v})`;
+      }
+    }
+    this.saveDebug(`ctx-snapshot-${step}.json`, safe);
+  }
+
+  /** 为 Http 实例设置请求记录器（verbose/full 模式） */
+  private httpCounter = 0;
+  private setupHttpRecorder(http: Http): void {
+    if (!this.isVerboseDebug()) return;
+    http.setRecorder((record) => {
+      this.httpCounter++;
+      const num = String(this.httpCounter).padStart(3, '0');
+      this.saveDebug(`http-${num}-${record.name}.json`, record);
+    });
   }
 
   /** 带计时的执行（记录到 metrics） */
@@ -139,6 +178,8 @@ export class Pipeline {
       logger.info(`登录态：${session.account || session.nickname}（过期时间 ${exp.toLocaleString('zh-CN')}）`);
       if (exp < new Date()) logger.warn('登录态已过期，请重新提供');
       else logger.info('登录态有效');
+      this.saveDebug('01-session.json', { account: session.account, nickname: session.nickname, project_id: session.project_id, token_exp: exp.toISOString(), env });
+      this.snapshotCtx('01-session', ctx);
 
       // 2. 素材库
       logger.step('[2/10] 素材库检查（Test-panqu）...');
@@ -148,16 +189,22 @@ export class Pipeline {
         logger.info(`  image=${assetScan.byType.image.length} | audio=${assetScan.byType.audio.length} | video=${assetScan.byType.video.length} | text=${assetScan.byType.text.length}`);
       }
       ctx.assets = assets;
+      this.saveDebug('02-assets.json', { exists: assetScan.exists, byType: assetScan.exists ? { image: assetScan.byType.image.length, audio: assetScan.byType.audio.length, video: assetScan.byType.video.length, text: assetScan.byType.text.length } : null });
+      this.snapshotCtx('02-assets', ctx);
 
       // 3. 影响分析
       logger.step('[3/10] 数据隔离/影响分析...');
       impact = buildImpactList(taskDef);
       ctx.impact = impact;
+      this.saveDebug('03-impact.json', impact);
 
       // 4. HTTP + 计费
       const http = new Http(baseUrl, session.cookie_string);
+      this.setupHttpRecorder(http);
+      http.setStep('4-pre-submit');
       const billing = new Billing(http, cfg.environments[env].billing_url!);
       ctx.http = http;
+      this.saveDebug('04-http-config.json', { baseUrl, billingUrl: cfg.environments[env].billing_url, env });
 
       // 4.1 提交前积分快照（用于快照差值断言）
       let beforeBalance: { available_points: number; consumed_7d: number } | undefined;
@@ -168,6 +215,8 @@ export class Pipeline {
       } catch (e: any) {
         logger.warn(`提交前积分快照失败（已降级）：${e.message}`);
       }
+      this.saveDebug('041-before-balance.json', { beforeBalance });
+      this.snapshotCtx('041-before-balance', ctx);
 
       // 5. 素材引用解析
       logger.step('[4/10] 素材引用解析...');
@@ -189,12 +238,14 @@ export class Pipeline {
       // ── 场景执行（钩子 beforeScene） ──
       await this.hooks.run('beforeScene', ctx);
       let taskId: number | null = ctx.taskId;
+      this.snapshotCtx('05-before-submit', ctx);
 
       // 提交任务
       if (!taskId) {
         if (handler) {
           await this.hooks.run('beforeStep', ctx);
           logger.step('[5/10] 提交任务...');
+          http.setStep('5-submit');
           const r = await handler.submit(ctx);
           taskId = r.taskId;
           Object.assign(ctx.submit, r.submit);
@@ -211,23 +262,32 @@ export class Pipeline {
         ctx.submit.taskId = taskId;
         ctx.submit.status = '使用已有任务';
       }
+      this.saveDebug('05-submit.json', { taskId, submit: ctx.submit });
+      this.snapshotCtx('05-submit', ctx);
 
       // 详情 + 状态
       if (taskId && handler) {
         await this.hooks.run('beforeStep', ctx);
         logger.step('[6/10] 查询任务详情（落库核对）...');
+        http.setStep('6-detail');
         await handler.detail(ctx);
         await this.hooks.run('afterStep', ctx);
+        this.saveDebug('06-detail.json', { taskId, submit: ctx.submit, detail: ctx.submit.detail });
+        this.snapshotCtx('06-detail', ctx);
 
         await this.hooks.run('beforeStep', ctx);
         logger.step('[7/10] 查询任务状态...');
+        http.setStep('7-status');
         await handler.status(ctx);
         await this.hooks.run('afterStep', ctx);
+        this.saveDebug('07-status.json', { taskId, submit: ctx.submit, statusHistory: ctx.submit.statusHistory });
+        this.snapshotCtx('07-status', ctx);
       }
 
       // 7.1 安全探针：跨账号只读越权检测（用错误 project_id 访问任务详情）
       let securityProbe: { attempted: boolean; rejected: boolean; detail: string } = { attempted: false, rejected: false, detail: '未执行' };
       if (taskId) {
+        http.setStep('7.1-security-probe');
         try {
           const wrongPid = (session.project_id || 0) + 999999;
           const probeUrl = `${cfg.environments[env].detail_url}?id=${taskId}&project_id=${wrongPid}&task_log_id=0`;
@@ -250,6 +310,7 @@ export class Pipeline {
 
       // 计费核验（非关键接口，失败降级为 warning 不阻塞）
       logger.step('[8/10] 计费核验...');
+      http.setStep('8-billing');
       try {
         const summary = await billing.summary();
         const trend = await billing.modelTrend();
@@ -275,18 +336,27 @@ export class Pipeline {
         logger.warn(`计费核验异常（已降级跳过）：${e.message}`);
         billingData = { modelTrend: { found: false, modelName: taskDef.model_name || '' }, net: 0, beforeBalance, securityProbe };
       }
+      this.saveDebug('08-billing.json', billingData);
+      this.snapshotCtx('08-billing', ctx);
 
       // 数据隔离核验
       logger.step('[9/10] 数据隔离核验...');
       const verifyDef = { ...taskDef, account: session.account || session.nickname, project_id: session.project_id };
+      // 断言中间值（verbose/full 模式保存）
+      this.saveDebug('assertion-inputs.json', { verifyDef, submit: ctx.submit, billingData });
       checks = runDefaultAssertions(verifyDef, ctx.submit, billingData);
       this.saveDebug('09-checks.json', { checks, verifyDef });
       checks.forEach((c: any) => logger.info(`  ${c.pass ? '✅' : '❌'} ${c.name}：${c.detail}`));
+      this.snapshotCtx('09-checks', ctx);
 
       await this.hooks.run('afterScene', ctx);
     } catch (e: any) {
       mainError = e;
       logger.error(`执行异常：${e.message}`);
+      // full 模式：保存完整堆栈
+      if (this.opts.debugLevel === 'full' && e.stack) {
+        this.saveDebug('error-stacktrace.json', { message: e.message, stack: e.stack, name: e.name });
+      }
     }
 
     // ── teardown（无论成功失败都执行） ──
@@ -294,6 +364,8 @@ export class Pipeline {
     const teardownChecks = runTeardownCheck(ctx, billingData);
     checks.push(...teardownChecks);
     teardownChecks.forEach((c) => logger.info(`  ${c.pass ? '✅' : '❌'} ${c.name}：${c.detail}`));
+    this.saveDebug('10-teardown.json', { teardownChecks, submit: ctx.submit, billingData });
+    this.snapshotCtx('10-teardown', ctx);
 
     // ── 数据工厂 teardown（--auto-setup 模式，无论成功失败都执行） ──
     if (this.opts.autoSetup && dataContext) {
@@ -354,6 +426,7 @@ export class Pipeline {
       semiAuto,
       taskId: ctx.taskId,
       dataContext,
+      debugProducts: this.opts.debugDir,
     };
   }
 }

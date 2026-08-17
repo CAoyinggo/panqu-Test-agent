@@ -77,3 +77,15 @@ export function debugDir(func?: string): string {
   ensureDir(dir);
   return dir;
 }
+
+/**
+ * 计算用例级调试目录（--debug-level verbose/full 模式下使用）：
+ * - 并发模式（caseId 非空）：output/<日期>/<功能名>/<caseId>/debug/
+ * - 串行模式（caseId 为空）：output/<日期>/<功能名>/debug/
+ */
+export function caseDebugDir(func?: string, caseId?: string): string {
+  const base = caseId ? caseOutputDir(func, caseId) : outputDir(func);
+  const dir = path.join(base, 'debug');
+  ensureDir(dir);
+  return dir;
+}
