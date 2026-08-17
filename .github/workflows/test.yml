@@ -1,13 +1,21 @@
 # GitHub Actions: push 到 main / PR 自动触发回归测试
 # 需要 Repository Secrets（Settings → Secrets and variables → Actions）：
-#   TESTFLOW_COOKIE           - test 环境 cookie_string
-#   TESTFLOW_PROJECT_ID        - test 环境 project_id
-#   TESTFLOW_OSS_ENDPOINT      - OSS endpoint
-#   TESTFLOW_OSS_BUCKET        - OSS bucket
-#   TESTFLOW_OSS_ACCESS_KEY_ID - OSS AK
+#   TESTFLOW_COOKIE               - test 环境 cookie_string
+#   TESTFLOW_PROJECT_ID            - test 环境 project_id
+#   TESTFLOW_ACCOUNT               - 账号名（可选）
+#   TESTFLOW_BASE_URL              - API 基础地址（可选，覆盖 environments.json）
+#   TESTFLOW_SUBMIT_URL            - 提交接口路径（可选）
+#   TESTFLOW_STATUS_URL            - 状态查询接口路径（可选）
+#   TESTFLOW_DETAIL_URL            - 详情接口路径（可选）
+#   TESTFLOW_BILLING_URL           - 计费接口路径（可选）
+#   TESTFLOW_CSRF_PAGE             - CSRF 页面路径（可选）
+#   TESTFLOW_FEISHU_WEBHOOK        - 飞书通知 webhook（可选）
+#   TESTFLOW_FEISHU_MENTION        - 飞书 @ 手机号，逗号分隔（可选）
+#   TESTFLOW_OSS_ENDPOINT          - OSS endpoint（如需上传报告）
+#   TESTFLOW_OSS_BUCKET            - OSS bucket
+#   TESTFLOW_OSS_ACCESS_KEY_ID     - OSS AK
 #   TESTFLOW_OSS_ACCESS_KEY_SECRET - OSS SK
-#   TESTFLOW_REPORT_BASE_URL   - 报告公开访问前缀
-#   TESTFLOW_FEISHU_WEBHOOK    - 飞书通知 webhook（可选）
+#   TESTFLOW_REPORT_BASE_URL       - 报告公开访问前缀
 
 name: Test Flow CI
 
@@ -39,7 +47,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -52,7 +60,15 @@ jobs:
         env:
           TESTFLOW_COOKIE: ${{ secrets.TESTFLOW_COOKIE }}
           TESTFLOW_PROJECT_ID: ${{ secrets.TESTFLOW_PROJECT_ID }}
+          TESTFLOW_ACCOUNT: ${{ secrets.TESTFLOW_ACCOUNT }}
+          TESTFLOW_BASE_URL: ${{ secrets.TESTFLOW_BASE_URL }}
+          TESTFLOW_SUBMIT_URL: ${{ secrets.TESTFLOW_SUBMIT_URL }}
+          TESTFLOW_STATUS_URL: ${{ secrets.TESTFLOW_STATUS_URL }}
+          TESTFLOW_DETAIL_URL: ${{ secrets.TESTFLOW_DETAIL_URL }}
+          TESTFLOW_BILLING_URL: ${{ secrets.TESTFLOW_BILLING_URL }}
+          TESTFLOW_CSRF_PAGE: ${{ secrets.TESTFLOW_CSRF_PAGE }}
           TESTFLOW_FEISHU_WEBHOOK: ${{ secrets.TESTFLOW_FEISHU_WEBHOOK }}
+          TESTFLOW_FEISHU_MENTION: ${{ secrets.TESTFLOW_FEISHU_MENTION }}
           TESTFLOW_OSS_ENDPOINT: ${{ secrets.TESTFLOW_OSS_ENDPOINT }}
           TESTFLOW_OSS_BUCKET: ${{ secrets.TESTFLOW_OSS_BUCKET }}
           TESTFLOW_OSS_ACCESS_KEY_ID: ${{ secrets.TESTFLOW_OSS_ACCESS_KEY_ID }}

@@ -41,13 +41,15 @@ export function timestamp(): number {
 }
 
 /**
- * 计算归档目录：/Users/mac/agents/output/<日期>/[<功能名>]
+ * 计算归档目录：<outputDir>/<日期>/[<功能名>]
  * func 为空时只有日期目录；func 非空追加功能名子目录
+ * 输出根目录优先使用 TESTFLOW_OUTPUT_DIR 环境变量，未设置时回退到默认路径
  */
 export function outputDir(func?: string): string {
-  const base = `/Users/mac/agents/output/${todayStr()}`;
+  const outputRoot = process.env.TESTFLOW_OUTPUT_DIR || '/Users/mac/agents/output';
+  const base = path.join(outputRoot, todayStr());
   const f = (func || '').trim();
-  const dir = f ? `${base}/${f}` : base;
+  const dir = f ? path.join(base, f) : base;
   ensureDir(dir);
   return dir;
 }

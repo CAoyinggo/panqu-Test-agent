@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ── 编译 TypeScript 源码
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY scripts/ ./scripts/
 RUN npm run build
 
 # ── Stage 2: Runtime ── 仅保留编译产物 + 运行时依赖
-FROM node:18-alpine AS runtime
+FROM node:20-alpine AS runtime
 
 WORKDIR /app
 
@@ -34,6 +34,8 @@ RUN mkdir -p /app/output
 # 环境变量默认值
 ENV TESTFLOW_ENV=test
 ENV NODE_ENV=production
+ENV TESTFLOW_OUTPUT_DIR=/app/output
+ENV TESTFLOW_ASSETS_DIR=/app/assets
 
 # 入口点
 ENTRYPOINT ["node", "dist/bin/run-test.js"]

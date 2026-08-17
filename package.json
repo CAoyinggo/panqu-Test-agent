@@ -22,7 +22,7 @@
     "docker:test": "docker run --rm -v $(pwd)/output:/app/output --env-file .env test-flow:latest --task src/cases --ci --upload-reports"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.11.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

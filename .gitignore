@@ -3,3 +3,8 @@ dist/
 *.log
 .DS_Store
 output/
+
+# Environment variables (secrets)
+.env
+.env.*
+!.env.example

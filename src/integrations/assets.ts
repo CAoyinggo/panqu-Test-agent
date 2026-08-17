@@ -1,12 +1,12 @@
 // 素材库扫描与相对路径解析/上传/序列化
-// 素材库根目录：/Users/mac/agents/Test-panqu/（audio/photo/video/txt）
+// 素材库根目录：优先 TESTFLOW_ASSETS_DIR 环境变量，未设置回退到默认路径
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Http } from './http.js';
 import type { AssetScan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
-export const ASSETS_ROOT = '/Users/mac/agents/Test-panqu';
+export const ASSETS_ROOT = process.env.TESTFLOW_ASSETS_DIR || '/Users/mac/agents/Test-panqu';
 const SUBDIRS = ['audio', 'photo', 'video', 'txt'];
 
 const EXT_TYPE: Record<string, string> = {

@@ -1,14 +1,22 @@
 # GitLab CI 流水线：MR / main 分支自动触发回归测试
 # 使用方式：将此文件提交到仓库根目录即可自动生效
 # 需要 CI/CD Variables（Settings → CI/CD → Variables）：
-#   TESTFLOW_COOKIE           - test 环境 cookie_string
-#   TESTFLOW_PROJECT_ID        - test 环境 project_id
-#   TESTFLOW_OSS_ENDPOINT      - OSS endpoint（如需上传报告）
-#   TESTFLOW_OSS_BUCKET        - OSS bucket
-#   TESTFLOW_OSS_ACCESS_KEY_ID - OSS AK
+#   TESTFLOW_COOKIE             - test 环境 cookie_string
+#   TESTFLOW_PROJECT_ID          - test 环境 project_id
+#   TESTFLOW_ACCOUNT             - 账号名（可选）
+#   TESTFLOW_BASE_URL            - API 基础地址（可选，覆盖 environments.json）
+#   TESTFLOW_SUBMIT_URL          - 提交接口路径（可选）
+#   TESTFLOW_STATUS_URL          - 状态查询接口路径（可选）
+#   TESTFLOW_DETAIL_URL          - 详情接口路径（可选）
+#   TESTFLOW_BILLING_URL         - 计费接口路径（可选）
+#   TESTFLOW_CSRF_PAGE           - CSRF 页面路径（可选）
+#   TESTFLOW_FEISHU_WEBHOOK      - 飞书通知 webhook（可选）
+#   TESTFLOW_FEISHU_MENTION      - 飞书 @ 手机号，逗号分隔（可选）
+#   TESTFLOW_OSS_ENDPOINT        - OSS endpoint（如需上传报告）
+#   TESTFLOW_OSS_BUCKET          - OSS bucket
+#   TESTFLOW_OSS_ACCESS_KEY_ID   - OSS AK
 #   TESTFLOW_OSS_ACCESS_KEY_SECRET - OSS SK
-#   TESTFLOW_REPORT_BASE_URL  - 报告公开访问前缀
-#   TESTFLOW_FEISHU_WEBHOOK    - 飞书通知 webhook（可选）
+#   TESTFLOW_REPORT_BASE_URL     - 报告公开访问前缀
 
 stages:
   - build
@@ -20,7 +28,7 @@ variables:
 # ── 构建阶段：安装依赖 + 编译 TypeScript ──
 build:
   stage: build
-  image: node:18-alpine
+  image: node:20-alpine
   cache:
     key: ${CI_COMMIT_REF_SLUG}
     paths:
@@ -40,7 +48,7 @@ build:
 # ── 测试阶段：执行回归 + 生成报告 ──
 test:
   stage: test
-  image: node:18-alpine
+  image: node:20-alpine
   needs:
     - build
   cache:
@@ -70,13 +78,11 @@ test:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "web"
-  # 允许手动触发（调试用）
-  when: on_success
 
-# ── 手动触发：单功能调试 ──
+# ── 手动触发：单功能调试（仅 web 触发时出现，需手动点击执行） ──
 test:wan3:
   stage: test
-  image: node:18-alpine
+  image: node:20-alpine
   needs:
     - build
   script:
@@ -89,4 +95,4 @@ test:wan3:
     when: always
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
-  when: manual
+      when: manual  # 必须手动点击才执行
