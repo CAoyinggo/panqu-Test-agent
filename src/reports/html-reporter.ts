@@ -81,6 +81,21 @@ function buildReport(d: ReportData): string {
   const issueHtml = issueRows.length ? tableHtml(['级别', '问题', '说明'], issueRows) : '<p class="muted">无</p>';
   const manualHtml = manualRows.length ? tableHtml(['用例', '人工操作步骤'], manualRows) : '<p class="muted">本次无浏览器人工待办</p>';
 
+  // 并发调整历史
+  const concurrencyChanges = (d.metrics?.concurrencyChanges as Array<{ timestamp: number; from: number; to: number; reason: string; windowPassRate: number }>) || [];
+  const concurrencyHtml = concurrencyChanges.length
+    ? tableHtml(
+        ['时间', '调整前', '调整后', '原因', '窗口通过率'],
+        concurrencyChanges.map((c) => [
+          new Date(c.timestamp).toLocaleTimeString('zh-CN'),
+          String(c.from),
+          String(c.to),
+          c.reason === 'high_failure_rate' ? '失败率高，降级' : c.reason === 'high_pass_rate' ? '通过率高，升级' : c.reason,
+          `${(c.windowPassRate * 100).toFixed(0)}%`,
+        ]),
+      )
+    : '<p class="muted">未启用动态并发或无调整记录</p>';
+
   const ai = d.assetInfo || {};
   let assetHtml: string;
   if (ai.exists) {
@@ -179,7 +194,10 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--rule); co
   <h2>七、浏览器人工待办</h2>
   ${manualHtml}
 
-  ${d.debugProducts ? `<h2>八、Debug 产物</h2><div class="callout"><strong>调试目录：</strong><code>${esc(d.debugProducts)}</code><br><span class="muted">包含中间产物（HTTP 请求/响应、上下文快照、断言输入等），需 --debug --debug-level verbose/full 模式生成</span></div>` : ''}
+  <h2>八、并发调整历史</h2>
+  ${concurrencyHtml}
+
+  ${d.debugProducts ? `<h2>九、Debug 产物</h2><div class="callout"><strong>调试目录：</strong><code>${esc(d.debugProducts)}</code><br><span class="muted">包含中间产物（HTTP 请求/响应、上下文快照、断言输入等），需 --debug --debug-level verbose/full 模式生成</span></div>` : ''}
 
   <footer><p>由 test-flow 一键执行脚本自动生成 ｜ 数据来源：test.panqu.com API 实测</p></footer>
 </div>

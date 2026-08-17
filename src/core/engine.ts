@@ -319,6 +319,8 @@ export class Engine {
   --concurrency <N>  并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行
   --parallel         自动并发，并发数取 CPU 核心数（上限 4）。优先于 --concurrency
   --dynamic-concurrency  动态并发：根据成功率自动调整并发数（失败率高时降低，稳定后恢复）
+  --concurrency-min <N>  动态并发最小值（默认 1）
+  --concurrency-max <N>  动态并发最大值（默认等于 --concurrency 的 2 倍）
   --case-timeout <s>  用例级超时（秒），覆盖全局 --timeout
   --no-retry          禁用用例级失败重试
   --record            Mock 录制模式：拦截 HTTP 请求并保存为 fixtures
@@ -378,6 +380,12 @@ export class Engine {
       return result.failed > 0 ? EXIT_CODE.CONFIG_ERROR : EXIT_CODE.SUCCESS;
     }
 
+    // ── --record 与 --replay 互斥检查 ──
+    if (args.record && args.replay) {
+      logger.error('--record 与 --replay 互斥，不能同时使用');
+      return EXIT_CODE.CONFIG_ERROR;
+    }
+
     // 自动扫描加载场景处理器
     const loadedScenes = await autoLoadScenes();
     Object.assign(SCENES, loadedScenes);
@@ -434,9 +442,11 @@ export class Engine {
     // 动态并发控制器
     let dynConcurrency: DynamicConcurrencyController | null = null;
     if (args.dynamicConcurrency && concurrency > 1) {
-      dynConcurrency = new DynamicConcurrencyController(
-        createDefaultConcurrencyConfig(concurrency, Math.min(8, concurrency * 2)),
-      );
+      const cMin = args.concurrencyMin ?? 1;
+      const cMax = args.concurrencyMax ?? Math.min(8, concurrency * 2);
+      const config = createDefaultConcurrencyConfig(concurrency, cMax);
+      config.min = cMin;
+      dynConcurrency = new DynamicConcurrencyController(config);
     }
 
     // ── Mock 录制/回放 ──

@@ -101,3 +101,78 @@ export function createDefaultConcurrencyConfig(initial: number, max: number): Co
     adjustmentInterval: 5,
   };
 }
+
+// ── 纯函数：adjustConcurrency（可独立单元测试） ──
+
+export interface AdjustConcurrencyOptions {
+  /** 最小并发（默认 1） */
+  min: number;
+  /** 最大并发（默认等于 initial） */
+  max: number;
+  /** 失败率降级阈值（默认 0.3） */
+  failureRateThreshold?: number;
+  /** 通过率升级阈值（默认 0.9） */
+  passRateThreshold?: number;
+}
+
+export interface AdjustResult {
+  /** 调整后的并发数 */
+  concurrency: number;
+  /** 调整前并发数 */
+  previous: number;
+  /** 调整原因 */
+  reason: 'high_failure_rate' | 'high_pass_rate' | 'stable';
+  /** 当前窗口通过率 */
+  passRate: number;
+}
+
+/**
+ * 纯函数：根据当前通过率调整并发数。
+ *
+ * 算法：
+ * - 失败率 >= failureRateThreshold → 降级（减半，下限 min）
+ * - 通过率 >= passRateThreshold → 升级（+1，上限 max）
+ * - 其他 → 保持不变
+ *
+ * @param current 当前并发数
+ * @param successRate 当前窗口通过率（0-1）
+ * @param options 调整参数
+ * @returns 调整结果
+ */
+export function adjustConcurrency(
+  current: number,
+  successRate: number,
+  options: AdjustConcurrencyOptions,
+): AdjustResult {
+  const { min, max } = options;
+  const failureRateThreshold = options.failureRateThreshold ?? 0.3;
+  const passRateThreshold = options.passRateThreshold ?? 0.9;
+  const failureRate = 1 - successRate;
+
+  if (failureRate >= failureRateThreshold && current > min) {
+    const newConcurrency = Math.max(min, Math.floor(current / 2));
+    return {
+      concurrency: newConcurrency,
+      previous: current,
+      reason: 'high_failure_rate',
+      passRate: successRate,
+    };
+  }
+
+  if (successRate >= passRateThreshold && current < max) {
+    const newConcurrency = Math.min(max, current + 1);
+    return {
+      concurrency: newConcurrency,
+      previous: current,
+      reason: 'high_pass_rate',
+      passRate: successRate,
+    };
+  }
+
+  return {
+    concurrency: current,
+    previous: current,
+    reason: 'stable',
+    passRate: successRate,
+  };
+}

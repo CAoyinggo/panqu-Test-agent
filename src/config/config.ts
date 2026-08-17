@@ -38,6 +38,10 @@ export interface CliArgs {
   parallel?: boolean;
   /** 动态并发：根据成功率自动调整并发数 */
   dynamicConcurrency?: boolean;
+  /** 动态并发最小值（默认 1） */
+  concurrencyMin?: number | null;
+  /** 动态并发最大值（默认等于 --concurrency） */
+  concurrencyMax?: number | null;
   /** 用例级超时（秒），覆盖全局超时 */
   caseTimeout?: number | null;
   /** 禁用失败重试 */
@@ -102,7 +106,7 @@ export function getEnvironment(cfg: AppConfig, envName: string): EnvironmentConf
 
 /** 解析 CLI 参数（薄封装，支持 --task/--env/--func/--reporter/--ci/--timeout/--debug/--grep/--filter/--scene/--concurrency/--parallel/--dynamic-concurrency/--case-timeout/--no-retry/--record/--replay/--auto-setup/--watch/--watch-delay/--dry-run/--debug-level/--upload-reports/--help） */
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, dynamicConcurrency: false, caseTimeout: null, noRetry: false, record: false, replay: false, autoSetup: false, watch: false, watchDelay: null, dryRun: false, debugLevel: null, uploadReports: false };
+  const args: CliArgs = { task: null, env: null, func: null, reporter: null, help: false, ci: false, timeout: null, debug: false, grep: null, filter: null, scene: null, concurrency: null, parallel: false, dynamicConcurrency: false, concurrencyMin: null, concurrencyMax: null, caseTimeout: null, noRetry: false, record: false, replay: false, autoSetup: false, watch: false, watchDelay: null, dryRun: false, debugLevel: null, uploadReports: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') args.task = argv[++i] ?? null;
@@ -119,6 +123,8 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === '--concurrency') args.concurrency = Number(argv[++i]) || 1;
     else if (a === '--parallel') args.parallel = true;
     else if (a === '--dynamic-concurrency') args.dynamicConcurrency = true;
+    else if (a === '--concurrency-min') args.concurrencyMin = Number(argv[++i]) || 1;
+    else if (a === '--concurrency-max') args.concurrencyMax = Number(argv[++i]) || null;
     else if (a === '--case-timeout') args.caseTimeout = Number(argv[++i]) || null;
     else if (a === '--no-retry') args.noRetry = true;
     else if (a === '--record') args.record = true;

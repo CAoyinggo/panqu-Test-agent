@@ -13,6 +13,7 @@ export default defineConfig({
         'src/core/assertion-operators.ts',
         'src/core/path-extractor.ts',
         'src/cases/define.ts',
+        'src/utils/concurrency-controller.ts',
       ],
       exclude: ['node_modules/', 'dist/', 'tests/'],
       thresholds: {

@@ -46,7 +46,10 @@ class SeededRandom {
 export type GeneratorType =
   | 'string' | 'number' | 'boolean' | 'array' | 'object'
   | 'timestamp' | 'uuid' | 'email' | 'phone' | 'enum'
-  | 'boundary';
+  | 'boundary' | 'special';
+
+export type BoundaryMode = 'min' | 'max' | 'zero' | 'negative' | 'overflow';
+export type SpecialKind = 'empty_string' | 'null' | 'undefined' | 'whitespace' | 'unicode' | 'emoji';
 
 export interface DataTemplate {
   type: GeneratorType;
@@ -139,9 +142,9 @@ function generateTimestamp(format?: string): string | number {
   }
 }
 
-// ── 边界值生成 ──
+// ── 边界值生成（内部，基于 DataTemplate） ──
 
-function generateBoundaryValues(template: DataTemplate, rng: SeededRandom): unknown[] {
+function generateBoundaryFromTemplate(template: DataTemplate, rng: SeededRandom): unknown[] {
   const results: unknown[] = [];
 
   switch (template.type) {
@@ -220,7 +223,7 @@ export function generateData(template: DataTemplate, options: GenerateOptions = 
 
   // 边界模式
   if (options.boundary || template.type === 'boundary') {
-    return generateBoundaryValues(template, rng);
+    return generateBoundaryFromTemplate(template, rng);
   }
 
   switch (template.type) {
@@ -283,6 +286,19 @@ export function generateData(template: DataTemplate, options: GenerateOptions = 
         return rng.pick(template.values);
       }
       return undefined;
+
+    case 'special': {
+      const kind = (template.boundaryType as string | undefined) || 'empty_string';
+      switch (kind) {
+        case 'empty_string': return '';
+        case 'null': return null;
+        case 'undefined': return undefined;
+        case 'whitespace': return '   \t\n  ';
+        case 'unicode': return 'こんにちは你好안녕하세요';
+        case 'emoji': return '🚀🎉🔥💻✨';
+        default: return '';
+      }
+    }
 
     default:
       logger.warn(`未知生成器类型: ${template.type}`);
@@ -447,4 +463,37 @@ function schemaToTemplate(schema: Record<string, unknown>): DataTemplate {
   }
 
   return template;
+}
+
+// ── 导出：generateBoundaryValues（独立函数，按 base + mode 生成边界值） ──
+
+/**
+ * 根据基准值和边界模式生成边界值数组。
+ *
+ * @param base 基准值（数字或字符串）
+ * @param mode 边界模式
+ * @returns 边界值数组
+ */
+export function generateBoundaryValues(base: unknown, mode: BoundaryMode): unknown[] {
+  if (typeof base === 'number') {
+    switch (mode) {
+      case 'min': return [0, 1, -1, base];
+      case 'max': return [base, base + 1, Number.MAX_SAFE_INTEGER, Infinity];
+      case 'zero': return [0, -0, 0.0, 0.000001];
+      case 'negative': return [-1, -base, -Infinity, NaN];
+      case 'overflow': return [Number.MAX_SAFE_INTEGER, Infinity, -Infinity, 2 ** 53];
+    }
+  }
+  if (typeof base === 'string') {
+    const len = base.length;
+    switch (mode) {
+      case 'min': return ['', base.slice(0, 1), base];
+      case 'max': return [base, base + base, 'a'.repeat(len * 2), 'a'.repeat(10000)];
+      case 'zero': return ['', ' ', '\0'];
+      case 'negative': return ['null', 'undefined', 'NaN', 'false'];
+      case 'overflow': return ['a'.repeat(10000), 'a'.repeat(100000), base.repeat(100)];
+    }
+  }
+  // 默认：返回 null/undefined 边界
+  return [null, undefined, base];
 }
