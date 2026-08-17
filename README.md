@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v3.3（并发执行版）｜ 更新：2026-08-16 ｜ 维护：AI 测试智能体
+> 版本：v3.4（数据工厂与环境检测版）｜ 更新：2026-08-17 ｜ 维护：AI 测试智能体
 > 标准化、可一键执行的功能测试流程交付包。**所有 AI 功能测试任务强制按此流程执行**。
 > 本流程为**多业务、即插即用的测试智能体框架**：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入。当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
 
@@ -10,6 +10,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v3.4 | 2026-08-17 | 数据工厂与环境检测：完善 `DataFactory` 接口（`setup/teardown/generate` + `DataContext`）；新增 `--auto-setup` 参数启用数据工厂（默认关闭，`NoopDataFactory` 空实现兜底）；新增环境一致性检测（`env-checker.ts`：快照采集/对比/基线持久化 `env-baseline.json`，检测积分余额骤变/7天消耗异常/模型上下线/单价变更/配置变更，自动生成断言注入检查项）；pipeline 在 step 1 前执行 `setup`、teardown 后执行 `teardown`；报告数据新增 `envDiff`/`dataContext` 字段 |
 | v3.3 | 2026-08-16 | 并发执行：新增 `--concurrency <N>` / `--parallel` 参数；按 feature 分组（组内串行 + 组间并行）；`p-limit` 并发池；并发模式下报告写入 caseId 子目录 `output/<日期>/<功能名>/<caseId>/`；日志增加 `[caseId]` 前缀隔离；串行模式（默认）完全向后兼容 |
 | v3.2 | 2026-08-16 | 多功能模块化：用例目录按功能分子文件夹 `src/cases/<功能>/`（wan3-*.ts 去前缀移入 `wan3/`）；loader 递归扫描全部功能模块 + ignore 配置（common/base/shared）；`--task` 支持功能子目录 / 根目录全量 / 单文件（向后兼容）；迁移脚本按 JSON 文件名前缀自动建子文件夹；新增 `test:wan3/test:user/test:order` 脚本；真机回归 4 个 Wan3.0 任务报告与改动前完全一致（passRate 86%、步骤数、检查项结构） |
 | v3.0 | 2026-08-15 | TypeScript 重构：模块化分层 `src/`（core 引擎 / cases 用例 / assertions 断言 / reports 报告 / integrations 集成 / utils 工具 / plugins 场景 / config 配置）；插件式场景处理器 + 7 标准钩子 + 断言注册表；三格式报告（HTML/JSON/JUnit）；`--task` 支持文件或目录批量；渐进式迁移（旧 `scripts/` 保留） |
@@ -41,12 +42,12 @@ test-flow/
 │   ├── 04-新任务启动检查清单模板.md  # 新任务启动检查清单模板
 │   └── 05-项目说明模板.md       # 项目说明统一格式模板（通用）
 ├── src/                         # ★ TypeScript 源码（模块化分层）
-│   ├── core/                    # 核心引擎：types / engine / pipeline / hooks / scene-handler
+│   ├── core/                    # 核心引擎：types / engine / pipeline / hooks / scene-handler / data-factory / env-checker / teardown
 │   ├── cases/                   # 用例层：define / registry / loader（多功能模块化）
 │   │   ├── {feature}/           # ★ 功能模块：每个子文件夹 = 一个独立业务功能（wan3 / user / order / payment ...）
 │   │   │   └── {任务名}.ts      # 功能内用例脚本（如 wan3 下：wensheng / tusheng / quanneng / shouwei）
 │   │   └── (新功能)              # 新增功能只需在 src/cases/ 下新建子文件夹即可即插即用
-│   ├── assertions/              # 断言库：db-check / billing-check / isolation-check / account-check / impact
+│   ├── assertions/              # 断言库：db-check / billing-check / isolation-check / account-check / impact / security-check / chaos-check / status-flow-check
 │   ├── reports/                 # 报告器：html / json / junit + factory
 │   ├── integrations/            # 外部集成：http / billing / assets / isolation
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
@@ -102,6 +103,7 @@ node dist/bin/run-test.js --help
 | `--reporter` | 否 | 报告格式，默认 `html`，可选 `html,json,junit`（逗号分隔多份） |
 | `--concurrency` | 否 | 并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行 |
 | `--parallel` | 否 | 自动并发，并发数取 CPU 核心数（上限 4）。优先于 `--concurrency` |
+| `--auto-setup` | 否 | 启用数据工厂：执行前 `setup` 准备测试数据、执行后 `teardown` 清理（默认关闭，`NoopDataFactory` 空实现兜底） |
 | `--help` | 否 | 显示帮助 |
 
 ## 依赖
@@ -165,6 +167,8 @@ node dist/bin/run-test.js --help
 | `node dist/bin/run-test.js --help` | 查看执行参数 |
 
 > **并发执行**：`--parallel` 或 `--concurrency <N>` 开启并发模式。按 feature 分组（组内串行避免积分冲突，组间并行缩短回归时间）。并发模式下报告写入 `<功能名>/<caseId>/` 子目录，日志加 `[caseId]` 前缀。不传参数时默认串行，行为与改造前完全一致。
+
+> **数据工厂与环境检测**：`--auto-setup` 启用 `DataFactory` 接口（执行前 `setup` 准备数据、执行后 `teardown` 清理），默认关闭时由 `NoopDataFactory` 空实现兜底，行为不变。环境一致性检测默认开启：首次执行采集快照保存为 `env-baseline.json`，后续执行对比基线，检测积分余额骤变 / 7 天消耗异常 / 模型上下线 / 单价变更 / 配置变更，差异项自动注入检查项。检测失败时降级跳过，不影响主流程。
 
 ## 项目说明格式规范
 
