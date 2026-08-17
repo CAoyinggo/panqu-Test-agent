@@ -14,6 +14,7 @@ export default defineConfig({
         'src/core/path-extractor.ts',
         'src/cases/define.ts',
         'src/utils/concurrency-controller.ts',
+        'src/utils/assertion-visualizer.ts',
       ],
       exclude: ['node_modules/', 'dist/', 'tests/'],
       thresholds: {
