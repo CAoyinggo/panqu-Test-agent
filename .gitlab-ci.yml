@@ -108,7 +108,6 @@ security:audit:
     paths: [security-reports/]
     expire_in: 7 days
     when: always
-  allow_failure: true  # 先观察模式，后续可改为阻塞
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
@@ -174,6 +173,7 @@ security:trivy:
   variables:
     TRIVY_NO_PROGRESS: "true"
     TRIVY_CACHE_DIR: ".trivycache/"
+    DOCKER_BUILDKIT: "1"
   script:
     - mkdir -p security-reports
     # 扫描 Dockerfile 配置
@@ -182,7 +182,8 @@ security:trivy:
     # CI 环境中若无 Docker daemon，则仅扫描 Dockerfile 配置
     - |
       if command -v docker &>/dev/null; then
-        docker build -t test-flow:ci-scan .
+        export DOCKER_BUILDKIT=1
+        docker build --cache-from=type=local,src=.docker-cache --cache-to=type=local,dest=.docker-cache -t test-flow:ci-scan .
         trivy image --exit-code 1 --severity HIGH,CRITICAL --format json --output security-reports/trivy-image.json test-flow:ci-scan
         echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
       else
@@ -193,9 +194,11 @@ security:trivy:
     paths: [security-reports/]
     expire_in: 7 days
     when: always
-  allow_failure: true  # Docker 环境不可用时降级
   cache:
-    paths: [.trivycache/]
+    key: trivy-db-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .trivycache/
+      - .docker-cache/
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"

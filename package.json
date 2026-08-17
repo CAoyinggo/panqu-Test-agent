@@ -19,13 +19,25 @@
     "test:regression": "npm run build && node dist/bin/run-test.js --task src/cases --ci",
     "docker:build": "docker build -t test-flow:latest .",
     "docker:run": "docker run --rm -v $(pwd)/output:/app/output -v $(pwd)/src/cases:/app/src/cases:ro --env-file .env test-flow:latest",
-    "docker:test": "docker run --rm -v $(pwd)/output:/app/output --env-file .env test-flow:latest --task src/cases --ci --upload-reports"
+    "docker:test": "docker run --rm -v $(pwd)/output:/app/output --env-file .env test-flow:latest --task src/cases --ci --upload-reports",
+    "prepare": "husky",
+    "security:audit": "bash scripts/security/audit.sh",
+    "security:semgrep": "semgrep --config semgrep.yml --json --output security-reports/semgrep.json .",
+    "security:gitleaks": "gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source .",
+    "security:license": "bash scripts/security/license-check.sh",
+    "security:local": "bash scripts/security/local-scan.sh",
+    "security:full": "npm run security:audit && npm run security:semgrep && npm run security:gitleaks && npm run security:license"
+  },
+  "lint-staged": {
+    "*.{ts,js,tsx,jsx}": "bash scripts/security/pre-commit-scan.sh"
   },
   "engines": {
     "node": ">=20.11.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {

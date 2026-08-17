@@ -1,0 +1,49 @@
+# Dependabot 配置 — 自动依赖更新
+# 文档：https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# 安全漏洞更新：Dependabot 自动检测并创建 PR（无需 schedule 配置）
+# 版本更新：按 schedule 定期检查并创建 PR
+
+version: 2
+
+updates:
+  # ── npm 依赖更新（每周一） ──
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "deps"
+    # 排除项目自身内部包（如有）
+    ignore:
+      - dependency-name: "test-flow*"
+    # 分组策略：安全更新与常规更新分开
+    groups:
+      security-updates:
+        update-types: ["security"]
+        patterns: ["*"]
+      minor-updates:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  # ── GitHub Actions 更新（每周一） ──
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"

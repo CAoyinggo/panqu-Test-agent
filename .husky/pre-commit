@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Pre-commit hook: 运行 lint-staged（SAST 扫描暂存文件）
+# 由 husky 自动安装，跳过方式：git commit --no-verify
+
+npx lint-staged

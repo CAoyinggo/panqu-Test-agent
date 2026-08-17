@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+# Commit-msg hook: 校验 Conventional Commits 格式
+# 由 husky 自动安装，跳过方式：git commit --no-verify
+
+MSG_FILE=$1
+MSG=$(cat "$MSG_FILE")
+
+# Conventional Commits: type(scope): description
+PATTERN='^(feat|fix|docs|style|refactor|test|chore|ci|build|perf|security|revert)(\(.+\))?: .{1,100}'
+
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+  echo "❌ Commit message 格式不符合 Conventional Commits 规范"
+  echo ""
+  echo "正确格式: type(scope): description"
+  echo "  type:   feat|fix|docs|style|refactor|test|chore|ci|build|perf|security|revert"
+  echo "  scope:  可选，如 (security), (ci), (docker)"
+  echo ""
+  echo "示例:"
+  echo "  feat(security): 添加 Trivy 镜像扫描"
+  echo "  fix: 修复 OSS 上传重试逻辑"
+  echo "  docs: 更新 README"
+  exit 1
+fi

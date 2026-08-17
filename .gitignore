@@ -12,3 +12,4 @@ output/
 # Security scan reports (CI artifacts, not version controlled)
 security-reports/
 .trivycache/
+.docker-cache/
