@@ -10,8 +10,11 @@
     "dev": "node dist/bin/run-test.js --watch --debug",
     "dev:ts": "tsc -p tsconfig.json --watch",
     "migrate": "node scripts/migrate-json-to-ts.ts",
-    "test": "node dist/bin/run-test.js --task src/cases --ci",
-    "test:unit": "node --test dist/**/*.test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "node dist/bin/run-test.js --task src/cases --ci",
+    "test:unit:old": "node --test dist/**/*.test.js",
     "test:all": "npm run build && node scripts/verify-migration.mjs",
     "test:wan3": "node dist/bin/run-test.js --task src/cases/wan3",
     "test:user": "node dist/bin/run-test.js --task src/cases/user",
@@ -40,10 +43,13 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@vitest/coverage-v8": "^4.1.10",
+    "ajv": "^8.20.0",
     "allure-commandline": "^2.30.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "ali-oss": "^6.23.0",

@@ -21,6 +21,17 @@ function esc(s: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+function formatValueShort(v: unknown): string {
+  if (v === undefined) return 'undefined';
+  if (v === null) return 'null';
+  if (typeof v === 'string') return v.length > 50 ? v.slice(0, 50) + '...' : v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    const s = JSON.stringify(v);
+    return s.length > 50 ? s.slice(0, 50) + '...' : s;
+  } catch { return String(v); }
+}
+
 function badge(status: string): string {
   const [bg, label] = STATUS_BADGE[status] || STATUS_BADGE.INFO;
   return `<span class="badge" style="background:${bg};color:#fff">${label}</span>`;
@@ -54,6 +65,16 @@ function buildReport(d: ReportData): string {
   ]);
   const impactRows = (d.impact || []).map((i: ImpactItem) => [esc(i.type), esc(i.name), esc(i.action), esc(i.desc)]);
   const checkRows = (d.checks || []).map((c: CheckResult) => [esc(c.name), c.pass ? badge('PASS') : badge('FAIL'), esc(c.detail || '-')]);
+  const assertChecks = (d.checks || []).filter((c) => c.assertionType);
+  const assertGroups: Record<string, typeof assertChecks> = {};
+  for (const c of assertChecks) {
+    const t = c.assertionType || 'other';
+    if (!assertGroups[t]) assertGroups[t] = [];
+    assertGroups[t].push(c);
+  }
+  const assertGroupLabels: Record<string, string> = {
+    response: 'HTTP 响应', submit: '提交结果', billing: '计费数据', headers: '响应头', env: '环境', metrics: '性能指标', custom: '自定义'
+  };
   const manualRows = (d.manual || []).map((m) => [esc(m.id), esc(m.steps || '-')]);
   const issueRows = (d.issues || []).map((i) => [esc(i.level), esc(i.title), esc(i.desc || '')]);
 
@@ -104,6 +125,9 @@ code { background:#f1f5f9; border:1px solid var(--rule); border-radius:4px; padd
 .callout { background:var(--bg2); border-left:4px solid var(--accent2); padding:14px 16px; border-radius:0 8px 8px 0; margin:16px 0; }
 footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--rule); color:var(--muted); font-size:12.5px; }
 @media (max-width:768px){ .cards{grid-template-columns:repeat(2,1fr);} body{font-size:14px;} .wrap{padding:16px 12px 40px;} }
+.assert-fail { background:#fef2f2; }
+.assert-fail td:nth-child(4) { color:#dc2626; font-weight:600; }
+.assert-pass td:nth-child(4) { color:#16a34a; }
 </style>
 </head>
 <body>
@@ -133,6 +157,18 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--rule); co
   ${impactRows.length ? tableHtml(['类型', '对象', '动作', '说明'], impactRows) : '<p class="muted">无</p>'}
   <h3>4.2 数据正确性核验</h3>
   ${checkRows.length ? tableHtml(['核验项', '结果', '说明'], checkRows) : '<p class="muted">无</p>'}
+  <h3>4.3 断言详情</h3>
+  ${assertChecks.length ? Object.entries(assertGroups).map(([type, checks]) => {
+    const label = assertGroupLabels[type] || type;
+    const rows = checks.map((c) => {
+      const cls = c.pass ? 'assert-pass' : 'assert-fail';
+      const expected = c.expected !== undefined ? esc(formatValueShort(c.expected)) : '-';
+      const actual = c.actual !== undefined ? esc(formatValueShort(c.actual)) : '-';
+      const dur = c.durationMs != null ? c.durationMs + 'ms' : '-';
+      return `<tr class="${cls}"><td>${esc(c.name)}</td><td><code>${esc(c.operator || '-')}</code></td><td>${expected}</td><td>${actual}</td><td>${dur}</td><td>${c.pass ? badge('PASS') : badge('FAIL')}</td></tr>`;
+    }).join('');
+    return `<h4 style="margin:14px 0 6px;font-size:13px;color:var(--muted)">${esc(label)}（${checks.length} 条）</h4><div class="table-wrap"><table><thead><tr><th>断言项</th><th>操作符</th><th>期望值</th><th>实际值</th><th>耗时</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join('') : '<p class="muted">无声明式断言（仅使用业务适配器断言）</p>'}
 
   <h2>五、素材库使用</h2>
   ${assetHtml}

@@ -39,6 +39,8 @@ export interface ExecutionSummary {
   reports: string[];
   /** 全部用例明细（用于 JUnit/Allure 报告生成） */
   results: CaseResult[];
+  /** 失败的断言明细（用于飞书通知展示） */
+  failedChecks?: import('../core/types.js').CheckResult[];
 }
 
 /** 执行结果追踪器：逐条记录用例结果，最终汇总为退出码 */

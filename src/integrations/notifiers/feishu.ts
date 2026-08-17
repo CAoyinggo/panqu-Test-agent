@@ -1,6 +1,7 @@
 // 飞书通知器：执行结束推送摘要卡片，失败时 @ 责任人
 import type { Notifier } from './base.js';
 import type { ExecutionSummary } from '../../utils/exit-code.js';
+import type { CheckResult } from '../../core/types.js';
 import { logger } from '../../utils/logger.js';
 
 export class FeishuNotifier implements Notifier {
@@ -75,6 +76,30 @@ export class FeishuNotifier implements Notifier {
           content: `<at user_id="">${this.mentionMobiles.map((m) => `<at email="${m}"></at>`).join('')}</at>`,
         },
       });
+    }
+
+    // 失败断言详情
+    if (failed && summary.failedChecks && summary.failedChecks.length > 0) {
+      const assertDetails = summary.failedChecks
+        .filter((c) => c.assertionType || c.path)
+        .slice(0, 10) // 最多展示 10 条，避免消息过长
+        .map((c) => {
+          const path = c.path || '-';
+          const op = c.operator || '-';
+          const expected = c.expected !== undefined ? JSON.stringify(c.expected) : '-';
+          const actual = c.actual !== undefined ? JSON.stringify(c.actual) : '-';
+          return `• ${c.name}\n  path: ${path} | operator: ${op} | expected: ${expected} | actual: ${actual}`;
+        })
+        .join('\n');
+      if (assertDetails) {
+        elements.push({
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: `**失败断言明细**：\n${assertDetails}`,
+          },
+        });
+      }
     }
 
     return {

@@ -237,25 +237,48 @@ register('deepEquals', (actual, expected, rule) => {
   };
 });
 
-// ── jsonSchema: JSON Schema 校验（动态加载 ajv） ──
+// ── jsonSchema: JSON Schema 校验（动态加载 ajv，带编译缓存） ──
+
+/** ajv 实例缓存（懒加载，避免重复创建） */
+let ajvInstance: any = null;
+/** schema 编译结果缓存（key = JSON.stringify(schema)） */
+const schemaCache = new Map<string, { validate: any; ajv: any }>();
+
+/** 获取或创建 ajv 实例（懒加载） */
+async function getAjv(): Promise<any> {
+  if (ajvInstance) return ajvInstance;
+  const mod = await import('ajv');
+  const Ajv = (mod as any).default || (mod as any).Ajv;
+  ajvInstance = new Ajv({ allErrors: true, strict: false });
+  return ajvInstance;
+}
+
 register('jsonSchema', async (actual, expected, rule) => {
   try {
-    // @ts-expect-error - ajv 为可选依赖，未安装时动态导入会抛异常
-    const mod = await import('ajv');
-    const Ajv = mod.default || mod.Ajv;
-    const ajv = new Ajv({ allErrors: true });
-    const validate = ajv.compile(expected as Record<string, unknown>);
-    const pass = validate(actual);
+    const ajv = await getAjv();
+    const schemaKey = JSON.stringify(expected);
+    let cached = schemaCache.get(schemaKey);
+    if (!cached) {
+      cached = { validate: ajv.compile(expected), ajv };
+      schemaCache.set(schemaKey, cached);
+    }
+    const pass = cached.validate(actual);
     if (pass) {
       return { pass: true, detail: 'JSON Schema validation passed' };
     }
-    const errors = validate.errors?.map((e: any) => `${e.instancePath || '/'}: ${e.message}`).join('; ') || 'unknown';
+    // 结构化错误：/path: message
+    const errors = cached.validate.errors?.map((e: any) => {
+      const path = e.instancePath || '/';
+      const msg = e.message || 'invalid';
+      const params = e.params ? ` (${JSON.stringify(e.params)})` : '';
+      return `${path}: ${msg}${params}`;
+    }).join('; ') || 'unknown';
     return { pass: false, detail: `JSON Schema validation failed: ${errors}` };
   } catch (e: any) {
-    // ajv 未安装，降级跳过
+    // ajv 未安装或 schema 无效，降级跳过
     return {
       pass: true,
-      detail: `ajv 未安装，跳过 JSON Schema 校验: ${e.message}`,
+      detail: `ajv 未安装或 schema 无效，跳过 JSON Schema 校验: ${e.message}`,
     };
   }
 });

@@ -3,7 +3,7 @@
 import type { CheckResult } from './types.js';
 import type { AssertionOperator, AssertionRule } from './assertion-operators.js';
 import { applyOperatorAsync } from './assertion-operators.js';
-import { extractPath, formatValue } from './path-extractor.js';
+import { extractPath, formatValue, extractPathWithMeta, type PathMeta } from './path-extractor.js';
 import { logger } from '../utils/logger.js';
 
 // ── 类型定义 ──
@@ -168,15 +168,32 @@ function normalizeMode(mode?: string, combinator?: string): AssertionMode {
   }
 }
 
-/** 执行单条断言规则（含超时/重试） */
+/** 执行单条断言规则（含超时/重试/计时/上下文快照） */
 async function runRule(rule: AssertionRule, context: AssertionContext): Promise<CheckResult> {
   const { target, path, operator, expected, message, severity } = rule;
+  const t0 = Date.now();
 
-  // 提取实际值
-  const actual = extractValue(context, target, path);
+  // 提取实际值 + 上下文元信息
+  const targetObj = getTargetObject(context, target);
+  const meta = path ? extractPathWithMeta(targetObj, path) : undefined;
+  const actual = meta ? meta.value : extractValue(context, target, path);
 
   // 断言名称
   const name = message || `${target}.${path || ''} ${operator}`;
+
+  // CheckResult 公共字段
+  const baseResult: CheckResult = {
+    name,
+    pass: false,
+    detail: '',
+    level: severity,
+    assertionType: target as CheckResult['assertionType'],
+    path: path || '',
+    operator,
+    expected,
+    actual,
+    durationMs: 0,
+  };
 
   // 重试逻辑
   const retryCount = rule.retry?.count || 0;
@@ -194,23 +211,22 @@ async function runRule(rule: AssertionRule, context: AssertionContext): Promise<
     );
 
     if (result.pass) {
-      return {
-        name,
-        pass: true,
-        detail: result.detail,
-        level: severity,
-      };
+      baseResult.pass = true;
+      baseResult.detail = result.detail;
+      baseResult.durationMs = Date.now() - t0;
+      return baseResult;
     }
 
     // 最后一次尝试失败
     if (attempt === retryCount) {
-      logger.debug(`  ❌ ${name}: ${result.detail}`);
-      return {
-        name,
-        pass: false,
-        detail: `${result.detail}${attempt > 0 ? ` (after ${attempt + 1} attempts)` : ''}`,
-        level: severity,
-      };
+      // 构建失败详情：包含字段上下文快照
+      const retrySuffix = attempt > 0 ? ` (after ${attempt + 1} attempts)` : '';
+      const ctxSnapshot = buildContextSnapshot(meta, targetObj);
+      baseResult.pass = false;
+      baseResult.detail = `${result.detail}${retrySuffix}${ctxSnapshot}`;
+      baseResult.durationMs = Date.now() - t0;
+      logger.debug(`  ❌ ${name}: ${baseResult.detail}`);
+      return baseResult;
     }
 
     // 等待重试
@@ -218,7 +234,45 @@ async function runRule(rule: AssertionRule, context: AssertionContext): Promise<
     await sleep(retryInterval * Math.pow(2, attempt)); // 指数退避
   }
 
-  return { name, pass: false, detail: 'unreachable', level: severity };
+  baseResult.detail = 'unreachable';
+  baseResult.durationMs = Date.now() - t0;
+  return baseResult;
+}
+
+/** 获取 target 对应的上下文对象 */
+function getTargetObject(context: AssertionContext, target: string): unknown {
+  switch (target) {
+    case 'response': return context.response;
+    case 'submit': return context.submit;
+    case 'billing': return context.billing;
+    case 'headers': return context.headers ?? context.response?.headers;
+    case 'env': return context.env;
+    case 'metrics': return context.metrics;
+    case 'custom': return context.custom;
+    default: return undefined;
+  }
+}
+
+/** 构建上下文快照字符串（用于失败详情） */
+function buildContextSnapshot(meta: PathMeta | undefined, targetObj: unknown): string {
+  if (!meta || !meta.matched) {
+    // 路径未匹配：显示 target 对象摘要
+    if (targetObj != null && typeof targetObj === 'object') {
+      const summary = formatValue(targetObj).slice(0, 200);
+      return ` | context: ${summary}`;
+    }
+    return '';
+  }
+  // 路径匹配但断言失败：显示父级对象摘要
+  if (meta.parent != null && typeof meta.parent === 'object') {
+    try {
+      const parentStr = JSON.stringify(meta.parent).slice(0, 200);
+      return ` | parent(${meta.lastKey}): ${parentStr}`;
+    } catch {
+      return ` | parent(${meta.lastKey}): (不可序列化)`;
+    }
+  }
+  return '';
 }
 
 /** 带超时的 Promise 竞赛 */
