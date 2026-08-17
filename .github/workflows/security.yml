@@ -1,0 +1,151 @@
+# GitHub Actions: 安全扫描流水线
+# 与 test.yml 并行运行，不延长原有流水线时长
+# 触发条件：push main / PR / workflow_dispatch
+# 需要 Repository Secrets（同 test.yml）
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # 手动触发
+  schedule:
+    # 每日凌晨 3:00 定时全量安全扫描（北京时间）
+    - cron: '0 19 * * *'  # UTC 19:00 = CST 03:00
+
+jobs:
+  # ── 1. 依赖漏洞扫描（npm audit） ──
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: npm audit
+        run: bash scripts/security/audit.sh
+        continue-on-error: true  # 先观察模式
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 7
+
+  # ── 2. 代码安全扫描（SAST - Semgrep） ──
+  sast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            ./semgrep.yml
+          generateSarifReport: true
+          sarifOutput: security-reports/semgrep.sarif
+      - name: Save Semgrep JSON report
+        run: |
+          mkdir -p security-reports
+          semgrep --config semgrep.yml --json --output security-reports/semgrep.json . || true
+      - name: Check for ERROR severity
+        run: |
+          ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
+          echo "Semgrep: $ERROR_COUNT 个 ERROR 级别问题"
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "❌ 检测到硬编码密钥或严重安全问题"
+            exit 1
+          fi
+          echo "✅ SAST 扫描通过"
+      - name: Upload SAST report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-sast-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 7
+
+  # ── 3. 密钥泄露扫描（Gitleaks） ──
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整 git 历史，用于历史扫描
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+        with:
+          report-format: json
+          report-path: security-reports/gitleaks.json
+      - name: Upload secrets report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-secrets-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 7
+
+  # ── 4. Docker 镜像漏洞扫描（Trivy） ──
+  trivy-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t test-flow:ci-scan .
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          format: 'json'
+          output: 'security-reports/trivy-config.json'
+          ignore-unfixed: true
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'test-flow:ci-scan'
+          format: 'json'
+          output: 'security-reports/trivy-image.json'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-trivy-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 7
+
+  # ── 5. License 合规扫描 ──
+  license-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: License check
+        run: bash scripts/security/license-check.sh
+        continue-on-error: true  # GPL 仅警告不阻塞
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-license-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 7

@@ -1,0 +1,155 @@
+# Semgrep SAST 规则集 — test-flow 项目安全扫描
+# 覆盖：硬编码密钥、SQL 注入、命令注入、不安全正则表达式
+# 使用方式：semgrep --config semgrep.yml --sarif --output security-reports/semgrep.sarif
+
+rules:
+  # ── 1. 硬编码密钥检测 ──
+  - id: hardcoded-aws-access-key
+    patterns:
+      - pattern-regex: 'AKIA[0-9A-Z]{16}'
+      - pattern-not-inside: |
+          "// ..."
+      - pattern-not-inside: |
+          '// ...'
+    message: 检测到硬编码的 AWS Access Key ID
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  - id: hardcoded-oss-access-key
+    patterns:
+      - pattern-regex: 'LTAI[0-9A-Za-z]{12,20}'
+      - pattern-not-inside: |
+          "// ..."
+    message: 检测到硬编码的阿里云 AccessKey ID（LTAI 前缀）
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798"
+
+  - id: hardcoded-password-assignment
+    pattern-regex: '(password|passwd|pwd)\s*[:=]\s*["\x27][^"\x27]{4,}["\x27]'
+    message: 检测到硬编码的密码赋值
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-259"
+
+  - id: hardcoded-api-token
+    pattern-regex: '(api_key|apikey|api-key|access_token|secret_key|accessKey|secretKey)\s*[:=]\s*["\x27][A-Za-z0-9_\-]{16,}["\x27]'
+    message: 检测到硬编码的 API Key / Token
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798"
+    paths:
+      exclude:
+        - "*.env.example"
+        - "*.test.ts"
+        - "node_modules/**"
+
+  - id: hardcoded-private-key
+    pattern-regex: '-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----'
+    message: 检测到硬编码的私钥
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-321"
+
+  # ── 2. SQL 注入风险 ──
+  - id: sql-injection-string-concat
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $DB.query("..." + $VAR + "...")
+          - pattern: |
+              $DB.execute("..." + $VAR + "...")
+          - pattern: |
+              $DB.exec(`...${$VAR}...`)
+          - pattern: |
+              $DB.query(`...${$VAR}...`)
+    message: 检测到 SQL 查询中使用字符串拼接，可能存在 SQL 注入风险
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+
+  # ── 3. 命令注入 ──
+  - id: command-injection-exec
+    patterns:
+      - pattern-either:
+          - pattern: |
+              require("child_process").exec("..." + $VAR + "...")
+          - pattern: |
+              import { exec } from "child_process"
+              ...
+              exec("..." + $VAR + "...")
+          - pattern: |
+              import { spawn } from "child_process"
+              ...
+              spawn("..." + $VAR, ...)
+          - pattern: |
+              $CP.exec(`...${$VAR}...`)
+          - pattern: |
+              $CP.execSync(`...${$VAR}...`)
+    message: 检测到 exec/spawn 中使用变量拼接，可能存在命令注入风险
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+    paths:
+      exclude:
+        - "node_modules/**"
+        - "dist/**"
+
+  # ── 4. 不安全的正则表达式（ReDoS）──
+  - id: unsafe-regex-redos
+    pattern-regex: 'new RegExp\(["\x27](?:.*\+){2,}.*["\x27]\)'
+    message: 检测到可能引发 ReDoS 的正则表达式（嵌套量词）
+    languages: [typescript, javascript]
+    severity: INFO
+    metadata:
+      category: security
+      cwe: "CWE-1333: Inefficient Regular Expression Complexity"
+    paths:
+      exclude:
+        - "node_modules/**"
+
+  # ── 5. 不安全的 eval 使用 ──
+  - id: unsafe-eval
+    patterns:
+      - pattern: eval($EXPR)
+      - pattern-not: eval("...")
+    message: 检测到 eval() 使用动态表达式，存在代码注入风险
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    paths:
+      exclude:
+        - "node_modules/**"
+        - "dist/**"
+
+  # ── 6. 不安全的 HTTP 请求（明文传输）──
+  - id: insecure-http-request
+    pattern-regex: 'https?://(?!localhost|127\.0\.0\.1)[0-9a-zA-Z]+\.'
+    message: 检测到外部 HTTP 请求，确认是否使用 HTTPS
+    languages: [typescript, javascript]
+    severity: INFO
+    metadata:
+      category: security
+    paths:
+      include:
+        - "src/**"
+      exclude:
+        - "node_modules/**"
+        - "*.test.ts"

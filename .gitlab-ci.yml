@@ -1,4 +1,4 @@
-# GitLab CI 流水线：MR / main 分支自动触发回归测试
+# GitLab CI 流水线：MR / main 分支自动触发回归测试 + 安全扫描
 # 使用方式：将此文件提交到仓库根目录即可自动生效
 # 需要 CI/CD Variables（Settings → CI/CD → Variables）：
 #   TESTFLOW_COOKIE             - test 环境 cookie_string
@@ -43,56 +43,180 @@ build:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_PIPELINE_SOURCE == "web"  # 手动触发
+    - if: $CI_PIPELINE_SOURCE == "web"
 
-# ── 测试阶段：执行回归 + 生成报告 ──
+# ════════════════════════════════════════════
+# 测试阶段（所有 job 并行执行）
+# ════════════════════════════════════════════
+
+# ── 回归测试 ──
 test:
   stage: test
   image: node:20-alpine
-  needs:
-    - build
+  needs: [build]
   cache:
     key: ${CI_COMMIT_REF_SLUG}
-    paths:
-      - node_modules/
+    paths: [node_modules/]
     policy: pull
   script:
-    - npm run build  # 确保 dist/ 最新（cache miss 时兜底）
-    # 执行全量回归（CI 模式），可按需调整 --task 参数
+    - npm run build
     - node dist/bin/run-test.js --task src/cases --ci --upload-reports
-  after_script:
-    - echo "测试执行完成，退出码 $?"
-    - |
-      if [ -d "output/$(date +%Y-%m-%d)/" ]; then
-        echo "报告目录内容："
-        find "output/$(date +%Y-%m-%d)/" -name "*.html" -o -name "*.json" | head -20
-      fi
   artifacts:
-    paths:
-      - output/
+    paths: [output/]
     reports:
       junit: output/**/*.xml
     expire_in: 7 days
-    when: always  # 即使测试失败也保存报告
+    when: always
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "web"
 
-# ── 手动触发：单功能调试（仅 web 触发时出现，需手动点击执行） ──
+# ── 手动触发：单功能调试（仅 web 触发，需手动点击） ──
 test:wan3:
   stage: test
   image: node:20-alpine
-  needs:
-    - build
+  needs: [build]
   script:
     - npm run build
     - node dist/bin/run-test.js --task src/cases/wan3 --func wan3 --ci --upload-reports
   artifacts:
-    paths:
-      - output/
+    paths: [output/]
     expire_in: 7 days
     when: always
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual  # 必须手动点击才执行
+      when: manual
+
+# ════════════════════════════════════════════
+# 安全扫描（与 test 并行执行，不延长流水线）
+# ════════════════════════════════════════════
+
+# ── 1. 依赖漏洞扫描（npm audit） ──
+security:audit:
+  stage: test
+  image: node:20-alpine
+  needs: [build]
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths: [node_modules/]
+    policy: pull
+  script:
+    - npm ci
+    - bash scripts/security/audit.sh
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 7 days
+    when: always
+  allow_failure: true  # 先观察模式，后续可改为阻塞
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ── 2. 代码安全扫描（SAST - Semgrep） ──
+security:sast:
+  stage: test
+  image: returntocorp/semgrep:latest
+  needs: []
+  script:
+    - semgrep --config semgrep.yml --sarif --output security-reports/semgrep.sarif . || true
+    - semgrep --config semgrep.yml --json --output security-reports/semgrep.json . || true
+    - |
+      ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
+      echo "Semgrep 扫描完成：$ERROR_COUNT 个 ERROR 级别问题"
+      if [ "$ERROR_COUNT" -gt 0 ]; then
+        echo "❌ 检测到硬编码密钥或严重安全问题"
+        exit 1
+      fi
+      echo "✅ SAST 扫描通过"
+  artifacts:
+    paths: [security-reports/]
+    reports:
+      sast: security-reports/semgrep.sarif
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ── 3. 密钥泄露扫描（Gitleaks） ──
+security:secrets:
+  stage: test
+  image: zricethezav/gitleaks:latest
+  needs: []
+  script:
+    - mkdir -p security-reports
+    - gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source . || true
+    - |
+      LEAK_COUNT=$(node -e "try{const r=require('./security-reports/gitleaks.json');console.log(r.length||0)}catch(e){console.log(0)}" 2>/dev/null || echo "0")
+      echo "Gitleaks 扫描完成：$LEAK_COUNT 个密钥泄露"
+      if [ "$LEAK_COUNT" -gt 0 ]; then
+        echo "❌ 检测到密钥泄露"
+        cat security-reports/gitleaks.json
+        exit 1
+      fi
+      echo "✅ 未检测到密钥泄露"
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ── 4. Docker 镜像漏洞扫描（Trivy） ──
+security:trivy:
+  stage: test
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  needs: [build]
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  script:
+    - mkdir -p security-reports
+    # 扫描 Dockerfile 配置
+    - trivy config --format json --output security-reports/trivy-config.json . || true
+    # 构建镜像并扫描（需要 Docker-in-Docker 或 Kaniko）
+    # CI 环境中若无 Docker daemon，则仅扫描 Dockerfile 配置
+    - |
+      if command -v docker &>/dev/null; then
+        docker build -t test-flow:ci-scan .
+        trivy image --exit-code 1 --severity HIGH,CRITICAL --format json --output security-reports/trivy-image.json test-flow:ci-scan
+        echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
+      else
+        echo "⚠ Docker 不可用，仅扫描 Dockerfile 配置"
+        echo "请在有 Docker 环境的 Runner 上执行完整镜像扫描"
+      fi
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 7 days
+    when: always
+  allow_failure: true  # Docker 环境不可用时降级
+  cache:
+    paths: [.trivycache/]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ── 5. License 合规扫描 ──
+security:license:
+  stage: test
+  image: node:20-alpine
+  needs: [build]
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths: [node_modules/]
+    policy: pull
+  script:
+    - npm ci
+    - bash scripts/security/license-check.sh
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 7 days
+    when: always
+  allow_failure: true  # GPL 仅警告，不阻塞
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"

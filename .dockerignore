@@ -11,3 +11,6 @@ test-flow-*.tgz
 .env.*
 !.env.example
 debug/
+security-reports/
+.trivycache/
+qa-report*.md

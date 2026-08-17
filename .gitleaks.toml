@@ -1,0 +1,59 @@
+# Gitleaks 配置 — test-flow 项目密钥泄露扫描
+# 使用方式：gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json
+# 排除 .env.example（占位符）、测试文件、node_modules
+
+[extend]
+useDefault = true
+
+# 全局允许列表（排除误报）
+[allowlist]
+description = "排除占位符、示例值、测试文件、配置文件"
+paths = [
+  '''node_modules/.*''',
+  '''.env.example''',
+  '''\.git/.*''',
+  '''dist/.*''',
+  '''output/.*''',
+  '''security-reports/.*''',
+  '''.*\.test\.ts$''',
+  '''.*\.spec\.ts$''',
+  '''qa-report.*\.md$''',
+  '''tsconfig\.json''',
+  '''package-lock\.json''',
+  '''package\.json''',
+  '''\.dockerignore''',
+]
+
+# 允许的占位符模式（不视为泄露）
+regexes = [
+  '''TESTFLOW_[A-Z_]*=\s*$''',            # 空值的 env 变量
+  '''TESTFLOW_[A-Z_]*=\s*<.*>''',         # <占位符> 格式
+  '''TESTFLOW_OSS_ACCESS_KEY_ID=\s*$''',  # 空的 AK
+  '''TESTFLOW_OSS_ACCESS_KEY_SECRET=\s*$''',  # 空的 SK
+  '''example\.com''',                    # 示例域名
+  '''your-.*-here''',                    # "your-xxx-here" 占位符
+]
+
+# 自定义规则：检测项目特定的密钥模式
+[[rules]]
+id = "testflow-session-cookie"
+description = "test-flow 会话 cookie 泄露"
+regex = '''TESTFLOW_COOKIE\s*=\s*["'][A-Za-z0-9_\-]{50,}["']'''
+tags = ["testflow", "cookie"]
+
+[[rules]]
+id = "feishu-webhook-url"
+description = "飞书 webhook URL 泄露"
+regex = '''https://open\.feishu\.cn/open-apis/bot/v2/hook/[a-f0-9\-]{36}'''
+tags = ["feishu", "webhook"]
+
+[[rules]]
+id = "aliyun-oss-credentials"
+description = "阿里云 OSS 凭证泄露"
+regex = '''(LTAI[0-9A-Za-z]{12,20})|([0-9a-zA-Z]{30})'''
+tags = ["aliyun", "oss"]
+  [rules.allowlist]
+  regexes = [
+    '''LTAI[0-9A-Za-z]*placeholder''',
+    '''TESTFLOW_OSS_ACCESS_KEY''',
+  ]

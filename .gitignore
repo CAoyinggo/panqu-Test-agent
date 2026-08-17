@@ -8,3 +8,7 @@ output/
 .env
 .env.*
 !.env.example
+
+# Security scan reports (CI artifacts, not version controlled)
+security-reports/
+.trivycache/
