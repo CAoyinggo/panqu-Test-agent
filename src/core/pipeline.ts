@@ -9,6 +9,8 @@ import { Billing } from '../integrations/billing.js';
 import { Assets, collectAssetRefs } from '../integrations/assets.js';
 import { buildImpactList } from '../assertions/impact.js';
 import { runDefaultAssertions } from '../assertions/all.js';
+import { runGenericAssertions, type AssertionContext } from './assertion-engine.js';
+import { runAdapterAssertions } from '../assertions/adapters/wan3-adapter.js';
 import { runTeardownCheck } from './teardown.js';
 import { resolveDataFactory, isNoop } from './data-factory.js';
 import { logger } from '../utils/logger.js';
@@ -344,7 +346,26 @@ export class Pipeline {
       const verifyDef = { ...taskDef, account: session.account || session.nickname, project_id: session.project_id };
       // 断言中间值（verbose/full 模式保存）
       this.saveDebug('assertion-inputs.json', { verifyDef, submit: ctx.submit, billingData });
-      checks = runDefaultAssertions(verifyDef, ctx.submit, billingData);
+      // 运行 wan3.0 专用断言（保持向后兼容）
+      const adapterChecks = runDefaultAssertions(verifyDef, ctx.submit, billingData);
+      // 运行用例自定义的通用断言（声明式 DSL）
+      let genericChecks: CheckResult[] = [];
+      if (taskDef.assert) {
+        const lastResp = ctx.responses.at(-1);
+        const assertContext: AssertionContext = {
+          response: lastResp ? { status: lastResp.status, json: { code: lastResp.code, summary: lastResp.summary } } : undefined,
+          submit: ctx.submit as unknown as Record<string, unknown>,
+          billing: billingData as unknown as Record<string, unknown>,
+          metrics: { durationMs: Number(billingData.durationMs) || 0 },
+        };
+        genericChecks = await runGenericAssertions(taskDef.assert as any, assertContext);
+      }
+      // 运行业务适配器（如显式指定 adapter）
+      let extraAdapterChecks: CheckResult[] = [];
+      if (taskDef.adapter && taskDef.adapter !== 'wan3') {
+        extraAdapterChecks = runAdapterAssertions(taskDef.adapter, { taskDef, submit: ctx.submit, billingData });
+      }
+      checks = [...adapterChecks, ...genericChecks, ...extraAdapterChecks];
       this.saveDebug('09-checks.json', { checks, verifyDef });
       checks.forEach((c: any) => logger.info(`  ${c.pass ? '✅' : '❌'} ${c.name}：${c.detail}`));
       this.snapshotCtx('09-checks', ctx);

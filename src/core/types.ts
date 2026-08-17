@@ -78,6 +78,12 @@ export interface TaskDef {
   teardown?: string;
   /** 外部数据文件路径（dry-run 模式校验文件是否存在） */
   dataFile?: string;
+  /** 声明式断言 DSL（通用断言引擎解析） */
+  assert?: AssertionConfig;
+  /** 业务适配器选择（如 'wan3'，不设则仅运行通用断言） */
+  adapter?: 'wan3' | 'default';
+  /** 断言失败后的行为：stop=中断（默认），continue=继续执行后续断言 */
+  onFail?: 'stop' | 'continue';
   [key: string]: unknown;
 }
 
@@ -131,6 +137,22 @@ export interface CheckResult {
   pass: boolean;
   detail: string;
   level?: 'P0' | 'P1' | 'P2';
+  // 扩展字段（通用断言引擎使用，向后兼容）
+  assertionType?: 'response' | 'submit' | 'billing' | 'headers' | 'env' | 'metrics' | 'custom';
+  path?: string;
+  operator?: string;
+  expected?: unknown;
+  actual?: unknown;
+  durationMs?: number;
+}
+
+/** 声明式断言配置（与 assertion-engine.ts 的 AssertionConfig 结构兼容） */
+export interface AssertionConfig {
+  mode?: 'all' | 'any' | 'soft';
+  /** 组合器（与 mode 等价，支持 "and"/"or" 别名，用于嵌套组） */
+  combinator?: 'and' | 'or';
+  rules: unknown[];
+  message?: string;
 }
 
 /** 接口响应摘要 */
