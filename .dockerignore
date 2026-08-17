@@ -15,3 +15,4 @@ security-reports/
 .trivycache/
 .docker-cache/
 qa-report*.md
+scripts/deploy/

@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ════════════════════════════════════════════
+  # 安全门禁（发布前置条件）
+  # ════════════════════════════════════════════
+  security-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 1. npm audit — 阻塞
+      - name: npm audit
+        run: bash scripts/security/audit.sh
+
+      # 2. Semgrep SAST — 阻塞（ERROR 级别）
+      - name: Semgrep scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: semgrep.yml
+          generateSarifReport: true
+          sarifOutput: security-reports/semgrep.sarif
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-reports/semgrep.sarif
+          category: semgrep
+
+      # 3. Gitleaks — 阻塞
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. License check — 非阻塞
+      - name: License check
+        run: bash scripts/security/license-check.sh
+        continue-on-error: true
+
+  # ════════════════════════════════════════════
+  # 构建并推送镜像到 GHCR
+  # ════════════════════════════════════════════
+  release-image:
+    needs: security-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: cyclonedx
+          output: security-reports/sbom.json
+
+      - name: Save image info
+        run: |
+          mkdir -p security-reports
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}" > security-reports/published-image.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 30
+
+  # ════════════════════════════════════════════
+  # 部署到测试环境 + 冒烟测试
+  # ════════════════════════════════════════════
+  deploy-test:
+    needs: release-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: test
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts-${{ github.run_id }}
+          path: security-reports/
+
+      - name: Deploy to test server
+        id: deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          REGISTRY: ${{ env.REGISTRY }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEPLOY_IMAGE=$(cat security-reports/published-image.txt)
+          echo "Deploying: $DEPLOY_IMAGE"
+
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Execute deploy script on test server
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            DEPLOY_IMAGE="$DEPLOY_IMAGE" \
+            REGISTRY="$REGISTRY" \
+            REGISTRY_USER="$REGISTRY_USER" \
+            REGISTRY_PASSWORD="$REGISTRY_PASSWORD" \
+            "bash -s" < scripts/deploy/deploy.sh
+
+          # Read deploy status
+          if [ -f security-reports/deploy-status.json ]; then
+            STATUS=$(python3 -c "import json; print(json.load(open('security-reports/deploy-status.json')).get('status','unknown'))" 2>/dev/null || echo "unknown")
+            echo "status=$STATUS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload deploy status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-status-${{ github.run_id }}
+          path: security-reports/
+          retention-days: 30
+
+  # ════════════════════════════════════════════
+  # 发布通知（飞书）
+  # ════════════════════════════════════════════
+  notify:
+    needs: [deploy-test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download deploy status
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-status-${{ github.run_id }}
+          path: security-reports/
+        continue-on-error: true
+
+      - name: Send Feishu notification
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.TESTFLOW_FEISHU_WEBHOOK }}
+          RELEASE_STATUS: ${{ needs.deploy-test.result }}
+          RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          RELEASE_TAG: ${{ needs.release-image.outputs.image-tag }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          PIPELINE_ID: ${{ github.run_id }}
+          PIPELINE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOY_ENV: test
+          SMOKE_RESULT: ${{ needs.deploy-test.result }}
+        run: node scripts/deploy/notify-feishu.mjs || echo "Notification failed, not blocking"

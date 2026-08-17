@@ -17,10 +17,16 @@
 #   TESTFLOW_OSS_ACCESS_KEY_ID   - OSS AK
 #   TESTFLOW_OSS_ACCESS_KEY_SECRET - OSS SK
 #   TESTFLOW_REPORT_BASE_URL     - 报告公开访问前缀
+# ── 发布部署 Variables ──
+#   TESTFLOW_DEPLOY_SSH_KEY      - 测试服务器 SSH 私钥（deploy 阶段）
+#   TESTFLOW_DEPLOY_HOST         - 测试服务器地址
+#   TESTFLOW_DEPLOY_USER         - SSH 用户名（默认 root）
+#   TESTFLOW_DEPLOY_HOST_KEY     - 测试服务器 SSH host key（可选）
 
 stages:
   - build
   - test
+  - deploy
 
 variables:
   NODE_ENV: "production"
@@ -44,6 +50,7 @@ build:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ════════════════════════════════════════════
 # 测试阶段（所有 job 并行执行）
@@ -71,6 +78,7 @@ test:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ── 手动触发：单功能调试（仅 web 触发，需手动点击） ──
 test:wan3:
@@ -111,6 +119,7 @@ security:audit:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ── 2. 代码安全扫描（SAST - Semgrep） ──
 security:sast:
@@ -137,6 +146,7 @@ security:sast:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ── 3. 密钥泄露扫描（Gitleaks） ──
 security:secrets:
@@ -162,6 +172,7 @@ security:secrets:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ── 4. Docker 镜像漏洞扫描（Trivy） ──
 security:trivy:
@@ -202,6 +213,7 @@ security:trivy:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ── 5. License 合规扫描 ──
 security:license:
@@ -223,3 +235,180 @@ security:license:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ════════════════════════════════════════════
+# 发布部署阶段（main 分支 / vX.Y.Z tag 触发）
+# 安全门禁全通过 → 构建推送镜像 → SBOM → 部署 → 通知
+# ════════════════════════════════════════════
+
+# ── 1. 构建并推送镜像到 GitLab Container Registry ──
+release:image:
+  stage: deploy
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  needs:
+    - security:audit
+    - security:sast
+    - security:secrets
+    - security:trivy
+    - security:license
+    - test
+  variables:
+    DOCKER_BUILDKIT: "1"
+    DOCKER_DRIVER: overlay2
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+    - mkdir -p security-reports
+    # 登录 GitLab Container Registry
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    # 确定镜像 tag
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        IMAGE_TAG="latest"
+      fi
+      echo "镜像 tag: $IMAGE_TAG"
+    # 构建镜像（复用 BuildKit 缓存）
+    - export DOCKER_BUILDKIT=1
+    - docker build -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
+    # 推送镜像
+    - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - echo "$CI_REGISTRY_IMAGE:$IMAGE_TAG" > security-reports/published-image.txt
+    - echo "✅ 镜像已推送: $CI_REGISTRY_IMAGE:$IMAGE_TAG"
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 30 days
+    when: always
+
+# ── 2. 生成 SBOM（软件物料清单） ──
+release:sbom:
+  stage: deploy
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  needs: [release:image]
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_NO_PROGRESS: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+    - mkdir -p security-reports
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IMAGE_TAG="$CI_COMMIT_TAG"
+      else
+        IMAGE_TAG="latest"
+      fi
+    - trivy image --format cyclonedx --output security-reports/sbom.json "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+    - echo "✅ SBOM 已生成: security-reports/sbom.json"
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 30 days
+    when: always
+
+# ── 3. 部署到测试环境 + 冒烟测试 ──
+release:deploy:
+  stage: deploy
+  image: alpine:latest
+  needs: [release:sbom]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$TESTFLOW_DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - |
+      if [ -n "$TESTFLOW_DEPLOY_HOST_KEY" ]; then
+        echo "$TESTFLOW_DEPLOY_HOST_KEY" >> ~/.ssh/known_hosts
+      else
+        ssh-keyscan -H "$TESTFLOW_DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+      fi
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    - export DEPLOY_IMAGE=$(cat security-reports/published-image.txt)
+    - export DEPLOY_HOST="${TESTFLOW_DEPLOY_HOST:?TESTFLOW_DEPLOY_HOST not set}"
+    - export DEPLOY_USER="${TESTFLOW_DEPLOY_USER:-root}"
+    - export REGISTRY="$CI_REGISTRY"
+    - export REGISTRY_USER="$CI_REGISTRY_USER"
+    - export REGISTRY_PASSWORD="$CI_REGISTRY_PASSWORD"
+    - |
+      echo "部署镜像: $DEPLOY_IMAGE"
+      echo "目标主机: $DEPLOY_USER@$DEPLOY_HOST"
+    # 通过 SSH 在测试服务器上执行部署脚本
+    - ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+      DEPLOY_IMAGE="$DEPLOY_IMAGE" \
+      REGISTRY="$REGISTRY" \
+      REGISTRY_USER="$REGISTRY_USER" \
+      REGISTRY_PASSWORD="$REGISTRY_PASSWORD" \
+      "bash -s" < scripts/deploy/deploy.sh
+    - echo "✅ 部署完成"
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 30 days
+    when: always
+
+# ── 4. 发布通知（飞书） ──
+release:notify:
+  stage: deploy
+  image: node:20-alpine
+  needs:
+    - job: release:deploy
+      optional: true
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: always
+  script:
+    - mkdir -p security-reports
+    - |
+      # 读取部署状态
+      if [ -f security-reports/deploy-status.json ]; then
+        DEPLOY_STATUS=$(python3 -c "import json; d=json.load(open('security-reports/deploy-status.json')); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
+      else
+        DEPLOY_STATUS="not_deployed"
+      fi
+      # 判断发布状态
+      if [ "$DEPLOY_STATUS" = "success" ]; then
+        export RELEASE_STATUS="success"
+      elif [ "$DEPLOY_STATUS" = "rollback" ] || [ "$DEPLOY_STATUS" = "rollback_no_previous" ]; then
+        export RELEASE_STATUS="rollback"
+      else
+        export RELEASE_STATUS="failure"
+        export FAILED_STAGE="deploy"
+      fi
+      # 读取推送的镜像
+      if [ -f security-reports/published-image.txt ]; then
+        export RELEASE_IMAGE=$(cat security-reports/published-image.txt)
+      else
+        export RELEASE_IMAGE="${CI_REGISTRY_IMAGE:-unknown}"
+      fi
+      # 确定镜像 tag
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export RELEASE_TAG="$CI_COMMIT_TAG"
+      else
+        export RELEASE_TAG="latest"
+      fi
+      # GitLab CI 自动提供：CI_COMMIT_SHA, CI_COMMIT_MESSAGE, CI_PIPELINE_ID, CI_PIPELINE_URL
+      # 飞书 webhook 从 TESTFLOW_FEISHU_WEBHOOK 读取
+      export FEISHU_WEBHOOK="${TESTFLOW_FEISHU_WEBHOOK:-}"
+      export DEPLOY_ENV="test"
+      export SMOKE_RESULT="$DEPLOY_STATUS"
+      # 发送通知
+      node scripts/deploy/notify-feishu.mjs || echo "⚠ 通知发送失败，不阻塞流水线"
+  artifacts:
+    paths: [security-reports/]
+    expire_in: 30 days
+    when: always

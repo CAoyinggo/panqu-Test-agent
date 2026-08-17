@@ -26,7 +26,9 @@
     "security:gitleaks": "gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source .",
     "security:license": "bash scripts/security/license-check.sh",
     "security:local": "bash scripts/security/local-scan.sh",
-    "security:full": "npm run security:audit && npm run security:semgrep && npm run security:gitleaks && npm run security:license"
+    "security:full": "npm run security:audit && npm run security:semgrep && npm run security:gitleaks && npm run security:license",
+    "deploy:smoke": "bash scripts/deploy/smoke-test-local.sh",
+    "deploy:notify": "node scripts/deploy/notify-feishu.mjs"
   },
   "lint-staged": {
     "*.{ts,js,tsx,jsx}": "bash scripts/security/pre-commit-scan.sh"
