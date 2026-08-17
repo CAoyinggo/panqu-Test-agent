@@ -4,6 +4,7 @@
 // DX 优化：--watch（文件监听自动重跑）、--dry-run（仅校验不执行）、--debug-level（增强调试）
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import pLimit from 'p-limit';
 import type { AppConfig, TaskDef, ReportData, EnvDiff, DebugLevel } from './types.js';
 import { HookRegistry } from './hooks.js';
@@ -29,6 +30,9 @@ import { Watcher, defaultWatchPaths, type WatchSummary } from './watcher.js';
 import { uploadReports, getOssConfigFromEnv } from '../utils/oss-uploader.js';
 import { generateJUnitXml } from '../utils/junit-reporter.js';
 import { generateAllureResults } from '../utils/allure-reporter.js';
+import { resolvePlaceholders } from '../utils/data-generator.js';
+import { createRecordSession, createReplaySession, type RecordSession, type ReplaySession } from '../utils/mock-recorder.js';
+import { DynamicConcurrencyController, createDefaultConcurrencyConfig } from '../utils/concurrency-controller.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -131,6 +135,7 @@ export class Engine {
   /**
    * 执行单个用例的完整链路（含超时检查、日志隔离、报告生成）。
    * 并发模式下由 p-limit 调度调用，串行模式下直接调用。
+   * 支持：per-case timeout、case-level retry、数据生成器占位符解析。
    */
   private async runOneCase(
     c: LoadedCase,
@@ -144,7 +149,7 @@ export class Engine {
     envDiff?: EnvDiff,
     debugLevel?: DebugLevel,
   ): Promise<void> {
-    // 超时检查
+    // 超时检查（全局超时）
     if (Date.now() - startTime > timeoutMs) {
       logger.warn(`执行超时（${args.timeout ?? 600}s），用例 ${c.name} 标记为超时中断`);
       tracker.addTimeout(c.name, c.feature, `整体超时 ${args.timeout ?? 600}s`);
@@ -160,44 +165,130 @@ export class Engine {
     const tag = c.feature ? `[${c.feature}]` : '';
     logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
 
+    // 数据生成器：解析用例定义中的占位符（{{gen.email}} 等）
+    let resolvedDef = c.def;
+    try {
+      const hasPlaceholder = JSON.stringify(c.def).includes('{{gen.');
+      if (hasPlaceholder) {
+        resolvedDef = resolvePlaceholders(c.def, { seed: args.caseTimeout ? undefined : Date.now() }) as TaskDef;
+        logger.debug(`  数据生成器已解析占位符`);
+      }
+    } catch (e: any) {
+      logger.warn(`数据生成器解析失败（已降级使用原始数据）：${e.message}`);
+    }
+
+    // 用例级超时（覆盖全局超时）
+    const caseTimeoutMs = args.caseTimeout ? args.caseTimeout * 1000 : null;
+
+    // 用例级重试配置（从用例定义中读取，--no-retry 可全局禁用）
+    const caseRetries = args.noRetry ? 0 : (typeof c.def.extra === 'object' && c.def.extra !== null ? (c.def.extra as Record<string, unknown>).retries as number : undefined);
+    const maxRetries = caseRetries ?? 0;
+
     const caseStart = Date.now();
 
-    try {
-      const func = args.func || c.feature || undefined;
-      const { files, passRate, hasBlockingIssue } = await this.runTask(
-        cfg, c.def, env, func, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel,
-      );
-      const durationMs = Date.now() - caseStart;
-      tracker.addResult({
-        name: c.name,
-        feature: c.feature,
-        pass: passRate === 100 && !hasBlockingIssue,
-        pending: false,
-        passRate,
-        durationMs,
-        scene: c.def.scene,
-        tags: c.def.tags,
-      });
-      tracker.reports.push(...files);
-    } catch (e: any) {
-      const durationMs = Date.now() - caseStart;
-      logger.error(`用例执行失败：${c.name} - ${e.message}`);
-      tracker.addResult({
-        name: c.name,
-        feature: c.feature,
-        pass: false,
-        pending: false,
-        passRate: 0,
-        error: e.message,
-        stack: e.stack,
-        durationMs,
-        scene: c.def.scene,
-        tags: c.def.tags,
-      });
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        logger.info(`  🔄 用例重试 ${attempt}/${maxRetries}：${c.name}`);
+        metrics.recordCaseRetry();
+        // 指数退避
+        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+      }
+
+      try {
+        // 用例级超时（通过 Promise.race 实现）
+        const execPromise = this.runTask(
+          cfg, resolvedDef, env, args.func || c.feature || undefined, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel,
+        );
+
+        const { files, passRate, hasBlockingIssue } = caseTimeoutMs
+          ? await this.raceWithTimeout(execPromise, caseTimeoutMs, c.name)
+          : await execPromise;
+
+        const durationMs = Date.now() - caseStart;
+        tracker.addResult({
+          name: c.name,
+          feature: c.feature,
+          pass: passRate === 100 && !hasBlockingIssue,
+          pending: false,
+          passRate,
+          durationMs,
+          scene: c.def.scene,
+          tags: c.def.tags,
+        });
+        tracker.reports.push(...files);
+        return; // 成功，退出重试循环
+      } catch (e: any) {
+        const durationMs = Date.now() - caseStart;
+        const isTimeout = e.message?.includes('用例超时') || e.message?.includes('timeout');
+
+        // 判断是否应该重试
+        const shouldRetry = attempt < maxRetries && this.shouldRetry(e, c.def);
+
+        if (!shouldRetry) {
+          logger.error(`用例执行失败：${c.name} - ${e.message}`);
+          tracker.addResult({
+            name: c.name,
+            feature: c.feature,
+            pass: false,
+            pending: false,
+            passRate: 0,
+            error: e.message,
+            stack: e.stack,
+            durationMs,
+            scene: c.def.scene,
+            tags: c.def.tags,
+          });
+          return; // 不重试，退出循环
+        }
+
+        // 记录最后一次重试的失败信息（用于后续报告）
+        if (attempt === maxRetries) {
+          tracker.addResult({
+            name: c.name,
+            feature: c.feature,
+            pass: false,
+            pending: false,
+            passRate: 0,
+            error: e.message,
+            stack: e.stack,
+            durationMs,
+            scene: c.def.scene,
+            tags: c.def.tags,
+          });
+        }
+      }
     }
 
     // 清除 caseId 前缀（避免影响后续用例日志）
     if (concurrencyOn) setCaseId('');
+  }
+
+  /** 用 Promise.race 实现用例级超时 */
+  private async raceWithTimeout<T>(promise: Promise<T>, ms: number, caseName: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`用例超时（${ms / 1000}s）：${caseName}`)), ms);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** 判断是否应该重试 */
+  private shouldRetry(error: Error, taskDef: TaskDef): boolean {
+    // 从用例定义中读取 retryWhen 配置
+    const extra = taskDef.extra as Record<string, unknown> | undefined;
+    const retryWhen = extra?.retryWhen as string | undefined;
+
+    if (!retryWhen || retryWhen === 'always') return true;
+
+    if (retryWhen === 'timeout' && (error.message?.includes('超时') || error.message?.includes('timeout'))) return true;
+    if (retryWhen === 'network' && (error.message?.includes('ECONNREFUSED') || error.message?.includes('fetch'))) return true;
+    if (retryWhen === '5xx' && /5\d{2}/.test(error.message)) return true;
+
+    return false;
   }
 
   /** CLI 主入口：解析参数 → 加载配置/任务 → 执行 → 返回退出码 */
@@ -227,6 +318,11 @@ export class Engine {
   --scene     按场景类型筛选用例
   --concurrency <N>  并发数（默认 1 = 串行）。同一 feature 内用例串行，不同 feature 间并行
   --parallel         自动并发，并发数取 CPU 核心数（上限 4）。优先于 --concurrency
+  --dynamic-concurrency  动态并发：根据成功率自动调整并发数（失败率高时降低，稳定后恢复）
+  --case-timeout <s>  用例级超时（秒），覆盖全局 --timeout
+  --no-retry          禁用用例级失败重试
+  --record            Mock 录制模式：拦截 HTTP 请求并保存为 fixtures
+  --replay           Mock 回放模式：从 fixtures 返回录制响应，不发起真实请求
   --auto-setup       启用数据工厂（执行 setup/teardown，默认关闭）
   --watch            Watch 模式：监听 src/ 文件变更，自动重新编译并执行匹配用例
   --watch-delay <ms> 文件变更后防抖延迟（默认 300ms）
@@ -331,9 +427,50 @@ export class Engine {
     const timeoutMs = (args.timeout ?? 600) * 1000;
 
     // 计算并发数：--parallel 优先于 --concurrency
-    const concurrency = args.parallel
+    let concurrency = args.parallel
       ? Math.min(4, os.cpus().length)
       : (args.concurrency ?? 1);
+
+    // 动态并发控制器
+    let dynConcurrency: DynamicConcurrencyController | null = null;
+    if (args.dynamicConcurrency && concurrency > 1) {
+      dynConcurrency = new DynamicConcurrencyController(
+        createDefaultConcurrencyConfig(concurrency, Math.min(8, concurrency * 2)),
+      );
+    }
+
+    // ── Mock 录制/回放 ──
+    let mockRecordSession: RecordSession | null = null;
+    let mockReplaySession: ReplaySession | null = null;
+    if (args.record || args.replay) {
+      const funcName = args.func || cases[0]?.feature || 'default';
+      const fixturesDir = path.join(outputDir(funcName), 'fixtures');
+      if (args.record) {
+        mockRecordSession = createRecordSession(fixturesDir, {
+          urlFilter: new RegExp(cfg.environments[env]?.base_url || '.*'),
+        });
+        mockRecordSession.start();
+      }
+      if (args.replay) {
+        // 也尝试从 src/cases/<func>/fixtures/ 加载
+        const srcFixturesDir = path.join('src', 'cases', funcName, 'fixtures');
+        mockReplaySession = createReplaySession(fixturesDir, {
+          matchStrategy: 'loose',
+          onMissing: 'passthrough',
+        });
+        mockReplaySession.start();
+        // 尝试加载 src 目录的 fixtures
+        try {
+          if (fs.existsSync(srcFixturesDir)) {
+            mockReplaySession = createReplaySession(srcFixturesDir, {
+              matchStrategy: 'loose',
+              onMissing: 'passthrough',
+            });
+            mockReplaySession.start();
+          }
+        } catch { /* 降级 */ }
+      }
+    }
 
     // Debug 级别（--debug-level）
     const debugLevel = (args.debugLevel as DebugLevel) || 'basic';
@@ -342,7 +479,7 @@ export class Engine {
     }
 
     if (concurrency > 1) {
-      logger.info(`并发模式：concurrency=${concurrency}（同一 feature 串行，不同 feature 并行）`);
+      logger.info(`并发模式：concurrency=${concurrency}${dynConcurrency ? ' (动态)' : ''}（同一 feature 串行，不同 feature 并行）`);
       // 并发模式：设置共享日志文件
       const logFunc = args.func || cases[0]?.feature;
       if (logFunc) {
@@ -377,13 +514,25 @@ export class Engine {
       logger.warn(`环境一致性检测失败（已降级跳过）：${e.message}`);
     }
 
-    if (concurrency === 1) {
-      // ── 串行模式（向后兼容，行为与改造前完全一致） ──
-      for (const c of cases) {
-        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff, debugLevel);
+    if (concurrency === 1 || dynConcurrency) {
+      // ── 串行模式或动态并发模式 ──
+      // 动态并发模式下，初始为串行，根据成功率逐步提升
+      if (dynConcurrency) {
+        logger.info(`动态并发模式：初始 concurrency=${dynConcurrency.getConcurrency()}`);
       }
-    } else {
-      // ── 并发模式：按 feature 分组，组内串行 + 组间并行 ──
+      for (const c of cases) {
+        const currentConcurrency = dynConcurrency?.getConcurrency() || concurrency;
+        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, currentConcurrency, envDiff, debugLevel);
+        // 动态并发：记录结果并调整
+        if (dynConcurrency) {
+          const lastResult = tracker.getResults().at(-1);
+          if (lastResult) {
+            dynConcurrency.recordResult(lastResult.pass);
+          }
+        }
+      }
+    } else if (concurrency > 1) {
+      // ── 固定并发模式：按 feature 分组，组内串行 + 组间并行 ──
       const groups = new Map<string, LoadedCase[]>();
       for (const c of cases) {
         const key = c.feature || 'default';
@@ -405,6 +554,16 @@ export class Engine {
       );
 
       await Promise.all(groupTasks);
+    }
+
+    // ── 停止 Mock 录制/回放 ──
+    if (mockRecordSession) {
+      const fixtures = mockRecordSession.stop();
+      logger.info(`Mock 录制完成：${fixtures.length} 条 fixtures`);
+    }
+    if (mockReplaySession) {
+      const stats = mockReplaySession.stop();
+      logger.info(`Mock 回放完成：命中 ${stats.matched}，未命中 ${stats.missed}`);
     }
 
     const summary = tracker.getSummary();

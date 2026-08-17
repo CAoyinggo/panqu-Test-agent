@@ -1,7 +1,15 @@
-// 执行度量收集器：各步骤耗时、接口调用次数、重试次数、通过率
+// 执行度量收集器：各步骤耗时、接口调用次数、重试次数、通过率、并发变化曲线
 export interface StepMetric {
   duration: number;
   calls: number;
+}
+
+export interface ConcurrencyChangeEvent {
+  timestamp: number;
+  from: number;
+  to: number;
+  reason: string;
+  windowPassRate: number;
 }
 
 export class MetricsCollector {
@@ -10,6 +18,8 @@ export class MetricsCollector {
   private apiCalls = 0;
   private apiRetries = 0;
   private passRate = 0;
+  private concurrencyChanges: ConcurrencyChangeEvent[] = [];
+  private caseRetries = 0;
 
   /** 开始计时 */
   start(): void {
@@ -38,6 +48,22 @@ export class MetricsCollector {
     this.passRate = rate;
   }
 
+  /** 记录并发变化 */
+  recordConcurrencyChange(from: number, to: number, reason: string, windowPassRate: number): void {
+    this.concurrencyChanges.push({
+      timestamp: Date.now(),
+      from,
+      to,
+      reason,
+      windowPassRate,
+    });
+  }
+
+  /** 记录用例级重试 */
+  recordCaseRetry(): void {
+    this.caseRetries++;
+  }
+
   /** 序列化为 JSON（写入 metrics.json） */
   toJSON(): Record<string, unknown> {
     return {
@@ -46,6 +72,8 @@ export class MetricsCollector {
       apiCalls: this.apiCalls,
       apiRetries: this.apiRetries,
       passRate: this.passRate,
+      concurrencyChanges: this.concurrencyChanges,
+      caseRetries: this.caseRetries,
     };
   }
 
@@ -56,6 +84,8 @@ export class MetricsCollector {
     this.apiCalls = 0;
     this.apiRetries = 0;
     this.passRate = 0;
+    this.concurrencyChanges = [];
+    this.caseRetries = 0;
   }
 }
 

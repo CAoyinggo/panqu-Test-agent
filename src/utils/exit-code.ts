@@ -63,6 +63,11 @@ export class ResultTracker {
     this.reports.push(file);
   }
 
+  /** 获取全部用例结果（用于动态并发控制等） */
+  getResults(): CaseResult[] {
+    return this.results;
+  }
+
   /** 获取执行汇总 */
   getSummary(): ExecutionSummary {
     const total = this.results.length;
