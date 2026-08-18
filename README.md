@@ -1,8 +1,8 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v3.4（数据工厂与环境检测版）｜ 更新：2026-08-17 ｜ 维护：AI 测试智能体
+> 版本：v4.0（AI Test Platform 平台化版）｜ 更新：2026-08-18 ｜ 维护：AI 测试智能体
 
-标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
+标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。
 
 📄 **[查看交互式 HTML 项目完整说明](file:///Users/mac/agents/test-flow-project-overview/test-flow-project-overview.html)**（含架构图与数据图表，本地打开）
 
@@ -18,18 +18,20 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 
 | 指标 | 数值 |
 |---|---|
-| 单元测试用例 | 225 条（8 个测试文件） |
+| 单元测试用例 | 1217 条（90 个测试文件） |
+| 平台测试 | 单元 128 + 集成 16 + E2E 8（11 + 3 + 1 个文件） |
 | 断言操作符 | 17 个 |
 | 核心引擎模块 | 13 个文件 |
+| 平台层模块 | 13 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
-| 版本演进 | v1.0 → v3.4（8 个里程碑） |
+| 版本演进 | v1.0 → v4.0（11 个里程碑） |
 | 运行时 | Node.js ≥ 20.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
 
 ## 二、架构总览
 
-源码按职责划分为八层，各层通过标准接口解耦，插件式扩展点在每一层都预留了登记入口。
+源码按职责划分为九层，各层通过标准接口解耦，插件式扩展点在每一层都预留了登记入口。
 
 | 层 | 职责 | 关键文件 |
 |---|---|---|
@@ -41,8 +43,11 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | `src/plugins` | 插件式场景处理器（新模块在此扩展） | `scenes/video.ts` `loader.ts` |
 | `src/config` | 环境配置与 CLI 参数解析（schema 校验） | `config.ts` `environments.json` |
 | `src/utils` | 通用工具：数据生成、Mock 录制回放、并发、可视化、度量 | `data-generator.ts` `mock-recorder.ts` `assertion-visualizer.ts` |
+| `src/platform` | ★ AI Test Platform 平台层（v4.0）：Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / Audit / Operations / Service / API | `projects/` `runs/` `scheduler/` `workers/` `rbac/` `approval-center/` `events/` `notifications/` `audit/` `operations/` `service/` `api/` |
 
 数据流：`CLI 入口 → 核心引擎 → 场景处理器 / 7 钩子 → 执行流水线 → 断言系统 / 数据工厂 / 环境检测 / 并发控制 → 报告四通道 + 飞书通知`。
+
+平台数据流（v4.0）：`API / CLI / Scheduler → 统一 PlatformService → Project / Run 状态机 → TestJob 队列 → Worker 执行 → Checkpoint / Audit / EventBus → Notification / 运维指标`。
 
 ## 三、执行流程
 
@@ -115,7 +120,9 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 ## 六、测试体系
 
-基于 Vitest（含 v8 覆盖率），`tests/unit/` 下共 8 个测试文件、**225 条用例**。
+基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **90 个测试文件、1217 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
+
+**核心引擎单元测试（8 个文件、225 条）**
 
 | 测试文件 | 用例数 | 覆盖主题 |
 |---|---|---|
@@ -130,7 +137,52 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 覆盖率门禁配置于 `vitest.config.ts`：行覆盖 ≥ 80%、函数覆盖 ≥ 80%、分支覆盖 ≥ 75%、语句覆盖 ≥ 80%。
 
-## 七、报告与通知
+**AI Test Platform 测试（v4.0）**
+
+| 组 | 文件 | 用例 | 覆盖主题 |
+|---|---|---|---|
+| `platform:test` | 11 个单元文件 | 128 | Project / Storage / Scheduler / Worker / RBAC / Approval / Notification / Checkpoint / Idempotency / Metrics / API |
+| `platform:integration` | 3 个集成文件 | 16 | Run 生命周期 / Checkpoint 恢复 / 崩溃回收 / HTTP 全链路 / 审计 / 幂等 |
+| `platform:e2e` | `platform-scenarios.test.ts` | 8 | S1-S8 核心场景（见「七、AI Test Platform 平台层」） |
+
+## 七、AI Test Platform 平台层
+
+v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有 AI Test Engine 共存（不拆微服务、不引入 Kafka / Kubernetes），实现多 Project / Environment 管理、Run 全生命周期、Worker 调度、RBAC / 审批门禁、事件通知、审计与运维指标。
+
+| 子模块 | 职责 |
+|---|---|
+| `projects/` | Project 实体 + Environment 分层 + 单一环境安全策略源（dev/test/staging/preprod/production） |
+| `storage/` | `Repository<T>` 抽象，Memory / JSON 双实现可替换（未来可平滑接入 SQLite） |
+| `runs/` | TestRun 状态机（QUEUED/RUNNING/PAUSED/COMPLETED/FAILED/CANCELLED）+ Checkpoint 恢复 |
+| `scheduler/` | TestJob 队列：优先级 / 重试 / 超时 / 幂等消费 / 定时触发 |
+| `workers/` | Worker 注册 / 心跳 / 健康评估 / 四维调度（环境+能力+并发+健康）/ 崩溃回收 |
+| `rbac/` | 6 角色 + 11 权限点 + 访问链路（RBAC → 环境策略），ADMIN 亦不可绕过生产安全 |
+| `approval-center/` | 持久化审批中心：request（幂等）/ approve / reject / 审批权限校验 |
+| `events/` | In-Process EventBus（24 种事件，单监听器异常隔离） |
+| `notifications/` | Feishu / DingTalk / Email / Webhook / Console 五类通道 + 事件路由 |
+| `audit/` | 审计日志：actor / role / action / runId / traceId / approvalId，敏感脱敏 |
+| `operations/` | 平台指标 14 项 + SLO 6 项（可计算指标真实统计，缺失遥测返回 null 不虚构） |
+| `service/` | **统一 Service Layer**：API / CLI / Scheduler 共用 `PlatformService`，禁止两套业务逻辑 |
+| `api/` | HTTP API（node:http）：Bearer Token / RBAC 头 / 限流 / 幂等 / 审计 |
+
+**统一入口**：`createPlatformService()` 一次性装配全部依赖（`storage: memory | json`，CLI 默认 json 跨进程持久化）；HTTP 服务由 `createPlatformServer()` 提供，CLI 由 `bin/platform-cli.ts` 提供，二者共用同一 Service Layer。
+
+**8 个核心 E2E Scenario**（`npm run platform:e2e` 全部通过）：
+
+| Scenario | 覆盖能力 |
+|---|---|
+| S1 创建 Run | POST /runs → QUEUED → Scheduler → RUNNING |
+| S2 Worker 执行 | Scheduler → Worker → 流水线 → COMPLETED |
+| S3 Worker 崩溃 | Worker DOWN → 回收 → RETRY → 其他 Worker 完成，Run 不丢失 |
+| S4 Pause / Resume | Checkpoint 恢复，不重复执行已完成 Case |
+| S5 Production Dangerous | 任何角色 → DENY，不可绕过生产安全 |
+| S6 Risky + Approval | PENDING → APPROVED → 执行；Reject → REJECTED |
+| S7 Idempotency | 相同 Key 两次 → 只创建 1 个 Run |
+| S8 Audit | runId / traceId / approvalId / actor 完整还原全链路 |
+
+**最终验收指标（11 项全部达成）**：Project Management / Environment Isolation / Scheduler / Worker Retry / Checkpoint-Resume / RBAC / Production Safety / Approval Flow / Idempotency / Audit Trace / API-CLI Consistency，详见 [docs/phase24-final-acceptance-report.md](docs/phase24-final-acceptance-report.md)。
+
+## 八、报告与通知
 
 报告层采用工厂模式，实现 `Reporter` 接口（`name/write`）即可登记多格式输出。
 
@@ -144,7 +196,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 输出强制归档到 `output/<YYYY-MM-DD>/<功能名>/`；并发模式下报告写入 `<功能名>/<caseId>/` 子目录，日志带 `[caseId]` 前缀隔离。
 
-## 八、CLI 参数
+## 九、CLI 参数
 
 入口为 `bin/run-test.ts`（编译为 `dist/bin/run-test.js`），运行 `node dist/bin/run-test.js --help` 查看全部帮助。
 
@@ -167,7 +219,20 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 | `--ci` / `--upload-reports` | CI 模式 / 上传报告到 OSS |
 | `--debug` / `--debug-level` / `--timeout` | 调试开关与全局超时 |
 
-## 九、CI/CD 与安全
+**平台 CLI**（v4.0，`bin/platform-cli.ts`，与 HTTP API 共用 Service Layer）：
+
+| 命令 | 说明 |
+|---|---|
+| `node dist/bin/platform-cli.js project list / create <id> --name <name>` | 项目管理 |
+| `node dist/bin/platform-cli.js run create --project wan3 --environment test --trigger manual` | 创建并执行 Run（自动进入 COMPLETED） |
+| `node dist/bin/platform-cli.js run list / get <id> / detail <id>` | Run 查询（detail 含 Checkpoint / Trace / Approvals） |
+| `node dist/bin/platform-cli.js run pause / resume / cancel / retry <id>` | 生命周期控制 |
+| `node dist/bin/platform-cli.js worker list / approval list` | Worker 与审批查询 |
+| `node dist/bin/platform-cli.js platform health / dashboard / metrics` | 运维视图与指标 |
+
+身份通过 `PLATFORM_ACTOR` / `PLATFORM_ROLE` 环境变量注入；存储后端 `PLATFORM_STORAGE=memory` 可切内存态。
+
+## 十、CI/CD 与安全
 
 项目内置完整的发布与安全流水线：Docker 镜像化、GitHub Actions、GitLab CI、husky 提交门禁与五类安全扫描。
 
@@ -182,7 +247,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 配套脚本：`deploy:smoke`（本地冒烟）、`deploy:notify`（飞书通知）、`ci:summary`（GitHub Summary）。
 
-## 十、扩展指南
+## 十一、扩展指南
 
 ### 六个架构扩展点
 
@@ -201,7 +266,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 全程无需改动 loader / engine / 任何框架代码——框架按目录结构自动识别新功能。`order`、`payment` 等业务同理。
 
-## 十一、版本历史
+## 十二、版本历史
 
 | 版本 | 日期 | 里程碑 |
 |---|---|---|
@@ -214,10 +279,12 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 | v3.2 | 2026-08-16 | 多功能模块化：按功能分子文件夹、loader 递归扫描、迁移脚本分目录 |
 | v3.3 | 2026-08-16 | 并发执行：`--concurrency` / `--parallel`，p-limit 并发池，caseId 归档 |
 | v3.4 | 2026-08-17 | 数据工厂（`--auto-setup`）+ 环境一致性检测（基线对比 + 断言注入） |
+| v3.5 | 2026-08-17 | Agent 化与能力沉淀（Phase 10-19）：RCA/Flaky 治理、自愈、缺陷生命周期、审批状态机、可观测性、评估体系、通用断言引擎、数据生成 / Mock 回放 / 动态并发、断言可视化 |
+| v4.0 | 2026-08-18 | AI Test Platform 平台化（Phase 20-24）：多业务接入、测试资产管理、持续回归、知识 / 成本 / 质量优化、智能排序与风险预测、自治回归流水线、统一追踪、发布决策与生产验收，以及全新 `src/platform` 平台层（13 模块 + HTTP API + CLI + 运维指标） |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）。
 
-## 十二、目录结构
+## 十三、目录结构
 
 ```
 test-flow/
@@ -241,9 +308,11 @@ test-flow/
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
 │   │   └── video.ts             # 视频场景处理器（文生/图生/全能参考/首尾帧）
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）
+│   ├── platform/                # ★ AI Test Platform 平台层（v4.0）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / operations / service / api
 │   └── utils/                   # 工具：logger / metrics / retry / data-generator / mock-recorder / concurrency-controller / assertion-visualizer / exit-code / fs-utils / time / trace / allure-reporter / junit-reporter / oss-uploader
-├── tests/unit/                  # Vitest 单元测试（8 个文件，225 条用例）
-├── bin/run-test.ts              # CLI 入口（编译为 dist/bin/run-test.js）
+├── tests/unit/                  # Vitest 单元测试（90 文件 / 1217 用例，含平台 11 文件）
+├── bin/run-test.ts              # 执行 CLI 入口（编译为 dist/bin/run-test.js）
+├── bin/platform-cli.ts          # 平台 CLI（v4.0，与 API 共用 Service Layer）
 ├── scripts/                     # 构建/迁移/安全/CI 工具
 ├── tasks/                       # JSON 任务定义（迁移源，保留）
 │   ├── _template.json           # 新任务定义模板
@@ -299,6 +368,9 @@ node dist/bin/run-test.js --help
 | `npm run test:regression` | 全量回归：编译 + 执行所有功能模块（CI 模式） |
 | `npm run migrate -- [--force]` | 将 `tasks/*.json` 迁移为 `src/cases/<功能>/*.ts`（幂等） |
 | `npm run security:full` | 五类安全扫描全量执行 |
+| `npm run platform -- run create --project wan3 --environment test` | 平台 Run 创建并执行（自动进入 COMPLETED） |
+| `npm run platform -- platform health / dashboard / metrics` | 平台运维视图与指标 |
+| `npm run platform:test` / `platform:integration` / `platform:e2e` | 平台单元 / 集成 / 核心 E2E 测试 |
 | `node dist/bin/run-test.js --help` | 查看执行参数 |
 
 **依赖**：Node.js ≥ 20.11（内置 fetch）、TypeScript；运行时依赖 `ali-oss`、`chokidar`、`p-limit`；登录态文件 `/Users/mac/agents/test-Configuration/session-cookies.json`（已有 test / preonline 两环境）。

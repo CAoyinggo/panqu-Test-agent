@@ -15,6 +15,8 @@ export default defineConfig({
         'src/cases/define.ts',
         'src/utils/concurrency-controller.ts',
         'src/utils/assertion-visualizer.ts',
+        'src/agents/**/*.ts',
+        'src/llm/**/*.ts',
       ],
       exclude: ['node_modules/', 'dist/', 'tests/'],
       thresholds: {

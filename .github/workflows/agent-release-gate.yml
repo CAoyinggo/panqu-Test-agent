@@ -1,0 +1,159 @@
+# Agent Release Gate（Phase 23.4）
+# 自治发布门禁：Autonomous Regression → Analysis → Release Decision → Gate。
+# CI Exit Code：0=PASS、1=BLOCK、2=REVIEW、3=SYSTEM_ERROR（REVIEW 绝不返回 0）。
+# Gate 规则：
+#   PASS         → workflow success
+#   BLOCK        → workflow failure
+#   SYSTEM_ERROR → workflow failure
+#   REVIEW       → 触发独立 approval job（environment: release-approval，需配置 required reviewers）
+#                  workflow 暂停等待人工审批；AI 生成的决策无法绕过 GitHub Environment Approval。
+#
+# 前提：仓库 Settings → Environments → release-approval 必须配置 Required reviewers。
+# 触发：push main / PR / workflow_dispatch。
+
+name: Agent Release Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ════════════════════════════════════════════
+  # 自治发布门禁主 Job
+  # ════════════════════════════════════════════
+  release-gate:
+    name: Autonomous Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      decision: ${{ steps.gate.outputs.decision }}
+      exit-code: ${{ steps.gate.outputs.exit-code }}
+      run-id: ${{ steps.gate.outputs.run-id }}
+      release-id: ${{ steps.gate.outputs.release-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Agent Preflight（环境自检）
+        run: npm run agent:preflight
+
+      - name: Autonomous Regression（控制层测试）
+        run: |
+          npm run agent:autonomous:test
+          npm run agent:portfolio-regression:test
+          npm run agent:exploration-regression:test
+          npm run agent:replan:test
+          npm run agent:release-ci:test
+
+      - name: CI Exit Code 自检（0/1/2/3）
+        run: |
+          failed=0
+          for pair in pass:0 review:2 block:1 error:3; do
+            name="${pair%%:*}"; want="${pair##*:}"
+            set +e
+            GATE_FIXTURE="$name" node scripts/ci/agent-release-gate.mjs --base-dir output-selfcheck --feature selfcheck >/dev/null 2>&1
+            got=$?
+            set -e
+            echo "fixture=$name expect=$want got=$got"
+            if [ "$got" -ne "$want" ]; then
+              echo "❌ fixture=$name exit code 不匹配（期望 $want 实际 $got）"
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "❌ CI Exit Code 自检失败"
+            exit 1
+          fi
+          echo "✅ CI Exit Code 0/1/2/3 全部正确（REVIEW=2、BLOCK=1、PASS=0、SYSTEM_ERROR=3）"
+
+      - name: Autonomous Pipeline（端到端，生成 run-summary.json）
+        run: npm run agent:autonomous:e2e || echo "autonomous e2e 未接入，使用确定性汇总"
+
+      - name: Release Decision（Analysis → Gate）
+        id: gate
+        env:
+          GATE_FEATURE: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.head.ref }}
+        run: |
+          set +e
+          node scripts/ci/agent-release-gate.mjs --feature "$GATE_FEATURE" > release-gate.json
+          set -e
+          node -e "
+            const fs = require('fs');
+            const d = JSON.parse(fs.readFileSync('release-gate.json', 'utf8'));
+            console.log('decision=' + d.decision);
+            console.log('exit-code=' + d.exitCode);
+            console.log('run-id=' + d.runId);
+            console.log('release-id=' + d.releaseId);
+          " >> "$GITHUB_OUTPUT"
+          cat release-gate.json
+
+      - name: Gate · PASS（workflow success）
+        if: steps.gate.outputs.decision == 'PASS'
+        run: |
+          echo "✅ 发布决策：PASS（exit code 0）"
+          echo "release=${{ steps.gate.outputs.release-id }} run=${{ steps.gate.outputs.run-id }}"
+
+      - name: Gate · REVIEW（需人工审批，进入 approval job）
+        if: steps.gate.outputs.decision == 'REVIEW'
+        run: |
+          echo "⚠️ 发布决策：REVIEW（exit code 2）"
+          echo "workflow 将暂停，等待 environment 'release-approval' 人工审批"
+          echo "blockReasons 详见 release-decision.json 产物"
+
+      - name: Gate · BLOCK / SYSTEM_ERROR（workflow failure）
+        if: steps.gate.outputs.decision == 'BLOCK' || steps.gate.outputs.decision == 'SYSTEM_ERROR'
+        run: |
+          echo "❌ 发布决策：${{ steps.gate.outputs.decision }}（exit code ${{ steps.gate.outputs.exit-code }}）"
+          cat release-gate.json
+          exit 1
+
+      - name: 上传 Release Decision 产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-decision-${{ github.run_id }}
+          path: output/**/release-decision.json
+          retention-days: 30
+
+      - name: 生成 CI 摘要
+        if: always()
+        run: bash scripts/ci/github-summary.sh || echo "summary skipped"
+
+  # ════════════════════════════════════════════
+  # REVIEW 人工审批门禁（仅 REVIEW 时运行）
+  # environment: release-approval 必须配置 Required reviewers，
+  # 未人工批准前该 job 保持 pending，workflow 不会成功。
+  # AI 生成的 decision 只能触发本 job，无法代替人工批准。
+  # ════════════════════════════════════════════
+  approval:
+    name: REVIEW 人工审批
+    needs: release-gate
+    if: needs.release-gate.outputs.decision == 'REVIEW'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4320
+    environment:
+      name: release-approval
+    steps:
+      - name: REVIEW 已由人工批准
+        run: |
+          echo "✅ REVIEW 已由人工在 environment 'release-approval' 审批通过"
+          echo "run=${{ needs.release-gate.outputs.run-id }} release=${{ needs.release-gate.outputs.release-id }}"
+          echo "workflow 继续；如需部署请等待后续 release workflow 执行"

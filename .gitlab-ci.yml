@@ -240,8 +240,63 @@ security:license:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 # ════════════════════════════════════════════
+# 自治发布门禁（Phase 23.4）
+# 统一 Release Contract + CI Exit Code：
+#   0=PASS → 继续发布
+#   1=BLOCK → 阻断（job 失败，release:image 不会启动）
+#   2=REVIEW → 阻断（job 失败并提示人工评审；REVIEW 绝不返回 0）
+#   3=SYSTEM_ERROR → 阻断
+# Deterministic First：决策由规则引擎推导，不调用 LLM。
+# ════════════════════════════════════════════
+agent-release-gate:
+  stage: deploy
+  image: node:20-alpine
+  needs:
+    - test
+    - security:audit
+    - security:sast
+    - security:secrets
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths: [node_modules/]
+    policy: pull
+  script:
+    - npm run build
+    - npm run agent:preflight
+    - npm run agent:autonomous:test
+    - npm run agent:portfolio-regression:test
+    - npm run agent:exploration-regression:test
+    - npm run agent:replan:test
+    - npm run agent:release-ci:test
+    - |
+      set +e
+      node scripts/ci/agent-release-gate.mjs --feature "${CI_COMMIT_REF_NAME}"
+      GATE_EXIT=$?
+      set -e
+      echo "GATE_EXIT=$GATE_EXIT"
+      if [ "$GATE_EXIT" -eq 0 ]; then
+        echo "✅ 发布决策：PASS"
+      elif [ "$GATE_EXIT" -eq 1 ]; then
+        echo "❌ 发布决策：BLOCK（阻断发布，需修复后重新运行流水线）"
+        exit 1
+      elif [ "$GATE_EXIT" -eq 2 ]; then
+        echo "⚠️ 发布决策：REVIEW（需人工评审，阻断发布。请评审 release-decision.json 后修复或人工批准后重跑）"
+        exit 2
+      else
+        echo "❌ 发布决策：SYSTEM_ERROR（检查环境与依赖后重试）"
+        exit 3
+      fi
+  artifacts:
+    paths: [output/]
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ════════════════════════════════════════════
 # 发布部署阶段（main 分支 / vX.Y.Z tag 触发）
-# 安全门禁全通过 → 构建推送镜像 → SBOM → 部署 → 通知
+# 安全门禁 + 自治发布门禁全通过 → 构建推送镜像 → SBOM → 部署 → 通知
 # ════════════════════════════════════════════
 
 # ── 1. 构建并推送镜像到 GitLab Container Registry ──
@@ -257,6 +312,7 @@ release:image:
     - security:trivy
     - security:license
     - test
+    - agent-release-gate
   variables:
     DOCKER_BUILDKIT: "1"
     DOCKER_DRIVER: overlay2
