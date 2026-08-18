@@ -34,7 +34,7 @@ export class Scheduler {
     if (dup.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING' || j.status === 'RETRY')) {
       throw new Error(`Run ${input.runId} 已有在执行中的 Job，禁止重复入队`);
     }
-    const jobId = input.jobId ?? `job-${input.runId}-${Date.now().toString(36)}`;
+    const jobId = input.jobId ?? `job-${input.runId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const job: TestJob = {
       id: jobId,
       jobId,

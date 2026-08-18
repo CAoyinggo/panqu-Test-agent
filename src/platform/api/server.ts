@@ -1,20 +1,42 @@
-// Platform HTTP API（Phase 24.7）：node:http 实现的统一平台 API
-// 认证（Bearer Token）+ RBAC（X-Actor / X-Role 头，由上游身份网关注入）+ 限流 + 请求校验 + 审计。
+// Platform HTTP API（Phase 24.7 + 25.3 + 25.7）：node:http 实现的统一平台 API
+// 认证：JWT（AuthService，Phase 25.3）优先；静态 Bearer Token + X-Actor/X-Role 仅作为
+//       development/test 内部模式（生产默认关闭）。RBAC 角色 + 资源作用域（Project/Environment）
+//       双重校验。
+// 25.7 Hardening：requestId/traceId（客户端可透传 X-Request-Id/X-Trace-Id）、统一错误契约
+//       {error,message,status,requestId,traceId}、每 IP 限流（X-RateLimit-* 头 + 429 Retry-After）、
+//       列表可选分页（?page&pageSize → {items,pagination}，默认向后兼容纯数组）。
 // 所有业务逻辑委托 PlatformService（与 CLI 共用 Service Layer，禁止维护两套逻辑）。
 
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { PlatformService } from '../service/platform-service.js';
 import type { Role } from '../rbac/rbac.js';
+import { assertRunAccess } from '../rbac/scopes.js';
+import type { AuthService } from '../auth/auth-service.js';
+import type { User } from '../auth/user.js';
+import type { TestRun } from '../runs/run-schema.js';
+import type { TelemetryPeriod } from '../telemetry/index.js';
+
+/** 平台运行模式（25.8 完整实现；25.3 已用于认证开关） */
+export type PlatformRunMode = 'development' | 'test' | 'staging' | 'production';
 
 export interface ApiServerOptions {
   service: PlatformService;
-  /** Bearer Token（缺省用 PLATFORM_API_TOKEN 或 dev-token） */
+  /** JWT 认证服务（Phase 25.3）；未提供则退回静态 Token 内部模式 */
+  auth?: AuthService;
+  /** 运行模式：development/test 允许 X-Actor/X-Role 内部模式；production 关闭 */
+  mode?: PlatformRunMode;
+  /** 静态 Bearer Token（internal/test mode；缺省用 PLATFORM_API_TOKEN 或 dev-token） */
   token?: string;
   /** 每 IP 每分钟请求上限 */
   rateLimitPerMinute?: number;
   host?: string;
   port?: number;
   now?: () => string;
+  /** Web Dashboard 静态目录（25.6）：提供时挂载 / 与 /assets/*（SPA fallback） */
+  webDir?: string;
 }
 
 interface Route {
@@ -27,9 +49,19 @@ interface Ctx {
   service: PlatformService;
   actor: string;
   role: Role;
+  /** JWT 认证用户（25.3）；内部模式为 undefined */
+  user?: User;
   body: Record<string, unknown>;
   req: http.IncomingMessage;
   res: http.ServerResponse;
+  requestId: string;
+  traceId: string;
+}
+
+interface Principal {
+  user?: User;
+  actor: string;
+  role: Role;
 }
 
 const DEFAULT_TOKEN = 'dev-token';
@@ -41,38 +73,219 @@ export interface PlatformHttpServer {
   address(): number | undefined;
 }
 
+function newId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`;
+}
+
+function parseBearer(authHeader: string | undefined): string | null {
+  if (!authHeader) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  return m ? m[1] : null;
+}
+
 export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer {
   const token = opts.token ?? process.env.PLATFORM_API_TOKEN ?? DEFAULT_TOKEN;
   const rateLimitPerMinute = opts.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT;
   const now = opts.now ?? (() => new Date().toISOString());
+  const authService = opts.auth;
+  const mode: PlatformRunMode = opts.mode ?? 'development';
 
   let server: http.Server | null = null;
   let boundPort: number | undefined;
   const hits = new Map<string, { windowStart: number; count: number }>();
 
+  // ── 认证解析：JWT 优先；静态 Token → internal/test 模式（production 关闭 X-Header 直信任）──
+  async function resolvePrincipal(authHeader: string | undefined, req: http.IncomingMessage): Promise<Principal | null> {
+    const cred = parseBearer(authHeader);
+    if (!cred) return null;
+    if (authService) {
+      try {
+        const { user } = await authService.verify(cred);
+        return { user, actor: user.username, role: (user.roles[0] as Role) ?? 'VIEWER' };
+      } catch {
+        /* JWT 无效，尝试内部模式（仅 development/test） */
+      }
+    }
+    if (cred === token) {
+      if (mode === 'production') return null; // 生产禁止 X-Actor/X-Role 作为身份来源
+      return {
+        user: undefined,
+        actor: String(req.headers['x-actor'] ?? 'api'),
+        role: (req.headers['x-role'] as Role) ?? 'VIEWER',
+      };
+    }
+    return null;
+  }
+
+  // ── 认证路由（无需静态 Token 即可访问 login/refresh；logout/info 需有效凭证）──
+  async function handleAuthRoute(req: http.IncomingMessage, res: http.ServerResponse, ids: { requestId: string; traceId: string }): Promise<void> {
+    if (!authService) {
+      sendError(res, 501, 'auth_disabled', '认证服务未启用', ids);
+      return;
+    }
+    const pathname = (req.url ?? '/').split('?')[0];
+    if (pathname === '/auth/login') {
+      const body = await readBodyJson(req, res);
+      if (!body) return;
+      const username = String(body.username ?? '');
+      const password = String(body.password ?? '');
+      if (!username || !password) {
+        sendError(res, 400, 'missing_credentials', '缺少用户名或密码', ids);
+        return;
+      }
+      try {
+        const tokens = await authService.login(username, password);
+        sendJson(res, 200, tokens);
+      } catch (err) {
+        sendError(res, 401, 'invalid_credentials', (err as Error).message, ids);
+      }
+      return;
+    }
+    if (pathname === '/auth/refresh') {
+      const body = await readBodyJson(req, res);
+      if (!body) return;
+      const refreshToken = String(body.refreshToken ?? '');
+      if (!refreshToken) {
+        sendError(res, 400, 'missing_refresh_token', '缺少 refreshToken', ids);
+        return;
+      }
+      try {
+        const tokens = await authService.refresh(refreshToken);
+        sendJson(res, 200, tokens);
+      } catch (err) {
+        sendError(res, 401, 'invalid_refresh_token', (err as Error).message, ids);
+      }
+      return;
+    }
+    if (pathname === '/auth/logout') {
+      const body = await readBodyJson(req, res);
+      if (!body) return;
+      await authService.logout(body.refreshToken ? String(body.refreshToken) : undefined);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (pathname === '/auth/info') {
+      const cred = parseBearer(req.headers.authorization);
+      if (!cred) {
+        sendError(res, 401, 'unauthorized', '缺少 Bearer Token', ids);
+        return;
+      }
+      try {
+        sendJson(res, 200, await authService.info(cred));
+      } catch (err) {
+        sendError(res, 401, 'unauthorized', (err as Error).message, ids);
+      }
+      return;
+    }
+    sendError(res, 404, 'not_found', `${req.method ?? 'GET'} ${pathname} 不存在`, ids);
+  }
+
+  function isAuthRoute(method: string, pathname: string): boolean {
+    return (
+      (method === 'POST' && (pathname === '/auth/login' || pathname === '/auth/logout' || pathname === '/auth/refresh')) ||
+      (method === 'GET' && pathname === '/auth/info')
+    );
+  }
+
+  // ── Run 级作用域校验（JWT 用户）──
+  async function withRunScope<T>(c: Ctx, runId: string, fn: (run: TestRun) => T): Promise<T> {
+    const run = await c.service.getRun(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (c.user) {
+      assertRunAccess({ roles: c.user.roles, scopes: c.user.scopes }, run.projectId, run.environment);
+    }
+    return fn(run);
+  }
+
+  // ── 审批级作用域校验（JWT 用户；approval → run → project/env）──
+  async function withApprovalScope<T>(c: Ctx, approvalId: string, fn: (approval: { runId: string; environment: string }) => T): Promise<T> {
+    const approvals = await c.service.listApprovals({ approvalId });
+    const approval = approvals[0];
+    if (!approval) throw new Error(`审批不存在：${approvalId}`);
+    if (c.user && approval.runId) {
+      const run = await c.service.getRun(approval.runId);
+      if (run) assertRunAccess({ roles: c.user.roles, scopes: c.user.scopes }, run.projectId, run.environment);
+    }
+    return fn(approval);
+  }
+
   const routes: Route[] = [
     { method: 'POST', segments: ['projects'], handler: async (c) => c.service.createProject(c.body as never) },
-    { method: 'GET', segments: ['projects'], handler: async (c) => c.service.listProjects() },
+    {
+      method: 'GET', segments: ['projects'],
+      handler: async (c) => {
+        let projects = c.service.listProjects();
+        if (c.user) {
+          const allowed = c.user.scopes?.projects;
+          if (allowed && allowed.length > 0) projects = projects.filter((p) => allowed.includes(p.id));
+        }
+        return maybePaginate(c.req.url, projects);
+      },
+    },
 
     { method: 'POST', segments: ['runs'], handler: async (c) => createRunHandler(c) },
-    { method: 'GET', segments: ['runs', ':id'], handler: async (c, p) => c.service.getRun(p.id) },
-    { method: 'POST', segments: ['runs', ':id', 'cancel'], handler: async (c, p) => c.service.cancelRun(p.id, c.actor, c.role) },
-    { method: 'POST', segments: ['runs', ':id', 'retry'], handler: async (c, p) => c.service.retryRun(p.id, c.actor, c.role) },
-    { method: 'GET', segments: ['runs', ':id', 'report'], handler: async (c, p) => c.service.getRunReport(p.id) },
-    { method: 'GET', segments: ['runs', ':id', 'trace'], handler: async (c, p) => c.service.getRunTrace(p.id) },
-    { method: 'GET', segments: ['runs', ':id', 'detail'], handler: async (c, p) => c.service.runDetail(p.id) },
+    { method: 'GET', segments: ['runs'], handler: async (c) => listRunsHandler(c) },
+    { method: 'GET', segments: ['runs', ':id'], handler: async (c, p) => withRunScope(c, p.id, (run) => run) },
+    { method: 'POST', segments: ['runs', ':id', 'cancel'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.cancelRun(p.id, c.actor, c.role)) },
+    { method: 'POST', segments: ['runs', ':id', 'retry'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.retryRun(p.id, c.actor, c.role)) },
+    { method: 'GET', segments: ['runs', ':id', 'report'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.getRunReport(p.id)) },
+    { method: 'GET', segments: ['runs', ':id', 'trace'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.getRunTrace(p.id)) },
+    { method: 'GET', segments: ['runs', ':id', 'detail'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.runDetail(p.id)) },
 
     { method: 'GET', segments: ['test-assets'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
     { method: 'GET', segments: ['defects'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
     { method: 'GET', segments: ['knowledge'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
 
-    { method: 'POST', segments: ['approvals', ':id', 'approve'], handler: async (c, p) => c.service.approveApproval(p.id, c.actor, c.role) },
-    { method: 'POST', segments: ['approvals', ':id', 'reject'], handler: async (c, p) => c.service.rejectApproval(p.id, c.actor, c.role) },
-    { method: 'GET', segments: ['approvals'], handler: async (c) => c.service.listApprovals() },
+    { method: 'POST', segments: ['approvals', ':id', 'approve'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.approveApproval(p.id, c.actor, c.role)) },
+    { method: 'POST', segments: ['approvals', ':id', 'reject'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.rejectApproval(p.id, c.actor, c.role)) },
+    { method: 'GET', segments: ['approvals'], handler: async (c) => maybePaginate(c.req.url, await c.service.listApprovals()) },
 
     { method: 'GET', segments: ['dashboard'], handler: async (c) => c.service.dashboard() },
     { method: 'GET', segments: ['health'], handler: async (c) => c.service.health() },
+
+    // 25.5/25.6：指标与遥测（Dashboard 数据源）
+    { method: 'GET', segments: ['metrics'], handler: async (c) => c.service.metrics(queryWindow(c.req.url)) },
+    { method: 'GET', segments: ['metrics', 'activation'], handler: async (c) => c.service.metricsActivation() },
+    { method: 'GET', segments: ['telemetry', 'snapshot'], handler: async (c) => c.service.telemetrySnapshot(queryWindow(c.req.url)) },
+    { method: 'GET', segments: ['telemetry', 'cost'], handler: async (c) => c.service.telemetryCost(queryWindow(c.req.url)) },
+    {
+      method: 'GET', segments: ['telemetry', 'events'],
+      handler: async (c) => maybePaginate(c.req.url, await c.service.telemetryEvents(queryParam(c.req.url, 'run') ?? undefined)),
+    },
+
+    // 25.6：运维视图数据源（Dashboard）
+    { method: 'GET', segments: ['jobs'], handler: async (c) => maybePaginate(c.req.url, await c.service.listJobs()) },
+    { method: 'GET', segments: ['audit'], handler: async (c) => maybePaginate(c.req.url, await c.service.listAudit()) },
+    { method: 'GET', segments: ['workers'], handler: async (c) => maybePaginate(c.req.url, await c.service.listWorkers()) },
   ];
+
+  /** 解析 ?window= 参数（默认 7d） */
+  function queryWindow(reqUrl: string | undefined): TelemetryPeriod {
+    const v = queryParam(reqUrl, 'window') ?? '7d';
+    return (['1h', '6h', '24h', '7d', '30d', 'release', 'version'].includes(v) ? v : '7d') as TelemetryPeriod;
+  }
+
+  function queryParam(reqUrl: string | undefined, key: string): string | null {
+    const q = (reqUrl ?? '').split('?')[1];
+    if (!q) return null;
+    const m = new URLSearchParams(q).get(key);
+    return m;
+  }
+
+  /** 25.7：可选分页——显式传 ?page / ?pageSize 才返回 {items, pagination}；否则原样返回（向后兼容） */
+  function maybePaginate<T>(reqUrl: string | undefined, items: T[]): unknown {
+    const pageParam = queryParam(reqUrl, 'page');
+    const sizeParam = queryParam(reqUrl, 'pageSize');
+    if (pageParam === null && sizeParam === null) return items;
+    const page = Math.max(1, Math.floor(Number(pageParam)) || 1);
+    const pageSize = Math.min(200, Math.max(1, Math.floor(Number(sizeParam)) || 50));
+    const total = items.length;
+    const start = (page - 1) * pageSize;
+    return {
+      items: items.slice(start, start + pageSize),
+      pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
+    };
+  }
 
   async function createRunHandler(c: Ctx): Promise<unknown> {
     const idempotencyKey = c.req.headers['idempotency-key'] ? String(c.req.headers['idempotency-key']) : undefined;
@@ -85,8 +298,20 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       change: c.body.change as never,
       actor: c.actor,
       role: c.role,
+      scopes: c.user?.scopes,
       idempotencyKey,
     });
+  }
+
+  async function listRunsHandler(c: Ctx): Promise<unknown> {
+    let runs = await c.service.listRuns();
+    if (c.user) {
+      const projects = c.user.scopes?.projects;
+      if (projects && projects.length > 0) {
+        runs = runs.filter((r) => projects.includes(r.projectId));
+      }
+    }
+    return maybePaginate(c.req.url, runs);
   }
 
   function match(reqUrl: string, method: string): { route: Route; params: Record<string, string> } | null {
@@ -110,29 +335,140 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     return null;
   }
 
-  function authOk(authHeader: string | undefined): boolean {
-    return authHeader === `Bearer ${token}`;
-  }
-
-  function rateLimited(ip: string): boolean {
-    const t = now();
-    const nowMs = Date.parse(t);
+  /** 25.7：每 IP 每分钟限流；返回配额信息（剩余 / 重置时间）供响应头 */
+  function rateLimitInfo(ip: string): { limited: boolean; remaining: number; resetAt: string; limit: number } {
+    const nowMs = Date.parse(now());
     const hit = hits.get(ip);
     if (!hit || nowMs - hit.windowStart >= 60_000) {
       hits.set(ip, { windowStart: nowMs, count: 1 });
-      return false;
+      return { limited: false, remaining: rateLimitPerMinute - 1, resetAt: new Date(nowMs + 60_000).toISOString(), limit: rateLimitPerMinute };
     }
     hit.count += 1;
-    return hit.count > rateLimitPerMinute;
+    return {
+      limited: hit.count > rateLimitPerMinute,
+      remaining: Math.max(0, rateLimitPerMinute - hit.count),
+      resetAt: new Date(hit.windowStart + 60_000).toISOString(),
+      limit: rateLimitPerMinute,
+    };
   }
 
-  function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  /** 25.7：每请求元数据（追踪 + 限流），挂到 res 以贯穿所有响应 */
+  interface RequestMeta {
+    requestId: string;
+    traceId: string;
+    rateLimit?: { limit: number; remaining: number; resetAt: string };
+  }
+  type MetaResponse = http.ServerResponse & { _meta?: RequestMeta };
+
+  function sendJson(res: http.ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}): void {
     const payload = JSON.stringify(body);
-    res.writeHead(status, {
+    const meta = (res as MetaResponse)._meta;
+    const headers: Record<string, string | number> = {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(payload),
-    });
+      'X-Request-Id': meta?.requestId ?? 'static',
+      'X-Trace-Id': meta?.traceId ?? 'static',
+    };
+    if (meta?.rateLimit) {
+      headers['X-RateLimit-Limit'] = String(meta.rateLimit.limit);
+      headers['X-RateLimit-Remaining'] = String(meta.rateLimit.remaining);
+      headers['X-RateLimit-Reset'] = meta.rateLimit.resetAt;
+    }
+    Object.assign(headers, extraHeaders);
+    res.writeHead(status, headers);
     res.end(payload);
+  }
+
+  /** 托管 Web Dashboard 静态资源（25.6）：/assets/* 原样返回，其余路径回退 index.html（SPA） */
+  function serveIndex(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const webDir = opts.webDir;
+    if (!webDir) return false;
+    const file = path.join(webDir, 'index.html');
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+      const content = fs.readFileSync(file);
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': content.length,
+        'Cache-Control': 'no-cache',
+      });
+      res.end(content);
+      return true;
+    }
+    sendError(res, 404, 'dashboard_not_built', 'Web Dashboard 未构建（运行 npm run build:web 后重试）', { requestId: 'static', traceId: 'static' });
+    return true;
+  }
+
+  function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const webDir = opts.webDir;
+    if (!webDir || (req.method ?? 'GET').toUpperCase() !== 'GET') return false;
+    const url = req.url ?? '/';
+    const pathname = url.split('?')[0];
+    // API 与认证路由不参与静态托管
+    if (pathname === '/' || pathname === '/index.html') {
+      return serveIndex(req, res);
+    }
+    if (pathname.startsWith('/assets/')) {
+      const rel = pathname.slice(1);
+      const file = path.join(webDir, rel);
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+        const ext = path.extname(file).toLowerCase();
+        const types: Record<string, string> = {
+          '.html': 'text/html; charset=utf-8',
+          '.js': 'text/javascript; charset=utf-8',
+          '.css': 'text/css; charset=utf-8',
+          '.json': 'application/json; charset=utf-8',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.ico': 'image/x-icon',
+          '.woff2': 'font/woff2',
+        };
+        const content = fs.readFileSync(file);
+        res.writeHead(200, {
+          'Content-Type': types[ext] ?? 'application/octet-stream',
+          'Content-Length': content.length,
+          'Cache-Control': 'public, max-age=3600',
+        });
+        res.end(content);
+        return true;
+      }
+      sendError(res, 404, 'not_found', `${pathname} 不存在`, { requestId: 'static', traceId: 'static' });
+      return true;
+    }
+    return false;
+  }
+
+  /** 前端 /api 前缀 → 根路由（25.6：Dashboard 与 API 同源部署） */
+  function stripApiPrefix(u: string): string {
+    const pathname = u.split('?')[0];
+    if (pathname === '/api') return u.replace('/api', '/');
+    if (pathname.startsWith('/api/')) {
+      const q = u.includes('?') ? u.slice(u.indexOf('?')) : '';
+      return `/${pathname.slice(4)}${q}`;
+    }
+    return u;
+  }
+
+  function sendError(
+    res: http.ServerResponse,
+    status: number,
+    code: string,
+    message: string,
+    ids: { requestId: string; traceId: string },
+    extraHeaders: Record<string, string> = {},
+  ): void {
+    const meta = (res as MetaResponse)._meta;
+    sendJson(
+      res,
+      status,
+      {
+        error: code,
+        message,
+        status,
+        requestId: meta?.requestId ?? ids.requestId,
+        traceId: meta?.traceId ?? ids.traceId,
+      },
+      extraHeaders,
+    );
   }
 
   function readBody(req: http.IncomingMessage): Promise<string> {
@@ -147,51 +483,93 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     });
   }
 
+  async function readBodyJson(req: http.IncomingMessage, res: http.ServerResponse): Promise<Record<string, unknown> | null> {
+    const raw = await readBody(req);
+    if (!raw.trim()) return {};
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      sendError(res, 400, 'invalid_json', '请求体不是合法 JSON', { requestId: 'unknown', traceId: 'unknown' });
+      return null;
+    }
+  }
+
   server = http.createServer(async (req, res) => {
     const start = Date.now();
     const ip = req.socket.remoteAddress ?? 'unknown';
+    // 25.7：客户端可透传 X-Request-Id / X-Trace-Id 用于跨服务链路关联；否则服务端生成
+    const rawReqId = String(req.headers['x-request-id'] ?? '').slice(0, 64);
+    const rawTraceId = String(req.headers['x-trace-id'] ?? '').slice(0, 64);
+    const requestId = rawReqId || newId('req');
+    const traceId = rawTraceId || newId('trace');
+    (res as MetaResponse)._meta = { requestId, traceId };
+    const ids = { requestId, traceId };
     try {
-      if (!authOk(req.headers.authorization)) {
-        sendJson(res, 401, { error: 'unauthorized', message: '缺少或无效的 Bearer Token' });
-        return;
-      }
-      if (rateLimited(ip)) {
-        sendJson(res, 429, { error: 'rate_limited', message: '请求过于频繁' });
-        return;
-      }
       const url = req.url ?? '/';
       const method = (req.method ?? 'GET').toUpperCase();
-      const m = match(url, method);
+      const pathname = url.split('?')[0];
+
+      // 25.6：Web Dashboard 静态资源（先于认证/API 路由处理）
+      if (serveStatic(req, res)) return;
+
+      // 认证路由无需静态 Token
+      if (isAuthRoute(method, pathname)) {
+        await handleAuthRoute(req, res, ids);
+        return;
+      }
+
+      // 25.6：SPA fallback——浏览器直链/刷新（Accept: text/html）回退 index.html；
+      // /api、/auth 与 fetch 默认 Accept(*/*) 不受影响，仍走 API。
+      if (
+        opts.webDir &&
+        method === 'GET' &&
+        (req.headers.accept ?? '').includes('text/html') &&
+        !pathname.startsWith('/api') &&
+        !pathname.startsWith('/auth')
+      ) {
+        if (serveIndex(req, res)) return;
+      }
+
+      const principal = await resolvePrincipal(req.headers.authorization, req);
+      if (!principal) {
+        sendError(res, 401, 'unauthorized', '缺少或无效的 Bearer Token', ids);
+        return;
+      }
+      // 25.7：限流（配额信息注入所有响应头；超限返回 429 + Retry-After）
+      const rl = rateLimitInfo(ip);
+      (res as MetaResponse)._meta!.rateLimit = rl;
+      if (rl.limited) {
+        sendError(res, 429, 'rate_limited', '请求过于频繁', ids, { 'Retry-After': '1' });
+        return;
+      }
+      const m = match(stripApiPrefix(url), method);
       if (!m) {
-        sendJson(res, 404, { error: 'not_found', message: `${method} ${url.split('?')[0]} 不存在` });
+        sendError(res, 404, 'not_found', `${method} ${pathname} 不存在`, ids);
         return;
       }
       let body: Record<string, unknown> = {};
       if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-        const raw = await readBody(req);
-        if (raw.trim()) {
-          try {
-            body = JSON.parse(raw) as Record<string, unknown>;
-          } catch {
-            sendJson(res, 400, { error: 'invalid_json', message: '请求体不是合法 JSON' });
-            return;
-          }
-        }
+        const parsed = await readBodyJson(req, res);
+        if (!parsed) return;
+        body = parsed;
       }
       const ctx: Ctx = {
         service: opts.service,
-        actor: String(req.headers['x-actor'] ?? 'api'),
-        role: (req.headers['x-role'] as Role) ?? 'VIEWER',
+        actor: principal.actor,
+        role: principal.role,
+        user: principal.user,
         body,
         req,
         res,
+        requestId,
+        traceId,
       };
       const result = await m.route.handler(ctx, m.params);
       sendJson(res, 200, result);
     } catch (err) {
       const e = err as Error;
       const status = /权限|缺少|无权|不存在|非法|重复|禁止|已存在/.test(e.message) ? 400 : 500;
-      sendJson(res, status, { error: 'error', message: e.message });
+      sendError(res, status, 'error', e.message, ids);
     } finally {
       // 运维指标：记录 API 延迟
       opts.service.recordApiLatency(Date.now() - start);

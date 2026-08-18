@@ -14,6 +14,8 @@ import type { ApprovalCenter } from '../approval-center/approval-center.js';
 import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import type { PlatformGate } from '../rbac/platform-gate.js';
 import { hasPermission, type Role, type Permission } from '../rbac/rbac.js';
+import { assertRunAccess } from '../rbac/scopes.js';
+import type { Scopes } from '../rbac/scopes.js';
 import type { EventBus } from '../events/event-bus.js';
 import type { PlatformEventType } from '../events/events.js';
 import type { NotificationDispatcher } from '../notifications/dispatcher.js';
@@ -26,7 +28,9 @@ import {
   computePlatformSlo,
   type PlatformMetrics,
   type PlatformSlo,
+  type MetricsTelemetryInput,
 } from '../operations/metrics.js';
+import type { TelemetryService, TelemetryPeriod, TelemetryEvent } from '../telemetry/index.js';
 
 /** 变更描述（驱动 autonomous 流水线） */
 export interface RunChange {
@@ -46,6 +50,8 @@ export interface CreateRunRequest {
   change?: RunChange;
   actor: string;
   role: Role;
+  /** 25.3 资源作用域（JWT 认证用户带入）；缺省不做项目/环境隔离 */
+  scopes?: Scopes;
   idempotencyKey?: string;
 }
 
@@ -61,6 +67,8 @@ export interface PlatformServiceDeps {
   notifier: NotificationDispatcher;
   audit: AuditLog;
   idempotency: IdempotencyStore;
+  /** 遥测服务（25.4）：真实成本 / RCA / Flaky / Healing 指标来源 */
+  telemetry: TelemetryService;
 }
 
 export class PlatformService {
@@ -140,9 +148,13 @@ export class PlatformService {
   }
 
   // ── Runs ──
-  /** 创建 Run：RBAC → 校验项目/环境 → 幂等去重 → 调度入队 → 事件 → 审计 */
+  /** 创建 Run：RBAC → 项目/环境作用域 → 校验项目/环境 → 幂等去重 → 调度入队 → 事件 → 审计 */
   async createRun(req: CreateRunRequest): Promise<{ runId: string; status: 'QUEUED' }> {
     this.assertPermission(req.role, 'TEST_RUN');
+    // 25.3 项目隔离：JWT 用户作用域校验（QA-A 不可访问 project-b）
+    if (req.scopes) {
+      assertRunAccess({ roles: [req.role], scopes: req.scopes }, req.projectId, req.environment);
+    }
     // 幂等：同一 idempotencyKey 只创建一个 Run
     if (req.idempotencyKey) {
       const idem = await this.deps.idempotency.begin('run', req.idempotencyKey);
@@ -339,18 +351,66 @@ export class PlatformService {
     };
   }
 
-  /** 平台核心指标（任务书 16） */
-  async metrics(): Promise<PlatformMetrics> {
+  /** 平台核心指标（任务书 16）：遥测驱动指标从 TelemetryService 真实数据计算（25.5 支持时间窗口） */
+  async metrics(window: TelemetryPeriod = '7d'): Promise<PlatformMetrics> {
     const runs = await this.deps.runs.list({});
     const jobs = await this.deps.scheduler.list({});
     const workers = this.deps.workers.list();
     const approvals = await this.deps.approvals.list({});
     const audit = await this.deps.audit.list({});
+    const telemetry = await this.telemetryMetricsInput(window);
     return computePlatformMetrics({
       runs, jobs, workers, approvals, audit,
       apiLatencyMs: this.apiLatencySamples,
       gateLatencyMs: this.gateLatencySamples,
+      telemetry,
     });
+  }
+
+  /** 指标激活状态（25.5）：tracked=false 指标按真实遥测自动激活 */
+  async metricsActivation(): Promise<{ records: Array<{ metric: string; activated: boolean; firstActivatedAt: string | null; lastSampleAt: string | null; sampleCount: number }>; activeCount: number }> {
+    const status = await this.deps.telemetry.activationStatus();
+    return { records: status.records, activeCount: status.activeCount };
+  }
+
+  /** 遥测快照（25.6 供 Dashboard）：cost / rcaAccuracy / flakyRate / healing */
+  async telemetrySnapshot(window: TelemetryPeriod = '7d'): Promise<ReturnType<TelemetryService['metricsSnapshot']>> {
+    return this.deps.telemetry.metricsSnapshot(window);
+  }
+
+  /** 成本汇总（25.6 供 Dashboard） */
+  async telemetryCost(window: TelemetryPeriod = '7d'): Promise<ReturnType<TelemetryService['costMetrics']>> {
+    return this.deps.telemetry.costMetrics(window);
+  }
+
+  /** 遥测事件（25.6 供 Dashboard；runId 可选） */
+  async telemetryEvents(runId?: string): Promise<TelemetryEvent[]> {
+    return runId ? this.deps.telemetry.eventsByRun(runId) : this.deps.telemetry.events.list({});
+  }
+
+  /** 调度任务（25.6 供 Dashboard） */
+  async listJobs(): Promise<TestJob[]> {
+    return this.deps.scheduler.list({});
+  }
+
+  /** 审计日志（25.6 供 Dashboard） */
+  async listAudit(): Promise<AuditEntry[]> {
+    return this.deps.audit.list({});
+  }
+
+  /** 从遥测服务汇总真实指标（无数据一律 tracked=false，禁止虚构） */
+  private async telemetryMetricsInput(window: TelemetryPeriod = '7d'): Promise<MetricsTelemetryInput> {
+    const snap = await this.deps.telemetry.metricsSnapshot(window);
+    return {
+      cost: snap.cost.total,
+      // 执行侧成本（计算/Agent 时长折算）在本阶段未单独计费；不虚构，保持 tracked=false
+      executionCost: { value: null, tracked: false, unit: 'CNY' },
+      costPerRun: snap.cost.perRun,
+      costPerFeature: snap.cost.perFeature,
+      rcaAccuracy: snap.rcaAccuracy,
+      flakyRate: snap.flakyRate,
+      healingRate: snap.healing.successRate,
+    };
   }
 
   /** Run Detail：Run + Checkpoint + Trace（阶段链路） */
@@ -378,6 +438,10 @@ export class PlatformService {
       { name: 'scheduler', ok: true, detail: `${(await this.deps.scheduler.list({})).length} 个 Job` },
       { name: 'workers', ok: this.deps.workers.list().some((w) => w.health === 'healthy') || this.deps.workers.list().length === 0, detail: `${this.deps.workers.list().length} 个（online ${this.deps.workers.list().filter((w) => w.health === 'healthy').length}）` },
       { name: 'approvals', ok: true, detail: `${(await this.deps.approvals.list({})).length} 个` },
+      // 25.8：平台健康检查增强——遥测存储 / 审计连通性
+      { name: 'audit', ok: true, detail: `${(await this.deps.audit.list({})).length} 条` },
+      { name: 'telemetry', ok: true, detail: `${(await this.deps.telemetry.events.list({})).length} 事件 / ${(await this.deps.telemetry.costs.list({})).length} 成本` },
+      { name: 'activation', ok: true, detail: `${(await this.deps.telemetry.activationStatus()).activeCount} 指标激活` },
     ];
     return { ok: checks.every((c) => c.ok), checks };
   }

@@ -133,12 +133,37 @@ describe('Platform Metrics', () => {
     expect(m.executionCost.value).toBeNull();
   });
 
-  it('Cost / Run：提供成本数据时计算', () => {
+  it('旧 costs 接口回退：llm/execution 成本可用；costPerRun/Feature 不虚构（tracked=false）', () => {
     const runs: TestRun[] = [run({ runId: 'a', status: 'COMPLETED' }), run({ runId: 'b', status: 'COMPLETED' })];
     const m = computePlatformMetrics({ runs, jobs: [], workers: [], approvals: [], audit: [], costs: { llm: 100, execution: 50 } });
     expect(m.llmCost.value).toBe(100);
     expect(m.executionCost.value).toBe(50);
-    expect(m.costPerRun.value).toBe(75);
+    // 25.4：无遥测时 costPerRun / costPerFeature 不虚构（返回 null + tracked=false）
+    expect(m.costPerRun.value).toBeNull();
+    expect(m.costPerRun.tracked).toBe(false);
+    expect(m.costPerFeature.value).toBeNull();
+  });
+
+  it('telemetry 输入优先：真实 Cost / RCA Accuracy / Flaky / Healing 指标接入', () => {
+    const runs: TestRun[] = [run({ runId: 'a', status: 'COMPLETED' })];
+    const m = computePlatformMetrics({
+      runs, jobs: [], workers: [], approvals: [], audit: [],
+      telemetry: {
+        cost: { value: 12.5, tracked: true, sampleCount: 4, unit: 'CNY' },
+        executionCost: { value: null, tracked: false, unit: 'CNY' },
+        costPerRun: { value: 3.125, tracked: true, sampleCount: 4, unit: 'CNY' },
+        costPerFeature: { value: 6.25, tracked: true, sampleCount: 2, unit: 'CNY' },
+        rcaAccuracy: { value: 80, tracked: true, sampleCount: 5, unit: '%' },
+        flakyRate: { value: 20, tracked: true, sampleCount: 5, unit: '%' },
+        healingRate: { value: 75, tracked: true, sampleCount: 4, unit: '%' },
+      },
+    });
+    expect(m.llmCost.value).toBe(12.5);
+    expect(m.costPerRun.value).toBe(3.125);
+    expect(m.costPerFeature.value).toBe(6.25);
+    expect(m.rcaAccuracy.value).toBe(80);
+    expect(m.flakyRate.value).toBe(20);
+    expect(m.healingRate.value).toBe(75);
   });
 });
 

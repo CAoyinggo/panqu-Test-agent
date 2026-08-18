@@ -20,7 +20,10 @@ export type AuditAction =
   | 'healing'
   | 'defect'
   | 'configuration'
-  | 'run.create';
+  | 'run.create'
+  | 'auth.login'
+  | 'auth.logout'
+  | 'auth.refresh';
 
 /** 审计记录 */
 export interface AuditEntry extends Entity {

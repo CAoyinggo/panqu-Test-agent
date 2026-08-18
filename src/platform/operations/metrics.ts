@@ -9,6 +9,18 @@ import type { TestWorker } from '../workers/worker.js';
 import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import type { AuditEntry } from '../audit/audit-log.js';
 
+/** 遥测驱动指标（Phase 25.4/25.5）：仅当真实数据存在时 tracked=true */
+export interface MetricsTelemetryInput {
+  /** LLM 总成本 */
+  cost: MetricValue;
+  executionCost?: MetricValue;
+  costPerRun: MetricValue;
+  costPerFeature: MetricValue;
+  rcaAccuracy: MetricValue;
+  flakyRate: MetricValue;
+  healingRate: MetricValue;
+}
+
 /** 指标计算输入 */
 export interface MetricsInput {
   runs: TestRun[];
@@ -20,14 +32,18 @@ export interface MetricsInput {
   apiLatencyMs?: number[];
   /** 审批决策延迟样本（毫秒） */
   gateLatencyMs?: number[];
-  /** 成本数据（可选） */
+  /** 成本数据（可选，旧接口） */
   costs?: { llm?: number; execution?: number };
+  /** 遥测数据（Phase 25.4，优先于 costs） */
+  telemetry?: MetricsTelemetryInput;
 }
 
 export interface MetricValue {
   value: number | null;
   tracked: boolean;
   unit?: string;
+  /** 采样数（telemetry 提供时填充） */
+  sampleCount?: number;
 }
 
 export interface PlatformMetrics {
@@ -79,7 +95,7 @@ function num(v: number | null): MetricValue {
 
 /** 平台核心指标（任务书 16 至少清单） */
 export function computePlatformMetrics(input: MetricsInput): PlatformMetrics {
-  const { runs, jobs, workers, approvals, audit, apiLatencyMs = [], gateLatencyMs = [], costs } = input;
+  const { runs, jobs, workers, approvals, audit, apiLatencyMs = [], gateLatencyMs = [], costs, telemetry } = input;
 
   const completed = runs.filter((r) => r.status === 'COMPLETED');
   const failed = runs.filter((r) => r.status === 'FAILED');
@@ -106,13 +122,15 @@ export function computePlatformMetrics(input: MetricsInput): PlatformMetrics {
   const releaseBlocked = releaseEntries.filter((e) => e.result !== 'success').length;
   const releaseBlockRate = releaseEntries.length > 0 ? pct(releaseBlocked, releaseEntries.length) : null;
 
-  // 成本
-  const llm = costs?.llm ?? null;
-  const exec = costs?.execution ?? null;
-  const totalCost = llm !== null && exec !== null ? llm + exec : llm ?? exec;
-  const features = new Set(runs.map((r) => r.feature).filter(Boolean)).size;
-  const costPerRun = totalCost !== null && runs.length > 0 ? totalCost / runs.length : null;
-  const costPerFeature = totalCost !== null && features > 0 ? totalCost / features : null;
+  // 成本：优先遥测（CostLedger 真实数据），回退旧接口 costs
+  const llm = telemetry?.cost ?? num(costs?.llm ?? null);
+  const exec = telemetry?.executionCost ?? num(costs?.execution ?? null);
+  const costPerRun = telemetry?.costPerRun ?? num(null);
+  const costPerFeature = telemetry?.costPerFeature ?? num(null);
+  // 遥测驱动指标：有真实数据才 tracked
+  const rcaAccuracy = telemetry?.rcaAccuracy ?? { value: null, tracked: false, unit: '%' };
+  const flakyRate = telemetry?.flakyRate ?? { value: null, tracked: false, unit: '%' };
+  const healingRate = telemetry?.healingRate ?? { value: null, tracked: false, unit: '%' };
 
   return {
     runSuccessRate: { value: successRate, tracked: true, unit: '%' },
@@ -120,16 +138,15 @@ export function computePlatformMetrics(input: MetricsInput): PlatformMetrics {
     workerUtilization: { value: workerUtilization, tracked: true, unit: '%' },
     avgRunDurationMs: num(mean(durations)),
     p95RunDurationMs: num(percentile(durations, 95)),
-    // 依赖 RCA 评估遥测：当前平台未接入
-    rcaAccuracy: { value: null, tracked: false, unit: '%' },
+    rcaAccuracy,
     releaseBlockRate: num(releaseBlockRate),
-    flakyRate: { value: null, tracked: false, unit: '%' },
-    healingRate: { value: null, tracked: false, unit: '%' },
+    flakyRate,
+    healingRate,
     humanApprovalRate: { value: humanApprovalRate, tracked: true, unit: '%' },
-    llmCost: num(llm),
-    executionCost: num(exec),
-    costPerRun: num(costPerRun),
-    costPerFeature: num(costPerFeature),
+    llmCost: llm,
+    executionCost: exec,
+    costPerRun,
+    costPerFeature,
   };
 }
 

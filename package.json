@@ -64,8 +64,13 @@
     "platform:checkpoint:test": "vitest run tests/unit/checkpoint.test.ts",
     "platform:idempotency:test": "vitest run tests/unit/idempotency.test.ts",
     "platform:metrics:test": "vitest run tests/unit/metrics.test.ts",
-    "platform:test": "vitest run tests/unit/platform-project.test.ts tests/unit/storage.test.ts tests/unit/scheduler.test.ts tests/unit/worker.test.ts tests/unit/rbac.test.ts tests/unit/approval-center.test.ts tests/unit/notification.test.ts tests/unit/platform-api.test.ts tests/unit/checkpoint.test.ts tests/unit/idempotency.test.ts tests/unit/metrics.test.ts",
-    "platform:integration": "vitest run tests/integration/platform-run.test.ts tests/integration/scheduler-worker.test.ts tests/integration/api-run.test.ts",
+    "platform:telemetry:test": "vitest run tests/unit/telemetry.test.ts",
+    "platform:activation:test": "vitest run tests/unit/activation.test.ts",
+    "platform:test": "vitest run tests/unit/platform-project.test.ts tests/unit/storage.test.ts tests/unit/sqlite.test.ts tests/unit/postgres.test.ts tests/unit/scheduler.test.ts tests/unit/worker.test.ts tests/unit/rbac.test.ts tests/unit/approval-center.test.ts tests/unit/notification.test.ts tests/unit/platform-api.test.ts tests/unit/checkpoint.test.ts tests/unit/idempotency.test.ts tests/unit/metrics.test.ts tests/unit/jwt.test.ts tests/unit/auth.test.ts tests/unit/rbac-scope.test.ts tests/unit/telemetry.test.ts tests/unit/activation.test.ts tests/unit/production-ops.test.ts",
+    "platform:integration": "vitest run tests/integration/platform-run.test.ts tests/integration/scheduler-worker.test.ts tests/integration/api-run.test.ts tests/integration/sqlite-persistence.test.ts tests/integration/auth-rbac.test.ts tests/integration/api-auth.test.ts tests/integration/telemetry-pipeline.test.ts tests/integration/web-dashboard.test.ts tests/integration/api-hardening.test.ts tests/integration/production-readiness.test.ts",
+    "platform:web:test": "vitest run tests/integration/web-dashboard.test.ts",
+    "build:web": "npm --prefix web run build",
+    "dev:web": "npm --prefix web run dev",
     "platform:e2e": "npm run build && vitest run tests/e2e/platform-scenarios.test.ts",
     "agent:release:ci": "npm run build && node dist/bin/release-gate.js",
     "test:e2e": "node dist/bin/run-test.js --task src/cases --ci",
@@ -98,17 +103,20 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.10",
     "ajv": "^8.20.0",
     "allure-commandline": "^2.30.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
+    "pg-mem": "^3.0.14",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   },
   "dependencies": {
     "ali-oss": "^6.23.0",
     "chokidar": "^3.6.0",
-    "p-limit": "^7.3.1"
+    "p-limit": "^7.3.1",
+    "pg": "^8.23.0"
   }
 }
