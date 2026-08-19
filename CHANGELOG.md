@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.4.0] - 2026-08-19
+
+### 新增（工程治理，Phase 28）
+
+- 新增共享安全工具模块 `src/core/redact.ts`（`redactSensitive` / `SENSITIVE_KEYS`），供 Agent Tool 审计与平台 AuditLog 共用，消除平台层对 agents 域的反向依赖。
+- 新增技术债登记 `docs/TECH-DEBT.md`（债务清单 + 阶段趋势，供每阶段维护）。
+- 修复脱敏缺陷：字段名归一化分隔符（下划线/连字符），`api_key` 现在也能命中 `X-Api-Key` 等变体。
+
+### 变更
+
+- 配置模块统一：删除与 `env-loader.ts` 重复的 `config/env.ts`；`engine.ts` / `execution-run-tool.ts` 统一从 `env-loader.ts` 导入（TESTFLOW_* 环境变量覆盖单一来源）。
+- `engine.ts` 移除冗余的 `applyEnvToConfig` 调用（`loadConfig` 已通过 `loadConfigFromEnv` 合并环境覆盖）。
+- `src/agents/tools/tool.ts` 保留 `redactSensitive` / `SENSITIVE_KEYS` 再导出（API 兼容）。
+
+### 移除
+
+- 删除死代码 `src/utils/time.ts`（零引用）。
+
+### 测试
+
+- 新增 `tests/unit/redact.test.ts`（6 项）；全量回归：1426 passed / 18 skipped（121 个测试文件）；`agent:test` 450 通过。
+
 ## [4.3.0] - 2026-08-19
 
 ### 新增（生产安全加固，Phase 27）

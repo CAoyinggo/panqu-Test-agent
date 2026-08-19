@@ -18,7 +18,7 @@ import { logger, setCiMode, setLogLevel, setLogFile, setLogContext, setCaseId } 
 import { loadCases, LoadedCase } from '../cases/loader.js';
 import { filterCases } from '../cases/filter.js';
 import { ResultTracker, EXIT_CODE, type ExecutionSummary } from '../utils/exit-code.js';
-import { getEnvFromEnv, applyEnvToConfig, applyEnvSessionOverrides, getNotifierConfig } from '../config/env.js';
+import { getEnvFromEnv, applyEnvSessionOverrides, getNotifierConfig } from '../config/env-loader.js';
 import { generateTraceId, getTraceId } from '../utils/trace.js';
 import { metrics } from '../utils/metrics.js';
 import { autoLoadScenes } from '../plugins/loader.js';
@@ -352,8 +352,8 @@ export class Engine {
 
     let cfg: AppConfig;
     try {
+      // 28.2：loadConfig 已合并 TESTFLOW_* 环境变量覆盖（loadConfigFromEnv），无需再次 applyEnvToConfig
       cfg = loadConfig(envName);
-      cfg = applyEnvToConfig(cfg, envName || cfg.default_env);
     } catch (e: any) {
       logger.error(`配置加载失败：${e.message}`);
       return EXIT_CODE.CONFIG_ERROR;

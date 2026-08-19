@@ -9,7 +9,7 @@ import type { LoadedCase } from '../../cases/loader.js';
 import type { AppConfig } from '../../core/types.js';
 import { Engine, registerScene } from '../../core/engine.js';
 import { loadConfig } from '../../config/config.js';
-import { getEnvFromEnv } from '../../config/env.js';
+import { getEnvFromEnv } from '../../config/env-loader.js';
 import { autoLoadScenes } from '../../plugins/loader.js';
 import { getDataFactory } from '../../core/data-factory.js';
 import { logger } from '../../utils/logger.js';

@@ -2,6 +2,8 @@
 // 安全约束：禁止 LLM 直接执行 eval/exec/shell/任意文件写/任意数据库操作，
 // 所有底层能力必须封装为 Tool，并经过 Schema 校验 + 超时 + 错误处理 + 审计日志。
 import type { AgentContext } from '../core/agent-context.js';
+// 28.3：脱敏工具上移至共享层 src/core/redact.ts，此处保留再导出以兼容既有调用方
+export { redactSensitive, SENSITIVE_KEYS } from '../../core/redact.js';
 
 /** Tool 调用结果（统一结构，不抛异常给 Agent 推理层） */
 export interface ToolResult<TOutput = unknown> {
@@ -36,31 +38,6 @@ export interface AgentTool<TInput = unknown, TOutput = unknown> {
   deniedInProduction?: boolean;
   /** 执行 */
   execute(input: TInput, context: AgentContext): Promise<TOutput>;
-}
-
-/** 敏感字段名（脱敏掩码：审计/日志不落明文） */
-const SENSITIVE_KEYS = [
-  'password', 'passwd', 'token', 'secret', 'authorization', 'cookie',
-  'api_key', 'apikey', 'access_key', 'private_key', 'credential', 'auth',
-  'session', 'cvv', 'card',
-];
-
-/**
- * 递归脱敏：将敏感字段的值掩码为 ***。
- * 用于 Tool 输入/输出写审计日志、入 Memory 前的安全处理。
- */
-export function redactSensitive(value: unknown, depth = 0): unknown {
-  if (depth > 6) return value !== null && typeof value === 'object' ? '[object]' : value;
-  if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1));
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const key = k.toLowerCase();
-      out[k] = SENSITIVE_KEYS.some((s) => key.includes(s)) ? '***' : redactSensitive(v, depth + 1);
-    }
-    return out;
-  }
-  return value;
 }
 
 /** 便捷：创建成功结果 */

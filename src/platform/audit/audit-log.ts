@@ -3,7 +3,7 @@
 // 敏感信息经 redactSensitive 脱敏后落库。
 
 import type { Entity, Repository } from '../storage/repository.js';
-import { redactSensitive } from '../../agents/tools/tool.js';
+import { redactSensitive } from '../../core/redact.js';
 
 /** 审计动作（任务书 14 至少清单） */
 export type AuditAction =
