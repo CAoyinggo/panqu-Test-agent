@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
@@ -83,6 +83,7 @@
     "phase30:test": "npm run build && vitest run tests/unit/platform-coverage-gap.test.ts tests/unit/security.test.ts tests/unit/id.test.ts tests/unit/redact.test.ts tests/unit/scheduler.test.ts tests/unit/worker.test.ts tests/unit/notification.test.ts tests/unit/checkpoint.test.ts tests/unit/platform-project.test.ts tests/unit/production-ops.test.ts tests/unit/platform-api.test.ts && vitest run --coverage",
     "phase31:test": "npm run build && vitest run tests/unit/migrations-down.test.ts tests/integration/migrations-rollback.test.ts tests/unit/production-ops.test.ts tests/unit/platform-coverage-gap.test.ts",
     "phase32:test": "npm run build && vitest run tests/unit/rbac.test.ts tests/unit/security.test.ts tests/unit/approval-center.test.ts tests/unit/run-schema.test.ts tests/unit/migrations-down.test.ts tests/integration/migrations-rollback.test.ts && npx stryker run",
+    "phase33:test": "npm run build && vitest run tests/unit/environment-policy-coherence.test.ts tests/unit/environment-policy.test.ts tests/unit/platform-project.test.ts tests/unit/platform-coverage-gap.test.ts tests/unit/security.test.ts",
     "mutation:test": "npx stryker run",
     "mutation:dry": "npx stryker run --dryRunOnly",
     "perf:test": "vitest run -c vitest.perf.config.ts",

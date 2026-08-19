@@ -53,3 +53,60 @@ export function describeDecision(d: PolicyDecision): string {
       return '拒绝';
   }
 }
+
+// ── 跨层一致性契约（DEBT-01）────────────────────────────────────────────
+// 本文件为「平台层动作分级」唯一策略源；src/config/environment-policy.ts 为
+// 「agent 层执行启用守卫」，src/platform/security/index.ts 为「平台运行模式加固」。
+// 三者职责不同（分级 / 启用 / 加固），经下述映射建立互操作契约，供跨层一致性
+// 校验（tests/unit/environment-policy-coherence.test.ts）防漂移。
+// 详见 docs/environment-policy-boundaries.md。
+
+/** agent 层环境档位（跨层互操作契约，与 config 层 EnvironmentTier 语义一致） */
+export type GuardTier = 'test' | 'preonline' | 'production';
+
+/** 平台运行模式（跨层互操作契约，与 security 层 PlatformMode 语义一致） */
+export type GuardMode = 'development' | 'test' | 'staging' | 'production';
+
+/**
+ * 平台环境类型 → agent 层守卫档位（跨层一致性契约）。
+ * dev/test → test（无守卫，交由审批分级）；staging/preprod → preonline（危险动作拒绝）；
+ * production → production（需显式 TESTFLOW_ALLOW_PRODUCTION 启用）。
+ */
+export function environmentTypeToTier(type: EnvironmentType): GuardTier {
+  switch (type) {
+    case 'dev':
+    case 'test':
+      return 'test';
+    case 'staging':
+    case 'preprod':
+      return 'preonline';
+    case 'production':
+      return 'production';
+  }
+}
+
+/**
+ * 平台环境类型 → 平台运行模式（跨层一致性契约）。
+ * dev → development；test → test；staging/preprod → staging（生产安全约束，演练环境）；
+ * production → production（生产安全约束最强）。
+ */
+export function environmentTypeToMode(type: EnvironmentType): GuardMode {
+  switch (type) {
+    case 'dev':
+      return 'development';
+    case 'test':
+      return 'test';
+    case 'staging':
+    case 'preprod':
+      return 'staging';
+    case 'production':
+      return 'production';
+  }
+}
+
+/**
+ * 生产类环境档位（dangerous 永远 deny 的环境在 agent 守卫中的档位集合）。
+ * 供跨层校验：平台 isProductionLike(type) 为 true 的类型，其 agent 守卫档位必须
+ * 落在该集合（preonline / production 均拒绝危险动作）。
+ */
+export const PRODUCTION_LIKE_GUARD_TIERS: readonly GuardTier[] = ['preonline', 'production'];

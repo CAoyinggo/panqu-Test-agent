@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.9.0] - 2026-08-19
+
+### 新增（环境策略职责边界与跨层一致性，Phase 33）
+
+- 新增跨层一致性契约（DEBT-01 已解决）：平台层 `environmentTypeToTier`（dev/test→test、staging/preprod→preonline、production→production）与 `environmentTypeToMode`（dev→development、test→test、staging/preprod→staging、production→production）映射函数 + `PRODUCTION_LIKE_GUARD_TIERS`，作为 agent 层启用守卫 / 平台层动作分级 / 安全模块运行模式加固三层策略的互操作契约。
+- **修复跨层漂移缺口**：agent 层 `resolveEnvironmentTier` 不识别平台层 `preprod` 环境名，此前 `preprod` 被解析为 test 档（危险动作可放行）；现正确归入 preonline 档（危险动作拒绝）。
+- 新增职责边界文档 `docs/environment-policy-boundaries.md`：三层模型表、职责划分、互操作契约、5 条不变量、变更检查单。
+- 新增脚本 `phase33:test`（构建 + 跨层一致性 + 相关回归）。
+
+### 变更
+
+- `docs/TECH-DEBT.md`：DEBT-01（双环境策略源）已解决（保留 + 边界文档化 + 跨层一致性校验）。
+
+### 测试
+
+- 新增 `tests/unit/environment-policy-coherence.test.ts`（15 项）：跨层映射契约与解析一致 / 生产类环境三模型一致（平台 isProductionLike ⇒ agent 生产类档位 ⇒ 运行模式生产安全） / 危险动作跨层拒绝一致（禁止动作清单全覆盖） / 纵深防御不变量（平台 deny ⇒ agent 必拒绝） / 禁止动作清单完整性 / 运行模式别名对齐；扩展 `tests/unit/environment-policy.test.ts`（preprod 档位）。
+
 ## [4.8.0] - 2026-08-19
 
 ### 新增（变异测试，Phase 32）

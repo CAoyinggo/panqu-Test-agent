@@ -25,11 +25,11 @@ export interface GuardResult {
   reason: string;
 }
 
-/** 环境名 → 档位（大小写不敏感，兼容 prod/production/staging/pre 别名） */
+/** 环境名 → 档位（大小写不敏感，兼容 prod/production/staging/pre/preprod 别名） */
 export function resolveEnvironmentTier(env: string | undefined): EnvironmentTier {
   const e = (env ?? '').trim().toLowerCase();
   if (e === 'prod' || e === 'production') return 'production';
-  if (e === 'preonline' || e === 'pre' || e === 'staging') return 'preonline';
+  if (e === 'preonline' || e === 'pre' || e === 'staging' || e === 'preprod') return 'preonline';
   return 'test';
 }
 

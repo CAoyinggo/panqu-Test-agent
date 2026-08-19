@@ -23,10 +23,11 @@ describe('resolveEnvironmentTier 档位解析', () => {
     expect(resolveEnvironmentTier(undefined)).toBe('test');
     expect(resolveEnvironmentTier('')).toBe('test');
   });
-  it('preonline / pre / staging → preonline 档', () => {
+  it('preonline / pre / staging / preprod → preonline 档', () => {
     expect(resolveEnvironmentTier('preonline')).toBe('preonline');
     expect(resolveEnvironmentTier('staging')).toBe('preonline');
     expect(resolveEnvironmentTier('pre')).toBe('preonline');
+    expect(resolveEnvironmentTier('preprod')).toBe('preonline');
   });
   it('production / prod → production 档（大小写不敏感）', () => {
     expect(resolveEnvironmentTier('production')).toBe('production');
