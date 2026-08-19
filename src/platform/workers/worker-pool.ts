@@ -7,7 +7,8 @@ import type { Scheduler, TestJob } from '../scheduler/index.js';
 import type { WorkerRegistry, TestWorker } from './index.js';
 
 export class WorkerPool {
-  private inFlight = new Set<Promise<void>>();
+  /** 在途任务（含归属 Worker）：drain 等待全部完成；崩溃 Worker 的任务可被 dropInFlight 丢弃 */
+  private inFlight = new Set<{ workerId: string; task: Promise<void> }>();
 
   constructor(
     private readonly registry: WorkerRegistry,
@@ -43,6 +44,7 @@ export class WorkerPool {
   }
 
   private execute(w: TestWorker, job: TestJob): void {
+    const entry = { workerId: w.workerId, task: Promise.resolve() };
     const task = (async () => {
       try {
         const executor = this.registry.getExecutor(w.workerId);
@@ -56,18 +58,32 @@ export class WorkerPool {
         this.registry.release(w.workerId);
       }
     })();
+    entry.task = task;
     void task.then(
-      () => this.inFlight.delete(task),
-      () => this.inFlight.delete(task),
+      () => this.inFlight.delete(entry),
+      () => this.inFlight.delete(entry),
     );
-    this.inFlight.add(task);
+    this.inFlight.add(entry);
   }
 
   /** 等待全部在途 Job 完成（测试 / 停机用） */
   async drain(): Promise<void> {
     while (this.inFlight.size > 0) {
-      await Promise.allSettled([...this.inFlight]);
+      await Promise.allSettled([...this.inFlight].map((e) => e.task));
     }
+  }
+
+  /** 丢弃指定 Worker 的挂起任务（模拟进程崩溃：任务不再被跟踪，不阻塞后续 drain）。
+   * 仅用于故障演练/测试——真实运行中 Worker 崩溃由 recoverOrphans 处理，任务仍可重试。 */
+  dropInFlight(workerId: string): number {
+    let dropped = 0;
+    for (const entry of this.inFlight) {
+      if (entry.workerId === workerId) {
+        this.inFlight.delete(entry);
+        dropped += 1;
+      }
+    }
+    return dropped;
   }
 
   /** 回收孤儿 Job：RUNNING 但归属 Worker 已 down/注销 → 置 RETRY，等待其他 Worker 领取 */

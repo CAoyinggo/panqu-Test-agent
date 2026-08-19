@@ -167,6 +167,12 @@ export class ProjectRegistry {
       fs.rmSync(this.file, { force: true });
     }
   }
+
+  /** 26.6：恢复用——直接注入快照记录（保留原 id / createdAt / updatedAt，不经 create 重生成时间戳） */
+  importAll(records: Project[]): void {
+    for (const p of records) this.projects.set(p.id, p);
+    this.save();
+  }
 }
 
 /** 便捷单例（平台默认注册表） */

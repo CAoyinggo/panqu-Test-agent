@@ -11,6 +11,9 @@ export interface SchedulerOptions {
 }
 
 export class Scheduler {
+  /** 全局暂停（26.4）：Storage/DB 异常时暂停领取，Run/Job 不丢失，恢复后继续 */
+  private paused = false;
+
   constructor(
     private readonly jobs: Repository<TestJob>,
     private readonly opts: SchedulerOptions = {},
@@ -18,6 +21,21 @@ export class Scheduler {
 
   private nowIso(): string {
     return this.opts.now ? this.opts.now() : new Date().toISOString();
+  }
+
+  /** 全局暂停调度：暂停后 next() 不再领取 Job（已入队的 Run/Job 保留，不丢失） */
+  pauseDispatch(): void {
+    this.paused = true;
+  }
+
+  /** 恢复调度 */
+  resumeDispatch(): void {
+    this.paused = false;
+  }
+
+  /** 是否全局暂停 */
+  isDispatchPaused(): boolean {
+    return this.paused;
   }
 
   /**
@@ -62,6 +80,8 @@ export class Scheduler {
    * 可传环境 / 能力过滤（Worker 只领取自己能执行的环境与能力）。
    */
   async next(opts: { environment?: string; capability?: string; status?: JobStatus; claimedBy?: string } = {}): Promise<TestJob | null> {
+    // 全局暂停（26.4）：DB/Storage 异常期间不领取新 Job；已入队 Run/Job 保留等待恢复
+    if (this.paused) return null;
     const queued = await this.jobs.query({ status: opts.status ?? 'QUEUED' });
     let candidates = queued.sort((a, b) => a.priority - b.priority);
     if (opts.environment) candidates = candidates.filter((j) => j.environment === opts.environment);

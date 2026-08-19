@@ -9,6 +9,8 @@ output-ci/
 .env
 .env.*
 !.env.example
+!.env.staging.example
+!.env.production.example
 
 # Security scan reports (CI artifacts, not version controlled)
 security-reports/

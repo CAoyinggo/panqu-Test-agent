@@ -69,6 +69,8 @@ export interface PlatformServiceDeps {
   idempotency: IdempotencyStore;
   /** 遥测服务（25.4）：真实成本 / RCA / Flaky / Healing 指标来源 */
   telemetry: TelemetryService;
+  /** 测试资产库（26.2）：真实 Test Case 资产（查询/统计/导入） */
+  testAssets: import('../test-assets/platform-test-assets.js').PlatformTestAssets;
 }
 
 export class PlatformService {
@@ -253,7 +255,8 @@ export class PlatformService {
 
   async failRun(runId: string, reason?: string): Promise<TestRun> {
     const run = await this.deps.runs.fail(runId);
-    await this.emit('RunFailed', { reason }, { runId });
+    // 26.7：RunFailed 通知含丰富上下文（environment / projectId）
+    await this.emit('RunFailed', { reason, environment: run.environment, projectId: run.projectId }, { runId });
     return run;
   }
 
@@ -431,18 +434,59 @@ export class PlatformService {
   }
 
 
-  async health(): Promise<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> }> {
-    const checks = [
-      { name: 'projects', ok: true, detail: `${this.deps.projects.listProjects().length} 个` },
-      { name: 'runs', ok: true, detail: `${(await this.deps.runs.list({})).length} 个` },
-      { name: 'scheduler', ok: true, detail: `${(await this.deps.scheduler.list({})).length} 个 Job` },
-      { name: 'workers', ok: this.deps.workers.list().some((w) => w.health === 'healthy') || this.deps.workers.list().length === 0, detail: `${this.deps.workers.list().length} 个（online ${this.deps.workers.list().filter((w) => w.health === 'healthy').length}）` },
-      { name: 'approvals', ok: true, detail: `${(await this.deps.approvals.list({})).length} 个` },
-      // 25.8：平台健康检查增强——遥测存储 / 审计连通性
-      { name: 'audit', ok: true, detail: `${(await this.deps.audit.list({})).length} 条` },
-      { name: 'telemetry', ok: true, detail: `${(await this.deps.telemetry.events.list({})).length} 事件 / ${(await this.deps.telemetry.costs.list({})).length} 成本` },
-      { name: 'activation', ok: true, detail: `${(await this.deps.telemetry.activationStatus()).activeCount} 指标激活` },
+  /** 测试资产（26.2）：真实 Test Case 列表 */
+  async listTestAssets(filter?: Partial<import('../test-assets/platform-test-assets.js').PlatformTestAsset>): Promise<import('../test-assets/platform-test-assets.js').PlatformTestAsset[]> {
+    return this.deps.testAssets.list(filter);
+  }
+
+  /** 测试资产统计（26.2）：total / byCategory / byPriority / bySource */
+  async testAssetStats(): Promise<import('../test-assets/platform-test-assets.js').TestAssetStats> {
+    return this.deps.testAssets.stats();
+  }
+
+  /** 平台健康检查（26.4 升级）：逐项探针容错 → HEALTHY / DEGRADED / DOWN；报告调度暂停状态 */
+  async health(): Promise<{ ok: boolean; status: 'HEALTHY' | 'DEGRADED' | 'DOWN'; checks: Array<{ name: string; ok: boolean; detail: string }> }> {
+    type Check = { name: string; ok: boolean; detail: string };
+    const probe = async (fn: () => Promise<string> | string): Promise<string> => {
+      const detail = await fn();
+      return detail;
+    };
+    const checks: Check[] = [];
+
+    const names: Array<{ name: string; run: () => Promise<string> | string }> = [
+      { name: 'projects', run: () => `${this.deps.projects.listProjects().length} 个` },
+      { name: 'runs', run: async () => `${(await this.deps.runs.list({})).length} 个` },
+      {
+        name: 'scheduler',
+        run: async () => `${(await this.deps.scheduler.list({})).length} 个 Job${this.deps.scheduler.isDispatchPaused() ? '（PAUSED）' : ''}`,
+      },
+      {
+        name: 'workers',
+        run: () => {
+          const ws = this.deps.workers.list();
+          return `${ws.length} 个（online ${ws.filter((w) => w.health === 'healthy').length}）`;
+        },
+      },
+      { name: 'approvals', run: async () => `${(await this.deps.approvals.list({})).length} 个` },
+      { name: 'audit', run: async () => `${(await this.deps.audit.list({})).length} 条` },
+      { name: 'telemetry', run: async () => `${(await this.deps.telemetry.events.list({})).length} 事件 / ${(await this.deps.telemetry.costs.list({})).length} 成本` },
+      { name: 'activation', run: async () => `${(await this.deps.telemetry.activationStatus()).activeCount} 指标激活` },
+      { name: 'test-assets', run: async () => `${(await this.deps.testAssets.count())} 个 Test Case` },
     ];
-    return { ok: checks.every((c) => c.ok), checks };
+
+    for (const c of names) {
+      try {
+        const detail = await probe(c.run);
+        // workers 单项允许为空（无 Worker 在线不视为平台故障）
+        const ok = c.name === 'workers' ? this.deps.workers.list().length === 0 || this.deps.workers.list().some((w) => w.health === 'healthy') : true;
+        checks.push({ name: c.name, ok, detail });
+      } catch (err) {
+        checks.push({ name: c.name, ok: false, detail: `不可用：${(err as Error).message}` });
+      }
+    }
+
+    const failed = checks.filter((c) => !c.ok);
+    const status: 'HEALTHY' | 'DEGRADED' | 'DOWN' = failed.length === 0 ? 'HEALTHY' : failed.length === checks.length ? 'DOWN' : 'DEGRADED';
+    return { ok: failed.length === 0, status, checks };
   }
 }

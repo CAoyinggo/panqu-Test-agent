@@ -73,6 +73,9 @@ export class RunService {
   }
 
   async start(runId: string): Promise<TestRun> {
+    // 26.4：幂等——Worker 崩溃恢复后另一 Worker 重跑同一 Run（已 RUNNING）不报非法迁移
+    const cur = await this.runs.get(runId);
+    if (cur?.status === 'RUNNING') return cur;
     return this.setStatus(runId, 'RUNNING', { startedAt: this.nowIso() });
   }
 

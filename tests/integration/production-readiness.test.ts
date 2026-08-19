@@ -82,10 +82,12 @@ describe('Phase 25.8 Production Readiness', () => {
     db.close();
   });
 
-  it('备份/恢复闭环：15 集合全量导出，恢复后计数与 id 一致（含 projects registry）', async () => {
+  it('备份/恢复闭环：16 集合全量导出，恢复后计数与 id 一致（含 projects registry、test-assets）', async () => {
     const dirA = tempDir('bkp-a');
     const bundleA = createPlatformService({ seedProject: true, seedUsers: true, dataDir: dirA, storage: 'sqlite', jwtSecret: 'pr-secret' });
     await bundleA.auth.ensureSeeded();
+    // 26.2：导入真实 Test Case 资产，验证其纳入备份/恢复
+    await bundleA.testAssets.importCatalog();
     registerExecWorker(bundleA);
     const { runId } = await bundleA.service.createRun({
       projectId: 'wan3', environment: 'test', trigger: 'manual', feature: 'bkp-probe', actor: 'pr-test', role: 'ADMIN',
@@ -94,7 +96,7 @@ describe('Phase 25.8 Production Readiness', () => {
 
     const snapshot = await collectSnapshot(bundleA);
     expect(snapshot.version).toBe(1);
-    expect(snapshot.stores).toHaveLength(15);
+    expect(snapshot.stores).toHaveLength(16);
     // projects 来自 registry（至少 seed 项目 wan3）
     const projStore = snapshot.stores.find((s) => s.store === 'projects')!;
     expect(projStore.count).toBeGreaterThanOrEqual(1);
@@ -103,13 +105,16 @@ describe('Phase 25.8 Production Readiness', () => {
     expect(teleStore.count).toBeGreaterThan(0);
     const costStore = snapshot.stores.find((s) => s.store === 'cost-ledger')!;
     expect(costStore.count).toBeGreaterThan(0);
+    // 26.2 真实 Test Case 资产（纳入备份/恢复）
+    const assetStore = snapshot.stores.find((s) => s.store === 'test-assets')!;
+    expect(assetStore.count).toBeGreaterThan(0);
     const totalBefore = snapshotTotal(snapshot);
 
     // 恢复进全新 bundle（独立数据目录）
     const dirB = tempDir('bkp-b');
     const bundleB = createPlatformService({ seedProject: true, seedUsers: true, dataDir: dirB, storage: 'sqlite', jwtSecret: 'pr-secret' });
     const result = await restoreSnapshot(bundleB, snapshot);
-    expect(result.stores).toBe(15);
+    expect(result.stores).toBe(16);
     expect(result.restored).toBe(totalBefore);
 
     const after = await collectSnapshot(bundleB);

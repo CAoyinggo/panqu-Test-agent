@@ -15,4 +15,7 @@ export * from './telemetry/index.js';
 export * from './operations/index.js';
 export * from './ops/index.js';
 export * from './service/index.js';
+export * from './version.js';
+export * from './test-assets/platform-test-assets.js';
+export * from './test-assets/wan3-catalog.js';
 export * from './api/index.js';

@@ -19,7 +19,7 @@ import { ApprovalCenter } from '../approval-center/approval-center.js';
 import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import { PlatformGate } from '../rbac/platform-gate.js';
 import { EventBus } from '../events/event-bus.js';
-import { NotificationDispatcher, consoleChannel } from '../notifications/index.js';
+import { NotificationDispatcher, consoleChannel, feishuChannel } from '../notifications/index.js';
 import { AuditLog } from '../audit/audit-log.js';
 import type { AuditEntry } from '../audit/audit-log.js';
 import { IdempotencyStore } from './idempotency.js';
@@ -27,6 +27,7 @@ import type { IdempotencyRecord } from './idempotency.js';
 import { PlatformService } from './platform-service.js';
 import { UserStore, AuthService } from '../auth/index.js';
 import type { UserRecord } from '../auth/index.js';
+import { PlatformTestAssets } from '../test-assets/platform-test-assets.js';
 import { TelemetryService, TelemetryEventStore, CostLedger, RcaVerificationStore, FlakyRecordStore, HealingRecordStore, ReleaseRecordStore, MetricActivationTracker } from '../telemetry/index.js';
 import type {
   TelemetryEvent,
@@ -55,6 +56,11 @@ export interface PlatformFactoryOptions {
   seedUsers?: boolean;
   /** 是否允许默认口令登录（默认 true；production 必须 false） */
   allowDefaultCredentials?: boolean;
+  /** 26.4：仓储包装器（故障注入/观测用）；默认恒等。收到集合名与仓储，返回包装后的仓储 */
+  wrapRepository?: <T extends Entity>(name: string, repo: Repository<T>) => Repository<T>;
+  /** 26.7：真实飞书自定义机器人 Webhook URL（如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx）；
+   *  配置后平台事件（6 类关键通知等）真实投递飞书；缺省仅 console。 */
+  feishuWebhookUrl?: string;
 }
 
 export interface PlatformBundle {
@@ -78,6 +84,8 @@ export interface PlatformBundle {
   telemetry: TelemetryService;
   /** 原始数据仓库映射（25.8）：15 集合 → Repository<T>；供备份/恢复/运维直接访问 */
   repositories: Record<string, Repository<Entity>>;
+  /** 测试资产库（26.2）：真实 Test Case 资产（查询/统计/导入；同存储后端持久化） */
+  testAssets: PlatformTestAssets;
   /** 注入 Worker 执行器（执行真实 Job 的逻辑；不注入则 Worker 不可执行） */
   registerWorkerExecutor: (workerId: string, exec: (job: unknown) => Promise<unknown>) => void;
 }
@@ -104,9 +112,12 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
   const store = (collection: string) => ({ collection, dir: dataDir, db: sqliteDb, pool: pgPool });
   // 25.8：原始仓库映射（备份/恢复/运维直接访问全部集合）
   const repos: Record<string, Repository<Entity>> = {};
+  const wrapRepository: <T extends Entity>(name: string, repo: Repository<T>) => Repository<T> =
+    opts.wrapRepository ?? (<T extends Entity>(_name: string, repo: Repository<T>) => repo);
   const reg = <T extends Entity>(name: string, repo: Repository<T>): Repository<T> => {
-    repos[name] = repo as Repository<Entity>;
-    return repo;
+    const wrapped = wrapRepository(name, repo);
+    repos[name] = wrapped as Repository<Entity>;
+    return wrapped;
   };
 
   const projects = new ProjectService({
@@ -135,6 +146,10 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
   const bus = new EventBus({ now });
   const notifier = new NotificationDispatcher();
   notifier.register(consoleChannel('console'));
+  // 26.7：真实飞书通道（配置 FEISHU_WEBHOOK_URL 后平台事件真实投递飞书）
+  if (opts.feishuWebhookUrl) {
+    notifier.register(feishuChannel({ name: 'feishu', url: opts.feishuWebhookUrl }));
+  }
 
   const audit = new AuditLog(reg('audit', createRepository<AuditEntry>(storage, store('audit'))), { now });
   const idempotency = new IdempotencyStore(reg('idempotency', createRepository<IdempotencyRecord>(storage, store('idempotency'))), { now });
@@ -181,7 +196,10 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
     }
   }
 
-  const service = new PlatformService({ projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, telemetry });
+  // 26.2：WAN3 真实 Test Case 资产装配（导入由 onboarding 显式执行：CLI `platform assets import`）
+  const testAssets = new PlatformTestAssets(reg('test-assets', createRepository<import('../test-assets/platform-test-assets.js').PlatformTestAsset>(storage, store('test-assets'))));
+
+  const service = new PlatformService({ projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, telemetry, testAssets });
 
   const registerWorkerExecutor = (workerId: string, exec: (job: unknown) => Promise<unknown>): void => {
     workers.register(
@@ -190,7 +208,7 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
     );
   };
 
-  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, registerWorkerExecutor };
+  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, testAssets, registerWorkerExecutor };
 }
 
 /** 默认平台数据目录（运维脚本用） */

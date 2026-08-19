@@ -32,9 +32,25 @@ import {
   listAppliedPostgres,
   MIGRATIONS,
 } from '../src/platform/ops/migrations.js';
-import { collectSnapshot, restoreSnapshot, snapshotTotal } from '../src/platform/ops/backup.js';
+import { collectSnapshot, restoreSnapshot, snapshotTotal, computeSnapshotChecksum, verifyRestore } from '../src/platform/ops/backup.js';
 import { runPlatformSmoke } from '../src/platform/ops/smoke.js';
+import { makeRealRunExecutor, type RunProfile } from '../src/platform/ops/real-run.js';
+import {
+  drillWorkerCrash,
+  drillLlmChain,
+  drillLlmRunRecovery,
+  drillStorageOutage,
+  recoverySummary,
+  type RecoveryMetric,
+} from '../src/platform/ops/recovery-drill.js';
+import { createBreaker } from '../src/platform/storage/faulty-repository.js';
+import {
+  runReleaseGateDrill,
+  gateDrillSummary,
+  type ReleaseGateDrillResult,
+} from '../src/platform/ops/release-gate-drill.js';
 import { runPlatformPreflight, preflightSummary } from '../src/platform/ops/preflight.js';
+import { buildVersionInfo } from '../src/platform/version.js';
 import { platformDataDir } from '../src/platform/index.js';
 
 function actor(): string {
@@ -116,6 +132,8 @@ async function main(): Promise<void> {
     // 默认 SQLite 持久化（跨进程保留平台状态，Production 模式唯一允许的本地后端）。
     // 可用 STORAGE_BACKEND=json|memory|sqlite 覆盖；旧别名 PLATFORM_STORAGE 仍兼容。
     storage: resolveStorageKind(process.env.STORAGE_BACKEND ?? process.env.PLATFORM_STORAGE),
+    // 26.7：真实飞书通知（配置 FEISHU_WEBHOOK_URL 或 FEISHU_WEBHOOK 后平台事件真实投递飞书）
+    feishuWebhookUrl: process.env.FEISHU_WEBHOOK_URL ?? process.env.FEISHU_WEBHOOK,
   });
   await bundle.auth.ensureSeeded();
   const wire = bundle.service.wireNotifications();
@@ -220,12 +238,129 @@ async function main(): Promise<void> {
         console.log(JSON.stringify(await bundle.service.metricsActivation(), null, 2));
       } else throw new Error(`未知 telemetry 子命令：${sub}`);
     } else if (group === 'platform') {
-      if (sub === 'health') {
+      if (sub === 'version') {
+        // 26.1：构建溯源（version/commit/buildTime/environment）
+        console.log(JSON.stringify(buildVersionInfo(), null, 2));
+      } else if (sub === 'health') {
         console.log(JSON.stringify(await bundle.service.health(), null, 2));
       } else if (sub === 'dashboard') {
         console.log(JSON.stringify(await bundle.service.dashboard(), null, 2));
       } else if (sub === 'metrics') {
         console.log(JSON.stringify(await bundle.service.metrics(), null, 2));
+      } else if (sub === 'realrun') {
+        // 26.3：真实 Run（smoke / sanity / regression / autonomous），在 staging 真实执行并落库
+        const profile = (args[2] as RunProfile) ?? 'sanity';
+        const env = args[3] ?? 'test';
+        if (!['smoke', 'sanity', 'regression', 'autonomous'].includes(profile)) {
+          throw new Error(`未知 Run 形态：${profile}（smoke/sanity/regression/autonomous）`);
+        }
+        bundle.registerWorkerExecutor(`real-${profile}-worker`, makeRealRunExecutor(bundle, profile, { environment: env }));
+        const { runId } = await bundle.service.createRun({
+          projectId: 'wan3', environment: env, trigger: profile === 'autonomous' ? 'autonomous' : 'manual', feature: `real-run-${profile}`, actor: actor(), role: role(),
+        });
+        await dispatchUntilIdle(bundle);
+        const run = await bundle.service.getRun(runId);
+        console.log(JSON.stringify({ ok: run?.status === 'COMPLETED', runId, status: run?.status, profile, environment: env }, null, 2));
+      } else if (sub === 'drill') {
+        // 26.4：受控故障演练（对当前数据目录执行 → staging-real 证据）
+        // 用法：platform drill <s1|s2|s3|p0block|all> [env]
+        const scenario = args[2] ?? 'all';
+        const env = args[3] ?? 'test';
+        const evidence = 'staging-real';
+        const results: RecoveryMetric[] = [];
+
+        if (scenario === 's1' || scenario === 'all') {
+          results.push(await drillWorkerCrash(bundle, { environment: env, tag: `cli${results.length}`, evidence }));
+        }
+        if (scenario === 's2' || scenario === 'all') {
+          results.push(await drillLlmChain({}));
+          results.push(await drillLlmRunRecovery(bundle, { environment: env, tag: `cli${results.length}`, profile: 'smoke', failMode: '500', failCount: 1, evidence }));
+        }
+        if (scenario === 's3' || scenario === 'all') {
+          // S3 需要熔断器注入（工厂创建时 wrapRepository）；对独立 SQLite 文件执行，
+          // 避免影响主平台数据文件（真实 SQLite 持久化、隔离数据）。
+          const s3Dir = platformDataDir();
+          const breakers = createBreaker();
+          const drillBundle = createPlatformService({
+            seedProject: true, dataDir: s3Dir, storage: 'sqlite',
+            wrapRepository: (name, repo) => breakers.wrap(name, repo),
+          });
+          await drillBundle.auth.ensureSeeded();
+          await drillBundle.testAssets.importCatalog();
+          results.push(await drillStorageOutage(drillBundle, { environment: env, tag: 'clis3', breaker: breakers, evidence }));
+        }
+        if (scenario === 'p0block' || scenario === 'all') {
+          // 真实数据目录注入 P0 FAIL → 平台必须真实 BLOCK（exit=1，Run=FAILED）
+          const p0WorkerId = `drill-p0-${Date.now()}`;
+          bundle.registerWorkerExecutor(p0WorkerId, makeRealRunExecutor(bundle, 'sanity', {
+            environment: env, failCases: ['WAN3-CORE-001'], failReason: '故障注入（staging drill）：P0 核心链路回归',
+          }));
+          const { runId } = await bundle.service.createRun({
+            projectId: 'wan3', environment: env, trigger: 'manual', feature: 'drill-p0-block', actor: actor(), role: role(),
+          });
+          await dispatchUntilIdle(bundle);
+          const run = await bundle.service.getRun(runId);
+          const rel = (await bundle.telemetry.eventsByRun(runId)).find((e) => e.type === 'release');
+          const decision = rel?.metadata?.decision as string | undefined;
+          const ok = run?.status === 'FAILED' && decision === 'BLOCK';
+          results.push({
+            scenario: 'S-p0-block', ok,
+            mttdMs: 0, mttrMs: 0, retryCount: 0,
+            recoverySuccessRate: ok ? 100 : 0, lostRuns: 0, lostCases: 0, evidence,
+            detail: { runId, status: run?.status, decision },
+          });
+          if (bundle.workers.get(p0WorkerId)) bundle.workers.unregister(p0WorkerId);
+          bundle.pool.dropInFlight(p0WorkerId);
+        }
+        if (!['s1', 's2', 's3', 'p0block', 'all'].includes(scenario)) {
+          throw new Error('用法：platform drill <s1|s2|s3|p0block|all> [env]');
+        }
+        // 同步写汇总到 stdout（fd 1）：长演练后异步 write 的回调可能不触发导致丢失
+        const summaryJson = JSON.stringify(recoverySummary(results), null, 2) + '\n';
+        fs.writeSync(1, summaryJson);
+      } else if (sub === 'gate') {
+        // 26.5：真实发布门禁演练（PASS / REVIEW / BLOCK）
+        // 用法：platform gate <pass|review|block|all> [env]
+        // - pass：sanity 真实 Run → decision=PASS → 部署执行（exit=0）
+        // - review：regression 真实 Run → decision=REVIEW → 创建审批、未批准不部署（exit=2）
+        // - block：sanity + 故障注入 P0 FAIL → decision=BLOCK → CI FAILED、不部署、Agent 不能绕过（exit=1）
+        const scenario = args[2] ?? 'all';
+        const env = args[3] ?? 'test';
+        const evidence = 'staging-real';
+        const results: ReleaseGateDrillResult[] = [];
+        if (scenario === 'pass' || scenario === 'all') {
+          results.push(await runReleaseGateDrill(bundle, { environment: env, profile: 'sanity', evidence }));
+        }
+        if (scenario === 'review' || scenario === 'all') {
+          results.push(await runReleaseGateDrill(bundle, { environment: env, profile: 'regression', evidence }));
+        }
+        if (scenario === 'block' || scenario === 'all') {
+          results.push(await runReleaseGateDrill(bundle, {
+            environment: env, profile: 'sanity',
+            failCases: ['WAN3-CORE-001'], failReason: '故障注入（release gate drill）：P0 核心链路回归', evidence,
+          }));
+        }
+        if (!['pass', 'review', 'block', 'all'].includes(scenario)) {
+          throw new Error('用法：platform gate <pass|review|block|all> [env]');
+        }
+        const gateSummary = gateDrillSummary(results);
+        const gateOutput = { ok: gateSummary.allPass, summary: gateSummary, results };
+        fs.writeSync(1, JSON.stringify(gateOutput, null, 2) + '\n');
+      } else if (sub === 'assets') {
+        // 26.2：真实 Test Case 资产（list / stats / import）
+        if (args[2] === 'stats') {
+          console.log(JSON.stringify(await bundle.service.testAssetStats(), null, 2));
+        } else if (args[2] === 'list') {
+          const filter = { category: flagValue(args, '--category') ?? undefined } as Partial<import('../src/platform/test-assets/platform-test-assets.js').PlatformTestAsset>;
+          const items = await bundle.service.listTestAssets(filter);
+          console.log(JSON.stringify(items.map((a) => ({ id: a.id, category: a.category, priority: a.priority, business: a.business, title: a.title, source: a.source })), null, 2));
+        } else if (args[2] === 'import') {
+          // 幂等导入 WAN3 目录；--force 强制跳过已存在（默认跳过）
+          const before = await bundle.service.testAssetStats();
+          const result = await bundle.testAssets.importCatalog();
+          const after = await bundle.service.testAssetStats();
+          console.log(JSON.stringify({ ok: true, ...result, before: before.total, after: after.total, byCategory: after.byCategory }, null, 2));
+        } else throw new Error('用法：platform assets <list|stats|import>');
       } else throw new Error(`未知 platform 子命令：${sub}`);
     } else if (group === 'migrate') {
       // 25.8：显式执行 / 查看 schema 迁移（工厂启动已自动应用；本命令供运维手动执行与检查）
@@ -261,22 +396,46 @@ async function main(): Promise<void> {
         }, null, 2));
       } else throw new Error(`未知 migrate 子命令：${sub}`);
     } else if (group === 'backup') {
-      // 25.8：全量快照备份 / 恢复
+      // 25.8 / 26.6：全量快照备份 / 恢复 / 一致性校验
       if (sub === 'save') {
         const file = args[2];
         if (!file) throw new Error('用法：backup save <file.json>');
         const snapshot = await collectSnapshot(bundle);
         fs.writeFileSync(file, JSON.stringify(snapshot, null, 2), 'utf-8');
-        console.log(JSON.stringify({ ok: true, file, total: snapshotTotal(snapshot), stores: snapshot.stores.length, exportedAt: snapshot.exportedAt }, null, 2));
+        console.log(JSON.stringify({
+          ok: true, file, total: snapshotTotal(snapshot), stores: snapshot.stores.length,
+          checksum: snapshot.checksum, exportedAt: snapshot.exportedAt,
+        }, null, 2));
       } else if (sub === 'restore') {
         const file = args[2];
         if (!file) throw new Error('用法：backup restore <file.json>');
         const snapshot = JSON.parse(fs.readFileSync(file, 'utf-8')) as Parameters<typeof restoreSnapshot>[1];
         const result = await restoreSnapshot(bundle, snapshot);
-        console.log(JSON.stringify({ ok: true, file, ...result }, null, 2));
+        const verify = await verifyRestore(bundle, snapshot);
+        const diffNote = result.cancelledJobs > 0
+          ? `（${result.cancelledJobs} 个遗留 Job 已按「禁止自动重触发」置 CANCELLED，Checksum 已归一化该维度）`
+          : '';
+        console.log(JSON.stringify({
+          ok: verify.ok, file,
+          restored: result.restored, stores: result.stores,
+          cancelledJobs: result.cancelledJobs,
+          verify: {
+            countBefore: verify.countBefore, countAfter: verify.countAfter, countMatch: verify.countMatch,
+            checksumBefore: verify.checksumBefore, checksumAfter: verify.checksumAfter, checksumMatch: verify.checksumMatch,
+            idMismatch: verify.idMismatch, cancelledJobs: verify.cancelledJobs,
+          },
+          detail: `恢复 ${result.restored} 条 / ${result.stores} 集合；一致性校验 ${verify.ok ? `通过（Count/Checksum/Key ID 一致）${diffNote}` : '未通过'}`,
+        }, null, 2));
+        if (!verify.ok) process.exitCode = 1;
       } else if (sub === 'summary') {
         const snapshot = await collectSnapshot(bundle);
-        console.log(JSON.stringify({ total: snapshotTotal(snapshot), stores: snapshot.stores }, null, 2));
+        console.log(JSON.stringify({ total: snapshotTotal(snapshot), stores: snapshot.stores, checksum: snapshot.checksum }, null, 2));
+      } else if (sub === 'checksum') {
+        const file = args[2];
+        if (!file) throw new Error('用法：backup checksum <file.json>');
+        const snapshot = JSON.parse(fs.readFileSync(file, 'utf-8')) as Parameters<typeof restoreSnapshot>[1];
+        const checksum = computeSnapshotChecksum(snapshot);
+        console.log(JSON.stringify({ ok: true, file, checksum, match: checksum === snapshot.checksum }, null, 2));
       } else throw new Error(`未知 backup 子命令：${sub}`);
     } else if (group === 'preflight') {
       // 25.8：平台上线前环境自检

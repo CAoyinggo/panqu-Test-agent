@@ -7,3 +7,4 @@ export * from './json-repository.js';
 export { SqliteRepository, createSqliteDatabase, sqliteDataFile, withTransaction as sqliteWithTransaction, ensureCollection as sqliteEnsureCollection } from './sqlite/index.js';
 export { PostgresRepository, collectionTableSql, withTransaction as pgWithTransaction, ensureCollection as pgEnsureCollection } from './postgres/index.js';
 export * from './storage-factory.js';
+export * from './faulty-repository.js';

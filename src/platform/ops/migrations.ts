@@ -24,6 +24,8 @@ export const ALL_COLLECTIONS: string[] = [
   'healing-records',
   'release-records',
   'metric-activations',
+  // 26.2：真实 Test Case 资产（纳入备份/恢复/迁移）
+  'test-assets',
 ];
 
 export interface MigrationContext {

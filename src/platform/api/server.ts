@@ -18,6 +18,7 @@ import type { AuthService } from '../auth/auth-service.js';
 import type { User } from '../auth/user.js';
 import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
+import { buildVersionInfo } from '../version.js';
 
 /** 平台运行模式（25.8 完整实现；25.3 已用于认证开关） */
 export type PlatformRunMode = 'development' | 'test' | 'staging' | 'production';
@@ -232,7 +233,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['runs', ':id', 'trace'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.getRunTrace(p.id)) },
     { method: 'GET', segments: ['runs', ':id', 'detail'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.runDetail(p.id)) },
 
-    { method: 'GET', segments: ['test-assets'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
+    { method: 'GET', segments: ['test-assets'], handler: async (c) => ({ items: await c.service.listTestAssets(), source: 'platform-test-assets' }) },
+    { method: 'GET', segments: ['test-assets', 'stats'], handler: async (c) => c.service.testAssetStats() },
     { method: 'GET', segments: ['defects'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
     { method: 'GET', segments: ['knowledge'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
 
@@ -437,6 +439,15 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     return false;
   }
 
+  /** 26.1：公开版本信息端点（无需认证；CI/运维确认运行版本）GET /version 与 /api/version */
+  function handlePublicVersion(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    if ((req.method ?? 'GET').toUpperCase() !== 'GET') return false;
+    const pathname = (req.url ?? '/').split('?')[0];
+    if (pathname !== '/version' && pathname !== '/api/version') return false;
+    sendJson(res, 200, buildVersionInfo());
+    return true;
+  }
+
   /** 前端 /api 前缀 → 根路由（25.6：Dashboard 与 API 同源部署） */
   function stripApiPrefix(u: string): string {
     const pathname = u.split('?')[0];
@@ -511,6 +522,9 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
       // 25.6：Web Dashboard 静态资源（先于认证/API 路由处理）
       if (serveStatic(req, res)) return;
+
+      // 26.1：公开版本信息（无需认证）
+      if (handlePublicVersion(req, res)) return;
 
       // 认证路由无需静态 Token
       if (isAuthRoute(method, pathname)) {

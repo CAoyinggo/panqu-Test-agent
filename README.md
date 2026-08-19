@@ -1,8 +1,8 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.1（AI Test Platform 生产化版）｜ 更新：2026-08-18 ｜ 维护：AI 测试智能体
+> 版本：v4.2.0（AI Test Platform 生产化 + 生产演练验证版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
 
-标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。
+标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。
 
 📄 **[查看交互式 HTML 项目完整说明](file:///Users/mac/agents/test-flow-project-overview/test-flow-project-overview.html)**（含架构图与数据图表，本地打开）
 
@@ -18,13 +18,13 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 
 | 指标 | 数值 |
 |---|---|
-| 单元测试用例 | 1349 条（107 个测试文件） |
-| 平台测试 | 单元 208 + 集成 64 + E2E 8（19 + 10 + 1 个文件） |
+| 单元测试用例 | 1394 条通过 / 18 跳过（119 个测试文件，全量回归全绿） |
+| 平台测试 | 单元 19 文件 + 集成 10 文件 + E2E 12 文件（Phase 26 新增 8 个真实演练/试运行套件） |
 | 断言操作符 | 17 个 |
 | 核心引擎模块 | 13 个文件 |
 | 平台层模块 | 18 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
-| 版本演进 | v1.0 → v4.1（12 个里程碑） |
+| 版本演进 | v1.0 → v4.2.0（13 个里程碑） |
 | 运行时 | Node.js ≥ 20.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
@@ -292,8 +292,9 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | v3.5 | 2026-08-17 | Agent 化与能力沉淀（Phase 10-19）：RCA/Flaky 治理、自愈、缺陷生命周期、审批状态机、可观测性、评估体系、通用断言引擎、数据生成 / Mock 回放 / 动态并发、断言可视化 |
 | v4.0 | 2026-08-18 | AI Test Platform 平台化（Phase 20-24）：多业务接入、测试资产管理、持续回归、知识 / 成本 / 质量优化、智能排序与风险预测、自治回归流水线、统一追踪、发布决策与生产验收，以及全新 `src/platform` 平台层（13 模块 + HTTP API + CLI + 运维指标） |
 | v4.1 | 2026-08-18 | AI Test Platform 生产化（Phase 25）：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、React Web Dashboard（15+ 页面）、API 加固（链路追踪 / 限流 / 错误契约 / 分页）、生产运维（迁移 / 备份恢复 / 冒烟 / Preflight） |
+| v4.2.0 | 2026-08-19 | 生产验证闭环（Phase 26）：版本溯源与部署验收链、50 真实 TestCase 接入、四形态真实 Run 执行、故障恢复演练（S1/S2/S3 + 恢复指标）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验 + 禁止自动重触发、六类可观测告警、30 Run 生产试运行（KPI + 10 条人工 QA 对照） |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`。
 
 ## 十三、目录结构
 
