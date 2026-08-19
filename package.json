@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.11.0",
+  "version": "4.12.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
@@ -86,6 +86,7 @@
     "phase33:test": "npm run build && vitest run tests/unit/environment-policy-coherence.test.ts tests/unit/environment-policy.test.ts tests/unit/platform-project.test.ts tests/unit/platform-coverage-gap.test.ts tests/unit/security.test.ts",
     "phase34:test": "npm run build && vitest run tests/unit/html-reporter-visualization.test.ts tests/unit/assertion-visualizer.test.ts tests/unit/assertion-engine.test.ts tests/unit/path-extractor.test.ts",
     "phase35:test": "npm run build && vitest run tests/unit/core-failure-category.test.ts tests/unit/root-cause-agent.test.ts tests/unit/defect-agent.test.ts tests/unit/defect-lifecycle.test.ts tests/unit/failure-prediction.test.ts tests/unit/telemetry.test.ts tests/integration/telemetry-pipeline.test.ts tests/e2e/real-run.test.ts tests/e2e/real/real-failure-rca.test.ts",
+    "phase36:test": "npm run build && vitest run tests/unit/identity-resolution-guard.test.ts tests/unit/security.test.ts tests/unit/auth-service.test.ts tests/unit/platform-gate.test.ts tests/unit/rbac.test.ts",
     "mutation:test": "npx stryker run",
     "mutation:dry": "npx stryker run --dryRunOnly",
     "perf:test": "vitest run -c vitest.perf.config.ts",

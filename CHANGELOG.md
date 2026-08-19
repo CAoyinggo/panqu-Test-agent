@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.12.0] - 2026-08-19
+
+### 新增（身份解析统一 + 防伪造不可绕过，Phase 36）
+
+- DEBT-12 已解决：审计确认 `resolvePrincipal` 为唯一身份解析实现（无历史版本残留）；同时将「静态身份来源」的守卫与解析真正收敛到 security 模块——新增 `resolveStaticIdentity(mode, headers)`：production 返回 `null`（防身份伪造不可绕过），其余模式从 X-Actor/X-Role 头解析（数组取首项；无 actor 默认 `api`，无 role 默认 `VIEWER`）。
+- `api/server.ts` 静态 Token 回退改调 `resolveStaticIdentity`，不再直接读取 `x-actor` / `x-role` 头——**平台层 X-Actor/X-Role 头读取仅存在于 security 模块**（结构上固化，防新 API 入口绕过生产关闭）。
+- 新增脚本 `phase36:test`（构建 + 身份解析守护 + security / auth / RBAC 相关回归）。
+
+### 变更
+
+- `docs/TECH-DEBT.md`：DEBT-12（身份解析重复实现残留）已解决。
+
+### 测试
+
+- 新增 `tests/unit/identity-resolution-guard.test.ts`（8 项）：`resolveStaticIdentity` 功能（生产关闭 / 各模式解析 / 默认回退 / 数组首项 / 空字符串回退 / 非字符串字符串化）+ 结构性守护（`src/platform/**` 中 X-Actor/X-Role 头读取仅存在于 security 模块）+ `resolvePrincipal` 唯一实现守护 + 集成语义（production 关闭不可绕过，staging 为生产演练模式仍允许静态身份）；全量回归：1504 passed / 18 skipped（130 个测试文件）。
+
 ## [4.11.0] - 2026-08-19
 
 ### 新增（类型级反向依赖上移 core，Phase 35）

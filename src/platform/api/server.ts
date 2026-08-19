@@ -20,7 +20,7 @@ import type { User } from '../auth/user.js';
 import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
-import { allowHeaderIdentity, isProductionLike, resolvePlatformMode, type PlatformMode } from '../security/index.js';
+import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -121,13 +121,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       }
     }
     if (cred === token) {
-      // 27.1：生产模式禁止 X-Actor/X-Role 静态身份来源（防身份伪造）；其余模式允许（开发/演练）
-      if (!allowHeaderIdentity(mode)) return null;
-      return {
-        user: undefined,
-        actor: String(req.headers['x-actor'] ?? 'api'),
-        role: (req.headers['x-role'] as Role) ?? 'VIEWER',
-      };
+      // 36（DEBT-12 已解决）：静态身份守卫 + 解析收敛到 security.resolveStaticIdentity——
+      // production 返回 null（防身份伪造不可绕过），其余模式解析 X-Actor/X-Role（默认 api/VIEWER）
+      const ident = resolveStaticIdentity(mode, req.headers);
+      if (!ident) return null;
+      return { user: undefined, actor: ident.actor, role: ident.role as Role };
     }
     return null;
   }

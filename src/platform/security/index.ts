@@ -55,6 +55,26 @@ export function allowHeaderIdentity(mode: PlatformMode): boolean {
   return mode !== 'production';
 }
 
+/**
+ * 静态身份来源统一解析（Phase 36，DEBT-12 已解决）：
+ * 守卫 + 解析收敛到 security 模块（防新 API 入口绕过生产关闭）：
+ * - production：返回 null（身份伪造已关闭，调用方不得回退静态身份）；
+ * - 其余模式：从 X-Actor / X-Role 头解析（数组取首项；无 actor 默认 'api'，无 role 默认 'VIEWER'）。
+ * 注：返回 role 为 string，调用方需按自身 Role 联合类型收窄。
+ */
+export function resolveStaticIdentity(
+  mode: PlatformMode,
+  headers: { 'x-actor'?: unknown; 'x-role'?: unknown; [key: string]: unknown },
+): { actor: string; role: string } | null {
+  if (!allowHeaderIdentity(mode)) return null;
+  const first = (v: unknown): string | undefined =>
+    Array.isArray(v) ? (v.length ? String(v[0]) : undefined) : v == null ? undefined : String(v);
+  return {
+    actor: first(headers['x-actor']) || 'api',
+    role: first(headers['x-role']) || 'VIEWER',
+  };
+}
+
 /** 安全策略清单（供 Preflight 展示；返回检查项，由调用方决定 PASS/WARN/BLOCK 级别） */
 export interface SecurityCheckResult {
   name: string;
