@@ -52,6 +52,13 @@ export class RunService {
       status: 'QUEUED',
       progress: 0,
       createdAt: this.nowIso(),
+      planId: input.planId,
+      suiteIds: input.suiteIds,
+      templateId: input.templateId,
+      mode: input.mode,
+      budget: input.budget,
+      releaseGate: input.releaseGate,
+      assetVersion: input.assetVersion,
     };
     await this.runs.create(run);
     return run;
@@ -112,6 +119,13 @@ export class RunService {
       feature: cur.feature,
       environment: cur.environment,
       trigger: cur.trigger,
+      planId: cur.planId,
+      suiteIds: cur.suiteIds,
+      templateId: cur.templateId,
+      mode: cur.mode,
+      budget: cur.budget,
+      releaseGate: cur.releaseGate,
+      assetVersion: cur.assetVersion,
     });
     return fresh;
   }

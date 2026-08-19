@@ -53,6 +53,14 @@ export interface CreateRunRequest {
   /** 25.3 资源作用域（JWT 认证用户带入）；缺省不做项目/环境隔离 */
   scopes?: Scopes;
   idempotencyKey?: string;
+  // Phase 39：QA Workflow 上下文（Run Again / Clone / Template 复用溯源）
+  planId?: string;
+  suiteIds?: string[];
+  templateId?: string;
+  mode?: string;
+  budget?: number;
+  releaseGate?: boolean;
+  assetVersion?: Record<string, number>;
 }
 
 export interface PlatformServiceDeps {
@@ -71,6 +79,8 @@ export interface PlatformServiceDeps {
   telemetry: TelemetryService;
   /** 测试资产库（26.2）：真实 Test Case 资产（查询/统计/导入） */
   testAssets: import('../test-assets/platform-test-assets.js').PlatformTestAssets;
+  /** QA Workflow（Phase 39）：Suite / Plan / Template / Versioning / Collaboration / Report / QA Home */
+  workflow: import('../workflow/index.js').WorkflowService;
 }
 
 export class PlatformService {
@@ -173,6 +183,13 @@ export class PlatformService {
       feature: req.feature ?? req.change?.target,
       environment: req.environment,
       trigger: req.trigger,
+      planId: req.planId,
+      suiteIds: req.suiteIds,
+      templateId: req.templateId,
+      mode: req.mode,
+      budget: req.budget,
+      releaseGate: req.releaseGate,
+      assetVersion: req.assetVersion,
     };
     const run = await this.deps.runs.create(input);
     // 调度入队（同一 Run 不重复执行由 Scheduler 保证）
@@ -431,6 +448,342 @@ export class PlatformService {
       decidedAt: a.decidedAt,
     }));
     return { run, checkpoint, trace, approvals };
+  }
+
+  // ═══════════════════════ QA Workflow（Phase 39）═══════════════════════
+  // 复用既有 RBAC / Repository / Notification / Audit / Telemetry，不新增第二套权限。
+  // 所有变更操作记录审计；列表操作按 scopes 过滤项目（跨项目隔离）。
+
+  // ── Test Suite（39.1）──
+  async createSuite(input: { projectId: string; name: string; description?: string; caseIds?: string[]; tags?: string[]; createdBy: string }, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.create(input);
+    await this.audit({ actor: input.createdBy, role, action: 'configuration', resource: `suite:${suite.id}`, result: 'success', detail: { action: 'create', name: suite.name, projectId: suite.projectId } });
+    return suite;
+  }
+
+  async listSuites(filter?: Partial<import('../workflow/index.js').TestSuite>, scopes?: Scopes): Promise<import('../workflow/index.js').TestSuite[]> {
+    const all = await this.deps.workflow.suites.list(filter);
+    return this.filterByScopes(all, scopes, (s) => s.projectId);
+  }
+
+  async getSuite(id: string): Promise<import('../workflow/index.js').TestSuite | null> {
+    return this.deps.workflow.suites.get(id);
+  }
+
+  async updateSuite(id: string, input: { name?: string; description?: string; tags?: string[] }, actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.update(id, input);
+    await this.audit({ actor, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'update', ...input } });
+    return suite;
+  }
+
+  async addSuiteCases(id: string, caseIds: string[], actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.addCases(id, caseIds);
+    await this.audit({ actor, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'addCases', count: caseIds.length } });
+    return suite;
+  }
+
+  async removeSuiteCases(id: string, caseIds: string[], actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.removeCases(id, caseIds);
+    await this.audit({ actor, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'removeCases', count: caseIds.length } });
+    return suite;
+  }
+
+  async archiveSuite(id: string, actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.archive(id);
+    await this.audit({ actor, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'archive' } });
+    return suite;
+  }
+
+  async restoreSuite(id: string, actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.restore(id);
+    await this.audit({ actor, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'restore' } });
+    return suite;
+  }
+
+  async copySuite(id: string, by: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const suite = await this.deps.workflow.suites.copy(id, by);
+    await this.audit({ actor: by, role, action: 'configuration', resource: `suite:${id}`, result: 'success', detail: { action: 'copy', copyId: suite.id } });
+    return suite;
+  }
+
+  async listSuitesByTag(tags: string[], scopes?: Scopes): Promise<import('../workflow/index.js').TestSuite[]> {
+    const all = await this.deps.workflow.suites.listByTags(tags);
+    return this.filterByScopes(all, scopes, (s) => s.projectId);
+  }
+
+  // ── Test Plan（39.2）──
+  async createPlan(input: { projectId: string; name: string; suiteIds?: string[]; environment: string; mode: import('../workflow/index.js').TestPlanMode; budget?: unknown; releaseGate?: unknown; createdBy: string }, role: Role): Promise<import('../workflow/index.js').TestPlan> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const plan = await this.deps.workflow.plans.create(input);
+    await this.audit({ actor: input.createdBy, role, action: 'configuration', resource: `plan:${plan.id}`, result: 'success', detail: { action: 'create', name: plan.name, projectId: plan.projectId, mode: plan.mode } });
+    return plan;
+  }
+
+  async listPlans(filter?: Partial<import('../workflow/index.js').TestPlan>, scopes?: Scopes): Promise<import('../workflow/index.js').TestPlan[]> {
+    const all = await this.deps.workflow.plans.list(filter);
+    return this.filterByScopes(all, scopes, (p) => p.projectId);
+  }
+
+  async getPlan(id: string): Promise<import('../workflow/index.js').TestPlan | null> {
+    return this.deps.workflow.plans.get(id);
+  }
+
+  async updatePlan(id: string, input: { name?: string; suiteIds?: string[]; environment?: string; mode?: import('../workflow/index.js').TestPlanMode; budget?: unknown; releaseGate?: unknown }, actor: string, role: Role): Promise<import('../workflow/index.js').TestPlan> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const plan = await this.deps.workflow.plans.update(id, input);
+    await this.audit({ actor, role, action: 'configuration', resource: `plan:${id}`, result: 'success', detail: { action: 'update', ...input } });
+    return plan;
+  }
+
+  /** 解析 Plan → 去重 Case 列表（API/CLI 预览用） */
+  async planCases(planId: string): Promise<{ planId: string; caseIds: string[] }> {
+    const plan = await this.deps.workflow.plans.get(planId);
+    if (!plan) throw new Error(`Test Plan 不存在：${planId}`);
+    const caseIds = await this.deps.workflow.suites.resolveCaseIds(plan.suiteIds);
+    return { planId, caseIds };
+  }
+
+  /** 按 Plan 直接运行（39.2 核心路径：Plan → Suite → TestCase → Run） */
+  async runPlan(planId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
+    this.assertPermission(role, 'TEST_RUN');
+    const plan = await this.deps.workflow.plans.get(planId);
+    if (!plan) throw new Error(`Test Plan 不存在：${planId}`);
+    const caseIds = await this.deps.workflow.suites.resolveCaseIds(plan.suiteIds);
+    const assetVersion: Record<string, number> = {};
+    for (const cid of caseIds) assetVersion[cid] = await this.deps.workflow.versions.latestVersion(cid);
+    const trigger: RunTrigger = plan.mode === 'AUTONOMOUS' ? 'autonomous' : 'manual';
+    const created = await this.createRun({
+      projectId: plan.projectId,
+      environment: plan.environment,
+      trigger,
+      feature: plan.name,
+      actor, role, scopes,
+      planId,
+      suiteIds: plan.suiteIds,
+      mode: plan.mode,
+      budget: plan.budget as number | undefined,
+      releaseGate: plan.releaseGate as boolean | undefined,
+      assetVersion,
+    });
+    await this.audit({ actor, role, action: 'run.create', resource: created.runId, environment: plan.environment, result: 'success', detail: { via: 'plan', planId }, traceId: created.runId });
+    return created;
+  }
+
+  // ── Run Template（39.3）──
+  async createTemplate(input: { projectId: string; name: string; description?: string; environment: string; suiteIds: string[]; mode: import('../workflow/index.js').TestPlanMode; budget?: number; releaseGate?: boolean; createdBy: string }, role: Role): Promise<import('../workflow/index.js').RunTemplate> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const t = await this.deps.workflow.templates.create(input);
+    await this.audit({ actor: input.createdBy, role, action: 'configuration', resource: `template:${t.id}`, result: 'success', detail: { action: 'create', name: t.name } });
+    return t;
+  }
+
+  async listTemplates(filter?: Partial<import('../workflow/index.js').RunTemplate>, scopes?: Scopes): Promise<import('../workflow/index.js').RunTemplate[]> {
+    const all = await this.deps.workflow.templates.list(filter);
+    return this.filterByScopes(all, scopes, (t) => t.projectId);
+  }
+
+  async getTemplate(id: string): Promise<import('../workflow/index.js').RunTemplate | null> {
+    return this.deps.workflow.templates.get(id);
+  }
+
+  async updateTemplate(id: string, input: Partial<Pick<import('../workflow/index.js').RunTemplate, 'name' | 'description' | 'environment' | 'suiteIds' | 'mode' | 'budget' | 'releaseGate'>>, actor: string, role: Role): Promise<import('../workflow/index.js').RunTemplate> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const t = await this.deps.workflow.templates.update(id, input);
+    await this.audit({ actor, role, action: 'configuration', resource: `template:${id}`, result: 'success', detail: { action: 'update', ...input } });
+    return t;
+  }
+
+  /** Save as Template：只复制 Configuration（不复制结果/RCA/门禁决策） */
+  async saveTemplateFromRun(runId: string, name: string, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').RunTemplate> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const t = await this.deps.workflow.templates.saveFromRun(
+      { projectId: run.projectId, environment: run.environment, suiteIds: run.suiteIds ?? [], mode: (run.mode as import('../workflow/index.js').TestPlanMode) ?? 'MANUAL', budget: run.budget, releaseGate: run.releaseGate },
+      { name, createdBy: actor },
+    );
+    await this.audit({ actor, role, action: 'configuration', resource: `template:${t.id}`, result: 'success', detail: { action: 'saveFromRun', runId }, traceId: runId });
+    return t;
+  }
+
+  /** Run Template：直接生成新 Run（仅 Configuration；复用计数 +1） */
+  async runTemplate(templateId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
+    this.assertPermission(role, 'TEST_RUN');
+    const config = await this.deps.workflow.templates.resolve(templateId);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, config.projectId, config.environment);
+    const caseIds = await this.deps.workflow.suites.resolveCaseIds(config.suiteIds);
+    const assetVersion: Record<string, number> = {};
+    for (const cid of caseIds) assetVersion[cid] = await this.deps.workflow.versions.latestVersion(cid);
+    const trigger: RunTrigger = config.mode === 'AUTONOMOUS' ? 'autonomous' : 'manual';
+    const created = await this.createRun({
+      projectId: config.projectId,
+      environment: config.environment,
+      trigger,
+      feature: config.suiteIds.length ? `template:${config.suiteIds.join(',')}` : undefined,
+      actor, role, scopes,
+      suiteIds: config.suiteIds,
+      templateId,
+      mode: config.mode,
+      budget: config.budget,
+      releaseGate: config.releaseGate,
+      assetVersion,
+    });
+    await this.deps.workflow.templates.recordRun(templateId);
+    await this.audit({ actor, role, action: 'run.create', resource: created.runId, environment: config.environment, result: 'success', detail: { via: 'template', templateId }, traceId: created.runId });
+    return created;
+  }
+
+  // ── Run 复用（39.3/39.7：Run Again / Clone Configuration）──
+  /** Run Again：只复制 project / environment / suite / plan / mode / budget（不复制结果/RCA/门禁决策） */
+  async rerunRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
+    this.assertPermission(role, 'TEST_RETRY');
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const created = await this.createRun({
+      projectId: run.projectId,
+      environment: run.environment,
+      trigger: run.trigger,
+      actor, role, scopes,
+      planId: run.planId,
+      suiteIds: run.suiteIds,
+      templateId: run.templateId,
+      mode: run.mode,
+      budget: run.budget,
+      releaseGate: run.releaseGate,
+      assetVersion: run.assetVersion,
+    });
+    await this.audit({ actor, role, action: 'run.retry', resource: created.runId, environment: run.environment, result: 'success', detail: { via: 'rerun', sourceRun: runId }, traceId: created.runId });
+    return created;
+  }
+
+  /** Clone Configuration：允许修改 environment / budget / releaseGate（禁止复用旧状态/结果/追踪） */
+  async cloneRun(runId: string, overrides: { environment?: string; budget?: number; releaseGate?: boolean }, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
+    this.assertPermission(role, 'TEST_RETRY');
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const created = await this.createRun({
+      projectId: run.projectId,
+      environment: overrides.environment ?? run.environment,
+      trigger: run.trigger,
+      actor, role, scopes,
+      planId: run.planId,
+      suiteIds: run.suiteIds,
+      templateId: run.templateId,
+      mode: run.mode,
+      budget: overrides.budget ?? run.budget,
+      releaseGate: overrides.releaseGate ?? run.releaseGate,
+      assetVersion: run.assetVersion,
+    });
+    await this.audit({ actor, role, action: 'run.retry', resource: created.runId, environment: overrides.environment ?? run.environment, result: 'success', detail: { via: 'clone', sourceRun: runId, overrides }, traceId: created.runId });
+    return created;
+  }
+
+  // ── Test Asset Versioning（39.4）──
+  async assetVersions(assetId: string): Promise<import('../workflow/index.js').AssetVersionSummary[]> {
+    return this.deps.workflow.versions.history(assetId);
+  }
+
+  async assetCompare(assetId: string, fromVersion: number, toVersion: number): Promise<import('../workflow/index.js').AssetDiff> {
+    return this.deps.workflow.versions.compare(assetId, fromVersion, toVersion);
+  }
+
+  /** 资产新版本：snapshot 为完整新状态；返回新版本记录 */
+  async recordAssetVersion(input: { assetType: import('../workflow/index.js').AssetType; assetId: string; snapshot: Record<string, unknown>; createdBy: string; changeReason?: string }, role: Role): Promise<import('../workflow/index.js').AssetVersion> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const v = await this.deps.workflow.versions.recordVersion(input);
+    await this.audit({ actor: input.createdBy, role, action: 'configuration', resource: `asset:${input.assetId}`, result: 'success', detail: { action: 'newVersion', version: v.version, reason: input.changeReason } });
+    return v;
+  }
+
+  /** 回滚取快照（调用方应用） */
+  async assetRollbackSnapshot(assetId: string, version: number): Promise<Record<string, unknown>> {
+    return this.deps.workflow.versions.rollbackSnapshot(assetId, version);
+  }
+
+  // ── Collaboration（39.5）──
+  async addRunComment(runId: string, body: string, actor: string, role: Role, scopes?: Scopes): Promise<{ comment: import('../workflow/index.js').CommentEntry; mentions: string[] }> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const { item, mentions } = await this.deps.workflow.collaboration.addComment({ resourceType: 'run', resourceId: runId, projectId: run.projectId, author: actor, body });
+    const preview = body.length > 60 ? `${body.slice(0, 60)}…` : body;
+    await this.emit('CollaborationComment', { author: actor, resourceType: 'run', resourceId: runId, preview }, { runId });
+    for (const u of mentions) {
+      await this.emit('CollaborationMention', { author: actor, resourceType: 'run', resourceId: runId, mention: u, preview }, { runId });
+    }
+    await this.audit({ actor, role, action: 'collaboration.comment', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { mentions }, traceId: runId });
+    void item;
+    return { comment: item.comments[item.comments.length - 1], mentions };
+  }
+
+  async listRunComments(runId: string, scopes?: Scopes): Promise<import('../workflow/index.js').CommentEntry[]> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: ['QA'], scopes }, run.projectId, run.environment);
+    return this.deps.workflow.collaboration.comments('run', runId);
+  }
+
+  async assignRun(runId: string, assignees: string[], actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').CollaborationItem> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const item = await this.deps.workflow.collaboration.assign({ resourceType: 'run', resourceId: runId, projectId: run.projectId, assignees });
+    await this.audit({ actor, role, action: 'collaboration.assign', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { assignees }, traceId: runId });
+    return item;
+  }
+
+  // ── Report / Share（39.6）──
+  async runReport(runId: string): Promise<import('../workflow/index.js').RunReportSummary> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    return this.deps.workflow.reports.buildSummary(run);
+  }
+
+  async shareRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ share: import('../workflow/index.js').RunShare; url: string }> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
+    const share = await this.deps.workflow.reports.share(run, actor);
+    await this.audit({ actor, role, action: 'configuration', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { action: 'share' }, traceId: runId });
+    return { share, url: `/runs/${runId}/report?share=${share.token}` };
+  }
+
+  async verifyShare(runId: string, token: string): Promise<boolean> {
+    return this.deps.workflow.reports.verifyShare(runId, token);
+  }
+
+  async exportReportJson(runId: string): Promise<string> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    return this.deps.workflow.reports.exportJson(run);
+  }
+
+  async exportReportHtml(runId: string): Promise<string> {
+    const run = await this.deps.runs.get(runId);
+    if (!run) throw new Error(`Run 不存在：${runId}`);
+    return this.deps.workflow.reports.exportHtml(run);
+  }
+
+  // ── QA Workflow Dashboard（39.7）──
+  async qaHome(scopes?: Scopes): Promise<import('../workflow/index.js').QaHome> {
+    return this.deps.workflow.qaHome.build(scopes);
+  }
+
+  /** 通用项目作用域过滤（JWT 用户跨项目隔离） */
+  private filterByScopes<T>(items: T[], scopes: Scopes | undefined, projectOf: (item: T) => string): T[] {
+    if (!scopes?.projects || scopes.projects.length === 0) return items;
+    const allowed = new Set(scopes.projects);
+    return items.filter((i) => allowed.has(projectOf(i)));
   }
 
 

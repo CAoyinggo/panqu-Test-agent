@@ -135,14 +135,14 @@ describe('Platform API：Run 生命周期', () => {
     expect(await ts.bundle.scheduler.pendingCount()).toBe(1);
   });
 
-  it('VIEWER 角色无 TEST_RUN → 400（RBAC 拒绝）', async () => {
+  it('VIEWER 角色无 TEST_RUN → 403（RBAC 拒绝）', async () => {
     const ts = await makeServer();
     const res = await ts.request('POST', '/runs', {
       token: TOKEN,
       headers: { 'X-Actor': 'viewer', 'X-Role': 'VIEWER' },
       body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect((res.data as { message: string }).message).toMatch(/权限/);
   });
 
@@ -284,7 +284,7 @@ describe('Platform API：Approval 流程', () => {
       token: TOKEN,
       headers: { 'X-Actor': 'viewer', 'X-Role': 'VIEWER' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect((res.data as { message: string }).message).toMatch(/无权审批/);
   });
 });

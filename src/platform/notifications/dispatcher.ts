@@ -46,6 +46,9 @@ export const EVENT_NOTIFICATION_TEMPLATES: Record<PlatformEventType, EventTempla
   ProductionDeny: { title: '生产访问被拒', severity: 'critical', body: (e) => `${String(e.data.actor ?? '')} 尝试 ${String(e.data.action ?? '')}@production 被拒绝（生产安全）${ctxSuffix(e)}` },
   SchedulerFailure: { title: '调度器异常', severity: 'critical', body: (e) => `调度器异常：${String(e.data.reason ?? '')}${ctxSuffix(e)}` },
   BudgetExhausted: { title: '预算耗尽', severity: 'error', body: (e) => `${e.runId} 预算耗尽：${String(e.data.reason ?? '')}${ctxSuffix(e)}` },
+  // Phase 39.5：协作通知（Comment / @Mention）
+  CollaborationComment: { title: '新评论', severity: 'info', body: (e) => `${String(e.data.author ?? '')} 在 ${String(e.data.resourceType ?? '')}:${String(e.data.resourceId ?? '')} 评论：${String(e.data.preview ?? '')}${ctxSuffix(e)}` },
+  CollaborationMention: { title: '@你 的提及', severity: 'warning', body: (e) => `${String(e.data.author ?? '')} 在 ${String(e.data.resourceType ?? '')}:${String(e.data.resourceId ?? '')} 提及你：${String(e.data.preview ?? '')}${ctxSuffix(e)}` },
 };
 
 /** 事件 → 通知消息 */

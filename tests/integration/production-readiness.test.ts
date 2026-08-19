@@ -12,6 +12,7 @@ import {
   applySqliteMigrations,
   listAppliedSqlite,
   MIGRATIONS,
+  ALL_COLLECTIONS,
 } from '../../src/platform/ops/migrations.js';
 import { collectSnapshot, restoreSnapshot, snapshotTotal } from '../../src/platform/ops/backup.js';
 import { runPlatformSmoke } from '../../src/platform/ops/smoke.js';
@@ -96,7 +97,7 @@ describe('Phase 25.8 Production Readiness', () => {
 
     const snapshot = await collectSnapshot(bundleA);
     expect(snapshot.version).toBe(1);
-    expect(snapshot.stores).toHaveLength(16);
+    expect(snapshot.stores).toHaveLength(ALL_COLLECTIONS.length);
     // projects 来自 registry（至少 seed 项目 wan3）
     const projStore = snapshot.stores.find((s) => s.store === 'projects')!;
     expect(projStore.count).toBeGreaterThanOrEqual(1);
@@ -114,7 +115,7 @@ describe('Phase 25.8 Production Readiness', () => {
     const dirB = tempDir('bkp-b');
     const bundleB = createPlatformService({ seedProject: true, seedUsers: true, dataDir: dirB, storage: 'sqlite', jwtSecret: 'pr-secret' });
     const result = await restoreSnapshot(bundleB, snapshot);
-    expect(result.stores).toBe(16);
+    expect(result.stores).toBe(ALL_COLLECTIONS.length);
     expect(result.restored).toBe(totalBefore);
 
     const after = await collectSnapshot(bundleB);

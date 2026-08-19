@@ -17,6 +17,7 @@ import {
   snapshotTotal,
 } from '../../src/platform/ops/backup.js';
 import { makeRealRunExecutor } from '../../src/platform/ops/real-run.js';
+import { ALL_COLLECTIONS } from '../../src/platform/ops/migrations.js';
 
 const cleaned: string[] = [];
 function tempDir(label: string): string {
@@ -83,7 +84,7 @@ describe('26.6.1 真实备份/恢复闭环（Count / Checksum / Key ID 一致）
     const snapshot = await collectSnapshot(a);
     expect(snapshot.version).toBe(1);
     expect(snapshot.checksum).toBeTruthy();
-    expect(snapshot.stores).toHaveLength(16);
+    expect(snapshot.stores).toHaveLength(ALL_COLLECTIONS.length);
     expect(snapshotTotal(snapshot)).toBeGreaterThan(0);
     // 真实数据已入快照：telemetry 事件、成本账本、审计、test-assets、审批
     const store = (name: string) => snapshot.stores.find((s) => s.store === name)?.count ?? 0;
@@ -97,7 +98,7 @@ describe('26.6.1 真实备份/恢复闭环（Count / Checksum / Key ID 一致）
     const b = makeSqliteBundle(dirB);
     await b.auth.ensureSeeded();
     const result = await restoreSnapshot(b, snapshot);
-    expect(result.stores).toBe(16);
+    expect(result.stores).toBe(ALL_COLLECTIONS.length);
     expect(result.restored).toBe(snapshotTotal(snapshot));
     // 全终态数据：无遗留待执行 Job → cancelledJobs=0
     expect(result.cancelledJobs).toBe(0);

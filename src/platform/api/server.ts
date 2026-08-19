@@ -250,7 +250,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['runs', ':id'], handler: async (c, p) => withRunScope(c, p.id, (run) => run) },
     { method: 'POST', segments: ['runs', ':id', 'cancel'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.cancelRun(p.id, c.actor, c.role)) },
     { method: 'POST', segments: ['runs', ':id', 'retry'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.retryRun(p.id, c.actor, c.role)) },
-    { method: 'GET', segments: ['runs', ':id', 'report'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.getRunReport(p.id)) },
+    { method: 'GET', segments: ['runs', ':id', 'report'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.runReport(p.id)) },
+    { method: 'GET', segments: ['runs', ':id', 'report', 'export'], handler: async (c, p) => withRunScope(c, p.id, () => (queryParam(c.req.url, 'format') === 'html' ? c.service.exportReportHtml(p.id) : c.service.exportReportJson(p.id))) },
     { method: 'GET', segments: ['runs', ':id', 'trace'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.getRunTrace(p.id)) },
     { method: 'GET', segments: ['runs', ':id', 'detail'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.runDetail(p.id)) },
 
@@ -258,6 +259,49 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['test-assets', 'stats'], handler: async (c) => c.service.testAssetStats() },
     { method: 'GET', segments: ['defects'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
     { method: 'GET', segments: ['knowledge'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
+
+    // ── QA Workflow（Phase 39）：Test Suite ──
+    { method: 'POST', segments: ['test-suites'], handler: async (c) => c.service.createSuite({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
+    { method: 'GET', segments: ['test-suites'], handler: async (c) => maybePaginate(c.req.url, await c.service.listSuites(undefined, c.user?.scopes)) },
+    { method: 'GET', segments: ['test-suites', ':id'], handler: async (c, p) => { const s = await c.service.getSuite(p.id); if (!s) throw new HttpError(404, `Test Suite 不存在：${p.id}`); return s; } },
+    { method: 'PATCH', segments: ['test-suites', ':id'], handler: async (c, p) => c.service.updateSuite(p.id, c.body as never, c.actor, c.role) },
+    { method: 'POST', segments: ['test-suites', ':id', 'archive'], handler: async (c, p) => c.service.archiveSuite(p.id, c.actor, c.role) },
+    { method: 'POST', segments: ['test-suites', ':id', 'restore'], handler: async (c, p) => c.service.restoreSuite(p.id, c.actor, c.role) },
+    { method: 'POST', segments: ['test-suites', ':id', 'copy'], handler: async (c, p) => c.service.copySuite(p.id, c.actor, c.role) },
+    { method: 'POST', segments: ['test-suites', ':id', 'cases'], handler: async (c, p) => c.service.addSuiteCases(p.id, ((c.body.caseIds as string[]) ?? []) as string[], c.actor, c.role) },
+    { method: 'DELETE', segments: ['test-suites', ':id', 'cases'], handler: async (c, p) => c.service.removeSuiteCases(p.id, ((c.body.caseIds as string[]) ?? []) as string[], c.actor, c.role) },
+    { method: 'GET', segments: ['test-suites', 'tags', ':tag'], handler: async (c, p) => c.service.listSuitesByTag([p.tag], c.user?.scopes) },
+
+    // ── QA Workflow（Phase 39）：Test Plan ──
+    { method: 'POST', segments: ['test-plans'], handler: async (c) => c.service.createPlan({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
+    { method: 'GET', segments: ['test-plans'], handler: async (c) => maybePaginate(c.req.url, await c.service.listPlans(undefined, c.user?.scopes)) },
+    { method: 'GET', segments: ['test-plans', ':id'], handler: async (c, p) => { const plan = await c.service.getPlan(p.id); if (!plan) throw new HttpError(404, `Test Plan 不存在：${p.id}`); return plan; } },
+    { method: 'PATCH', segments: ['test-plans', ':id'], handler: async (c, p) => c.service.updatePlan(p.id, c.body as never, c.actor, c.role) },
+    { method: 'POST', segments: ['test-plans', ':id', 'run'], handler: async (c, p) => c.service.runPlan(p.id, c.actor, c.role, c.user?.scopes) },
+    { method: 'GET', segments: ['test-plans', ':id', 'cases'], handler: async (c, p) => c.service.planCases(p.id) },
+
+    // ── QA Workflow（Phase 39）：Run Template ──
+    { method: 'POST', segments: ['run-templates'], handler: async (c) => c.service.createTemplate({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
+    { method: 'GET', segments: ['run-templates'], handler: async (c) => maybePaginate(c.req.url, await c.service.listTemplates(undefined, c.user?.scopes)) },
+    { method: 'GET', segments: ['run-templates', ':id'], handler: async (c, p) => c.service.getTemplate(p.id) },
+    { method: 'POST', segments: ['run-templates', ':id', 'run'], handler: async (c, p) => c.service.runTemplate(p.id, c.actor, c.role, c.user?.scopes) },
+
+    // ── QA Workflow（Phase 39）：Asset Versioning ──
+    { method: 'GET', segments: ['assets', ':id', 'versions'], handler: async (c, p) => c.service.assetVersions(p.id) },
+    { method: 'GET', segments: ['assets', ':id', 'compare'], handler: async (c, p) => c.service.assetCompare(p.id, Number(queryParam(c.req.url, 'from') ?? 1), Number(queryParam(c.req.url, 'to') ?? 2)) },
+    { method: 'POST', segments: ['assets', ':id', 'version'], handler: async (c, p) => c.service.recordAssetVersion({ assetType: String(c.body.assetType ?? 'test-case') as never, assetId: p.id, snapshot: (c.body.snapshot as Record<string, unknown>) ?? {}, createdBy: c.actor, changeReason: c.body.changeReason as string | undefined }, c.role) },
+
+    // ── QA Workflow（Phase 39）：Run 复用 + 协作 + 分享 ──
+    { method: 'POST', segments: ['runs', ':id', 'rerun'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.rerunRun(p.id, c.actor, c.role, c.user?.scopes)) },
+    { method: 'POST', segments: ['runs', ':id', 'clone'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.cloneRun(p.id, { environment: c.body.environment as string | undefined, budget: c.body.budget as number | undefined, releaseGate: c.body.releaseGate as boolean | undefined }, c.actor, c.role, c.user?.scopes)) },
+    { method: 'POST', segments: ['runs', ':id', 'template'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.saveTemplateFromRun(p.id, String(c.body.name ?? ''), c.actor, c.role, c.user?.scopes)) },
+    { method: 'GET', segments: ['runs', ':id', 'share'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.shareRun(p.id, c.actor, c.role, c.user?.scopes)) },
+    { method: 'POST', segments: ['runs', ':id', 'comments'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.addRunComment(p.id, String(c.body.body ?? ''), c.actor, c.role, c.user?.scopes)) },
+    { method: 'GET', segments: ['runs', ':id', 'comments'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.listRunComments(p.id, c.user?.scopes)) },
+    { method: 'POST', segments: ['runs', ':id', 'assign'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.assignRun(p.id, (c.body.assignees as string[]) ?? [], c.actor, c.role, c.user?.scopes)) },
+
+    // ── QA Workflow（Phase 39）：QA Home / Action Center ──
+    { method: 'GET', segments: ['qa-home'], handler: async (c) => c.service.qaHome(c.user?.scopes) },
 
     { method: 'POST', segments: ['approvals', ':id', 'approve'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.approveApproval(p.id, c.actor, c.role)) },
     { method: 'POST', segments: ['approvals', ':id', 'reject'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.rejectApproval(p.id, c.actor, c.role)) },
@@ -323,6 +367,14 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       role: c.role,
       scopes: c.user?.scopes,
       idempotencyKey,
+      // Phase 39：QA Workflow 上下文透传（Plan / Suite / Template / 模式 / 预算 / 门禁 / 资产版本）
+      planId: c.body.planId ? String(c.body.planId) : undefined,
+      suiteIds: Array.isArray(c.body.suiteIds) ? (c.body.suiteIds as string[]) : undefined,
+      templateId: c.body.templateId ? String(c.body.templateId) : undefined,
+      mode: c.body.mode ? String(c.body.mode) : undefined,
+      budget: typeof c.body.budget === 'number' ? c.body.budget : undefined,
+      releaseGate: typeof c.body.releaseGate === 'boolean' ? c.body.releaseGate : undefined,
+      assetVersion: c.body.assetVersion as Record<string, number> | undefined,
     });
   }
 
@@ -603,8 +655,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       sendJson(res, 200, result);
     } catch (err) {
       const e = err as Error;
-      // 27.2：HttpError 携带显式状态码（如读端点 RBAC 的 403 Forbidden）；其余按业务错误语义映射
-      const status = e instanceof HttpError ? e.status : /权限|缺少|无权|不存在|非法|重复|禁止|已存在/.test(e.message) ? 400 : 500;
+      // 27.2：HttpError 携带显式状态码（如读端点 RBAC 的 403 Forbidden）；
+      // Phase 39：权限/作用域拒绝（RBAC 不足 / 项目环境越权）语义化为 403 Forbidden；
+      // 其余按业务错误语义映射为 400，未识别异常 500。
+      const isForbidden = /无权|缺少权限|禁止|越权/.test(e.message);
+      const status = e instanceof HttpError ? e.status : isForbidden ? 403 : /权限|缺少|不存在|非法|重复|已存在/.test(e.message) ? 400 : 500;
       sendError(res, status, 'error', e.message, ids);
     } finally {
       // 运维指标：记录 API 延迟

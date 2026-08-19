@@ -26,7 +26,10 @@ export type PlatformEventType =
   | 'HealingApproval'
   | 'ProductionDeny'
   | 'SchedulerFailure'
-  | 'BudgetExhausted';
+  | 'BudgetExhausted'
+  // Phase 39.5：协作（Comment / Mention）
+  | 'CollaborationComment'
+  | 'CollaborationMention';
 
 /** 平台事件 */
 export interface PlatformEvent {
@@ -50,4 +53,5 @@ export const PLATFORM_EVENT_TYPES: readonly PlatformEventType[] = [
   'KnowledgeUpdated',
   'P0Failure', 'RepeatedFailure', 'FlakyQuarantine', 'HealingApproval',
   'ProductionDeny', 'SchedulerFailure', 'BudgetExhausted',
+  'CollaborationComment', 'CollaborationMention',
 ];

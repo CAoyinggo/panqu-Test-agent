@@ -15,7 +15,7 @@ export type RunTrigger =
 /** 运行状态（过程态，区别于 RegressionRunStatus 结果态） */
 export type RunStatus = 'QUEUED' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
-/** 统一 Run Entity（任务书 24.3） */
+/** 统一 Run Entity（任务书 24.3；Phase 39 扩展：固定计划/模板/资产版本以便复用与溯源） */
 export interface TestRun {
   runId: string;
   projectId: string;
@@ -28,6 +28,20 @@ export interface TestRun {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+  /** Phase 39.2：来源 Test Plan（可选；Run Again / 溯源用） */
+  planId?: string;
+  /** Phase 39.2/39.1：来源 Suite 引用（可选） */
+  suiteIds?: string[];
+  /** Phase 39.3：来源 Run Template（可选；Run Template 复用计数用） */
+  templateId?: string;
+  /** Phase 39.3：运行模式（MANUAL / REGRESSION / AUTONOMOUS，可选） */
+  mode?: string;
+  /** Phase 39.3：预算（可选） */
+  budget?: number;
+  /** Phase 39.3：发布门禁开关（可选） */
+  releaseGate?: boolean;
+  /** Phase 39.4：固定资产版本（assetId → version；本次 Run 实际执行的版本） */
+  assetVersion?: Record<string, number>;
 }
 
 /** 创建 Run 输入 */
@@ -38,6 +52,13 @@ export interface CreateRunInput {
   feature?: string;
   environment: string;
   trigger: RunTrigger;
+  planId?: string;
+  suiteIds?: string[];
+  templateId?: string;
+  mode?: string;
+  budget?: number;
+  releaseGate?: boolean;
+  assetVersion?: Record<string, number>;
 }
 
 /** Run 状态机：合法迁移表 */

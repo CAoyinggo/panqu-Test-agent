@@ -81,7 +81,7 @@ describe('31.1 迁移回滚闭环：backup → migrate → rollback → restore'
     const b = makeSqliteBundle(dir);
     await b.auth.ensureSeeded();
     const result = await restoreSnapshot(b, snapshot);
-    expect(result.stores).toBe(16);
+    expect(result.stores).toBe(ALL_COLLECTIONS.length);
     expect(result.restored).toBe(snapshotTotal(snapshot));
 
     const verify = await verifyRestore(b, snapshot);

@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.14.0] - 2026-08-19
+
+### 新增（QA 工作流产品化，Phase 39）
+
+把"能力很多的 AI Test Platform"升级为"QA 每天真正愿意使用的 AI Test Workbench"：QA 从「选项目 → 选测试计划 → 一键运行 → AI 自动执行 → 自动分析/归因/缺陷/回归/Release 决策 → 查看报告 → 协作处理」全流程可追踪 / 审计 / 恢复 / 复用 / 版本化 / 权限控制 / 自动化。
+
+- 新增 `src/platform/workflow/` 模块（8 个文件）：`test-suite.ts`（TestSuite：创建/修改/复制/归档/恢复/增删 Case/按 Tag 过滤，只维护 caseIds 引用不复制数据）、`test-plan.ts`（TestPlan：Plan → Suite → TestCase，mode MANUAL/REGRESSION/AUTONOMOUS）、`run-template.ts`（RunTemplate：Save as Template → Run Template，只复制 Configuration，不复制 Execution Result/RCA/Release Decision）、`asset-versioning.ts`（AssetVersion：version/changeReason/snapshot + Compare/Rollback/History，TestRun 固定 assetVersion）、`collaboration.ts`（Comment/Mention/Assignment/Watcher，@user 触发通知）、`run-report.ts`（RunReportSummary：Release Decision/Risk/Coverage/Failures/RCA/Cost/Duration + DecisionTrace 透出 + share/export JSON/HTML）、`qa-home.ts`（QA Home：我的项目/今日 Runs/失败/待审批/常用 Plan/Template/Flaky/高风险 + Action Center 告诉 QA 现在该做什么）、`index.ts`（WorkflowService 门面）。
+- 零新增基础设施：全部复用既有 `PlatformService` / `Repository` / `RBAC` / `Notification` / `Audit` / `Telemetry` / `Run`；新增实体仅走既有三层改动模式（实体定义 → factory `reg()` → `ALL_COLLECTIONS` 追加，迁移/回滚/备份/恢复自动覆盖）。
+- 新增 QA Workflow API（25+ 路由）：`/test-suites`（CRUD + archive/restore/copy/cases/tags）、`/test-plans`（CRUD + run/cases）、`/run-templates`（CRUD + run）、`/assets/:id/versions|compare|version`、`/runs/:id/rerun|clone|template|share|comments|assign`、`/qa-home`；分页/鉴权/错误契约沿用既有 API 标准。
+- 新增 CLI 命令组：`suite list/create/get/archive/restore/copy`、`plan list/create/get/run/cases`、`template list/create/get/run`、`run rerun|clone`、`report get/share/export`（CLI 与 Web 共用 Service Layer）。
+- 新增 Web QA Workbench 页面：QAHome（Action Center + 快速操作）、TestSuites、TestPlans、RunTemplates、RunDetail 增强（报告摘要卡 / Run Again / Clone Configuration / Create Template / Share + Export / 协作评论 @mention）。
+- 权限语义化：权限/作用域拒绝（RBAC 不足 / 项目环境越权）由 400 提升为 403 Forbidden；Project Scope + RBAC 双重校验跨项目报告隔离（不能通过 URL 猜到其它项目报告）。
+- 产品体验指标真实采集：报告成本 `tracked` 仅在存在真实 CostLedgerEntry 时置 true，无数据返回 tracked=false，不虚构 KPI。
+
+### 测试
+
+- 新增 8 个测试文件：5 个单元（test-suite / test-plan / run-template / asset-versioning / collaboration，30 项）+ 2 个集成（test-workflow-api / report-share）+ 1 个 E2E（qa-workflow，8 个核心场景 S1-S8：Suite→Plan→Run→Template→版本 Compare→评论@通知→分享→跨项目隔离→QA Home Action Center）。
+- 全量回归：1562 passed / 18 skipped（较 v4.13.1 新增 49 项）；`platform:integration` 与 `platform:e2e` 脚本纳入新测试；新增 `platform:workflow:test` / `phase39:test` 专用脚本。
+- 既有备份/恢复/迁移回滚断言改为动态 `ALL_COLLECTIONS.length`（22 集合），未来新增集合不再需要手动改数字。
+
 ## [4.13.1] - 2026-08-19
 
 ### 安全加固（非法 X-Role 拒绝，Phase 36 范围补全）

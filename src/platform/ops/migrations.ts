@@ -26,6 +26,13 @@ export const ALL_COLLECTIONS: string[] = [
   'metric-activations',
   // 26.2：真实 Test Case 资产（纳入备份/恢复/迁移）
   'test-assets',
+  // Phase 39：QA Workflow 集合（Test Suite / Test Plan / Run Template / 资产版本 / 协作 / 报告分享）
+  'test-suites',
+  'test-plans',
+  'run-templates',
+  'asset-versions',
+  'collaboration',
+  'run-reports',
 ];
 
 export interface MigrationContext {

@@ -152,7 +152,7 @@ describe('S2 项目隔离（JWT 用户）', () => {
       token,
       body: { projectId: 'order', environment: 'test', trigger: 'manual' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect((res.data as { message: string }).message).toMatch(/无权访问项目 order/);
   });
 
@@ -163,7 +163,7 @@ describe('S2 项目隔离（JWT 用户）', () => {
       token,
       body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
     });
-    expect(denied.status).toBe(400);
+    expect(denied.status).toBe(403);
     expect((denied.data as { message: string }).message).toMatch(/无权访问项目 wan3/);
     const allowed = await ts.request('POST', '/runs', {
       token,
@@ -179,7 +179,7 @@ describe('S2 项目隔离（JWT 用户）', () => {
       token,
       body: { projectId: 'wan3', environment: 'production', trigger: 'manual' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect((res.data as { message: string }).message).toMatch(/无权访问环境 production/);
   });
 
@@ -202,14 +202,14 @@ describe('S2 项目隔离（JWT 用户）', () => {
     expect(res.status).toBe(200);
   });
 
-  it('VIEWER 无 TEST_RUN 权限 → 400', async () => {
+  it('VIEWER 无 TEST_RUN 权限 → 403', async () => {
     const ts = await makeAuthServer();
     const token = await loginAs(ts, 'viewer', 'view123456');
     const res = await ts.request('POST', '/runs', {
       token,
       body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     expect((res.data as { message: string }).message).toMatch(/缺少权限 TEST_RUN/);
   });
 

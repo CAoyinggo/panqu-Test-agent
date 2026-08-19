@@ -194,7 +194,125 @@ async function main(): Promise<void> {
         } as const;
         const r = await bundle.service[methodMap[sub as keyof typeof methodMap]](id, actor(), role());
         console.log(JSON.stringify(r, null, 2));
+      } else if (sub === 'rerun') {
+        // Phase 39：Run Again——只复制 project/environment/suite/plan/mode/budget，不复制旧结果/RCA/门禁决策
+        const id = args[2];
+        if (!id) throw new Error('用法：run rerun <runId>');
+        const r = await bundle.service.rerunRun(id, actor(), role());
+        console.log(JSON.stringify({ ...r, detail: 'Run Again：仅复制配置，未复用旧状态/结果/RCA/Release 决策' }, null, 2));
+      } else if (sub === 'clone') {
+        // Phase 39：Clone Configuration——允许改 environment/budget/priority/release gate
+        const id = args[2];
+        if (!id) throw new Error('用法：run clone <runId> [--environment env] [--budget n] [--release-gate true|false]');
+        const r = await bundle.service.cloneRun(id, {
+          environment: flagValue(args, '--environment'),
+          budget: flagValue(args, '--budget') ? Number(flagValue(args, '--budget')) : undefined,
+          releaseGate: hasFlag(args, '--release-gate') ? flagValue(args, '--release-gate') !== 'false' : undefined,
+        }, actor(), role());
+        console.log(JSON.stringify({ ...r, detail: 'Clone Configuration：可修改环境/预算/门禁，不复用旧状态/结果/追踪/Release 决策' }, null, 2));
       } else throw new Error(`未知 run 子命令：${sub}`);
+    } else if (group === 'suite') {
+      // Phase 39.1：Test Suite（只维护 caseIds 引用，不复制 TestCase 数据）
+      if (sub === 'list') {
+        const tag = flagValue(args, '--tag');
+        const suites = tag ? await bundle.service.listSuitesByTag([tag]) : await bundle.service.listSuites();
+        console.log(JSON.stringify(suites, null, 2));
+      } else if (sub === 'create') {
+        const name = flagValue(args, '--name');
+        const projectId = flagValue(args, '--project') ?? 'wan3';
+        const caseIds = (flagValue(args, '--cases') ?? '').split(',').filter(Boolean);
+        const tags = (flagValue(args, '--tags') ?? '').split(',').filter(Boolean);
+        if (!name) throw new Error('用法：suite create --name <name> [--project wan3] [--cases c1,c2] [--tags t1,t2]');
+        const s = await bundle.service.createSuite({ projectId, name, caseIds, tags, createdBy: actor() }, role());
+        console.log(JSON.stringify(s, null, 2));
+      } else if (sub === 'get') {
+        const id = args[2];
+        if (!id) throw new Error('缺少 suite id');
+        console.log(JSON.stringify(await bundle.service.getSuite(id), null, 2));
+      } else if (sub === 'archive' || sub === 'restore' || sub === 'copy') {
+        const id = args[2];
+        if (!id) throw new Error(`缺少 suite id（用法：suite ${sub} <id>）`);
+        const r = sub === 'archive' ? await bundle.service.archiveSuite(id, actor(), role())
+          : sub === 'restore' ? await bundle.service.restoreSuite(id, actor(), role())
+          : await bundle.service.copySuite(id, actor(), role());
+        console.log(JSON.stringify(r, null, 2));
+      } else throw new Error(`未知 suite 子命令：${sub}`);
+    } else if (group === 'plan') {
+      // Phase 39.2：Test Plan（Plan → Suite → TestCase）
+      if (sub === 'list') {
+        console.log(JSON.stringify(await bundle.service.listPlans(), null, 2));
+      } else if (sub === 'create') {
+        const name = flagValue(args, '--name');
+        const projectId = flagValue(args, '--project') ?? 'wan3';
+        const environment = flagValue(args, '--environment') ?? 'staging';
+        const mode = (flagValue(args, '--mode') ?? 'MANUAL') as import('../src/platform/workflow/index.js').TestPlanMode;
+        const suiteIds = (flagValue(args, '--suites') ?? '').split(',').filter(Boolean);
+        const budget = flagValue(args, '--budget') ? Number(flagValue(args, '--budget')) : undefined;
+        if (!name) throw new Error('用法：plan create --name <name> [--project wan3] [--environment staging] [--mode MANUAL|REGRESSION|AUTONOMOUS] [--suites s1,s2] [--budget n]');
+        const p = await bundle.service.createPlan({ projectId, name, suiteIds, environment, mode, budget, createdBy: actor() }, role());
+        console.log(JSON.stringify(p, null, 2));
+      } else if (sub === 'get') {
+        const id = args[2];
+        if (!id) throw new Error('缺少 plan id');
+        console.log(JSON.stringify(await bundle.service.getPlan(id), null, 2));
+      } else if (sub === 'run') {
+        const id = args[2];
+        if (!id) throw new Error('用法：plan run <planId>');
+        registerCliWorker(bundle);
+        const r = await bundle.service.runPlan(id, actor(), role());
+        await dispatchUntilIdle(bundle);
+        const run = await bundle.service.getRun(r.runId);
+        console.log(JSON.stringify({ ...r, result: run?.status }, null, 2));
+      } else if (sub === 'cases') {
+        const id = args[2];
+        if (!id) throw new Error('缺少 plan id');
+        console.log(JSON.stringify(await bundle.service.planCases(id), null, 2));
+      } else throw new Error(`未知 plan 子命令：${sub}`);
+    } else if (group === 'template') {
+      // Phase 39.3：Run Template（Save as Template → Run Template）
+      if (sub === 'list') {
+        console.log(JSON.stringify(await bundle.service.listTemplates(), null, 2));
+      } else if (sub === 'create') {
+        const name = flagValue(args, '--name');
+        const projectId = flagValue(args, '--project') ?? 'wan3';
+        const environment = flagValue(args, '--environment') ?? 'staging';
+        const mode = (flagValue(args, '--mode') ?? 'AUTONOMOUS') as import('../src/platform/workflow/index.js').TestPlanMode;
+        const suiteIds = (flagValue(args, '--suites') ?? '').split(',').filter(Boolean);
+        const budget = flagValue(args, '--budget') ? Number(flagValue(args, '--budget')) : undefined;
+        const releaseGate = hasFlag(args, '--release-gate') ? flagValue(args, '--release-gate') !== 'false' : undefined;
+        if (!name) throw new Error('用法：template create --name <name> [--project wan3] [--environment staging] [--mode AUTONOMOUS] [--suites s1,s2] [--budget n] [--release-gate true|false]');
+        const t = await bundle.service.createTemplate({ projectId, name, environment, suiteIds, mode, budget, releaseGate, createdBy: actor() }, role());
+        console.log(JSON.stringify(t, null, 2));
+      } else if (sub === 'get') {
+        const id = args[2];
+        if (!id) throw new Error('缺少 template id');
+        console.log(JSON.stringify(await bundle.service.getTemplate(id), null, 2));
+      } else if (sub === 'run') {
+        const id = args[2];
+        if (!id) throw new Error('用法：template run <templateId>');
+        registerCliWorker(bundle);
+        const r = await bundle.service.runTemplate(id, actor(), role());
+        await dispatchUntilIdle(bundle);
+        const run = await bundle.service.getRun(r.runId);
+        console.log(JSON.stringify({ ...r, result: run?.status, detail: '仅复制 Configuration，未复用旧 Run 状态/结果/RCA/Release 决策' }, null, 2));
+      } else throw new Error(`未知 template 子命令：${sub}`);
+    } else if (group === 'report') {
+      // Phase 39.6：Run Report（关键结论首页 / Share / Export）
+      if (sub === 'get') {
+        const id = args[2];
+        if (!id) throw new Error('用法：report get <runId>');
+        console.log(JSON.stringify(await bundle.service.runReport(id), null, 2));
+      } else if (sub === 'share') {
+        const id = args[2];
+        if (!id) throw new Error('用法：report share <runId>');
+        console.log(JSON.stringify(await bundle.service.shareRun(id, actor(), role()), null, 2));
+      } else if (sub === 'export') {
+        const id = args[2];
+        const format = (args[3] ?? 'json');
+        if (!id) throw new Error('用法：report export <runId> <json|html>');
+        const out = format === 'html' ? await bundle.service.exportReportHtml(id) : await bundle.service.exportReportJson(id);
+        console.log(out);
+      } else throw new Error(`未知 report 子命令：${sub}`);
     } else if (group === 'worker') {
       if (sub === 'list') {
         console.log(JSON.stringify(bundle.service.listWorkers(), null, 2));

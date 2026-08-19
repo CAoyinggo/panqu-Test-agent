@@ -108,6 +108,13 @@ body {
 .muted { color: var(--muted); }
 .cell-clip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Phase 39 QA Workbench 布局 */
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.small { font-size: 12px; }
+.comment-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--bg2); }
+.comment-row .badge { margin-right: 6px; }
+
 a.link { color: var(--accent); text-decoration: none; }
 a.link:hover { text-decoration: underline; }
 

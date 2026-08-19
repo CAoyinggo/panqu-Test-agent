@@ -17,10 +17,17 @@ import Jobs from './pages/Jobs';
 import Workers from './pages/Workers';
 import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
+import QAHome from './pages/QAHome';
+import TestSuites from './pages/TestSuites';
+import TestPlans from './pages/TestPlans';
+import RunTemplates from './pages/RunTemplates';
 
 const NAV = [
-  { to: '/', label: '总览' },
+  { to: '/', label: 'QA 工作台' },
   { to: '/runs', label: '执行' },
+  { to: '/suites', label: 'Suites' },
+  { to: '/plans', label: 'Test Plan' },
+  { to: '/templates', label: 'Template' },
   { to: '/projects', label: '项目' },
   { to: '/approvals', label: '审批' },
   { to: '/metrics', label: '指标' },
@@ -68,9 +75,12 @@ export default function App() {
       </aside>
       <main className="content">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<QAHome />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:id" element={<RunDetail />} />
+          <Route path="/suites" element={<TestSuites />} />
+          <Route path="/plans" element={<TestPlans />} />
+          <Route path="/templates" element={<RunTemplates />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/metrics" element={<Metrics />} />

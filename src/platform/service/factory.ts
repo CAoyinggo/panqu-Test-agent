@@ -30,6 +30,23 @@ import type { UserRecord } from '../auth/index.js';
 import { PlatformTestAssets } from '../test-assets/platform-test-assets.js';
 import { TelemetryService, TelemetryEventStore, CostLedger, RcaVerificationStore, FlakyRecordStore, HealingRecordStore, ReleaseRecordStore, MetricActivationTracker } from '../telemetry/index.js';
 import { isProductionLike, requireSecureJwtSecret, resolveAllowDefaultCredentials, resolvePlatformMode, type PlatformMode } from '../security/index.js';
+// Phase 39：QA Workflow 模块（Test Suite / Plan / Template / Versioning / Collaboration / Report / QA Home）
+import {
+  WorkflowService,
+  TestSuiteService,
+  TestPlanService,
+  RunTemplateService,
+  AssetVersioningService,
+  CollaborationService,
+  RunReportService,
+  QaHomeService,
+} from '../workflow/index.js';
+import type { TestSuite } from '../workflow/test-suite.js';
+import type { TestPlan } from '../workflow/test-plan.js';
+import type { RunTemplate } from '../workflow/run-template.js';
+import type { AssetVersion } from '../workflow/asset-versioning.js';
+import type { CollaborationItem } from '../workflow/collaboration.js';
+import type { RunShare } from '../workflow/run-report.js';
 import type {
   TelemetryEvent,
   CostLedgerEntry,
@@ -89,6 +106,8 @@ export interface PlatformBundle {
   repositories: Record<string, Repository<Entity>>;
   /** 测试资产库（26.2）：真实 Test Case 资产（查询/统计/导入；同存储后端持久化） */
   testAssets: PlatformTestAssets;
+  /** QA Workflow（Phase 39）：Suite / Plan / Template / Versioning / Collaboration / Report / QA Home */
+  workflow: WorkflowService;
   /** 27.1：生效的运行模式（安全约束依据；development/test 允许回退，production/staging 强制） */
   mode: PlatformMode;
   /** 注入 Worker 执行器（执行真实 Job 的逻辑；不注入则 Worker 不可执行） */
@@ -210,7 +229,21 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
   // 26.2：WAN3 真实 Test Case 资产装配（导入由 onboarding 显式执行：CLI `platform assets import`）
   const testAssets = new PlatformTestAssets(reg('test-assets', createRepository<import('../test-assets/platform-test-assets.js').PlatformTestAsset>(storage, store('test-assets'))));
 
-  const service = new PlatformService({ projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, telemetry, testAssets });
+  // Phase 39：QA Workflow 装配（Suite / Plan / Template / Versioning / Collaboration / Report / QA Home）
+  // 全部复用 Repository<T> 统一存储后端（自动纳入备份/恢复/迁移/审计）。
+  const suites = new TestSuiteService(reg('test-suites', createRepository<TestSuite>(storage, store('test-suites'))));
+  const plans = new TestPlanService(reg('test-plans', createRepository<TestPlan>(storage, store('test-plans'))));
+  const templates = new RunTemplateService(reg('run-templates', createRepository<RunTemplate>(storage, store('run-templates'))));
+  const versions = new AssetVersioningService(reg('asset-versions', createRepository<AssetVersion>(storage, store('asset-versions'))));
+  const collaboration = new CollaborationService(reg('collaboration', createRepository<CollaborationItem>(storage, store('collaboration'))));
+  const reports = new RunReportService(
+    { runs, approvals, telemetry },
+    reg('run-reports', createRepository<RunShare>(storage, store('run-reports'))),
+  );
+  const qaHome = new QaHomeService({ projects, runs, approvals, telemetry, audit, suites, plans, templates });
+  const workflow = new WorkflowService({ suites, plans, templates, versions, collaboration, reports, qaHome });
+
+  const service = new PlatformService({ projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, telemetry, testAssets, workflow });
 
   const registerWorkerExecutor = (workerId: string, exec: (job: unknown) => Promise<unknown>): void => {
     workers.register(
@@ -219,7 +252,7 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
     );
   };
 
-  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, testAssets, mode, registerWorkerExecutor };
+  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, testAssets, workflow, mode, registerWorkerExecutor };
 }
 
 /** 默认平台数据目录（运维脚本用） */

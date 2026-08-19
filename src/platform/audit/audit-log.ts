@@ -24,7 +24,10 @@ export type AuditAction =
   | 'run.create'
   | 'auth.login'
   | 'auth.logout'
-  | 'auth.refresh';
+  | 'auth.refresh'
+  // Phase 39.5：协作（Comment / Mention / Assignment）
+  | 'collaboration.comment'
+  | 'collaboration.assign';
 
 /** 审计记录 */
 export interface AuditEntry extends Entity {
