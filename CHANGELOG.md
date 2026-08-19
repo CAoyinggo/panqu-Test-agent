@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.13.0] - 2026-08-19
+
+### 新增（E2E 时序卫生治理，Phase 37）
+
+- DEBT-13 已解决（**技术债清零**：TECH-DEBT 12 项债务全部关闭）：审计确认 E2E / 集成测试已普遍采用健壮模式——随机端口（`server.listen()` 无参 / `listen(0)`）、固定时钟注入（`FIXED_ISO`，固定输入→固定输出，非 flaky）、`Date.now()` 生成唯一 ID、轮询 + 超时等待；未发现硬编码端口、运行时时间戳固定字面量断言或固定长 sleep 残留。
+- 新增脚本 `phase37:test`（构建 + 时序卫生守护 + 代表性 E2E / 集成回归）。
+
+### 变更
+
+- `docs/TECH-DEBT.md`：DEBT-13（慢 / 易碎测试）已解决，开放债务归零。
+
+### 测试
+
+- 新增 `tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护：全部 E2E / 集成测试文件（1）无硬编码监听端口（`listen(<数字>)`）、（2）无对时间字段的固定 ISO 字面量断言（`FIXED_ISO` 注入除外）、（3）无 ≥1000ms 固定 sleep（应为轮询 + 超时）、（4）现状基线确认（随机端口 + FIXED_ISO + 超时轮询模式存在）；全量回归：1508 passed / 18 skipped（131 个测试文件）。
+
 ## [4.12.0] - 2026-08-19
 
 ### 新增（身份解析统一 + 防伪造不可绕过，Phase 36）

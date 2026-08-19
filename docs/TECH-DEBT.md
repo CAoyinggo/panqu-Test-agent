@@ -19,7 +19,7 @@
 | DEBT-10 | P2 | 文档滞后 | README 曾多节测试数自相矛盾、目录结构滞后 | Phase 27 审计 | **已解决（Phase 28）** | 已统一 120 文件/1420 用例；目录结构已更新（含 security/、core/redact、env-loader、CHANGELOG） |
 | DEBT-11 | P2 | 类型级反向依赖 | `platform/telemetry-service.ts`、`platform/real-run.ts`、`audit-log.ts` 以 `import type` 引用 agents 域共享类型（FailureCategory） | Phase 27 审计 | **已解决（Phase 35）** | 失败分类共享模型（`FailureCategory` / `FAILURE_CATEGORIES` / `isFailureCategory`）上移至 core 层唯一权威来源 `core/failure-category.ts`；agents 域 `root-cause-schema.ts` 从 core 导入并 re-export（兼容不变）；平台层 3 处（telemetry-types / telemetry-service / real-run）改从 core 导入——平台层对 agents 域零依赖；`tests/unit/core-failure-category.test.ts`（6 项）守护唯一权威源 + RCA JSON Schema enum 一致 + `src/platform/**` 无 agents 域 import 结构性防线 |
 | DEBT-12 | P2 | 重复实现 | `resolvePrincipal` 等身份解析逻辑历史版本残留（已并入 security 模块统一解析） | Phase 28 扫描 | **已解决（Phase 36）** | 审计确认 `resolvePrincipal` 为唯一实现（无残留）；将静态身份来源守卫+解析收敛到 security 模块新增 `resolveStaticIdentity(mode, headers)`（production 返回 null 防伪造不可绕过；其余模式解析 X-Actor/X-Role，默认 api/VIEWER）；`api/server.ts` 改调该函数，平台层 X-Actor/X-Role 头读取仅存在于 security 模块；`tests/unit/identity-resolution-guard.test.ts`（8 项）守护功能 + 结构性不可绕过 + 唯一实现 |
-| DEBT-13 | P2 | 慢/易碎测试 | 部分 E2E 依赖固定 ISO 时间与端口，存在时序敏感用例 | Phase 28 扫描 | 开放 | 已通过固定 `now()` 与随机端口缓解；持续观察 flaky |
+| DEBT-13 | P2 | 慢/易碎测试 | 部分 E2E 依赖固定 ISO 时间与端口，存在时序敏感用例 | Phase 28 扫描 | **已解决（Phase 37）** | 审计确认 E2E/集成已普遍采用健壮模式（随机端口 `server.listen()`/`listen(0)`、固定时钟注入 `FIXED_ISO`、`Date.now()` 唯一 ID、轮询+超时等待），无硬编码端口 / 运行时时间戳固定字面量断言 / 固定长 sleep 残留；`tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护固化（禁止硬编码端口、禁止时间字段固定 ISO 字面量断言、禁止 ≥1000ms 固定 sleep、现状基线确认） |
 
 ## 阶段债务趋势
 
@@ -35,3 +35,4 @@
 | Phase 34（断言可视化接入） | 0（无新债） | DEBT-05（1） | 3 项开放（DEBT-11/12/13） | 净下降 |
 | Phase 35（类型级反向依赖上移） | 0（无新债） | DEBT-11（1） | 2 项开放（DEBT-12/13） | 净下降 |
 | Phase 36（身份解析统一） | 0（无新债） | DEBT-12（1） | 1 项开放（DEBT-13） | 净下降 |
+| Phase 37（E2E 时序卫生治理） | 0（无新债） | DEBT-13（1） | **0 项开放（技术债清零）** | 净下降 |
