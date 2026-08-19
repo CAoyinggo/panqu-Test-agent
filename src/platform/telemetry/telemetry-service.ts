@@ -26,7 +26,7 @@ import type {
 } from './telemetry-types.js';
 import { periodStartMs } from './telemetry-types.js';
 import { MetricActivationTracker, type MetricActivationRecord, type TrackedMetric } from './activation.js';
-import type { FailureCategory } from '../../agents/analysis/root-cause-schema.js';
+import type { FailureCategory } from '../../core/failure-category.js';
 
 /** 模型单价（元 / 百万 token；可覆盖） */
 export interface ModelPricing {

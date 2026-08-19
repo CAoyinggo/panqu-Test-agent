@@ -15,6 +15,7 @@ export default defineConfig({
         'src/core/assertion-operators.ts',
         'src/core/path-extractor.ts',
         'src/core/id.ts',
+        'src/core/failure-category.ts',
         'src/cases/define.ts',
         'src/utils/concurrency-controller.ts',
         'src/utils/assertion-visualizer.ts',

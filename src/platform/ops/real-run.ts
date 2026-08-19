@@ -15,7 +15,7 @@ import { MockLLMProvider } from '../../llm/mock-llm.js';
 import type { LLMProvider } from '../../llm/types.js';
 import type { PlatformBundle } from '../service/factory.js';
 import type { PlatformTestAsset } from '../test-assets/platform-test-assets.js';
-import type { FailureCategory } from '../../agents/analysis/root-cause-schema.js';
+import type { FailureCategory } from '../../core/failure-category.js';
 
 /** Run 形态 */
 export type RunProfile = 'smoke' | 'sanity' | 'regression' | 'autonomous';

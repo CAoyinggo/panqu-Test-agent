@@ -3,21 +3,10 @@
 // 输出分类 / 置信度 / 根因 / 证据 / 排除原因 / 建议动作，并严格区分：
 //   确定事实（fact） / AI 推断（inference） / 低置信度猜测（guess）。
 
-/** 失败分类（确定性分类器产出，作为 RCA 的类别候选） */
-export type FailureCategory =
-  | 'ASSERTION'          // 断言失败（期望 vs 实际不符）
-  | 'TIMEOUT'            // 超时
-  | 'MODEL_ERROR'        // 模型/服务错误（5xx、503、模型网关异常）
-  | 'DATA_ERROR'         // 测试数据错误（数据缺失/不符合预期）
-  | 'ENVIRONMENT_ERROR'  // 环境问题（环境未就绪/依赖服务未启动）
-  | 'NETWORK_ERROR'      // 网络问题
-  | 'AUTH_ERROR'         // 鉴权/权限问题（401/403/越权）
-  | 'BILLING_ERROR'      // 计费/积分问题
-  | 'CONCURRENCY_ERROR'  // 并发问题
-  | 'RATE_LIMIT_ERROR'   // 限流（HTTP 429）
-  | 'DEPENDENCY_ERROR'   // 依赖服务故障（上游/依赖不可用）
-  | 'TEST_CODE_ERROR'    // 测试代码/断言路径错误
-  | 'UNKNOWN';           // 未分类
+// Phase 35（DEBT-11 已解决）：失败分类共享模型上移至 core 层唯一权威来源，
+// 此处 re-export 保持对外兼容（agents 域既有 API 不变）。
+import { type FailureCategory, FAILURE_CATEGORIES, isFailureCategory } from '../../core/failure-category.js';
+export { type FailureCategory, FAILURE_CATEGORIES, isFailureCategory } from '../../core/failure-category.js';
 
 /** 证据确定性等级 */
 export type EvidenceCertainty = 'fact' | 'inference' | 'guess';
@@ -86,18 +75,6 @@ export const ROOT_CAUSE_JSON_SCHEMA = {
     recommendedAction: { type: 'string', minLength: 1 },
   },
 } as const;
-
-/** 合法分类集合 */
-export const FAILURE_CATEGORIES: readonly FailureCategory[] = [
-  'ASSERTION', 'TIMEOUT', 'MODEL_ERROR', 'DATA_ERROR', 'ENVIRONMENT_ERROR',
-  'NETWORK_ERROR', 'AUTH_ERROR', 'BILLING_ERROR', 'CONCURRENCY_ERROR',
-  'RATE_LIMIT_ERROR', 'DEPENDENCY_ERROR', 'TEST_CODE_ERROR', 'UNKNOWN',
-];
-
-/** 判断是否为合法分类 */
-export function isFailureCategory(v: unknown): v is FailureCategory {
-  return typeof v === 'string' && (FAILURE_CATEGORIES as readonly string[]).includes(v);
-}
 
 /** 判断数据是否「像 RootCauseAnalysis」 */
 export function isRootCauseLike(data: unknown): data is Record<string, unknown> {

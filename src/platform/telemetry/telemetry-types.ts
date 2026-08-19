@@ -2,7 +2,7 @@
 // 原则：所有数值来自真实运行数据（LLM usage / 执行结果 / 人工验证 / 自愈决策），
 //       无数据时 tracked=false（禁止用 0 表示“没有数据”）。
 
-import type { FailureCategory } from '../../agents/analysis/root-cause-schema.js';
+import type { FailureCategory } from '../../core/failure-category.js';
 
 /** 遥测事件类型 */
 export type TelemetryEventType =

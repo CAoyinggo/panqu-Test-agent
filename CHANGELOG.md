@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.11.0] - 2026-08-19
+
+### 新增（类型级反向依赖上移 core，Phase 35）
+
+- 消除平台层对 agents 域的类型反向依赖（DEBT-11 已解决）：失败分类共享模型（`FailureCategory` / `FAILURE_CATEGORIES` / `isFailureCategory`）从 agents 域 `agents/analysis/root-cause-schema.ts` 上移至 **core 层唯一权威来源** `core/failure-category.ts`（core 为最底层、可被任意域依赖，符合依赖规则）。
+- agents 域 `root-cause-schema.ts` 改为从 core 导入并 **re-export**（既有 API 完全兼容，`root-cause-agent.ts` 的 `FailureCategory` / `FAILURE_CATEGORIES` 使用不受影响）；`autonomous` 域经 agents 正常使用。
+- 平台层 3 处 `import type { FailureCategory }` 改从 core 导入：`telemetry/telemetry-types.ts`、`telemetry/telemetry-service.ts`、`ops/real-run.ts`——**平台层至此对 agents 域零依赖**（结构上已由守护测试固化）。
+- 新增脚本 `phase35:test`（构建 + 失败分类模型 + RCA / defect / telemetry / real-run 相关回归）。
+
+### 变更
+
+- `vitest.config.ts` coverage include 纳入 `src/core/failure-category.ts`（新模块计入覆盖率门禁）。
+- `docs/TECH-DEBT.md`：DEBT-11（类型级反向依赖）已解决。
+
+### 测试
+
+- 新增 `tests/unit/core-failure-category.test.ts`（6 项）：分类清单完整性 / 守卫正反例 / core 与 agents re-export 同一权威源（同一数组引用，防双源漂移）/ agents 兼容可用 / core 分类清单与 RCA JSON Schema enum 完全一致（防分类改动漂移）/ **结构性依赖守护**（`src/platform/**` 全部源文件无 agents 域 import，防回归）；全量回归：1496 passed / 18 skipped（129 个测试文件）。
+
 ## [4.10.0] - 2026-08-19
 
 ### 新增（断言可视化接入 HTML 报告，Phase 34）

@@ -17,7 +17,7 @@
 | DEBT-08 | P1 | 覆盖率缺口 | vitest coverage include 未含 `src/platform/**` | Phase 27 审计 | **已解决（Phase 30）** | `vitest.config.ts` coverage include 纳入 `src/platform/**` 与 `src/core/id.ts`；新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events/notifications/migrations(Postgres)/environment-policy/scheduler/workers/checkpoint 缺口；平台层全子模块达标（行/函数/语句 ≥ 80，分支 ≥ 75），全量 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03 |
 | DEBT-09 | P1 | 迁移框架缺口 | 迁移仅 up/status，无 down/回滚；未验证 backup→migrate→restore→rollback 链 | Phase 27 审计 | **已解决（Phase 31）** | `Migration.revert`（v1 回滚删集合表）+ `resolveRevertTarget`（仅回滚最新防跳级）+ `revertSqliteMigration` / `revertPostgresMigration`；CLI `migrate down sqlite|postgres|check`；`tests/integration/migrations-rollback.test.ts` 验证 backup→migrate→rollback→restore 三一致闭环 |
 | DEBT-10 | P2 | 文档滞后 | README 曾多节测试数自相矛盾、目录结构滞后 | Phase 27 审计 | **已解决（Phase 28）** | 已统一 120 文件/1420 用例；目录结构已更新（含 security/、core/redact、env-loader、CHANGELOG） |
-| DEBT-11 | P2 | 类型级反向依赖 | `platform/telemetry-service.ts`、`platform/real-run.ts`、`audit-log.ts` 以 `import type` 引用 agents 域共享类型（FailureCategory） | Phase 27 审计 | 开放 | type-only 无运行时耦合，可接受；后续可将共享 Schema 类型移至 core 层 |
+| DEBT-11 | P2 | 类型级反向依赖 | `platform/telemetry-service.ts`、`platform/real-run.ts`、`audit-log.ts` 以 `import type` 引用 agents 域共享类型（FailureCategory） | Phase 27 审计 | **已解决（Phase 35）** | 失败分类共享模型（`FailureCategory` / `FAILURE_CATEGORIES` / `isFailureCategory`）上移至 core 层唯一权威来源 `core/failure-category.ts`；agents 域 `root-cause-schema.ts` 从 core 导入并 re-export（兼容不变）；平台层 3 处（telemetry-types / telemetry-service / real-run）改从 core 导入——平台层对 agents 域零依赖；`tests/unit/core-failure-category.test.ts`（6 项）守护唯一权威源 + RCA JSON Schema enum 一致 + `src/platform/**` 无 agents 域 import 结构性防线 |
 | DEBT-12 | P2 | 重复实现 | `resolvePrincipal` 等身份解析逻辑历史版本残留（已并入 security 模块统一解析） | Phase 28 扫描 | 开放 | 低优先，随 API 重构清理 |
 | DEBT-13 | P2 | 慢/易碎测试 | 部分 E2E 依赖固定 ISO 时间与端口，存在时序敏感用例 | Phase 28 扫描 | 开放 | 已通过固定 `now()` 与随机端口缓解；持续观察 flaky |
 
@@ -33,3 +33,4 @@
 | Phase 32（变异测试） | 0（无新债） | DEBT-07（1） | 5 项开放（DEBT-01/05/11/12/13） | 净下降 |
 | Phase 33（环境策略边界） | 0（无新债） | DEBT-01（1） | 4 项开放（DEBT-05/11/12/13） | 净下降 |
 | Phase 34（断言可视化接入） | 0（无新债） | DEBT-05（1） | 3 项开放（DEBT-11/12/13） | 净下降 |
+| Phase 35（类型级反向依赖上移） | 0（无新债） | DEBT-11（1） | 2 项开放（DEBT-12/13） | 净下降 |
