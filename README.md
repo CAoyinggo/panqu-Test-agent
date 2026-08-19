@@ -2,7 +2,11 @@
 
 > 版本：v4.15.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试 + 环境策略边界 + 断言可视化 + 依赖解耦 + 身份解析统一 + 时序卫生治理 + 非法角色拒绝安全加固 + QA 工作流产品化 + **Phase 40 工程化收尾：单资源读端点 Project Scope 加固 / Defect 缺陷平台化 / 前端断点修复与公开分享落地页 / 报告数据真实性 / QAHome 聚合缓存**）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
 
-标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。v4.5（Phase 29）建立性能与容量基线：10/50/100/500 Runs 生命周期吞吐/延迟、Scheduler / Audit / Telemetry 子系统吞吐与内存稳定性，配套相对基线回归门禁（`src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`），并修复容量基线暴露的高吞吐 ID 碰撞缺陷（`src/core/id.ts`，crypto.randomUUID）。v4.6（Phase 30）完成覆盖率补齐：`src/platform/**` 纳入 vitest coverage 统计，新增平台层集中补测 15 项，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁，全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03。v4.7（Phase 31）完成迁移 down / 回滚（DEBT-09）：`Migration.revert` 回滚实现、`resolveRevertTarget` 防跳级语义、SQLite / Postgres 回滚函数、CLI `migrate down` 子命令，并验证 backup→migrate→rollback→restore 完整闭环（三一致）——只要升级前有备份，迁移回滚不会造成数据永久丢失。v4.8（Phase 32）引入变异测试（DEBT-07 已解决）：Stryker + vitest-runner 聚焦平台 Critical 决策逻辑（生产安全 / RBAC / 审批中心 / Run 状态机 7 个源文件），变异分数门禁 high=80 / low=70 / break=60，总体变异分数 98.96%（191 杀死 / 2 存活 / 0 无覆盖），security / approval-center 100%、rbac 98.44%、runs 96.55%。v4.9（Phase 33）完成环境策略职责边界（DEBT-01 已解决）：三层环境策略模型（agent 层启用守卫 / 平台层动作分级 / 安全模块运行模式加固）职责边界文档化，新增 `environmentTypeToTier` / `environmentTypeToMode` 跨层互操作契约与 15 项一致性校验（5 条不变量），并修复 agent 层不识别平台层 `preprod` 环境名的跨层漂移缺口（归入 preonline 档，危险动作拒绝）。v4.10（Phase 34）完成断言可视化接入（DEBT-05 已解决）：将此前仅被自身测试引用的 `utils/assertion-visualizer.ts` 断言可视化引擎接入 HTML 报告器（变废为用），报告新增 4.4 断言可视化节——失败断言 Diff 视图（JSON/TEXT/NUMERIC/BOOLEAN/SCHEMA 节点级差异）+ 断言热力图（权重 0 绿 / 1-3 黄橙 / 4-5 红 + Flakiness Index）。v4.11（Phase 35）完成类型级反向依赖上移（DEBT-11 已解决）：失败分类共享模型（`FailureCategory` / `FAILURE_CATEGORIES` / `isFailureCategory`）从 agents 域上移至 core 层唯一权威来源 `core/failure-category.ts`，agents 域 re-export 保持兼容，平台层 3 处（telemetry-types / telemetry-service / real-run）改从 core 导入——**平台层对 agents 域零依赖**，并由 `tests/unit/core-failure-category.test.ts` 的结构性依赖守护固化。v4.12（Phase 36）完成身份解析统一（DEBT-12 已解决）：审计确认 `resolvePrincipal` 为唯一身份解析实现（无残留），并将「静态身份来源」的守卫与解析收敛到 security 模块新增 `resolveStaticIdentity(mode, headers)`（production 返回 null 防伪造不可绕过，其余模式解析 X-Actor/X-Role 默认 api/VIEWER）；`api/server.ts` 改调该函数——**平台层 X-Actor/X-Role 头读取仅存在于 security 模块**，由 `tests/unit/identity-resolution-guard.test.ts` 的结构性守护固化不可绕过。v4.13（Phase 37）完成 E2E 时序卫生治理（DEBT-13 已解决，**技术债清零**）：审计确认 E2E/集成已普遍采用健壮模式（随机端口 `server.listen()`/`listen(0)`、固定时钟注入 `FIXED_ISO`、`Date.now()` 唯一 ID、轮询+超时等待），无硬编码端口/固定时间戳断言/固定长 sleep 残留；新增 `tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护固化时序卫生，防未来引入慢/易碎用例。v4.14（Phase 39）完成 **QA 工作流产品化**：把"能力很多的 AI Test Platform"升级为"QA 每天真正愿意使用的 AI Test Workbench"——新增 `src/platform/workflow/` 模块（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home），全部复用既有 PlatformService / Repository / RBAC / Notification / Audit / Telemetry，零新增基础设施；新增 QA Workflow API（`/test-suites`、`/test-plans`、`/run-templates`、`/assets/:id/versions|compare`、`/runs/:id/share|comments|assign|rerun|clone|template`、`/qa-home`）、CLI 命令组（`suite` / `plan` / `template` / `run rerun|clone` / `report`）、Web QA Workbench 页面（Action Center + 快速操作 + Suite/Plan/Template 管理 + Run Detail 报告摘要与复用/分享/协作）；权限错误语义化为 403 Forbidden；8 个核心 E2E 场景（S1-S8）与 8 个测试文件全量通过。
+**标准化、可一键执行的多业务 AI 功能测试智能体框架**。所有 AI 功能测试任务强制按此流程执行：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
+
+自 v4.0 起，框架以 **Modular Monolith** 方式叠加 `src/platform` AI Test Platform 平台层（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），API 与 CLI 共用统一 Service Layer。平台层此后沿六条主线持续演进：**生产化与持久化**（SQLite / PostgreSQL、JWT 认证与用户体系、真实遥测、Web Dashboard、API 加固）、**生产验证闭环**（真实 Run 执行引擎、故障恢复演练、统一发布门禁、备份恢复、可观测告警）、**安全加固**（生产模式强制非默认密钥、静态身份防伪造、运维只读 RBAC、审批职责分离）、**工程治理**（覆盖率补齐、迁移回滚、变异测试、依赖解耦、身份解析统一、时序卫生治理）、**QA 工作流产品化**（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home）、**工程化收尾**（读端点 Project Scope 加固、Defect 缺陷平台化、公开分享落地页、报告数据真实性、聚合缓存）。
+
+各里程碑的详细演进记录见下文 **「十二、版本历史」** 表。
 
 📄 **[查看交互式 HTML 项目完整说明](file:///Users/mac/agents/test-flow-project-overview/test-flow-project-overview.html)**（含架构图与数据图表，本地打开）
 
@@ -44,7 +48,7 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | `src/plugins` | 插件式场景处理器（新模块在此扩展） | `scenes/video.ts` `loader.ts` |
 | `src/config` | 环境配置与 CLI 参数解析（schema 校验） | `config.ts` `environments.json` |
 | `src/utils` | 通用工具：数据生成、Mock 录制回放、并发、可视化、度量 | `data-generator.ts` `mock-recorder.ts` `assertion-visualizer.ts` |
-| `src/platform` | ★ AI Test Platform 平台层（v4.0 / v4.1）：Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / Audit / Operations / Service / API / 存储（SQLite/PostgreSQL）/ Auth / Telemetry / Ops | `projects/` `runs/` `scheduler/` `workers/` `rbac/` `approval-center/` `events/` `notifications/` `audit/` `operations/` `service/` `api/` `storage/` `auth/` `telemetry/` `ops/` |
+| `src/platform` | ★ AI Test Platform 平台层（v4.0-v4.15）：Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / Audit / Operations / Service / API / 存储（SQLite/PostgreSQL）/ Auth / Telemetry / Ops / Security / Test Assets / Workflow | `projects/` `runs/` `scheduler/` `workers/` `rbac/` `approval-center/` `events/` `notifications/` `audit/` `operations/` `service/` `api/` `storage/` `auth/` `telemetry/` `ops/` `security/` `test-assets/` `workflow/` |
 
 数据流：`CLI 入口 → 核心引擎 → 场景处理器 / 7 钩子 → 执行流水线 → 断言系统 / 数据工厂 / 环境检测 / 并发控制 → 报告四通道 + 飞书通知`。
 
@@ -121,7 +125,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 ## 六、测试体系
 
-基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **127 个测试文件、1486 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
+基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **141 个测试文件、1586 条用例通过 / 18 跳过**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
 
 **核心引擎单元测试（8 个文件、225 条）**
 
@@ -342,7 +346,11 @@ test-flow/
 │   ├── 03-数据需求清单模板.md   # 数据需求清单模板
 │   ├── 04-新任务启动检查清单模板.md  # 新任务启动检查清单模板
 │   ├── 05-项目说明模板.md       # 项目说明统一格式模板（通用）
-│   └── assertion-dsl.md         # 断言 DSL 语法文档
+│   ├── assertion-dsl.md         # 断言 DSL 语法文档
+│   ├── FINAL-PROJECT-ACCEPTANCE-REPORT.md  # 最终项目验收报告（七大类 A-G，判定 PROJECT COMPLETE）
+│   ├── phase39-summary.md / phase40-summary.md  # QA 工作流产品化 / 工程化收尾总结
+│   ├── product/                 # 产品文档：test-suite / test-plan / run-template / asset-versioning / report-sharing / qa-workflow
+│   └── phase*.summary.md        # 各阶段总结（phase13-37）
 ├── src/                         # ★ TypeScript 源码（模块化分层）
 │   ├── core/                    # 核心引擎：types / engine / pipeline / hooks / scene-handler / data-factory / env-checker / teardown / redact（共享脱敏）
 │   ├── cases/                   # 用例层：define / registry / loader（多功能模块化）
@@ -354,10 +362,11 @@ test-flow/
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
 │   │   └── video.ts             # 视频场景处理器（文生/图生/全能参考/首尾帧）
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）+ env-loader.ts（TESTFLOW_* 环境变量覆盖单一来源）
-│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.5）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security
+│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.15）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security / test-assets / workflow
+│   ├── web/                     # Web Dashboard 前端（React + Vite，v4.1/Phase 25.6）
 │   └── utils/                   # 工具：logger / metrics / retry / data-generator / mock-recorder / concurrency-controller / assertion-visualizer / exit-code / fs-utils / trace / allure-reporter / junit-reporter / oss-uploader
-├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/ + evals/（基准评测）（126 文件 / 1471 用例，全量回归全绿）
-├── tests/unit/                  # Vitest 单元测试（含平台 19+ 文件）
+├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/（141 文件 / 1586 用例，全量回归全绿）
+├── tests/unit/                  # Vitest 单元测试（含平台 35 文件）
 ├── bin/run-test.ts              # 执行 CLI 入口（编译为 dist/bin/run-test.js）
 ├── bin/platform-cli.ts          # 平台 CLI（v4.0/v4.3，与 API 共用 Service Layer）
 ├── scripts/                     # 构建/迁移/安全/CI 工具
@@ -372,7 +381,7 @@ test-flow/
 
 测试素材库（固定）：`/Users/mac/agents/Test-panqu/`（`audio/` `photo/` `txt/` `video/`）。
 
-## 十三、强制约定
+## 十四、强制约定
 
 1. **所有任务**（视频生成、剧本分镜、账单调整、模型接入、其他 AI 能力等）都必须走本流程，无例外。
 2. 每个新任务开始前，**必须先输出《新任务启动检查清单》并确认**，确认后才进入用例编写与执行。
