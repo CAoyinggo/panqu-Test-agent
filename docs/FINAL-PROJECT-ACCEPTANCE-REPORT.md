@@ -104,3 +104,7 @@
 经对照任务书最终完成标准七大类（功能完整 / 可靠性 / 测试 / 生产 / AI 验证 / 工程质量 / 可维护性）逐项核对，全部满足；关键质量门禁（覆盖率、变异分数、性能基线、技术债、全量回归）全部达标或超额达标；工程与文档闭环完整。**判定：PROJECT COMPLETE。**
 
 项目进入维护态：后续变更按既有规范（每变更走 phase-summary + 版本递增 + 回归门禁）执行；技术债登记机制（docs/TECH-DEBT.md）保留，新债务按 P0-P2 分级登记。
+
+## 六、后续维护记录
+
+- **v4.13.1（2026-08-19，Phase 36 范围补全）**：安全加固——`api/server.ts` 静态身份路径关闭 `role as Role` 不安全断言，静态 Token 返回的 role 必须经 `rbac.isRole` 校验，非法 `X-Role`（如 `HACKER`）直接拒绝（401），不再被当作合法角色（防身份伪造升级 / 防越权）。新增 `rbac.ROLES` 角色清单与 `isRole` 类型守卫（Role 单一权威源）；新增单元（isRole 守卫正反例 + ROLES/ROLE_PERMISSIONS 一致性）、结构性（server.ts 禁止 `ident.role as Role` 硬断言）与集成（非法 X-Role → 401）测试。全量回归：**1513 passed / 18 skipped（131 个测试文件）**。维护态完成度保持 PROJECT COMPLETE。

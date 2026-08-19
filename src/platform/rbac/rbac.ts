@@ -11,6 +11,14 @@ export type Role =
   | 'VIEWER'
   | 'SERVICE_ACCOUNT';
 
+/** 平台角色清单（单一权威源：守卫 / 校验 / 文档共用，防止角色漂移） */
+export const ROLES: readonly Role[] = ['ADMIN', 'QA', 'DEVELOPER', 'RELEASE_MANAGER', 'VIEWER', 'SERVICE_ACCOUNT'];
+
+/** 角色类型守卫：非法字符串（如 X-Role: HACKER）不被当作合法 Role（防身份伪造升级） */
+export function isRole(v: unknown): v is Role {
+  return typeof v === 'string' && (ROLES as readonly string[]).includes(v);
+}
+
 /** 平台权限（任务书 24.5 至少清单） */
 export type Permission =
   | 'PROJECT_READ'

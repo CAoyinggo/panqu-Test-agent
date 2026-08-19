@@ -12,6 +12,7 @@ import {
   allowHeaderIdentity,
   isProductionLike,
 } from '../../src/platform/security/index.js';
+import { isRole, ROLES, ROLE_PERMISSIONS } from '../../src/platform/rbac/rbac.js';
 
 describe('resolveStaticIdentity（Phase 36，DEBT-12）', () => {
   it('生产模式返回 null（身份伪造关闭，不可回退静态身份）', () => {
@@ -40,6 +41,22 @@ describe('resolveStaticIdentity（Phase 36，DEBT-12）', () => {
     });
     expect(resolveStaticIdentity('test', { 'x-actor': '', 'x-role': '' })).toEqual({ actor: 'api', role: 'VIEWER' });
     expect(resolveStaticIdentity('test', { 'x-actor': 42, 'x-role': null })).toEqual({ actor: '42', role: 'VIEWER' });
+  });
+});
+
+describe('rbac.isRole 角色守卫（强化类型安全：非法 X-Role 拒绝，v4.13.1）', () => {
+  it('全部合法角色通过校验', () => {
+    for (const r of ROLES) expect(isRole(r)).toBe(true);
+  });
+
+  it('非法角色被拒绝（HACKER / OWNER / 大小写漂移 / 空串 / 非字符串）', () => {
+    for (const bad of ['HACKER', 'OWNER', 'ADMIN ', 'admin', '', 42, null, undefined, ['ADMIN']]) {
+      expect(isRole(bad)).toBe(false);
+    }
+  });
+
+  it('ROLES 清单与 ROLE_PERMISSIONS 键完全一致（防角色漂移）', () => {
+    expect([...ROLES].sort()).toEqual(Object.keys(ROLE_PERMISSIONS).sort());
   });
 });
 
@@ -73,6 +90,12 @@ describe('身份解析结构性守护（Phase 36，DEBT-12 回归防）', () => 
     const defs = all.filter((f) => fs.readFileSync(f, 'utf8').match(/function\s+resolvePrincipal\s*\(/));
     expect(defs).toHaveLength(1);
     expect(path.relative(srcRoot, defs[0])).toBe(path.join('platform', 'api', 'server.ts'));
+  });
+
+  it(`api/server.ts 静态身份 role 必须经 isRole 校验，禁止 ident.role as Role 硬断言（v4.13.1）`, () => {
+    const src = fs.readFileSync(path.join(platformRoot, 'api', 'server.ts'), 'utf8');
+    expect(src).not.toMatch(/ident\.role\s+as\s+Role/);
+    expect(src).toMatch(/isRole\(ident\.role\)/);
   });
 });
 

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PlatformService } from '../service/platform-service.js';
 import type { Role } from '../rbac/rbac.js';
-import { hasPermission, type Permission } from '../rbac/rbac.js';
+import { hasPermission, isRole, type Permission } from '../rbac/rbac.js';
 import { assertRunAccess } from '../rbac/scopes.js';
 import type { AuthService } from '../auth/auth-service.js';
 import type { User } from '../auth/user.js';
@@ -121,11 +121,13 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       }
     }
     if (cred === token) {
-      // 36（DEBT-12 已解决）：静态身份守卫 + 解析收敛到 security.resolveStaticIdentity——
-      // production 返回 null（防身份伪造不可绕过），其余模式解析 X-Actor/X-Role（默认 api/VIEWER）
+      // 36（DEBT-12 已解决）+ 安全加固（v4.13.1）：静态身份守卫 + 解析收敛到 security.resolveStaticIdentity——
+      // production 返回 null（防身份伪造不可绕过），其余模式解析 X-Actor/X-Role（默认 api/VIEWER）；
+      // role 必须经 rbac.isRole 校验，非法 X-Role（如 HACKER）直接拒绝，不得 as Role 硬断言。
       const ident = resolveStaticIdentity(mode, req.headers);
       if (!ident) return null;
-      return { user: undefined, actor: ident.actor, role: ident.role as Role };
+      if (!isRole(ident.role)) return null;
+      return { user: undefined, actor: ident.actor, role: ident.role };
     }
     return null;
   }

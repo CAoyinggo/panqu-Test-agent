@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.13.1] - 2026-08-19
+
+### 安全加固（非法 X-Role 拒绝，Phase 36 范围补全）
+
+- 关闭 `api/server.ts` 静态身份路径的 `role as Role` 不安全类型断言：静态 Token 返回的 role 必须经 `rbac.isRole` 校验，非法 `X-Role`（如 `HACKER`）直接拒绝（401），不再被当作合法角色——防身份伪造升级 / 防越权。
+- 新增 `rbac.isRole` 类型守卫与 `ROLES` 角色清单（Role 单一权威源，防角色漂移）；`resolveStaticIdentity` 保持返回 string（security 模块维持零依赖），角色收窄收敛到 API 边界。
+- 新增测试：`tests/unit/identity-resolution-guard.test.ts`（isRole 守卫正反例 + ROLES/ROLE_PERMISSIONS 一致性 + 结构性守护：server.ts 禁止 `ident.role as Role` 硬断言）；`tests/integration/api-auth.test.ts`（非法 X-Role → 401）。
+
 ## [4.13.0] - 2026-08-19
 
 ### 新增（E2E 时序卫生治理，Phase 37）

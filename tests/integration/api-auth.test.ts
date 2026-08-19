@@ -130,6 +130,17 @@ describe('X-Actor/X-Role 内部模式', () => {
     expect(res.status).toBe(200);
   });
 
+  it('非法 X-Role（如 HACKER）被拒绝 → 401，不得被当作合法角色（防身份伪造升级，v4.13.1）', async () => {
+    const ts = await makeServer({ withAuth: true, mode: 'development' });
+    const res = await ts.request('POST', '/runs', {
+      token: STATIC_TOKEN,
+      headers: { 'X-Actor': 'evil', 'X-Role': 'HACKER' },
+      body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
+    });
+    expect(res.status).toBe(401);
+    expect((res.data as { error: string }).error).toBe('unauthorized');
+  });
+
   it('S6 production：静态 Token + X-Header 被拒绝（生产禁止 X-Header 直信任）', async () => {
     const ts = await makeServer({ withAuth: true, mode: 'production' });
     const res = await ts.request('POST', '/runs', {
