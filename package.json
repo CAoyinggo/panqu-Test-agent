@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.7.0",
+  "version": "4.8.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
@@ -59,7 +59,7 @@
     "platform:worker:test": "vitest run tests/unit/worker.test.ts",
     "platform:rbac:test": "vitest run tests/unit/rbac.test.ts",
     "platform:approval:test": "vitest run tests/unit/approval-center.test.ts",
-    "platform:notification:test": "vitest run tests/unit/notification.test.ts",
+    "platform:notification:test": "npm run build && vitest run tests/unit/notification.test.ts tests/e2e/notification-real.test.ts",
     "platform:api:test": "vitest run tests/unit/platform-api.test.ts",
     "platform:checkpoint:test": "vitest run tests/unit/checkpoint.test.ts",
     "platform:idempotency:test": "vitest run tests/unit/idempotency.test.ts",
@@ -82,6 +82,9 @@
     "phase29:test": "npm run build && vitest run -c vitest.perf.config.ts",
     "phase30:test": "npm run build && vitest run tests/unit/platform-coverage-gap.test.ts tests/unit/security.test.ts tests/unit/id.test.ts tests/unit/redact.test.ts tests/unit/scheduler.test.ts tests/unit/worker.test.ts tests/unit/notification.test.ts tests/unit/checkpoint.test.ts tests/unit/platform-project.test.ts tests/unit/production-ops.test.ts tests/unit/platform-api.test.ts && vitest run --coverage",
     "phase31:test": "npm run build && vitest run tests/unit/migrations-down.test.ts tests/integration/migrations-rollback.test.ts tests/unit/production-ops.test.ts tests/unit/platform-coverage-gap.test.ts",
+    "phase32:test": "npm run build && vitest run tests/unit/rbac.test.ts tests/unit/security.test.ts tests/unit/approval-center.test.ts tests/unit/run-schema.test.ts tests/unit/migrations-down.test.ts tests/integration/migrations-rollback.test.ts && npx stryker run",
+    "mutation:test": "npx stryker run",
+    "mutation:dry": "npx stryker run --dryRunOnly",
     "perf:test": "vitest run -c vitest.perf.config.ts",
     "perf:baseline": "npm run build && node scripts/perf/run-perf.mjs --baseline perf/baseline.json",
     "perf:gate": "npm run build && node scripts/perf/run-perf.mjs --gate",
@@ -93,7 +96,6 @@
     "platform:recovery:test": "npm run build && vitest run tests/e2e/recovery-drill.test.ts",
     "platform:release-gate:test": "npm run build && vitest run tests/e2e/release-gate-real.test.ts",
     "platform:backup-restore:test": "npm run build && vitest run tests/e2e/backup-restore-real.test.ts",
-    "platform:notification:test": "npm run build && vitest run tests/unit/notification.test.ts tests/e2e/notification-real.test.ts",
     "platform:pilot": "npm run build && node dist/bin/run-pilot.js",
     "platform:pilot:test": "npm run build && vitest run tests/e2e/pilot-run.test.ts",
     "agent:release:ci": "npm run build && node dist/bin/release-gate.js",
@@ -126,6 +128,8 @@
     "node": ">=20.11.0"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^20.19.43",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.10",

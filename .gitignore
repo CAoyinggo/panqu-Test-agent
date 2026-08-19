@@ -19,3 +19,7 @@ security-reports/
 
 # Test coverage reports
 coverage/
+
+# Mutation testing artifacts (Stryker)
+.stryker-tmp/
+reports/mutation/

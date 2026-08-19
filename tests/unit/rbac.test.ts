@@ -9,6 +9,7 @@ import {
   hasPermission,
   approvalPermissionFor,
   evaluateAccessChain,
+  listPermissions,
   PlatformGate,
 } from '../../src/platform/rbac/index.js';
 import { ApprovalCenter } from '../../src/platform/approval-center/index.js';
@@ -70,6 +71,33 @@ describe('RBAC 角色 / 权限矩阵', () => {
     expect(approvalPermissionFor('healing')).toBe('HEALING_APPROVE');
     expect(approvalPermissionFor('release')).toBe('RELEASE_APPROVE');
     expect(approvalPermissionFor('risky-production')).toBe('RELEASE_APPROVE');
+  });
+
+  it('DEVELOPER / SERVICE_ACCOUNT 权限矩阵完整（变异防护，Phase 32）', () => {
+    // DEVELOPER 正向：可读项目、跑测试、重试、读资产、创建缺陷
+    for (const p of ['PROJECT_READ', 'TEST_RUN', 'TEST_RETRY', 'ASSET_READ', 'DEFECT_CREATE']) {
+      expect(hasPermission('DEVELOPER', p as never)).toBe(true);
+    }
+    // DEVELOPER 负向：不可取消、不可写资产/项目、不可审批、不可生产访问、不可读运维
+    for (const p of ['TEST_CANCEL', 'ASSET_WRITE', 'PROJECT_WRITE', 'RELEASE_APPROVE', 'PRODUCTION_ACCESS', 'OPS_READ']) {
+      expect(hasPermission('DEVELOPER', p as never)).toBe(false);
+    }
+    // SERVICE_ACCOUNT 正向：可跑测试、读资产、创建缺陷、读运维
+    for (const p of ['TEST_RUN', 'ASSET_READ', 'DEFECT_CREATE', 'OPS_READ']) {
+      expect(hasPermission('SERVICE_ACCOUNT', p as never)).toBe(true);
+    }
+    // SERVICE_ACCOUNT 负向：不可读项目、不可重试/取消、不可写资产、不可审批
+    for (const p of ['PROJECT_READ', 'TEST_RETRY', 'TEST_CANCEL', 'ASSET_WRITE', 'RELEASE_APPROVE', 'HEALING_APPROVE']) {
+      expect(hasPermission('SERVICE_ACCOUNT', p as never)).toBe(false);
+    }
+  });
+
+  it('listPermissions 返回角色权限清单（审计/调试用）', () => {
+    expect(listPermissions('DEVELOPER')).toEqual(ROLE_PERMISSIONS.DEVELOPER);
+    expect(listPermissions('SERVICE_ACCOUNT')).toEqual(ROLE_PERMISSIONS.SERVICE_ACCOUNT);
+    expect(listPermissions('QA')).toContain('TEST_RUN');
+    expect(listPermissions('QA')).not.toContain('RELEASE_APPROVE');
+    expect(listPermissions('ADMIN')).toEqual(ALL_PERMISSIONS);
   });
 });
 
@@ -165,6 +193,70 @@ describe('Access Chain：RBAC → Environment Policy', () => {
   });
 });
 
+describe('Access Decision 完整形状（变异测试防护，Phase 32）', () => {
+  // 四个分支逐一断言 {verdict, requiresApproval, rbacPassed, policy} 全字段，
+  // 防止布尔字段被变异（如 requiresApproval 被翻转为 true）时测试仍通过。
+  it('RBAC 拒绝分支：DENIED + requiresApproval=false + rbacPassed=false + policy=deny', () => {
+    const d = evaluateAccessChain({
+      actor: 'alice',
+      role: 'QA',
+      permission: 'PRODUCTION_ACCESS',
+      action: 'dangerous',
+      environment: prod,
+    });
+    expect(d.verdict).toBe('DENIED');
+    expect(d.requiresApproval).toBe(false);
+    expect(d.rbacPassed).toBe(false);
+    expect(d.policy).toBe('deny');
+    expect(d.reason).toContain('缺少权限');
+  });
+
+  it('环境允许分支：ALLOWED + requiresApproval=false + rbacPassed=true + policy=allow', () => {
+    const d = evaluateAccessChain({
+      actor: 'alice',
+      role: 'QA',
+      permission: 'TEST_RUN',
+      action: 'risky',
+      environment: test,
+    });
+    expect(d.verdict).toBe('ALLOWED');
+    expect(d.requiresApproval).toBe(false);
+    expect(d.rbacPassed).toBe(true);
+    expect(d.policy).toBe('allow');
+    expect(d.reason).toContain('允许');
+  });
+
+  it('需审批分支：APPROVAL_REQUIRED + requiresApproval=true + rbacPassed=true + policy=approval', () => {
+    const d = evaluateAccessChain({
+      actor: 'bob',
+      role: 'RELEASE_MANAGER',
+      permission: 'PRODUCTION_ACCESS',
+      action: 'risky',
+      environment: prod,
+    });
+    expect(d.verdict).toBe('APPROVAL_REQUIRED');
+    expect(d.requiresApproval).toBe(true);
+    expect(d.rbacPassed).toBe(true);
+    expect(d.policy).toBe('approval');
+    expect(d.reason).toContain('需审批');
+  });
+
+  it('环境拒绝分支：DENIED + requiresApproval=false + rbacPassed=true + policy=deny（RBAC 已通过）', () => {
+    const d = evaluateAccessChain({
+      actor: 'bob',
+      role: 'RELEASE_MANAGER',
+      permission: 'PRODUCTION_ACCESS',
+      action: 'dangerous',
+      environment: prod,
+    });
+    expect(d.verdict).toBe('DENIED');
+    expect(d.requiresApproval).toBe(false);
+    expect(d.rbacPassed).toBe(true);
+    expect(d.policy).toBe('deny');
+    expect(d.reason).toContain('生产安全');
+  });
+});
+
 describe('Platform Gate：完整链路 + 审批流（Scenario 6）', () => {
   it('production + risky → 自动发起审批 → 审批人通过后执行', async () => {
     const approvals = makeApprovals();
@@ -255,5 +347,44 @@ describe('Platform Gate：完整链路 + 审批流（Scenario 6）', () => {
       runId: 'run-5',
     });
     expect(out.verdict).toBe('APPROVAL_REQUIRED');
+  });
+
+  it('approve 审批不存在 → 抛错（Phase 32）', async () => {
+    const gate = new PlatformGate(makeApprovals());
+    await expect(gate.approve('no-such-approval', 'carol', 'RELEASE_MANAGER')).rejects.toThrow(/审批不存在/);
+  });
+
+  it('reject 审批不存在 → 抛错（Phase 32）', async () => {
+    const gate = new PlatformGate(makeApprovals());
+    await expect(gate.reject('no-such-approval', 'carol', 'RELEASE_MANAGER')).rejects.toThrow(/审批不存在/);
+  });
+
+  it('reject 无审批权限 → 抛错（Phase 32）', async () => {
+    const approvals = makeApprovals();
+    const gate = new PlatformGate(approvals);
+    const { approval } = requireApproval(await gate.execute({
+      actor: 'bob',
+      role: 'RELEASE_MANAGER',
+      permission: 'PRODUCTION_ACCESS',
+      action: 'risky',
+      environment: prod,
+      runId: 'run-rej',
+    }));
+    await expect(gate.reject(approval.approvalId, 'carol', 'QA')).rejects.toThrow(/无权审批/);
+  });
+
+  it('未传 reason / evidence → 审批回退 decision.reason / 空数组（Phase 32）', async () => {
+    const approvals = makeApprovals();
+    const gate = new PlatformGate(approvals);
+    const { decision, approval } = requireApproval(await gate.execute({
+      actor: 'bob',
+      role: 'RELEASE_MANAGER',
+      permission: 'PRODUCTION_ACCESS',
+      action: 'risky',
+      environment: prod,
+      runId: 'run-fb',
+    }));
+    expect(approval.reason).toBe(decision.reason);
+    expect(approval.evidence).toEqual([]);
   });
 });

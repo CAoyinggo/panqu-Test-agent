@@ -1,8 +1,8 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.7.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
+> 版本：v4.8.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
 
-标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。v4.5（Phase 29）建立性能与容量基线：10/50/100/500 Runs 生命周期吞吐/延迟、Scheduler / Audit / Telemetry 子系统吞吐与内存稳定性，配套相对基线回归门禁（`src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`），并修复容量基线暴露的高吞吐 ID 碰撞缺陷（`src/core/id.ts`，crypto.randomUUID）。v4.6（Phase 30）完成覆盖率补齐：`src/platform/**` 纳入 vitest coverage 统计，新增平台层集中补测 15 项，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁，全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03。v4.7（Phase 31）完成迁移 down / 回滚（DEBT-09）：`Migration.revert` 回滚实现、`resolveRevertTarget` 防跳级语义、SQLite / Postgres 回滚函数、CLI `migrate down` 子命令，并验证 backup→migrate→rollback→restore 完整闭环（三一致）——只要升级前有备份，迁移回滚不会造成数据永久丢失。
+标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。v4.5（Phase 29）建立性能与容量基线：10/50/100/500 Runs 生命周期吞吐/延迟、Scheduler / Audit / Telemetry 子系统吞吐与内存稳定性，配套相对基线回归门禁（`src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`），并修复容量基线暴露的高吞吐 ID 碰撞缺陷（`src/core/id.ts`，crypto.randomUUID）。v4.6（Phase 30）完成覆盖率补齐：`src/platform/**` 纳入 vitest coverage 统计，新增平台层集中补测 15 项，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁，全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03。v4.7（Phase 31）完成迁移 down / 回滚（DEBT-09）：`Migration.revert` 回滚实现、`resolveRevertTarget` 防跳级语义、SQLite / Postgres 回滚函数、CLI `migrate down` 子命令，并验证 backup→migrate→rollback→restore 完整闭环（三一致）——只要升级前有备份，迁移回滚不会造成数据永久丢失。v4.8（Phase 32）引入变异测试（DEBT-07 已解决）：Stryker + vitest-runner 聚焦平台 Critical 决策逻辑（生产安全 / RBAC / 审批中心 / Run 状态机 7 个源文件），变异分数门禁 high=80 / low=70 / break=60，总体变异分数 98.96%（191 杀死 / 2 存活 / 0 无覆盖），security / approval-center 100%、rbac 98.44%、runs 96.55%。
 
 📄 **[查看交互式 HTML 项目完整说明](file:///Users/mac/agents/test-flow-project-overview/test-flow-project-overview.html)**（含架构图与数据图表，本地打开）
 
@@ -18,14 +18,14 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 
 | 指标 | 数值 |
 |---|---|
-| 单元测试用例 | 1445 条通过 / 18 跳过（122 个测试文件，全量回归全绿） |
+| 单元测试用例 | 1471 条通过 / 18 跳过（126 个测试文件，全量回归全绿） |
 | 全量覆盖率 | Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03（含 `src/platform/**`） |
 | 平台测试 | 单元 19 文件 + 集成 10 文件 + E2E 12 文件（Phase 27 新增 8 个真实演练/试运行套件） |
 | 断言操作符 | 17 个 |
 | 核心引擎模块 | 13 个文件 |
 | 平台层模块 | 19 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
-| 版本演进 | v1.0 → v4.6.0（17 个里程碑） |
+| 版本演进 | v1.0 → v4.8.0（19 个里程碑） |
 | 运行时 | Node.js ≥ 20.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
@@ -121,7 +121,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 ## 六、测试体系
 
-基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **125 个测试文件、1452 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
+基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **126 个测试文件、1471 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
 
 **核心引擎单元测试（8 个文件、225 条）**
 
@@ -151,6 +151,8 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 **平台层覆盖率补齐**（v4.6.0 / Phase 30）：新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events / notifications / migrations(Postgres) / environment-policy / scheduler / workers / checkpoint 缺口；`perf-harness.ts` 由独立性能套件运行，排除以免以 0% 虚假稀释平台层覆盖率。验收：`npm run phase30:test`（构建 + 平台层相关测试 + 完整覆盖率门禁）。
 
 **迁移 down / 回滚**（v4.7.0 / Phase 31，DEBT-09）：`Migration.revert` 回滚实现（`v1/base-schema` 回滚 = 删除全部集合表）、`resolveRevertTarget` 仅允许回滚最新已应用迁移（禁止跳级）、SQLite / Postgres 回滚函数与 CLI `migrate down` 子命令；新增 `tests/unit/migrations-down.test.ts`（5 项）+ `tests/integration/migrations-rollback.test.ts`（2 项，backup→migrate→rollback→restore 三一致闭环）。验收：`npm run phase31:test`（构建 + 迁移/运维相关测试）。
+
+**变异测试**（v4.8.0 / Phase 32，DEBT-07）：引入 Stryker + `@stryker-mutator/vitest-runner`（`testRunner: 'vitest'`、`vitest.related: true` 仅跑相关测试、`coverageAnalysis: 'perTest'`）。变异目标集聚焦平台 Critical 决策逻辑 7 个源文件（`security/index.ts`、`rbac/rbac.ts`、`rbac/platform-gate.ts`、`rbac/access-chain.ts`、`approval-center/approval-center.ts`、`approval-center/approval-schema.ts`、`runs/run-schema.ts`），`excludedMutations` 排除 `StringLiteral`，`concurrency=4`。门禁 `thresholds: high=80 / low=70 / break=60`。首次变异 85.49% → 依据存活缺口补测 18 项（访问决策四分支全字段形状断言 / 权限矩阵 / listPermissions / Gate 错误路径与回退 / 审批 clear 与 evidence 默认 / Run 状态机六状态转移表 / security trim 规范化）→ **总体变异分数 98.96%**（191 杀死 / 2 存活 / 0 无覆盖），security 100% / approval-center 100% / rbac 98.44% / runs 96.55%。验收：`npm run phase32:test`（构建 + 相关单测 + 完整变异门禁）；变异报告落 `reports/mutation/mutation.html`（不入库）。
 
 ## 七、AI Test Platform 平台层
 
@@ -333,7 +335,7 @@ test-flow/
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）+ env-loader.ts（TESTFLOW_* 环境变量覆盖单一来源）
 │   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.5）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security
 │   └── utils/                   # 工具：logger / metrics / retry / data-generator / mock-recorder / concurrency-controller / assertion-visualizer / exit-code / fs-utils / trace / allure-reporter / junit-reporter / oss-uploader
-├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/ + evals/（基准评测）（120 文件 / 1420 用例，全量回归全绿）
+├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/ + evals/（基准评测）（126 文件 / 1471 用例，全量回归全绿）
 ├── tests/unit/                  # Vitest 单元测试（含平台 19+ 文件）
 ├── bin/run-test.ts              # 执行 CLI 入口（编译为 dist/bin/run-test.js）
 ├── bin/platform-cli.ts          # 平台 CLI（v4.0/v4.3，与 API 共用 Service Layer）

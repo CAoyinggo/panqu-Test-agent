@@ -161,4 +161,27 @@ describe('Approval Center', () => {
     }
     expect(ids.size).toBe(50);
   });
+
+  it('未传 evidence → 默认为空数组（Phase 32）', async () => {
+    const c = makeCenter();
+    const { approval } = await c.request({
+      runId: 'run-ev',
+      action: 'release',
+      riskLevel: 'risky',
+      environment: 'production',
+      requester: 'alice',
+      reason: 'x',
+    });
+    expect(approval.evidence).toEqual([]);
+  });
+
+  it('clear 清空全部审批（Phase 32）', async () => {
+    const c = makeCenter();
+    await c.request({ runId: 'r1', action: 'release', riskLevel: 'risky', environment: 'production', requester: 'a', reason: 'x' });
+    await c.request({ runId: 'r2', action: 'healing', riskLevel: 'risky', environment: 'staging', requester: 'a', reason: 'x' });
+    expect(await c.pendingCount()).toBe(2);
+    await c.clear();
+    expect(await c.list()).toHaveLength(0);
+    expect(await c.pendingCount()).toBe(0);
+  });
 });

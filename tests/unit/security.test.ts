@@ -25,6 +25,12 @@ describe('resolvePlatformMode：运行模式解析', () => {
   it('未知模式回退 development（不允许静默进入未知状态）', () => {
     expect(resolvePlatformMode('bogus')).toBe('development');
   });
+
+  it('前导/尾随空白与混合大小写被规范化（trim + toLowerCase，Phase 32）', () => {
+    expect(resolvePlatformMode('  production  ')).toBe('production');
+    expect(resolvePlatformMode('  PROD  ')).toBe('production');
+    expect(resolvePlatformMode(' Staging ')).toBe('staging');
+  });
 });
 
 describe('isProductionLike / isKnownInsecureJwtSecret', () => {
@@ -118,5 +124,16 @@ describe('securityChecks：Preflight 安全检查项', () => {
     expect(missing.find((i) => i.name === 'JWT 密钥')?.level).toBe('BLOCK');
     const ok = securityChecks('staging', { jwtSecret: 'strong', allowDefaultCredentials: false });
     expect(ok.find((i) => i.name === '静态身份来源')?.level).toBe('WARN');
+  });
+
+  it('静态身份来源 detail：production 关闭伪造，其余提示可用（Phase 32）', () => {
+    const prod = securityChecks('production', { jwtSecret: 'strong', allowDefaultCredentials: false });
+    const prodId = prod.find((i) => i.name === '静态身份来源')!;
+    expect(prodId.level).toBe('PASS');
+    expect(prodId.detail).toContain('身份伪造已关闭');
+    const dev = securityChecks('development', { jwtSecret: undefined });
+    const devId = dev.find((i) => i.name === '静态身份来源')!;
+    expect(devId.detail).toContain('静态身份可用');
+    expect(devId.detail).toContain('development');
   });
 });

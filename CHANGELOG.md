@@ -2,6 +2,25 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.8.0] - 2026-08-19
+
+### 新增（变异测试，Phase 32）
+
+- 引入变异测试基础设施（Stryker + `@stryker-mutator/vitest-runner`，Vitest `related` 模式 + perTest 覆盖率分析，仅运行与变异点相关的测试）；新增 `stryker.config.mjs`：变异目标集聚焦平台 Critical 决策逻辑（生产安全 / RBAC / 审批中心 / Run 状态机 7 个源文件），`excludedMutations` 排除 `StringLiteral`，`concurrency=4`。
+- 新增变异分数门禁（`thresholds: high=80 / low=70 / break=60`）：总体变异分数 98.96%（191 杀死 / 2 存活 / 0 无覆盖），高于 high 阈值；子模块 security 100% / approval-center 100% / rbac 98.44% / runs 96.55%。
+- 新增脚本：`phase32:test`（构建 + 相关单测 + 完整变异门禁）/ `mutation:test` / `mutation:dry`（仅校验测试环境）。
+- 变异报告落盘 `reports/mutation/mutation.html`（已入 `.gitignore`，与 `coverage/` 一致不入版本库）。
+
+### 变更
+
+- 依据变异测试甄别的真实缺口补齐测试（首次变异 85.49% → 补测后 98.96%）：访问决策四分支全字段形状断言（`{verdict, requiresApproval, rbacPassed, policy}`，防布尔字段被翻转）、`DEVELOPER`/`SERVICE_ACCOUNT` 权限矩阵、`listPermissions`、PlatformGate 审批不存在/无审批权限抛错与 reason/evidence 回退默认值、`resolvePlatformMode` trim/大小写规范化、静态身份来源 detail、审批 `clear()` 与 evidence 默认空数组、Run 状态机六状态完整转移表与终态空转移。
+- `docs/TECH-DEBT.md`：DEBT-07（无变异测试与 Critical 变异门禁）已解决。
+
+### 测试
+
+- 新增 `tests/unit/run-schema.test.ts`（5 项：状态转移表 / 终态空转移 / canTransition 正反例 / transitionRun / isTerminal）+ 扩展现有 rbac/security/approval-center 测试；全量回归：1471 passed / 18 skipped（126 个测试文件）。
+- 已知等价存活 2 项（已甄别）：`platform-gate.ts:43` evidence 回退 `??`→`&&`（perTest 覆盖率映射的保守假象，实测行为不同且新测试可杀死）、`run-schema.ts:75` runId 月份算术（需 mock Date 才能测，实践等价）。
+
 ## [4.7.0] - 2026-08-19
 
 ### 新增（迁移 down / 回滚，Phase 31）
