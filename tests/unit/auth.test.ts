@@ -2,7 +2,7 @@
 // 覆盖：密码哈希 / UserStore 幂等种子 / AuthService login/logout/refresh/info/verify /
 //       token 内嵌作用域 / 禁用用户 / 生产环境默认口令禁用。
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { InMemoryRepository } from '../../src/platform/storage/index.js';
 import { UserStore, DEFAULT_SEED_USERS } from '../../src/platform/auth/user-store.js';
 import { AuthService } from '../../src/platform/auth/auth-service.js';
@@ -146,6 +146,36 @@ describe('生产环境默认口令禁用', () => {
     const { auth } = makeAuth({ allowDefaultCredentials: false });
     await auth.ensureSeeded();
     await expect(auth.login('admin', 'admin123')).rejects.toThrow(/默认账号在生产环境已禁用/);
+  });
+});
+
+describe('生产安全模式：requireSecureSecret（Phase 27.1）', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('requireSecureSecret 且未配置密钥 → 构造拒绝（fail fast）', () => {
+    vi.stubEnv('JWT_SECRET', undefined);
+    expect(() => makeAuth({ requireSecureSecret: true })).toThrow(/JWT_SECRET/);
+  });
+
+  it('requireSecureSecret 且使用开发默认密钥 → 构造拒绝', () => {
+    vi.stubEnv('JWT_SECRET', undefined);
+    expect(() => makeAuth({ requireSecureSecret: true, secret: 'dev-secret-change-me' })).toThrow(/JWT_SECRET/);
+  });
+
+  it('requireSecureSecret 且显式非默认密钥 → 构造通过并可登录', async () => {
+    vi.stubEnv('JWT_SECRET', undefined);
+    const { auth } = makeAuth({ requireSecureSecret: true, secret: 'strong-secret' });
+    await auth.ensureSeeded();
+    const tokens = await auth.login('qa-a', 'qa123456');
+    expect(tokens.accessToken).toBeTruthy();
+  });
+
+  it('非生产模式缺省不强制：未配置密钥回退开发密钥可正常签名', async () => {
+    vi.stubEnv('JWT_SECRET', undefined);
+    const { auth } = makeAuth();
+    await auth.ensureSeeded();
+    const tokens = await auth.login('qa-a', 'qa123456');
+    expect(tokens.accessToken).toBeTruthy();
   });
 });
 

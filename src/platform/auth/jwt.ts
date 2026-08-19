@@ -79,11 +79,17 @@ export function verifyJwt(token: string, secret: string, opts: JwtVerifyOptions 
   return payload;
 }
 
-/** 解码（不校验签名；测试 / 调试用） */
+/** 解码（不校验签名；测试 / 调试用；非法结构抛错） */
 export function decodeJwt(token: string): { header: unknown; payload: JwtPayload } {
-  const [headerB64, payloadB64] = token.split('.');
-  return {
-    header: JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')),
-    payload: JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as JwtPayload,
-  };
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('JWT 结构非法');
+  const [headerB64, payloadB64] = parts;
+  try {
+    return {
+      header: JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')),
+      payload: JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as JwtPayload,
+    };
+  } catch {
+    throw new Error('JWT payload 非法');
+  }
 }

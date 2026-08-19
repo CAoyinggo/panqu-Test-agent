@@ -247,6 +247,8 @@ describe('Scenario 8：Audit（通过 runId / traceId / approvalId / actor 完�
   it('Request → Approval → Tool → Execution → Release 全链路可还原', async () => {
     const b = makeBundle();
     const actor = 'release-actor';
+    // 27.3 审批职责分离：审批人必须与申请人不同
+    const approver = 'release-mgr';
     // Request：创建 Run（捕获真实 runId）
     const { runId } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'release', actor, role: 'RELEASE_MANAGER', feature: 'text-to-video' });
     // Service 约定：traceId = runId
@@ -257,16 +259,19 @@ describe('Scenario 8：Audit（通过 runId / traceId / approvalId / actor 完�
       actor, role: 'RELEASE_MANAGER', permission: 'PRODUCTION_ACCESS', action: 'risky', runId, reason: '生产发布', evidence: [{ case: 'c1', result: 'PASS' }], environment: env!,
     });
     const approvalId = (outcome as { approval: { approvalId: string } }).approval.approvalId;
-    await b.service.approveApproval(approvalId, actor, 'RELEASE_MANAGER');
+    await b.service.approveApproval(approvalId, approver, 'RELEASE_MANAGER');
     // Tool / Execution / Release：审计记录（带 approvalId + traceId 关联）
     await b.audit.record({ actor, role: 'RELEASE_MANAGER', action: 'risky.tool', resource: `run:${runId}`, environment: 'production', result: 'success', approvalId, traceId });
     await b.audit.record({ actor, role: 'RELEASE_MANAGER', action: 'production.access', resource: `run:${runId}`, environment: 'production', result: 'success', approvalId, traceId });
     await b.audit.record({ actor, role: 'RELEASE_MANAGER', action: 'release', resource: 'project:wan3', environment: 'production', result: 'success', approvalId, traceId });
-    // 按 actor：Request → Approval → Tool → Execution → Release 全部还原
+    // 按 actor：Request → Tool → Execution → Release（审批由 approver 独立完成）
     const byActor = await b.audit.search({ actor });
-    for (const action of ['run.create', 'approval', 'risky.tool', 'production.access', 'release']) {
+    for (const action of ['run.create', 'risky.tool', 'production.access', 'release']) {
       expect(byActor.some((e) => e.action === action)).toBe(true);
     }
+    // 审批职责分离：approval 事件记录在审批人 release-mgr 名下
+    const byApprover = await b.audit.search({ actor: approver });
+    expect(byApprover.some((e) => e.action === 'approval')).toBe(true);
     // 按 runId：还原 Run 创建
     const byRun = await b.audit.search({ runId });
     expect(byRun.some((e) => e.action === 'run.create')).toBe(true);

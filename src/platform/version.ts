@@ -7,7 +7,7 @@
 //   PLATFORM_BUILD_TIME ISO 时间（CI 构建时注入）
 //   PLATFORM_ENVIRONMENT 运行环境（development/test/staging/production；默认 development）
 
-export const PLATFORM_VERSION = '4.2.0';
+export const PLATFORM_VERSION = '4.3.0';
 
 export interface BuildInfo {
   version: string;

@@ -23,7 +23,9 @@ export type Permission =
   | 'DEFECT_CREATE'
   | 'HEALING_APPROVE'
   | 'RELEASE_APPROVE'
-  | 'PRODUCTION_ACCESS';
+  | 'PRODUCTION_ACCESS'
+  // 27.2：运维只读（审计日志 / 遥测成本 / Job / Worker 基础设施状态）
+  | 'OPS_READ';
 
 /** 全部权限（ADMIN 持有） */
 export const ALL_PERMISSIONS: readonly Permission[] = [
@@ -38,6 +40,7 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'HEALING_APPROVE',
   'RELEASE_APPROVE',
   'PRODUCTION_ACCESS',
+  'OPS_READ',
 ];
 
 /** 角色 → 权限矩阵（单一策略源） */
@@ -64,9 +67,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'HEALING_APPROVE',
     'RELEASE_APPROVE',
     'PRODUCTION_ACCESS',
+    'OPS_READ',
   ],
   VIEWER: ['PROJECT_READ', 'ASSET_READ'],
-  SERVICE_ACCOUNT: ['TEST_RUN', 'ASSET_READ', 'DEFECT_CREATE'],
+  SERVICE_ACCOUNT: ['TEST_RUN', 'ASSET_READ', 'DEFECT_CREATE', 'OPS_READ'],
 };
 
 /** 判断角色是否具备某权限 */

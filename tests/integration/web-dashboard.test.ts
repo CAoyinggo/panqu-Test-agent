@@ -161,7 +161,8 @@ describe('/api 前缀（Dashboard 与 API 同源）', () => {
 
   it('带 token 访问 /api/metrics?window= 等 Dashboard 数据源', async () => {
     const ts = await makeServer({ withAuth: true, webDir: makeWebDir(true) });
-    const token = await login(ts);
+    // 27.2：/api/telemetry/cost、/api/jobs、/api/audit、/api/workers 为运维只读端点（OPS_READ），需 admin 身份
+    const token = await login(ts, 'admin', 'admin123');
 
     const metrics = await ts.request('GET', '/api/metrics?window=1h', { token });
     expect(metrics.status).toBe(200);
@@ -196,6 +197,15 @@ describe('/api 前缀（Dashboard 与 API 同源）', () => {
 
     const dash = await ts.request('GET', '/api/dashboard', { token });
     expect(dash.status).toBe(200);
+  });
+
+  it('QA 角色访问运维端点 /api/audit → 403（OPS_READ 权限隔离）', async () => {
+    const ts = await makeServer({ withAuth: true, webDir: makeWebDir(true) });
+    const token = await login(ts, 'qa-a', 'qa123456');
+    expect((await ts.request('GET', '/api/audit', { token })).status).toBe(403);
+    expect((await ts.request('GET', '/api/telemetry/cost', { token })).status).toBe(403);
+    // 非运维端点（dashboard 数据源）仍可访问
+    expect((await ts.request('GET', '/api/dashboard', { token })).status).toBe(200);
   });
 });
 

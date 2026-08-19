@@ -1,8 +1,10 @@
 // Approval Center（Phase 24.5）：审批工作流
 // - request：创建审批（幂等：同一 idempotencyKey 只创建一份）
 // - approve / reject：只允许对 PENDING 操作，已决的审批不可二次变更
+// - 27.3：审批职责分离——审批人不能审批自己发起的申请（自提自批禁止）
 // - 幂等：重复 approve / reject 返回既有结果，不重复执行
 
+import { randomUUID } from 'node:crypto';
 import type { Repository } from '../storage/repository.js';
 import {
   type ApprovalRequest,
@@ -30,7 +32,7 @@ export class ApprovalCenter {
       const existing = await this.repo.query({ idempotencyKey: input.idempotencyKey });
       if (existing.length > 0) return { approval: existing[0], created: false };
     }
-    const approvalId = input.approvalId ?? `approval-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const approvalId = input.approvalId ?? `approval-${randomUUID()}`;
     const approval: ApprovalRequest = {
       id: approvalId,
       approvalId,
@@ -82,6 +84,10 @@ export class ApprovalCenter {
     // 幂等：已决审批返回既有结果，不重复执行
     if (cur.status !== 'PENDING') {
       return cur;
+    }
+    // 27.3：审批职责分离——审批人不能审批自己发起的申请（防自提自批越权）
+    if (cur.requester === decidedBy) {
+      throw new Error(`审批职责分离：审批人 ${decidedBy} 不能审批自己发起的申请`);
     }
     return this.repo.update(approvalId, {
       status,

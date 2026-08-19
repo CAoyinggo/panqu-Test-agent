@@ -25,6 +25,7 @@ import { withLLMTelemetry, runContext } from '../src/platform/index.js';
 import { MockLLMProvider } from '../src/llm/mock-llm.js';
 import { createSqliteDatabase, sqliteDataFile } from '../src/platform/storage/sqlite/database.js';
 import { createPostgresPool } from '../src/platform/storage/postgres/pg-database.js';
+import { isProductionLike, resolvePlatformMode } from '../src/platform/security/index.js';
 import {
   applySqliteMigrations,
   applyPostgresMigrations,
@@ -459,7 +460,8 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exitCode = 1;
     } else if (group === 'serve') {
-      // 25.6：启动 Platform API + Web Dashboard（长驻进程）
+      // 25.6：启动 Platform API + Web Dashboard（长驻进程）；27.1：运行模式统一解析并强制生产安全约束
+      const mode = resolvePlatformMode();
       const port = Number(flagValue(args, '--port') ?? process.env.PLATFORM_PORT ?? 8787);
       const host = flagValue(args, '--host') ?? '127.0.0.1';
       const webDir = flagValue(args, '--web') ?? path.join(process.cwd(), 'web', 'dist');
@@ -468,7 +470,7 @@ async function main(): Promise<void> {
       const server = createPlatformServer({
         service: bundle.service,
         auth: bundle.auth,
-        mode: (process.env.PLATFORM_MODE as never) ?? 'development',
+        mode,
         port,
         host,
         now: () => new Date().toISOString(),
@@ -477,8 +479,11 @@ async function main(): Promise<void> {
       const { url } = await server.listen();
       console.log('════════ PANQU Platform ════════');
       console.log(`API + Web Dashboard：${url}`);
+      console.log(`运行模式：${mode}${isProductionLike(mode) ? '（生产安全约束已生效：JWT_SECRET 强制、静态身份关闭）' : '（开发模式）'}`);
       console.log(`Web 构建：${hasWeb ? '已构建（npm run build:web）' : '未构建（运行 npm run build:web 后重试）'}`);
-      console.log(`默认账号：admin / admin123（seed 用户）`);
+      if (!isProductionLike(mode)) {
+        console.log(`默认账号：admin / admin123（seed 用户；生产模式禁用）`);
+      }
       console.log(`自动派发：新建 Run 由 CLI Worker 真实执行（产生真实遥测）`);
       console.log('Ctrl+C 退出');
       console.log('════════════════════════════════');

@@ -148,6 +148,37 @@ describe('X-Actor/X-Role 内部模式', () => {
   });
 });
 
+describe('27.2 读端点 RBAC：OPS_READ（审计 / 遥测成本 / Job / Worker）', () => {
+  const OPS_ENDPOINTS = ['/audit', '/jobs', '/workers', '/telemetry/cost'];
+
+  it('VIEWER / QA 无权读取运维端点 → 403 Forbidden', async () => {
+    const ts = await makeServer({ mode: 'development' });
+    for (const ep of OPS_ENDPOINTS) {
+      for (const role of ['VIEWER', 'QA']) {
+        const res = await ts.request('GET', ep, { token: STATIC_TOKEN, headers: { 'X-Actor': 'ops-user', 'X-Role': role } });
+        expect(res.status, `${ep} 角色 ${role}`).toBe(403);
+        expect((res.data as { message: string }).message, `${ep} 角色 ${role}`).toMatch(/无权读取运维数据/);
+      }
+    }
+  });
+
+  it('ADMIN / RELEASE_MANAGER / SERVICE_ACCOUNT 有权读取运维端点 → 200', async () => {
+    const ts = await makeServer({ mode: 'development' });
+    for (const ep of OPS_ENDPOINTS) {
+      for (const role of ['ADMIN', 'RELEASE_MANAGER', 'SERVICE_ACCOUNT']) {
+        const res = await ts.request('GET', ep, { token: STATIC_TOKEN, headers: { 'X-Actor': 'ops-user', 'X-Role': role } });
+        expect(res.status, `${ep} 角色 ${role}`).toBe(200);
+      }
+    }
+  });
+
+  it('JWT 登录的 VIEWER 同样无 OPS_READ（不依赖 X-Header 身份）', async () => {
+    const ts = await makeServer({ withAuth: true, mode: 'development' });
+    const token = await login(ts, 'viewer', 'view123456');
+    expect((await ts.request('GET', '/audit', { token })).status).toBe(403);
+  });
+});
+
 describe('requestId / traceId 契约', () => {
   it('错误响应携带 requestId 与 traceId', async () => {
     const ts = await makeServer({ withAuth: true });

@@ -178,9 +178,10 @@ describe('可选分页（25.7）', () => {
     const raw = await ts.request('GET', '/api/runs', { token: STATIC_TOKEN });
     expect(Array.isArray(raw.data)).toBe(true);
 
-    // 其他列表路由
-    const audit = await ts.request('GET', '/api/audit?pageSize=1', { token: STATIC_TOKEN });
+    // 其他列表路由（/api/audit 为 OPS_READ 运维端点，27.2：需 ADMIN 身份）
+    const audit = await ts.request('GET', '/api/audit?pageSize=1', { token: STATIC_TOKEN, headers: { 'X-Actor': 'ops', 'X-Role': 'ADMIN' } });
     const ad = audit.data as { items: unknown[]; pagination: { pageSize: number } };
+    expect(audit.status).toBe(200);
     expect(Array.isArray(ad.items)).toBe(true);
     expect(ad.pagination.pageSize).toBe(1);
   });

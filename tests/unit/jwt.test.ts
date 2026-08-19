@@ -72,6 +72,13 @@ describe('JWT 签发 / 校验', () => {
     expect(payload.sub).toBe('u-admin');
   });
 
+  it('27.3 decodeJwt 加固：结构非法 / 非法 JSON → 抛错（不静默返回）', () => {
+    expect(() => decodeJwt('a.b')).toThrow(/结构非法/);
+    expect(() => decodeJwt('a.b.c.d')).toThrow(/结构非法/);
+    // 合法段数但 payload 非 JSON → 抛错
+    expect(() => decodeJwt('eyJhbGciOiJIUzI1NiJ9.not-json.c2ln')).toThrow(/payload 非法/);
+  });
+
   it('时间确定性：注入 iat 与 nowSeconds 后结果稳定', () => {
     const iat = 1_700_000_000;
     const token = signJwt({ ...base, iat }, SECRET, 300);

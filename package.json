@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
@@ -77,6 +77,7 @@
     "platform:onboarding": "npm run build && node dist/bin/platform-cli.js platform assets import && vitest run tests/e2e/project-onboarding.test.ts",
     "platform:preflight": "npm run build && node dist/bin/platform-cli.js preflight --json",
     "platform:health": "npm run build && node dist/bin/platform-cli.js platform health",
+    "phase27:test": "npm run build && vitest run tests/unit/security.test.ts tests/unit/auth.test.ts tests/unit/approval-center.test.ts tests/unit/jwt.test.ts tests/integration/api-auth.test.ts tests/integration/web-dashboard.test.ts tests/integration/api-hardening.test.ts tests/e2e/platform-scenarios.test.ts tests/e2e/production-deployment.test.ts",
     "platform:smoke": "npm run build && node dist/bin/platform-cli.js smoke",
     "platform:production:preflight": "npm run platform:preflight",
     "platform:production:smoke": "npm run platform:smoke",

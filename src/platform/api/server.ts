@@ -13,15 +13,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PlatformService } from '../service/platform-service.js';
 import type { Role } from '../rbac/rbac.js';
+import { hasPermission, type Permission } from '../rbac/rbac.js';
 import { assertRunAccess } from '../rbac/scopes.js';
 import type { AuthService } from '../auth/auth-service.js';
 import type { User } from '../auth/user.js';
 import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
+import { allowHeaderIdentity, isProductionLike, resolvePlatformMode, type PlatformMode } from '../security/index.js';
 
-/** 平台运行模式（25.8 完整实现；25.3 已用于认证开关） */
-export type PlatformRunMode = 'development' | 'test' | 'staging' | 'production';
+/** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
+export type PlatformRunMode = PlatformMode;
+
+/** 27.2：带状态码的业务错误（读端点 RBAC 等返回 403 Forbidden） */
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 export interface ApiServerOptions {
   service: PlatformService;
@@ -89,7 +101,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   const rateLimitPerMinute = opts.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT;
   const now = opts.now ?? (() => new Date().toISOString());
   const authService = opts.auth;
-  const mode: PlatformRunMode = opts.mode ?? 'development';
+  // 27.1：运行模式统一从 PLATFORM_MODE 解析（缺省 development），避免未显式配置时静默退化为非生产模式
+  const mode: PlatformRunMode = opts.mode ?? resolvePlatformMode();
 
   let server: http.Server | null = null;
   let boundPort: number | undefined;
@@ -108,7 +121,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       }
     }
     if (cred === token) {
-      if (mode === 'production') return null; // 生产禁止 X-Actor/X-Role 作为身份来源
+      // 27.1：生产模式禁止 X-Actor/X-Role 静态身份来源（防身份伪造）；其余模式允许（开发/演练）
+      if (!allowHeaderIdentity(mode)) return null;
       return {
         user: undefined,
         actor: String(req.headers['x-actor'] ?? 'api'),
@@ -116,6 +130,13 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       };
     }
     return null;
+  }
+
+  // ── 27.2：读端点 RBAC —— 运维只读（审计/遥测成本/Job/Worker）需要 OPS_READ，防 VIEWER 越权读敏感数据 ──
+  function requireOpsRead(c: Ctx): void {
+    if (!hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
+      throw new HttpError(403, `角色 ${c.role} 无权读取运维数据（需 OPS_READ 权限）`);
+    }
   }
 
   // ── 认证路由（无需静态 Token 即可访问 login/refresh；logout/info 需有效凭证）──
@@ -249,16 +270,16 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['metrics'], handler: async (c) => c.service.metrics(queryWindow(c.req.url)) },
     { method: 'GET', segments: ['metrics', 'activation'], handler: async (c) => c.service.metricsActivation() },
     { method: 'GET', segments: ['telemetry', 'snapshot'], handler: async (c) => c.service.telemetrySnapshot(queryWindow(c.req.url)) },
-    { method: 'GET', segments: ['telemetry', 'cost'], handler: async (c) => c.service.telemetryCost(queryWindow(c.req.url)) },
+    { method: 'GET', segments: ['telemetry', 'cost'], handler: async (c) => { requireOpsRead(c); return c.service.telemetryCost(queryWindow(c.req.url)); } },
     {
       method: 'GET', segments: ['telemetry', 'events'],
       handler: async (c) => maybePaginate(c.req.url, await c.service.telemetryEvents(queryParam(c.req.url, 'run') ?? undefined)),
     },
 
-    // 25.6：运维视图数据源（Dashboard）
-    { method: 'GET', segments: ['jobs'], handler: async (c) => maybePaginate(c.req.url, await c.service.listJobs()) },
-    { method: 'GET', segments: ['audit'], handler: async (c) => maybePaginate(c.req.url, await c.service.listAudit()) },
-    { method: 'GET', segments: ['workers'], handler: async (c) => maybePaginate(c.req.url, await c.service.listWorkers()) },
+    // 25.6：运维视图数据源（Dashboard；27.2：审计/Job/Worker 属运维敏感数据，需 OPS_READ）
+    { method: 'GET', segments: ['jobs'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listJobs()); } },
+    { method: 'GET', segments: ['audit'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listAudit()); } },
+    { method: 'GET', segments: ['workers'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listWorkers()); } },
   ];
 
   /** 解析 ?window= 参数（默认 7d） */
@@ -582,7 +603,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       sendJson(res, 200, result);
     } catch (err) {
       const e = err as Error;
-      const status = /权限|缺少|无权|不存在|非法|重复|禁止|已存在/.test(e.message) ? 400 : 500;
+      // 27.2：HttpError 携带显式状态码（如读端点 RBAC 的 403 Forbidden）；其余按业务错误语义映射
+      const status = e instanceof HttpError ? e.status : /权限|缺少|无权|不存在|非法|重复|禁止|已存在/.test(e.message) ? 400 : 500;
       sendError(res, status, 'error', e.message, ids);
     } finally {
       // 运维指标：记录 API 延迟

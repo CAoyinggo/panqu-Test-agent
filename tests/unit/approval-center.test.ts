@@ -126,4 +126,39 @@ describe('Approval Center', () => {
     const c = makeCenter();
     await expect(c.approve('nope', 'bob')).rejects.toThrow(/审批不存在/);
   });
+
+  it('27.3 审批职责分离：审批人不能审批自己发起的申请（approve/reject 均拦截）', async () => {
+    const c = makeCenter();
+    const { approval } = await c.request({
+      runId: 'run-6',
+      action: 'release',
+      riskLevel: 'risky',
+      environment: 'production',
+      requester: 'alice',
+      reason: '自提自批演练',
+    });
+    await expect(c.approve(approval.approvalId, 'alice')).rejects.toThrow(/职责分离/);
+    await expect(c.reject(approval.approvalId, 'alice')).rejects.toThrow(/职责分离/);
+    // 未被篡改：仍为 PENDING，可交由他人审批
+    expect((await c.get(approval.approvalId))?.status).toBe('PENDING');
+    const approved = await c.approve(approval.approvalId, 'bob');
+    expect(approved.status).toBe('APPROVED');
+  });
+
+  it('27.3 审批 ID 使用安全随机值：同一时间多次创建不重复', async () => {
+    const c = makeCenter();
+    const ids = new Set<string>();
+    for (let i = 0; i < 50; i++) {
+      const { approval } = await c.request({
+        runId: `run-${i}`,
+        action: 'release',
+        riskLevel: 'risky',
+        environment: 'production',
+        requester: 'alice',
+        reason: 'x',
+      });
+      ids.add(approval.approvalId);
+    }
+    expect(ids.size).toBe(50);
+  });
 });

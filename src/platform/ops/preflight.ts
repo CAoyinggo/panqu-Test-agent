@@ -1,6 +1,6 @@
-// 平台 Preflight（Phase 25.8）：平台上线前环境自检
+// 平台 Preflight（Phase 25.8 / Phase 27.1）：平台上线前环境自检
 // 检查项：Node 版本 / 平台构建产物 / 存储连通性（sqlite 可写、postgres 可连接）
-//        / 迁移状态（未应用迁移数）/ 环境变量（JWT_SECRET）/ 敏感信息扫描。
+//        / 迁移状态（未应用迁移数）/ 安全策略（模式、JWT 密钥、默认口令、静态身份来源）/ 敏感信息扫描。
 // 供 CLI `preflight` 命令与集成测试共用；返回统一 CheckResult[]。
 
 import fs from 'node:fs';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { createSqliteDatabase, sqliteDataFile } from '../storage/sqlite/database.js';
 import { createPostgresPool } from '../storage/postgres/pg-database.js';
 import { MIGRATIONS, listAppliedSqlite, ensureSqliteMigrationsTable } from './migrations.js';
+import { resolvePlatformMode, securityChecks } from '../security/index.js';
 
 export interface PlatformCheck {
   name: string;
@@ -74,18 +75,19 @@ async function checkMigrations(): Promise<PlatformCheck> {
   }
 }
 
-/** 环境变量：production 模式必须显式提供 JWT_SECRET */
-function checkEnv(): PlatformCheck {
-  const mode = (process.env.PLATFORM_MODE ?? 'development').toLowerCase();
-  const secret = process.env.JWT_SECRET;
-  const ok = mode !== 'production' || !!secret;
+/** 安全策略（Phase 27.1）：运行模式 / JWT 密钥 / 默认口令 / 静态身份来源。
+ *  复用安全策略模块 securityChecks；生产/预发模式 JWT 缺失或默认值 → BLOCK，默认口令 → BLOCK。 */
+function checkSecurity(): PlatformCheck {
+  const mode = resolvePlatformMode();
+  const items = securityChecks(mode);
+  const block = items.filter((i) => i.level === 'BLOCK');
+  const warn = items.filter((i) => i.level === 'WARN');
+  const level: PlatformCheck['level'] = block.length ? 'BLOCK' : warn.length ? 'WARN' : 'PASS';
   return {
-    name: '环境变量',
-    ok,
-    level: mode === 'production' ? (ok ? 'PASS' : 'BLOCK') : 'PASS',
-    detail: mode === 'production'
-      ? (ok ? 'JWT_SECRET 已配置（production 安全）' : 'production 模式缺少 JWT_SECRET（阻断）')
-      : `模式 ${mode}（开发模式不强制 JWT_SECRET）`,
+    name: '安全策略',
+    ok: block.length === 0,
+    level,
+    detail: items.map((i) => `${i.name}:${i.level}（${i.detail}）`).join('；'),
   };
 }
 
@@ -141,7 +143,7 @@ export async function runPlatformPreflight(opts: { checkPostgres?: boolean } = {
     checkNodeVersion(),
     checkBuild(),
     checkSqlite(),
-    checkEnv(),
+    checkSecurity(),
     checkSecrets(),
   ];
   if (opts.checkPostgres ?? true) checks.push(await checkPostgres());

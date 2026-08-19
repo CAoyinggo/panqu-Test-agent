@@ -29,6 +29,7 @@ import { UserStore, AuthService } from '../auth/index.js';
 import type { UserRecord } from '../auth/index.js';
 import { PlatformTestAssets } from '../test-assets/platform-test-assets.js';
 import { TelemetryService, TelemetryEventStore, CostLedger, RcaVerificationStore, FlakyRecordStore, HealingRecordStore, ReleaseRecordStore, MetricActivationTracker } from '../telemetry/index.js';
+import { isProductionLike, requireSecureJwtSecret, resolveAllowDefaultCredentials, resolvePlatformMode, type PlatformMode } from '../security/index.js';
 import type {
   TelemetryEvent,
   CostLedgerEntry,
@@ -61,6 +62,8 @@ export interface PlatformFactoryOptions {
   /** 26.7：真实飞书自定义机器人 Webhook URL（如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx）；
    *  配置后平台事件（6 类关键通知等）真实投递飞书；缺省仅 console。 */
   feishuWebhookUrl?: string;
+  /** 27.1：运行模式（缺省按 PLATFORM_MODE 解析；development/test 允许开发回退，production/staging 强制安全约束） */
+  mode?: PlatformMode;
 }
 
 export interface PlatformBundle {
@@ -86,6 +89,8 @@ export interface PlatformBundle {
   repositories: Record<string, Repository<Entity>>;
   /** 测试资产库（26.2）：真实 Test Case 资产（查询/统计/导入；同存储后端持久化） */
   testAssets: PlatformTestAssets;
+  /** 27.1：生效的运行模式（安全约束依据；development/test 允许回退，production/staging 强制） */
+  mode: PlatformMode;
   /** 注入 Worker 执行器（执行真实 Job 的逻辑；不注入则 Worker 不可执行） */
   registerWorkerExecutor: (workerId: string, exec: (job: unknown) => Promise<unknown>) => void;
 }
@@ -95,6 +100,10 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
   const now = opts.now ?? (() => new Date().toISOString());
   const storage: StorageKind = opts.storage ?? 'memory';
   const dataDir = opts.dataDir ?? platformDataDir();
+  // 27.1：运行模式统一解析；生产安全约束在装配期强制（JWT_SECRET / 默认口令）
+  const mode: PlatformMode = opts.mode ?? resolvePlatformMode();
+  const jwtSecret = requireSecureJwtSecret(mode, opts.jwtSecret ?? process.env.JWT_SECRET);
+  const allowDefaultCredentials = resolveAllowDefaultCredentials(mode, opts.allowDefaultCredentials);
   // sqlite：单进程共享一个连接（所有集合在同一 .sqlite 文件）
   const sqliteDb = storage === 'sqlite' ? createSqliteDatabase(sqliteDataFile(dataDir)) : undefined;
   // postgres：共享连接池（DATABASE_URL 或默认本地连接）
@@ -157,9 +166,11 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
   // 25.3：用户存储 + JWT 认证（用户落同一存储后端）
   const users = new UserStore(reg('users', createRepository<UserRecord>(storage, store('users'))));
   const auth = new AuthService(users, {
-    secret: opts.jwtSecret ?? process.env.JWT_SECRET,
+    secret: jwtSecret,
     now: () => Date.parse(now()),
-    allowDefaultCredentials: opts.allowDefaultCredentials,
+    allowDefaultCredentials,
+    // 27.1：生产/预发模式禁止开发密钥回退（双保险；装配期 requireSecureJwtSecret 已强制）
+    requireSecureSecret: isProductionLike(mode),
     audit,
   });
   if (opts.seedUsers ?? true) {
@@ -208,7 +219,7 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
     );
   };
 
-  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, testAssets, registerWorkerExecutor };
+  return { service, projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, users, auth, telemetry, repositories: repos, testAssets, mode, registerWorkerExecutor };
 }
 
 /** 默认平台数据目录（运维脚本用） */

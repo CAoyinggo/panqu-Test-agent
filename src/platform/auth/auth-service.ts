@@ -7,6 +7,7 @@ import { DEFAULT_SEED_USERS, type UserStore } from './user-store.js';
 import { signJwt, verifyJwt, type JwtPayload } from './jwt.js';
 import { toPublicUser, type User } from './user.js';
 import type { AuditLog } from '../audit/audit-log.js';
+import { DEV_FALLBACK_JWT_SECRET, isKnownInsecureJwtSecret } from '../security/index.js';
 
 /** 默认种子用户用户名（生产环境 allowDefaultCredentials=false 时禁止登录） */
 const DEFAULT_USERNAMES = new Set(DEFAULT_SEED_USERS.map((u) => u.username));
@@ -29,6 +30,8 @@ export interface AuthServiceOptions {
   now?: () => number;
   /** 是否允许默认种子用户口令登录（production 必须 false） */
   allowDefaultCredentials?: boolean;
+  /** 强制安全密钥（Phase 27.1）：生产/预发模式禁止使用缺失或开发默认 JWT_SECRET，否则拒绝装配 */
+  requireSecureSecret?: boolean;
   /** 审计（可选）：登录 / 登出 / 刷新记录 */
   audit?: AuditLog;
 }
@@ -51,7 +54,15 @@ export class AuthService {
     private readonly users: UserStore,
     private readonly opts: AuthServiceOptions = {},
   ) {
-    this.secret = opts.secret ?? process.env.JWT_SECRET ?? 'dev-secret-change-me';
+    const rawSecret = opts.secret ?? process.env.JWT_SECRET;
+    if (isKnownInsecureJwtSecret(rawSecret)) {
+      if (opts.requireSecureSecret) {
+        throw new Error(`[security] 生产/预发模式必须显式配置非默认 JWT_SECRET（当前缺失或使用开发默认值 ${DEV_FALLBACK_JWT_SECRET}）`);
+      }
+      this.secret = DEV_FALLBACK_JWT_SECRET;
+    } else {
+      this.secret = rawSecret;
+    }
     this.accessTtl = opts.accessTtlSeconds ?? 3600;
     this.refreshTtl = opts.refreshTtlSeconds ?? 30 * 24 * 3600;
     this.issuer = opts.issuer ?? 'panqu-test-platform';
