@@ -174,7 +174,8 @@ describe('S6：Run → Share Report → Project Permission', () => {
     const api = await startServer(b);
     const r = await api.request('POST', '/runs', { token: TOKEN, headers: QA, body: { projectId: 'wan3', environment: 'test', trigger: 'manual' } });
     const runId = (r.data as { runId: string }).runId;
-    const share = await api.request('GET', `/runs/${runId}/share`, { token: TOKEN, headers: QA });
+    // Phase 40.3：share 为 POST
+    const share = await api.request('POST', `/runs/${runId}/share`, { token: TOKEN, headers: QA });
     expect(share.status).toBe(200);
     const sh = share.data as { url: string; share: { token: string } };
     expect(sh.url).toContain(`/runs/${runId}/report`);

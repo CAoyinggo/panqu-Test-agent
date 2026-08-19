@@ -257,13 +257,19 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
     { method: 'GET', segments: ['test-assets'], handler: async (c) => ({ items: await c.service.listTestAssets(), source: 'platform-test-assets' }) },
     { method: 'GET', segments: ['test-assets', 'stats'], handler: async (c) => c.service.testAssetStats() },
-    { method: 'GET', segments: ['defects'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
     { method: 'GET', segments: ['knowledge'], handler: async () => ({ items: [], source: 'platform-repo-not-connected' }) },
+
+    // ── QA Workflow（Phase 40.2）：Defect 管理（真实实体，替换此前空 stub）──
+    { method: 'GET', segments: ['defects'], handler: async (c) => maybePaginate(c.req.url, await c.service.listDefects(undefined, c.user?.scopes)) },
+    { method: 'POST', segments: ['defects'], handler: async (c) => c.service.createDefect({ projectId: String(c.body.projectId ?? ''), title: String(c.body.title ?? ''), severity: c.body.severity as never, environment: c.body.environment as string | undefined, runId: c.body.runId as string | undefined, caseId: c.body.caseId as string | undefined, description: c.body.description as string | undefined, evidence: c.body.evidence as unknown[] | undefined, createdBy: c.actor }, c.role, c.user?.scopes) },
+    { method: 'GET', segments: ['defects', ':id'], handler: async (c, p) => { const d = await c.service.getDefect(p.id, c.user?.scopes); if (!d) throw new HttpError(404, `缺陷不存在：${p.id}`); return d; } },
+    { method: 'PATCH', segments: ['defects', ':id', 'status'], handler: async (c, p) => c.service.updateDefectStatus(p.id, String(c.body.status ?? '') as never, c.body.resolution as string | undefined, c.actor, c.role, c.user?.scopes) },
+    { method: 'POST', segments: ['defects', ':id', 'assign'], handler: async (c, p) => c.service.assignDefect(p.id, String(c.body.assignee ?? ''), c.actor, c.role, c.user?.scopes) },
 
     // ── QA Workflow（Phase 39）：Test Suite ──
     { method: 'POST', segments: ['test-suites'], handler: async (c) => c.service.createSuite({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
     { method: 'GET', segments: ['test-suites'], handler: async (c) => maybePaginate(c.req.url, await c.service.listSuites(undefined, c.user?.scopes)) },
-    { method: 'GET', segments: ['test-suites', ':id'], handler: async (c, p) => { const s = await c.service.getSuite(p.id); if (!s) throw new HttpError(404, `Test Suite 不存在：${p.id}`); return s; } },
+    { method: 'GET', segments: ['test-suites', ':id'], handler: async (c, p) => { const s = await c.service.getSuite(p.id, c.user?.scopes); if (!s) throw new HttpError(404, `Test Suite 不存在：${p.id}`); return s; } },
     { method: 'PATCH', segments: ['test-suites', ':id'], handler: async (c, p) => c.service.updateSuite(p.id, c.body as never, c.actor, c.role) },
     { method: 'POST', segments: ['test-suites', ':id', 'archive'], handler: async (c, p) => c.service.archiveSuite(p.id, c.actor, c.role) },
     { method: 'POST', segments: ['test-suites', ':id', 'restore'], handler: async (c, p) => c.service.restoreSuite(p.id, c.actor, c.role) },
@@ -275,19 +281,19 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     // ── QA Workflow（Phase 39）：Test Plan ──
     { method: 'POST', segments: ['test-plans'], handler: async (c) => c.service.createPlan({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
     { method: 'GET', segments: ['test-plans'], handler: async (c) => maybePaginate(c.req.url, await c.service.listPlans(undefined, c.user?.scopes)) },
-    { method: 'GET', segments: ['test-plans', ':id'], handler: async (c, p) => { const plan = await c.service.getPlan(p.id); if (!plan) throw new HttpError(404, `Test Plan 不存在：${p.id}`); return plan; } },
+    { method: 'GET', segments: ['test-plans', ':id'], handler: async (c, p) => { const plan = await c.service.getPlan(p.id, c.user?.scopes); if (!plan) throw new HttpError(404, `Test Plan 不存在：${p.id}`); return plan; } },
     { method: 'PATCH', segments: ['test-plans', ':id'], handler: async (c, p) => c.service.updatePlan(p.id, c.body as never, c.actor, c.role) },
     { method: 'POST', segments: ['test-plans', ':id', 'run'], handler: async (c, p) => c.service.runPlan(p.id, c.actor, c.role, c.user?.scopes) },
-    { method: 'GET', segments: ['test-plans', ':id', 'cases'], handler: async (c, p) => c.service.planCases(p.id) },
+    { method: 'GET', segments: ['test-plans', ':id', 'cases'], handler: async (c, p) => c.service.planCases(p.id, c.user?.scopes) },
 
     // ── QA Workflow（Phase 39）：Run Template ──
     { method: 'POST', segments: ['run-templates'], handler: async (c) => c.service.createTemplate({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
     { method: 'GET', segments: ['run-templates'], handler: async (c) => maybePaginate(c.req.url, await c.service.listTemplates(undefined, c.user?.scopes)) },
-    { method: 'GET', segments: ['run-templates', ':id'], handler: async (c, p) => c.service.getTemplate(p.id) },
+    { method: 'GET', segments: ['run-templates', ':id'], handler: async (c, p) => c.service.getTemplate(p.id, c.user?.scopes) },
     { method: 'POST', segments: ['run-templates', ':id', 'run'], handler: async (c, p) => c.service.runTemplate(p.id, c.actor, c.role, c.user?.scopes) },
 
     // ── QA Workflow（Phase 39）：Asset Versioning ──
-    { method: 'GET', segments: ['assets', ':id', 'versions'], handler: async (c, p) => c.service.assetVersions(p.id) },
+    { method: 'GET', segments: ['assets', ':id', 'versions'], handler: async (c, p) => c.service.assetVersions(p.id, c.user?.scopes) },
     { method: 'GET', segments: ['assets', ':id', 'compare'], handler: async (c, p) => c.service.assetCompare(p.id, Number(queryParam(c.req.url, 'from') ?? 1), Number(queryParam(c.req.url, 'to') ?? 2)) },
     { method: 'POST', segments: ['assets', ':id', 'version'], handler: async (c, p) => c.service.recordAssetVersion({ assetType: String(c.body.assetType ?? 'test-case') as never, assetId: p.id, snapshot: (c.body.snapshot as Record<string, unknown>) ?? {}, createdBy: c.actor, changeReason: c.body.changeReason as string | undefined }, c.role) },
 
@@ -295,7 +301,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'POST', segments: ['runs', ':id', 'rerun'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.rerunRun(p.id, c.actor, c.role, c.user?.scopes)) },
     { method: 'POST', segments: ['runs', ':id', 'clone'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.cloneRun(p.id, { environment: c.body.environment as string | undefined, budget: c.body.budget as number | undefined, releaseGate: c.body.releaseGate as boolean | undefined }, c.actor, c.role, c.user?.scopes)) },
     { method: 'POST', segments: ['runs', ':id', 'template'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.saveTemplateFromRun(p.id, String(c.body.name ?? ''), c.actor, c.role, c.user?.scopes)) },
-    { method: 'GET', segments: ['runs', ':id', 'share'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.shareRun(p.id, c.actor, c.role, c.user?.scopes)) },
+    { method: 'POST', segments: ['runs', ':id', 'share'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.shareRun(p.id, c.actor, c.role, c.user?.scopes)) },
     { method: 'POST', segments: ['runs', ':id', 'comments'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.addRunComment(p.id, String(c.body.body ?? ''), c.actor, c.role, c.user?.scopes)) },
     { method: 'GET', segments: ['runs', ':id', 'comments'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.listRunComments(p.id, c.user?.scopes)) },
     { method: 'POST', segments: ['runs', ':id', 'assign'], handler: async (c, p) => withRunScope(c, p.id, () => c.service.assignRun(p.id, (c.body.assignees as string[]) ?? [], c.actor, c.role, c.user?.scopes)) },
@@ -305,7 +311,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
     { method: 'POST', segments: ['approvals', ':id', 'approve'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.approveApproval(p.id, c.actor, c.role)) },
     { method: 'POST', segments: ['approvals', ':id', 'reject'], handler: async (c, p) => withApprovalScope(c, p.id, () => c.service.rejectApproval(p.id, c.actor, c.role)) },
-    { method: 'GET', segments: ['approvals'], handler: async (c) => maybePaginate(c.req.url, await c.service.listApprovals()) },
+    { method: 'GET', segments: ['approvals'], handler: async (c) => maybePaginate(c.req.url, await c.service.listApprovals(undefined, c.user?.scopes)) },
 
     { method: 'GET', segments: ['dashboard'], handler: async (c) => c.service.dashboard() },
     { method: 'GET', segments: ['health'], handler: async (c) => c.service.health() },
@@ -521,6 +527,48 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     return true;
   }
 
+  /** Phase 40.3：公开分享落地页 —— ?share=<token> 时无需 JWT 即可读取报告 / 导出（share token 防跨项目猜测）
+   *  支持 /api 前缀（前端 api.ts baseURL=/api）；浏览器直链（Accept: text/html）放行给 SPA fallback 渲染前端公开页。 */
+  async function handlePublicShare(req: http.IncomingMessage, res: http.ServerResponse, ids: { requestId: string; traceId: string }): Promise<boolean> {
+    if ((req.method ?? 'GET').toUpperCase() !== 'GET') return false;
+    const url = req.url ?? '';
+    const pathname = url.split('?')[0];
+    const stripped = pathname.startsWith('/api/') ? pathname.slice(4) : pathname;
+    const m = /^\/runs\/([^/]+)\/report(\/export)?$/.exec(stripped);
+    if (!m) return false;
+    const shareToken = queryParam(url, 'share');
+    if (!shareToken) return false; // 无 share 参数 → 走正常认证流程（受保护）
+    // 浏览器直链分享链接 → 交给 SPA fallback 返回 index.html，由前端 ReadOnlyRunReport 渲染（再从 /api 取数据）
+    if ((req.headers.accept ?? '').includes('text/html')) return false;
+    const runId = m[1];
+    const isExport = !!m[2];
+    try {
+      const ok = await opts.service.verifyShare(runId, shareToken);
+      if (!ok) {
+        sendError(res, 403, 'share_invalid', '分享链接无效或已失效', ids);
+        return true;
+      }
+      if (isExport) {
+        const format = queryParam(url, 'format');
+        const body = format === 'html' ? await opts.service.exportReportHtml(runId) : await opts.service.exportReportJson(runId);
+        res.writeHead(200, {
+          'Content-Type': format === 'html' ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      } else {
+        const report = await opts.service.runReport(runId);
+        sendJson(res, 200, report);
+      }
+      return true;
+    } catch (err) {
+      const e = err as Error;
+      const isForbidden = /无权|缺少权限|禁止|越权/.test(e.message);
+      sendError(res, /不存在/.test(e.message) ? 404 : isForbidden ? 403 : 500, 'error', e.message, ids);
+      return true;
+    }
+  }
+
   /** 前端 /api 前缀 → 根路由（25.6：Dashboard 与 API 同源部署） */
   function stripApiPrefix(u: string): string {
     const pathname = u.split('?')[0];
@@ -598,6 +646,9 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
       // 26.1：公开版本信息（无需认证）
       if (handlePublicVersion(req, res)) return;
+
+      // Phase 40.3：公开分享落地页（?share=<token> 无需 JWT 读报告/导出；无 share 参数回退正常认证流程）
+      if (await handlePublicShare(req, res, ids)) return;
 
       // 认证路由无需静态 Token
       if (isAuthRoute(method, pathname)) {

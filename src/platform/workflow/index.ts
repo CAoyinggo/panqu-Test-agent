@@ -1,5 +1,5 @@
 // Workflow 模块门面（Phase 39）：QA Workbench 统一出口
-// 聚合 Suite / Plan / Template / Versioning / Collaboration / Report / QA Home。
+// 聚合 Suite / Plan / Template / Versioning / Collaboration / Report / QA Home / Defect（Phase 40.2）。
 // 经 PlatformService 注入，API 与 CLI 共用（禁止维护两套逻辑）。
 
 import { TestSuiteService } from './test-suite.js';
@@ -9,6 +9,7 @@ import { AssetVersioningService } from './asset-versioning.js';
 import { CollaborationService } from './collaboration.js';
 import { RunReportService } from './run-report.js';
 import { QaHomeService } from './qa-home.js';
+import { DefectService } from './defects.js';
 
 export { TestSuiteService, type TestSuite, type CreateSuiteInput, type TestSuiteStatus } from './test-suite.js';
 export { TestPlanService, type TestPlan, type CreatePlanInput, type TestPlanMode } from './test-plan.js';
@@ -17,6 +18,17 @@ export { AssetVersioningService, type AssetVersion, type AssetDiff, type AssetVe
 export { CollaborationService, type CollaborationItem, type CommentEntry, type CollaborationResourceType, parseMentions } from './collaboration.js';
 export { RunReportService, type RunReportSummary, type RunShare, type ReportRisk } from './run-report.js';
 export { QaHomeService, type QaHome, type ActionItem } from './qa-home.js';
+export {
+  DefectService,
+  type Defect,
+  type CreateDefectInput,
+  type DefectSeverity,
+  type DefectStatus,
+  DEFECT_SEVERITIES,
+  DEFECT_STATUSES,
+  isDefectSeverity,
+  isDefectStatus,
+} from './defects.js';
 
 export interface WorkflowServiceDeps {
   suites: TestSuiteService;
@@ -26,6 +38,7 @@ export interface WorkflowServiceDeps {
   collaboration: CollaborationService;
   reports: RunReportService;
   qaHome: QaHomeService;
+  defects: DefectService;
 }
 
 export class WorkflowService {
@@ -51,5 +64,8 @@ export class WorkflowService {
   }
   get qaHome(): QaHomeService {
     return this.deps.qaHome;
+  }
+  get defects(): DefectService {
+    return this.deps.defects;
   }
 }

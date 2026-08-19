@@ -33,6 +33,8 @@ export const ALL_COLLECTIONS: string[] = [
   'asset-versions',
   'collaboration',
   'run-reports',
+  // Phase 40.2：缺陷管理集合
+  'defects',
 ];
 
 export interface MigrationContext {

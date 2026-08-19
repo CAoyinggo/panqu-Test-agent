@@ -16,25 +16,25 @@ interface ActionItem {
 
 interface QaHomeData {
   projects: Array<{ id: string; name: string }>;
-  todayRuns: number;
+  todayRuns: Array<{ runId: string; projectId: string; environment: string; status: string }>;
   runningRuns: Array<{ runId: string; projectId: string; environment: string; progress: number }>;
   failedRuns: Array<{ runId: string; projectId: string; environment: string; status: string }>;
   pendingApprovals: Array<{ approvalId: string; action: string; riskLevel: string; environment: string; reason: string }>;
   recentFailures: Array<{ runId: string; projectId: string; environment: string }>;
-  recentDefects: Array<{ defectId: string; title: string; severity: string; status: string }>;
+  recentDefects: Array<{ defectId: string; title: string; severity: string; status: string; projectId: string }>;
   recentReleases: Array<{ runId: string; projectId: string; decision: string }>;
   commonPlans: Array<{ id: string; name: string; mode: string }>;
-  commonTemplates: Array<{ id: string; name: string; mode: string; runCount: number }>;
-  flakyCases: Array<{ caseId: string; flakeRate: number }>;
-  highRiskCases: Array<{ caseId: string; risk: string }>;
+  commonTemplates: Array<{ id: string; name: string; environment: string; runCount: number }>;
+  flakyCases: Array<{ caseId: string; runs: number; failures: number; lastAt: string }>;
+  highRiskCases: Array<{ caseId: string; failures: number; lastAt: string }>;
   actionCenter: ActionItem[];
 }
 
 const SEVERITY_KIND: Record<string, 'err' | 'warn' | 'info' | 'muted'> = {
-  CRITICAL: 'err',
-  HIGH: 'err',
-  MEDIUM: 'warn',
-  LOW: 'info',
+  critical: 'err',
+  high: 'err',
+  medium: 'warn',
+  low: 'info',
 };
 
 export default function QAHome(): JSX.Element {
@@ -53,6 +53,7 @@ export default function QAHome(): JSX.Element {
             <Link className="btn btn-sm" to="/suites/new">+ 新建 Suite</Link>
             <Link className="btn btn-sm" to="/plans/new">+ 新建 Test Plan</Link>
             <Link className="btn btn-sm" to="/templates/new">+ 新建 Run Template</Link>
+            <Link className="btn btn-sm" to="/defects/new">+ 登记 Defect</Link>
             <Link className="btn btn-sm" to="/runs">历史 Runs</Link>
             <Link className="btn btn-sm" to="/approvals">待审批</Link>
           </div>
@@ -75,7 +76,7 @@ export default function QAHome(): JSX.Element {
           </Card>
 
           <div className="metric-grid">
-            <Metric label="今日 Runs" value={String(data.todayRuns)} />
+            <Metric label="今日 Runs" value={String(data.todayRuns.length)} />
             <Metric label="进行中 Runs" value={String(data.runningRuns.length)} />
             <Metric label="失败 Runs" value={String(data.failedRuns.length)} />
             <Metric label="待处理审批" value={String(data.pendingApprovals.length)} />
@@ -163,7 +164,7 @@ export default function QAHome(): JSX.Element {
                   {data.commonTemplates.map((t) => (
                     <tr key={t.id}>
                       <td>{t.name}</td>
-                      <td><StatusBadge status={t.mode} /></td>
+                      <td><StatusBadge status={t.environment} /></td>
                       <td>{t.runCount}</td>
                     </tr>
                   ))}
@@ -180,7 +181,7 @@ export default function QAHome(): JSX.Element {
                   {data.flakyCases.map((f) => (
                     <tr key={f.caseId}>
                       <td className="mono">{f.caseId}</td>
-                      <td>{(f.flakeRate * 100).toFixed(0)}%</td>
+                      <td>{f.runs > 0 ? `${((f.failures / f.runs) * 100).toFixed(0)}%` : '-'}</td>
                     </tr>
                   ))}
                 </Table>
@@ -193,7 +194,37 @@ export default function QAHome(): JSX.Element {
                   {data.highRiskCases.map((h) => (
                     <tr key={h.caseId}>
                       <td className="mono">{h.caseId}</td>
-                      <td><StatusBadge status={h.risk} /></td>
+                      <td>{h.failures} 次失败</td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </Card>
+          </div>
+          <div className="grid-2">
+            <Card title={<span>最近缺陷 <Link className="link" to="/defects">全部 ›</Link></span>}>
+              {data.recentDefects.length === 0 && <Empty text="暂无缺陷" />}
+              {data.recentDefects.length > 0 && (
+                <Table head={['缺陷', '级别', '状态']}>
+                  {data.recentDefects.map((d) => (
+                    <tr key={d.defectId}>
+                      <td><Link className="link" to={`/defects/${d.defectId}`}>{d.title}</Link></td>
+                      <td><Badge kind={SEVERITY_KIND[d.severity] ?? 'muted'}>{d.severity}</Badge></td>
+                      <td><StatusBadge status={d.status} /></td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </Card>
+            <Card title="最近 Release">
+              {data.recentReleases.length === 0 && <Empty text="暂无 Release 决策" />}
+              {data.recentReleases.length > 0 && (
+                <Table head={['Run', '项目', '决策']}>
+                  {data.recentReleases.map((r) => (
+                    <tr key={r.runId}>
+                      <td className="mono">{r.runId}</td>
+                      <td className="mono">{r.projectId}</td>
+                      <td><StatusBadge status={r.decision} /></td>
                     </tr>
                   ))}
                 </Table>
@@ -221,6 +252,6 @@ function actionTarget(a: ActionItem): JSX.Element {
   if (a.category === 'FAILURE') return <Link className="link" to={`/runs/${a.target}`}>处理失败</Link>;
   if (a.category === 'WORKER') return <Link className="link" to={`/workers`}>检查 Worker</Link>;
   if (a.category === 'FLAKY') return <Link className="link" to={`/runs`}>确认 Flaky</Link>;
-  if (a.category === 'RCA') return <Link className="link" to={`/runs/${a.target}`}>确认 RCA</Link>;
+  if (a.category === 'RCA') return <Link className="link" to={`/runs`}>确认 RCA</Link>;
   return <span>{a.detail}</span>;
 }

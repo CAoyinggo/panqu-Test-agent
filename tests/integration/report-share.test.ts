@@ -102,7 +102,8 @@ describe('Share / Export（39.6）', () => {
     const r = await ts.request('POST', '/runs', { token: STATIC_TOKEN, headers: qaHeaders(), body: { projectId: 'wan3', environment: 'test', trigger: 'manual' } });
     const runId = (r.data as { runId: string }).runId;
 
-    const share = await ts.request('GET', `/runs/${runId}/share`, { token: STATIC_TOKEN, headers: qaHeaders() });
+    // Phase 40.3：share 为 POST（前端 RunDetail 用 api.post 调用）
+    const share = await ts.request('POST', `/runs/${runId}/share`, { token: STATIC_TOKEN, headers: qaHeaders() });
     expect(share.status).toBe(200);
     const sh = share.data as { share: { token: string }; url: string };
     expect(sh.url).toContain('/runs/');

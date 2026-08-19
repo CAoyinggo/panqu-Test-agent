@@ -1,7 +1,8 @@
-import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { clearSession, getStoredUser } from './api';
 import { useState } from 'react';
 import Login from './pages/Login';
+import ReadOnlyRunReport from './pages/ReadOnlyRunReport';
 import Dashboard from './pages/Dashboard';
 import Runs from './pages/Runs';
 import RunDetail from './pages/RunDetail';
@@ -21,6 +22,7 @@ import QAHome from './pages/QAHome';
 import TestSuites from './pages/TestSuites';
 import TestPlans from './pages/TestPlans';
 import RunTemplates from './pages/RunTemplates';
+import Defects from './pages/Defects';
 
 const NAV = [
   { to: '/', label: 'QA 工作台' },
@@ -28,6 +30,7 @@ const NAV = [
   { to: '/suites', label: 'Suites' },
   { to: '/plans', label: 'Test Plan' },
   { to: '/templates', label: 'Template' },
+  { to: '/defects', label: '缺陷' },
   { to: '/projects', label: '项目' },
   { to: '/approvals', label: '审批' },
   { to: '/metrics', label: '指标' },
@@ -44,8 +47,12 @@ const NAV = [
 export default function App() {
   const [user, setUser] = useState(getStoredUser());
   const navigate = useNavigate();
+  const location = useLocation();
 
   if (!user) {
+    // Phase 40.3：无 Token 时区分公开分享落地页（/runs/:id/report?share=<token>）与登录页
+    const isPublicShare = /^\/runs\/[^/]+\/report$/.test(location.pathname) && new URLSearchParams(location.search).has('share');
+    if (isPublicShare) return <ReadOnlyRunReport />;
     return <Routes><Route path="*" element={<Login onLogin={setUser} />} /></Routes>;
   }
 
@@ -81,6 +88,8 @@ export default function App() {
           <Route path="/suites" element={<TestSuites />} />
           <Route path="/plans" element={<TestPlans />} />
           <Route path="/templates" element={<RunTemplates />} />
+          <Route path="/defects" element={<Defects />} />
+          <Route path="/defects/:id" element={<Defects />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/metrics" element={<Metrics />} />

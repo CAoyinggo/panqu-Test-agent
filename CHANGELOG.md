@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.15.0] - 2026-08-19
+
+### 修复与加固（QA Workbench 工程化收尾，Phase 40）
+
+基于 Explore 扫描出的 Critical / High 缺口逐项修复，覆盖安全越权、缺陷管理缺失、前端断点、数据真实性、聚合性能五类问题。
+
+- 安全 Critical（Phase 40.1）：单资源读端点补 Project Scope——`getSuite / getPlan / planCases / getTemplate / assetVersions / listApprovals` 六处服务层与对应路由透传 `scopes`，JWT 用户不能跨项目读取他人资源；`assetVersions` 通过资产类型（suite/plan/test-case）解析归属项目后校验；审批列表按 `approval → run → projectId` 解析过滤；`listRunComments` 默认读权限由 QA 放宽为 VIEWER。
+- 缺陷管理真实化（Phase 40.2）：新增 `src/platform/workflow/defects.ts`（Defect 实体 + 状态机 OPEN/IN_PROGRESS/RESOLVED/CLOSED/WONT_FIX + severity critical/high/medium/low + 指派）；`POST/GET/PATCH` 缺陷 API、`DefectCreated` 事件 + `audit('defect')` 写入、`defect` CLI 命令组、Web 缺陷页面（列表/新建/详情/状态流转/指派）、QA Home `recentDefects` 返回真实缺陷实体。
+- 前端断点（Phase 40.3）：`POST /runs/:id/share` 修正（原 GET 404）；Settings `/api/version` 双前缀修复；新增公开分享落地页——无 JWT 携带 `?share=<token>` 可读报告与 JSON/HTML 导出（share token 防跨项目猜测，非法 token 403）；无 Token 访问自动跳登录，分享链接自动进入只读报告页；QA Home Action Center RCA 死链修复。
+- 数据真实性（Phase 40.4）：run-report `failures` 由真实遥测 execution（`case:` 失败）与 RCA 事件聚合，`coverage.failed` 真实计数；`decisionTrace` 可读化（summary + 决策/风险/原因 + 步骤列表），无数据返回占位不虚构。
+- 聚合性能（Phase 40.5）：QA Home 与 run-report 增加 TTL 内存缓存（QA Home 按用户资源作用域隔离，防跨用户泄漏），削减 3s 轮询下的全量聚合开销。
+
+### 测试
+
+- 新增 `tests/integration/phase40-scope.test.ts`（14 项：跨项目越权 403、资产版本/审批隔离、Defect 全链路、QA Home 契约、分享落地页公开访问与非法 token、failures 真实填充、decisionTrace 可读化、QA Home/run-report 缓存命中与隔离）+ `tests/unit/defects.test.ts`（10 项：CRUD/状态机/权限/事件/审计/recentDefects）。
+- `share` 由 GET 改 POST 同步更新 `report-share.test.ts` 与 `qa-workflow.test.ts`；新增 `phase40:test` 专用脚本。
+- 全量回归：1586 passed / 18 skipped；`platform:integration` / `platform:e2e` / `phase39:test` 保持 PASS。
+
 ## [4.14.0] - 2026-08-19
 
 ### 新增（QA 工作流产品化，Phase 39）

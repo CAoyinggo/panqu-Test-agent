@@ -10,11 +10,11 @@ import type { ApprovalCenter } from '../approval-center/approval-center.js';
 import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import type { TelemetryService } from '../telemetry/index.js';
 import type { ReleaseRecord, FlakyRecord } from '../telemetry/index.js';
-import type { AuditLog } from '../audit/audit-log.js';
 import type { Scopes } from '../rbac/scopes.js';
 import type { TestSuiteService } from './test-suite.js';
 import type { TestPlanService } from './test-plan.js';
 import type { RunTemplateService } from './run-template.js';
+import type { DefectService, DefectStatus, DefectSeverity } from './defects.js';
 
 /** Action Center 项（告诉 QA 现在应该做什么） */
 export interface ActionItem {
@@ -34,7 +34,7 @@ export interface QaHome {
   failedRuns: TestRun[];
   pendingApprovals: ApprovalRequest[];
   recentFailures: Array<{ runId: string; status: string; environment: string; createdAt: string }>;
-  recentDefects: Array<{ entryId: string; actor: string; resource: string; timestamp: string }>;
+  recentDefects: Array<{ defectId: string; title: string; severity: DefectSeverity; status: DefectStatus; projectId: string; createdAt: string }>;
   recentReleases: ReleaseRecord[];
   commonPlans: Array<{ id: string; name: string; mode: string; environment: string }>;
   commonTemplates: Array<{ id: string; name: string; environment: string; runCount: number }>;
@@ -48,16 +48,25 @@ export interface QaHomeDeps {
   runs: RunService;
   approvals: ApprovalCenter;
   telemetry: TelemetryService;
-  audit: AuditLog;
   suites: TestSuiteService;
   plans: TestPlanService;
   templates: RunTemplateService;
+  defects: DefectService;
 }
 
 export class QaHomeService {
+  // Phase 40.5：TTL 内存缓存（QA Home 前端 3s 轮询；2s TTL 减少全量聚合开销）
+  private static readonly TTL_MS = 2000;
+  private cache = new Map<string, { at: number; data: QaHome }>();
+
   constructor(private readonly deps: QaHomeDeps) {}
 
   async build(scopes?: Scopes, now?: () => string): Promise<QaHome> {
+    // 缓存按用户资源作用域隔离（projects 集合为 key），防止跨用户越权读到他人项目数据
+    const scopeKey = scopes?.projects && scopes.projects.length > 0 ? scopes.projects.slice().sort().join(',') : '*';
+    const hit = this.cache.get(scopeKey);
+    if (hit && Date.now() - hit.at < QaHomeService.TTL_MS) return hit.data;
+
     const ts = now ? now() : new Date().toISOString();
     const today = ts.slice(0, 10);
     const allProjects = this.deps.projects.listProjects();
@@ -67,7 +76,6 @@ export class QaHomeService {
     const approvals = await this.deps.approvals.list({});
     const releases: ReleaseRecord[] = (await this.deps.telemetry.releases.list({})).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     const flakyRecords: FlakyRecord[] = await this.deps.telemetry.flaky.list({});
-    const audit = await this.deps.audit.list({});
     const plans = await this.deps.plans.list({});
     const templates = (await this.deps.templates.list({})).sort((a, b) => b.runCount - a.runCount);
 
@@ -76,11 +84,12 @@ export class QaHomeService {
     const failedRuns = runs.filter((r) => r.status === 'FAILED').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
     const pendingApprovals = approvals.filter((a) => a.status === 'PENDING');
     const recentFailures = failedRuns.map((r) => ({ runId: r.runId, status: r.status, environment: r.environment, createdAt: r.createdAt }));
-    const defects = audit
-      .filter((e) => e.action === 'defect')
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    const allDefects = await this.deps.defects.list({});
+    const defects = allDefects
+      .filter((d) => !allowedProjects || allowedProjects.has(d.projectId))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, 10)
-      .map((e) => ({ entryId: e.entryId, actor: e.actor, resource: e.resource, timestamp: e.timestamp }));
+      .map((d) => ({ defectId: d.defectId, title: d.title, severity: d.severity, status: d.status, projectId: d.projectId, createdAt: d.createdAt }));
 
     // Flaky / 高风险聚合（基于真实 Flaky 记录）
     const byCase = new Map<string, { runs: number; failures: number; lastAt: string }>();
@@ -118,7 +127,7 @@ export class QaHomeService {
       actionCenter.push({ id: 'ac-rca', category: 'RCA', severity: 'info', title: `${unverifiedRca} 条 RCA 待人工确认`, detail: '根因分析待确认', target: 'rca' });
     }
 
-    return {
+    const result: QaHome = {
       projects: projects.map((p) => ({ id: p.id, name: p.name, defaultEnvironment: p.defaultEnvironment })),
       todayRuns,
       runningRuns,
@@ -133,5 +142,9 @@ export class QaHomeService {
       highRiskCases,
       actionCenter,
     };
+    // Phase 40.5：写入 TTL 缓存（按 scope key 隔离；容量上限 64，避免长期运行内存膨胀）
+    if (this.cache.size >= 64) this.cache.clear();
+    this.cache.set(scopeKey, { at: Date.now(), data: result });
+    return result;
   }
 }

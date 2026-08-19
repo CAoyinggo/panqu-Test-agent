@@ -15,7 +15,7 @@ export default function Settings(): JSX.Element {
   const [info, setInfo] = useState<BuildInfo | null>(null);
   useEffect(() => {
     let alive = true;
-    api.get<BuildInfo>('/api/version')
+    api.get<BuildInfo>('/version')
       .then((v) => { if (alive) setInfo(v); })
       .catch(() => { if (alive) setInfo(null); });
     return () => { alive = false; };

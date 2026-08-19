@@ -313,6 +313,32 @@ async function main(): Promise<void> {
         const out = format === 'html' ? await bundle.service.exportReportHtml(id) : await bundle.service.exportReportJson(id);
         console.log(out);
       } else throw new Error(`未知 report 子命令：${sub}`);
+    } else if (group === 'defect') {
+      // Phase 40.2：Defect 管理（登记 / 列表 / 详情 / 状态流转 / 指派）
+      if (sub === 'create') {
+        const projectId = flagValue(args, '--project') ?? args[2];
+        const title = flagValue(args, '--title') ?? args[3];
+        if (!projectId || !title) throw new Error('用法：defect create <projectId> <title> [--severity=high] [--run=runId] [--case=caseId]');
+        const d = await bundle.service.createDefect({ projectId, title, severity: flagValue(args, '--severity') as never, runId: flagValue(args, '--run'), caseId: flagValue(args, '--case'), createdBy: actor() }, role());
+        console.log(JSON.stringify(d, null, 2));
+      } else if (sub === 'list') {
+        console.log(JSON.stringify(await bundle.service.listDefects(), null, 2));
+      } else if (sub === 'get') {
+        const id = args[2];
+        if (!id) throw new Error('用法：defect get <defectId>');
+        console.log(JSON.stringify(await bundle.service.getDefect(id), null, 2));
+      } else if (sub === 'status') {
+        const id = args[2];
+        const status = args[3];
+        if (!id || !status) throw new Error('用法：defect status <defectId> <OPEN|IN_PROGRESS|RESOLVED|CLOSED|WONT_FIX>');
+        const d = await bundle.service.updateDefectStatus(id, status as never, flagValue(args, '--resolution'), actor(), role());
+        console.log(JSON.stringify(d, null, 2));
+      } else if (sub === 'assign') {
+        const id = args[2];
+        const assignee = args[3];
+        if (!id || !assignee) throw new Error('用法：defect assign <defectId> <assignee>');
+        console.log(JSON.stringify(await bundle.service.assignDefect(id, assignee, actor(), role()), null, 2));
+      } else throw new Error(`未知 defect 子命令：${sub}`);
     } else if (group === 'worker') {
       if (sub === 'list') {
         console.log(JSON.stringify(bundle.service.listWorkers(), null, 2));

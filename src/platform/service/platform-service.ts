@@ -14,7 +14,7 @@ import type { ApprovalCenter } from '../approval-center/approval-center.js';
 import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import type { PlatformGate } from '../rbac/platform-gate.js';
 import { hasPermission, type Role, type Permission } from '../rbac/rbac.js';
-import { assertRunAccess } from '../rbac/scopes.js';
+import { assertProjectAccess, assertRunAccess } from '../rbac/scopes.js';
 import type { Scopes } from '../rbac/scopes.js';
 import type { EventBus } from '../events/event-bus.js';
 import type { PlatformEventType } from '../events/events.js';
@@ -319,8 +319,20 @@ export class PlatformService {
   }
 
   // ── Approvals ──
-  async listApprovals(filter?: Partial<ApprovalRequest>): Promise<ApprovalRequest[]> {
-    return this.deps.approvals.list(filter);
+  async listApprovals(filter?: Partial<ApprovalRequest>, scopes?: Scopes): Promise<ApprovalRequest[]> {
+    const all = await this.deps.approvals.list(filter);
+    // Phase 40.1：审批列表 Project Scope（approval → run → projectId）
+    if (scopes?.projects && scopes.projects.length > 0) {
+      const allowed = new Set(scopes.projects);
+      const out: ApprovalRequest[] = [];
+      for (const a of all) {
+        if (!a.runId) { out.push(a); continue; }
+        const run = await this.deps.runs.get(a.runId);
+        if (!run || allowed.has(run.projectId)) out.push(a);
+      }
+      return out;
+    }
+    return all;
   }
 
   async approveApproval(approvalId: string, actor: string, role: Role): Promise<ApprovalRequest> {
@@ -467,8 +479,12 @@ export class PlatformService {
     return this.filterByScopes(all, scopes, (s) => s.projectId);
   }
 
-  async getSuite(id: string): Promise<import('../workflow/index.js').TestSuite | null> {
-    return this.deps.workflow.suites.get(id);
+  async getSuite(id: string, scopes?: Scopes): Promise<import('../workflow/index.js').TestSuite | null> {
+    const suite = await this.deps.workflow.suites.get(id);
+    if (!suite) return null;
+    // Phase 40.1：单资源读端点 Project Scope（JWT 用户不能越权读取其它项目 Suite）
+    if (scopes) assertRunAccess({ roles: ['VIEWER'], scopes }, suite.projectId, 'test');
+    return suite;
   }
 
   async updateSuite(id: string, input: { name?: string; description?: string; tags?: string[] }, actor: string, role: Role): Promise<import('../workflow/index.js').TestSuite> {
@@ -531,8 +547,11 @@ export class PlatformService {
     return this.filterByScopes(all, scopes, (p) => p.projectId);
   }
 
-  async getPlan(id: string): Promise<import('../workflow/index.js').TestPlan | null> {
-    return this.deps.workflow.plans.get(id);
+  async getPlan(id: string, scopes?: Scopes): Promise<import('../workflow/index.js').TestPlan | null> {
+    const plan = await this.deps.workflow.plans.get(id);
+    if (!plan) return null;
+    if (scopes) assertRunAccess({ roles: ['VIEWER'], scopes }, plan.projectId, plan.environment);
+    return plan;
   }
 
   async updatePlan(id: string, input: { name?: string; suiteIds?: string[]; environment?: string; mode?: import('../workflow/index.js').TestPlanMode; budget?: unknown; releaseGate?: unknown }, actor: string, role: Role): Promise<import('../workflow/index.js').TestPlan> {
@@ -543,9 +562,10 @@ export class PlatformService {
   }
 
   /** 解析 Plan → 去重 Case 列表（API/CLI 预览用） */
-  async planCases(planId: string): Promise<{ planId: string; caseIds: string[] }> {
+  async planCases(planId: string, scopes?: Scopes): Promise<{ planId: string; caseIds: string[] }> {
     const plan = await this.deps.workflow.plans.get(planId);
     if (!plan) throw new Error(`Test Plan 不存在：${planId}`);
+    if (scopes) assertRunAccess({ roles: ['VIEWER'], scopes }, plan.projectId, plan.environment);
     const caseIds = await this.deps.workflow.suites.resolveCaseIds(plan.suiteIds);
     return { planId, caseIds };
   }
@@ -589,8 +609,11 @@ export class PlatformService {
     return this.filterByScopes(all, scopes, (t) => t.projectId);
   }
 
-  async getTemplate(id: string): Promise<import('../workflow/index.js').RunTemplate | null> {
-    return this.deps.workflow.templates.get(id);
+  async getTemplate(id: string, scopes?: Scopes): Promise<import('../workflow/index.js').RunTemplate | null> {
+    const t = await this.deps.workflow.templates.get(id);
+    if (!t) return null;
+    if (scopes) assertRunAccess({ roles: ['VIEWER'], scopes }, t.projectId, t.environment);
+    return t;
   }
 
   async updateTemplate(id: string, input: Partial<Pick<import('../workflow/index.js').RunTemplate, 'name' | 'description' | 'environment' | 'suiteIds' | 'mode' | 'budget' | 'releaseGate'>>, actor: string, role: Role): Promise<import('../workflow/index.js').RunTemplate> {
@@ -689,8 +712,28 @@ export class PlatformService {
   }
 
   // ── Test Asset Versioning（39.4）──
-  async assetVersions(assetId: string): Promise<import('../workflow/index.js').AssetVersionSummary[]> {
-    return this.deps.workflow.versions.history(assetId);
+  async assetVersions(assetId: string, scopes?: Scopes): Promise<import('../workflow/index.js').AssetVersionSummary[]> {
+    const versions = await this.deps.workflow.versions.history(assetId);
+    // Phase 40.1：单资源读端点 Project Scope（JWT 用户不能越权读取其它项目资产版本）
+    if (versions.length && scopes?.projects && scopes.projects.length > 0) {
+      const projectId = await this.resolveAssetProject(assetId, versions[versions.length - 1].assetType);
+      if (projectId) assertRunAccess({ roles: ['VIEWER'], scopes }, projectId, 'test');
+    }
+    return versions;
+  }
+
+  /** 解析资产所属项目（suite/plan/test-case；解析不到则放行——无法证明跨项目） */
+  private async resolveAssetProject(assetId: string, assetType: import('../workflow/index.js').AssetType): Promise<string | null> {
+    if (assetType === 'suite') {
+      const s = await this.deps.workflow.suites.get(assetId);
+      return s?.projectId ?? null;
+    }
+    if (assetType === 'plan') {
+      const p = await this.deps.workflow.plans.get(assetId);
+      return p?.projectId ?? null;
+    }
+    const c = await this.deps.testAssets.get(assetId);
+    return c?.projectId ?? null;
   }
 
   async assetCompare(assetId: string, fromVersion: number, toVersion: number): Promise<import('../workflow/index.js').AssetDiff> {
@@ -726,10 +769,10 @@ export class PlatformService {
     return { comment: item.comments[item.comments.length - 1], mentions };
   }
 
-  async listRunComments(runId: string, scopes?: Scopes): Promise<import('../workflow/index.js').CommentEntry[]> {
+  async listRunComments(runId: string, scopes?: Scopes, role: Role = 'VIEWER'): Promise<import('../workflow/index.js').CommentEntry[]> {
     const run = await this.deps.runs.get(runId);
     if (!run) throw new Error(`Run 不存在：${runId}`);
-    if (scopes) assertRunAccess({ roles: ['QA'], scopes }, run.projectId, run.environment);
+    if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     return this.deps.workflow.collaboration.comments('run', runId);
   }
 
@@ -742,6 +785,58 @@ export class PlatformService {
     return item;
   }
 
+  // ── Defect 管理（40.2）──
+  async createDefect(input: {
+    projectId: string;
+    title: string;
+    severity?: import('../workflow/index.js').DefectSeverity;
+    environment?: string;
+    runId?: string;
+    caseId?: string;
+    description?: string;
+    evidence?: unknown[];
+    createdBy: string;
+  }, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').Defect> {
+    this.assertPermission(role, 'DEFECT_CREATE');
+    if (scopes) assertProjectAccess({ roles: [role], scopes }, input.projectId);
+    const d = await this.deps.workflow.defects.create(input);
+    await this.emit('DefectCreated', { defectId: d.defectId, title: d.title, severity: d.severity, projectId: d.projectId, runId: d.runId, caseId: d.caseId, reason: d.description }, { runId: d.runId });
+    await this.audit({ actor: input.createdBy, role, action: 'defect', resource: `defect:${d.defectId}`, environment: d.environment, result: 'success', detail: { action: 'create', title: d.title, severity: d.severity }, traceId: d.runId });
+    return d;
+  }
+
+  async listDefects(filter?: Partial<import('../workflow/index.js').Defect>, scopes?: Scopes): Promise<import('../workflow/index.js').Defect[]> {
+    const all = await this.deps.workflow.defects.list(filter);
+    return this.filterByScopes(all, scopes, (d) => d.projectId);
+  }
+
+  async getDefect(id: string, scopes?: Scopes): Promise<import('../workflow/index.js').Defect | null> {
+    const d = await this.deps.workflow.defects.get(id);
+    if (!d) return null;
+    if (scopes) assertProjectAccess({ roles: ['VIEWER'], scopes }, d.projectId);
+    return d;
+  }
+
+  async updateDefectStatus(id: string, status: import('../workflow/index.js').DefectStatus, resolution: string | undefined, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').Defect> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const d = await this.deps.workflow.defects.get(id);
+    if (!d) throw new Error(`缺陷不存在：${id}`);
+    if (scopes) assertProjectAccess({ roles: [role], scopes }, d.projectId);
+    const updated = await this.deps.workflow.defects.updateStatus(id, status, resolution);
+    await this.audit({ actor, role, action: 'defect', resource: `defect:${id}`, environment: d.environment, result: 'success', detail: { action: 'updateStatus', from: d.status, to: status }, traceId: d.runId });
+    return updated;
+  }
+
+  async assignDefect(id: string, assignee: string, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').Defect> {
+    this.assertPermission(role, 'ASSET_WRITE');
+    const d = await this.deps.workflow.defects.get(id);
+    if (!d) throw new Error(`缺陷不存在：${id}`);
+    if (scopes) assertProjectAccess({ roles: [role], scopes }, d.projectId);
+    const updated = await this.deps.workflow.defects.assign(id, assignee);
+    await this.audit({ actor, role, action: 'defect', resource: `defect:${id}`, environment: d.environment, result: 'success', detail: { action: 'assign', assignee }, traceId: d.runId });
+    return updated;
+  }
+
   // ── Report / Share（39.6）──
   async runReport(runId: string): Promise<import('../workflow/index.js').RunReportSummary> {
     const run = await this.deps.runs.get(runId);
@@ -749,13 +844,14 @@ export class PlatformService {
     return this.deps.workflow.reports.buildSummary(run);
   }
 
-  async shareRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ share: import('../workflow/index.js').RunShare; url: string }> {
+  async shareRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ token: string; url: string; share: import('../workflow/index.js').RunShare }> {
     const run = await this.deps.runs.get(runId);
     if (!run) throw new Error(`Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const share = await this.deps.workflow.reports.share(run, actor);
     await this.audit({ actor, role, action: 'configuration', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { action: 'share' }, traceId: runId });
-    return { share, url: `/runs/${runId}/report?share=${share.token}` };
+    // Phase 40.3：返回契约补 token 顶层字段（前端 RunDetail 依赖 { token, url }；share 保留兼容 CLI/report-share 测试）
+    return { token: share.token, url: `/runs/${runId}/report?share=${share.token}`, share };
   }
 
   async verifyShare(runId: string, token: string): Promise<boolean> {

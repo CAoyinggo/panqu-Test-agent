@@ -71,6 +71,10 @@ export interface RunReportServiceDeps {
 }
 
 export class RunReportService {
+  // Phase 40.5：TTL 缓存（报告详情页/分享页高频访问；5s TTL 削减遥测聚合开销）
+  private static readonly TTL_MS = 5000;
+  private cache = new Map<string, { at: number; data: RunReportSummary }>();
+
   constructor(
     private readonly deps: RunReportServiceDeps,
     private readonly shares: Repository<RunShare>,
@@ -78,6 +82,9 @@ export class RunReportService {
 
   /** 构建报告摘要（真实数据聚合；无数据返回 tracked=false / 空数组，不虚构） */
   async buildSummary(run: TestRun): Promise<RunReportSummary> {
+    const hit = this.cache.get(run.runId);
+    if (hit && Date.now() - hit.at < RunReportService.TTL_MS) return hit.data;
+
     const checkpoint = (await this.deps.runs.loadCheckpoint(run.runId)) as {
       completedCases?: string[];
       remainingCases?: string[];
@@ -99,7 +106,23 @@ export class RunReportService {
           timestamp: decision.timestamp ?? run.finishedAt ?? run.createdAt,
         }
       : null;
+    // Phase 40.4：真实失败明细 —— 由 execution（case: 失败）事件 + RCA 分类聚合，不再恒空
+    const events = await this.deps.telemetry.eventsByRun(run.runId);
+    const rcaByCase = new Map<string, string>();
+    for (const e of events) {
+      if (e.type === 'rca' && e.metadata?.caseId && e.metadata?.predictedCategory) {
+        rcaByCase.set(String(e.metadata.caseId), String(e.metadata.predictedCategory));
+      }
+    }
     const failures: ReportFailure[] = [];
+    for (const e of events) {
+      if (e.type !== 'execution' || e.metadata?.result !== 'failed') continue;
+      const phase = String(e.metadata?.phase ?? '');
+      if (!phase.startsWith('case:')) continue; // 仅取逐 case 失败（pipeline 汇总事件不计入）
+      const caseId = phase.slice(5);
+      const category = rcaByCase.get(caseId);
+      failures.push({ caseId, reason: category ? `执行失败（${category}）` : '执行失败', category });
+    }
     const rcaList: Array<{ caseId?: string; category: string; verified: boolean }> = [];
     const rcaRecords: RcaVerification[] = await this.deps.telemetry.rca.list({ runId: run.runId });
     for (const r of rcaRecords) {
@@ -111,7 +134,7 @@ export class RunReportService {
     const started = run.startedAt ? Date.parse(run.startedAt) : null;
     const finished = run.finishedAt ? Date.parse(run.finishedAt) : null;
     const risk: ReportRisk = run.status === 'FAILED' ? 'HIGH' : release?.decision === 'BLOCK' ? 'HIGH' : release?.decision === 'REVIEW' ? 'MEDIUM' : total === 0 ? 'UNKNOWN' : 'LOW';
-    return {
+    const summary: RunReportSummary = {
       runId: run.runId,
       projectId: run.projectId,
       environment: run.environment,
@@ -126,7 +149,7 @@ export class RunReportService {
       coverage: {
         total,
         completed: completedCases.length,
-        failed: run.status === 'FAILED' ? 1 : 0,
+        failed: failures.length, // Phase 40.4：真实失败用例数（execution failed 事件）
         remaining: remainingCases.length,
       },
       failures,
@@ -134,8 +157,12 @@ export class RunReportService {
       cost: { value: costValue, tracked: costEntries.length > 0, unit: 'CNY' },
       approvals: approvals.map((a) => ({ approvalId: a.approvalId, action: a.action, status: a.status })),
       risk,
-      decisionTrace: decisionState,
+      decisionTrace: readableDecisionTrace(decisionState, run, total),
     };
+    // Phase 40.5：写入 TTL 缓存（容量上限 256，避免长期运行内存膨胀）
+    if (this.cache.size >= 256) this.cache.clear();
+    this.cache.set(run.runId, { at: Date.now(), data: summary });
+    return summary;
   }
 
   /** 创建分享（幂等：同一 run 复用 token） */
@@ -216,4 +243,28 @@ th{width:180px;color:#6b7280;font-weight:500}
 <div class="card"><h3>Decision Trace</h3><pre style="white-space:pre-wrap;font-size:12px">${esc(JSON.stringify(s.decisionTrace, null, 2))}</pre></div>
 </div></body></html>`;
   }
+}
+
+/** Phase 40.4：DecisionTrace 可读化 —— 将 checkpoint decisionState 转成人可读的决策追踪对象（数据仍来自真实决策状态） */
+function readableDecisionTrace(
+  decisionState: unknown,
+  run: TestRun,
+  total: number,
+): { summary: string; decision: string; risk: string; reason: string; steps: Array<{ step: string; detail: string }> } {
+  const d = decisionState as { decision?: string; reason?: string; risk?: string } | null;
+  if (!d) {
+    return { summary: '暂无决策追踪（checkpoint 无 decisionState）', decision: '—', risk: 'UNKNOWN', reason: '', steps: [] };
+  }
+  return {
+    summary: `决策 ${d.decision ?? '—'} · 风险 ${d.risk ?? 'UNKNOWN'}${total > 0 ? ` · ${total} 个用例` : ''}`,
+    decision: d.decision ?? '—',
+    risk: d.risk ?? 'UNKNOWN',
+    reason: d.reason ?? '',
+    steps: [
+      { step: '执行', detail: `${run.status}（进度 ${run.progress}%）` },
+      { step: '决策', detail: d.decision ?? '—' },
+      { step: '原因', detail: d.reason ?? '—' },
+      { step: '风险', detail: d.risk ?? 'UNKNOWN' },
+    ],
+  };
 }

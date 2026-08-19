@@ -31,6 +31,7 @@ import { PlatformTestAssets } from '../test-assets/platform-test-assets.js';
 import { TelemetryService, TelemetryEventStore, CostLedger, RcaVerificationStore, FlakyRecordStore, HealingRecordStore, ReleaseRecordStore, MetricActivationTracker } from '../telemetry/index.js';
 import { isProductionLike, requireSecureJwtSecret, resolveAllowDefaultCredentials, resolvePlatformMode, type PlatformMode } from '../security/index.js';
 // Phase 39：QA Workflow 模块（Test Suite / Plan / Template / Versioning / Collaboration / Report / QA Home）
+// Phase 40.2：Defect 管理
 import {
   WorkflowService,
   TestSuiteService,
@@ -40,6 +41,7 @@ import {
   CollaborationService,
   RunReportService,
   QaHomeService,
+  DefectService,
 } from '../workflow/index.js';
 import type { TestSuite } from '../workflow/test-suite.js';
 import type { TestPlan } from '../workflow/test-plan.js';
@@ -47,6 +49,7 @@ import type { RunTemplate } from '../workflow/run-template.js';
 import type { AssetVersion } from '../workflow/asset-versioning.js';
 import type { CollaborationItem } from '../workflow/collaboration.js';
 import type { RunShare } from '../workflow/run-report.js';
+import type { Defect } from '../workflow/defects.js';
 import type {
   TelemetryEvent,
   CostLedgerEntry,
@@ -240,8 +243,9 @@ export function createPlatformService(opts: PlatformFactoryOptions = {}): Platfo
     { runs, approvals, telemetry },
     reg('run-reports', createRepository<RunShare>(storage, store('run-reports'))),
   );
-  const qaHome = new QaHomeService({ projects, runs, approvals, telemetry, audit, suites, plans, templates });
-  const workflow = new WorkflowService({ suites, plans, templates, versions, collaboration, reports, qaHome });
+  const defects = new DefectService(reg('defects', createRepository<Defect>(storage, store('defects'))));
+  const qaHome = new QaHomeService({ projects, runs, approvals, telemetry, suites, plans, templates, defects });
+  const workflow = new WorkflowService({ suites, plans, templates, versions, collaboration, reports, qaHome, defects });
 
   const service = new PlatformService({ projects, runs, scheduler, workers, pool, approvals, gate, bus, notifier, audit, idempotency, telemetry, testAssets, workflow });
 
