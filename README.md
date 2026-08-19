@@ -18,14 +18,14 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 
 | 指标 | 数值 |
 |---|---|
-| 单元测试用例 | 1508 条通过 / 18 跳过（131 个测试文件，全量回归全绿） |
+| 单元测试用例 | 1586 条通过 / 18 跳过（141 个测试文件，全量回归全绿） |
 | 全量覆盖率 | Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03（含 `src/platform/**`） |
-| 平台测试 | 单元 19 文件 + 集成 10 文件 + E2E 12 文件（Phase 27 新增 8 个真实演练/试运行套件） |
+| 平台测试 | 单元 35 文件 + 集成 14 文件 + E2E 16 文件（Phase 40 新增 defects / phase40-scope 套件） |
 | 断言操作符 | 17 个 |
 | 核心引擎模块 | 13 个文件 |
 | 平台层模块 | 19 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
-| 版本演进 | v1.0 → v4.13.0（24 个里程碑） |
+| 版本演进 | v1.0 → v4.15.0（26 个里程碑） |
 | 运行时 | Node.js ≥ 20.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
@@ -185,7 +185,9 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | `operations/` | 平台指标 14 项 + SLO 6 项（可计算指标真实统计，缺失遥测返回 null 不虚构） |
 | `ops/` | 生产运维（25.8/31）：schema 迁移与回滚（down）/ 备份恢复 / 冒烟 / Preflight |
 | `service/` | **统一 Service Layer**：API / CLI / Scheduler 共用 `PlatformService`，禁止两套业务逻辑 |
-| `api/` | HTTP API（node:http）：Bearer Token / RBAC 头 / 限流 / 幂等 / 审计 / 链路追踪 / 统一错误契约 / 分页 / Web Dashboard 静态托管 |
+| `api/` | HTTP API（node:http）：Bearer Token / RBAC 头 / 限流 / 幂等 / 审计 / 链路追踪 / 统一错误契约 / 分页 / Web Dashboard 静态托管 / 公开分享落地页（share token 校验） |
+| `test-assets/` | 测试资产库（26.2）：真实 Test Case 资产（查询 / 统计 / 导入 / 种子目录） |
+| `workflow/` | QA 工作流（Phase 39/40）：Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report（含公开分享）/ QA Home 聚合（TTL 缓存，按用户 scopes 隔离）/ Defect 缺陷管理（状态机 + severity + 指派 + DefectCreated 事件 + audit） |
 
 **统一入口**：`createPlatformService()` 一次性装配全部依赖（`storage: memory | json | sqlite | postgres`，CLI 默认 sqlite 跨进程持久化，启动自动应用 schema 迁移）；HTTP 服务由 `createPlatformServer()` 提供，CLI 由 `bin/platform-cli.ts` 提供，二者共用同一 Service Layer。
 
@@ -323,8 +325,10 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | v4.11.0 | 2026-08-19 | 类型级反向依赖上移 core（Phase 35，DEBT-11）：失败分类共享模型（`FailureCategory` / `FAILURE_CATEGORIES` / `isFailureCategory`）上移至 core 层唯一权威来源 `core/failure-category.ts`，agents 域 re-export 兼容；平台层 3 处（telemetry-types / telemetry-service / real-run）改从 core 导入——平台层对 agents 域零依赖；新增 `tests/unit/core-failure-category.test.ts`（6 项）含结构性依赖守护 |
 | v4.12.0 | 2026-08-19 | 身份解析统一（Phase 36，DEBT-12）：审计确认 `resolvePrincipal` 唯一实现；静态身份来源守卫+解析收敛到 security 模块新增 `resolveStaticIdentity`（production 返回 null 防伪造不可绕过，其余模式解析 X-Actor/X-Role 默认 api/VIEWER）；`api/server.ts` 改调该函数——平台层 X-Actor/X-Role 头读取仅存在于 security 模块；新增 `tests/unit/identity-resolution-guard.test.ts`（8 项）含结构性不可绕过守护 |
 | v4.13.0 | 2026-08-19 | E2E 时序卫生治理（Phase 37，DEBT-13，**技术债清零**）：审计确认 E2E/集成已普遍采用健壮模式（随机端口 / `FIXED_ISO` 固定时钟注入 / `Date.now()` 唯一 ID / 轮询+超时），无硬编码端口、固定时间戳断言、固定长 sleep 残留；新增 `tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护固化 |
+| v4.14.0 | 2026-08-19 | QA 工作流产品化（Phase 39）：新增 `src/platform/workflow/`（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home），复用既有 PlatformService / Repository / RBAC / Notification / Audit / Telemetry，零新增基础设施；QA Workflow API（`/test-suites`、`/test-plans`、`/run-templates`、`/assets/:id/versions|compare`、`/runs/:id/share|comments|assign|rerun|clone|template`、`/qa-home`）+ CLI 命令组（suite / plan / template / run rerun|clone / report）+ Web QA Workbench 页面（Action Center + 快速操作 + Suite/Plan/Template 管理 + Run Detail 报告摘要与复用/分享/协作）；权限错误语义化为 403 |
+| v4.15.0 | 2026-08-19 | Phase 40 工程化收尾：单资源读端点 Project Scope 加固（getSuite/getPlan/planCases/getTemplate/assetVersions/listApprovals 六处 + resolveAssetProject 解析 + 审批 runId 过滤）；Defect 缺陷平台化（`workflow/defects.ts` 真实实体 + 状态机 + severity + 指派 + DefectCreated 事件 + Web/CLI 页面 + QA Home recentDefects 真实数据）；前端断点修复（share 改 POST、Settings 双前缀、公开分享落地页无 JWT + share token 校验 + 导出直链、无 Token 跳登录、RCA 死链）；报告数据真实性（failures 由真实遥测 execution/RCA 事件聚合、decisionTrace 可读化）；QAHome / run-report TTL 聚合缓存（按 scopes 隔离） |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`；Phase 31 报告见 `docs/phase31-summary.md`；Phase 32 报告见 `docs/phase32-summary.md`；Phase 33 报告见 `docs/phase33-summary.md`（含 `docs/environment-policy-boundaries.md` 职责边界文档）；Phase 34 报告见 `docs/phase34-summary.md`；Phase 35 报告见 `docs/phase35-summary.md`；Phase 36 报告见 `docs/phase36-summary.md`；Phase 37 报告见 `docs/phase37-summary.md`；最终项目验收报告见 `docs/FINAL-PROJECT-ACCEPTANCE-REPORT.md`（七大类 A-G 全部满足，判定 **PROJECT COMPLETE**，v4.13.0）。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`；Phase 31 报告见 `docs/phase31-summary.md`；Phase 32 报告见 `docs/phase32-summary.md`；Phase 33 报告见 `docs/phase33-summary.md`（含 `docs/environment-policy-boundaries.md` 职责边界文档）；Phase 34 报告见 `docs/phase34-summary.md`；Phase 35 报告见 `docs/phase35-summary.md`；Phase 36 报告见 `docs/phase36-summary.md`；Phase 37 报告见 `docs/phase37-summary.md`；最终项目验收报告见 `docs/FINAL-PROJECT-ACCEPTANCE-REPORT.md`（七大类 A-G 全部满足，判定 **PROJECT COMPLETE**，v4.13.0）；Phase 39 报告见 `docs/phase39-summary.md`（QA 工作流产品化）；Phase 40 报告见 `docs/phase40-summary.md`（工程化收尾，v4.15.0）。
 
 ## 十三、目录结构
 
