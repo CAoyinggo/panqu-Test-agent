@@ -1,0 +1,63 @@
+{
+  "tool": "test-flow",
+  "version": "4.4.0",
+  "timestamp": "2026-08-19T06:27:56.646Z",
+  "nodeVersion": "v26.3.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "runLifecycle": [
+    {
+      "batchSize": 10,
+      "createOpsPerSec": 41717.42,
+      "createP50Ms": 0,
+      "createP95Ms": 0.1,
+      "createP99Ms": 0.1,
+      "createMaxMs": 0.1,
+      "lifecycleOpsPerSec": 45670.86,
+      "lifecycleTotalMs": 0.21895799999998644,
+      "jobsPendingAfter": 0
+    },
+    {
+      "batchSize": 50,
+      "createOpsPerSec": 36064.24,
+      "createP50Ms": 0,
+      "createP95Ms": 0.1,
+      "createP99Ms": 0.1,
+      "createMaxMs": 0.1,
+      "lifecycleOpsPerSec": 39377.83,
+      "lifecycleTotalMs": 1.2697499999999877,
+      "jobsPendingAfter": 0
+    },
+    {
+      "batchSize": 100,
+      "createOpsPerSec": 18439.55,
+      "createP50Ms": 0,
+      "createP95Ms": 0.2,
+      "createP99Ms": 0.3,
+      "createMaxMs": 2.6,
+      "lifecycleOpsPerSec": 13918.77,
+      "lifecycleTotalMs": 7.184540999999967,
+      "jobsPendingAfter": 0
+    },
+    {
+      "batchSize": 500,
+      "createOpsPerSec": 18586.86,
+      "createP50Ms": 0,
+      "createP95Ms": 0.2,
+      "createP99Ms": 0.3,
+      "createMaxMs": 1.1,
+      "lifecycleOpsPerSec": 15644.35,
+      "lifecycleTotalMs": 31.96041600000001,
+      "jobsPendingAfter": 0
+    }
+  ],
+  "schedulerOpsPerSec": 4577.68,
+  "auditOpsPerSec": 122698.75,
+  "telemetryOpsPerSec": 104144.97,
+  "memory": {
+    "heapUsedBeforeMb": 15.86,
+    "heapUsedAfterMb": 25.67,
+    "growthMb": 9.81
+  },
+  "totalMs": 1576.02
+}

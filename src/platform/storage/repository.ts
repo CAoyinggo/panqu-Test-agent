@@ -2,6 +2,8 @@
 // 业务层禁止直接操作数据库；仅通过 Repository<T> 访问。
 // 实现可替换：Memory（测试/进程内） / JSON（文件） / SQLite（未来按同接口接入）。
 
+import { generateId } from '../../core/id.js';
+
 /** 实体约束：必须具备 id */
 export interface Entity {
   id: string;
@@ -28,7 +30,7 @@ export interface Repository<T extends Entity> {
   clear(): Promise<void>;
 }
 
-/** 生成确定性 id（时间 + 随机后缀） */
+/** 生成碰撞安全 id（29.3：委托 core/id.ts，消除高吞吐下的随机碰撞） */
 export function generateEntityId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return generateId(prefix);
 }

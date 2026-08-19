@@ -2,6 +2,29 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.5.0] - 2026-08-19
+
+### 新增（性能与容量基线，Phase 29）
+
+- 新增性能基准测量模块 `src/platform/ops/perf-harness.ts`（唯一测量源）：覆盖 10/50/100/500 Runs 生命周期（createRun → Scheduler → Worker → startRun/completeRun）吞吐/延迟、Scheduler 队列吞吐、Audit 写入吞吐（含脱敏）、Telemetry 事件写入吞吐与内存稳定性；计时统一 `performance.now()`（µs），每项取 min-of-3 滤除 GC/调度抖动。
+- 新增性能门禁 CLI `scripts/perf/run-perf.mjs`：`--baseline`（固化 `perf/baseline.json`）/ `--gate`（相对基线回归判定，延迟 > 2× / 吞吐 < 50% 即失败）/ `--json`。
+- 新增 `tests/perf/platform-perf.test.ts`（Vitest sanity 门禁）+ `vitest.perf.config.ts`（`tests/perf/` 独立于默认 `npm test` 运行）。
+- 新增脚本：`phase29:test` / `perf:test` / `perf:baseline` / `perf:gate` / `perf:report`。
+
+### 修复（性能基准暴露的真实缺陷）
+
+- **高吞吐下 ID 碰撞缺陷**：审计 / 调度 Job / 遥测事件 / 实体 / Run ID 原用 `Date.now().toString(36) + Math.random().toString(36).slice()` 组合，在容量基线（10 万+ ops/s 写入）下会碰撞导致「实体已存在」。新增 `src/core/id.ts`（`generateId`，crypto.randomUUID 128 bit 熵），统一替换 `audit-log` / `scheduler` / `telemetry-store` / `storage/repository` / `run-schema` 五处生成器；`generatePlatformRunId` 随机尾由 4 位 base36 升级为 32 位 hex。
+- 新增回归守卫 `tests/unit/id.test.ts`（4 项）：同一毫秒内 10000 个 ID 无重复、`generatePlatformRunId` 5000 个无重复、格式断言。
+
+### 变更
+
+- 默认 `npm test` 通过 `vitest.config.ts` exclude 排除 `tests/perf/**`（性能套件单独运行，不影响全量回归计数与时长）。
+- `docs/TECH-DEBT.md`：DEBT-06（性能基线缺失）与 DEBT-14（ID 碰撞）已解决。
+
+### 测试
+
+- 新增 `tests/unit/id.test.ts`（4 项）+ `tests/perf/platform-perf.test.ts`（2 项，sanity 门禁）；全量回归：1430 passed / 18 skipped（122 个测试文件）；`agent:test` 450 通过；性能门禁连续多轮 PASS（基线：500 Runs 生命周期 ~11k runs/s、create p95 < 3ms、Audit/Telemetry 10 万+ ops/s、内存增长 < 150MB）。
+
 ## [4.4.0] - 2026-08-19
 
 ### 新增（工程治理，Phase 28）

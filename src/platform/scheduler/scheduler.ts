@@ -4,6 +4,7 @@
 // - 支持 priority / retry / timeout / cancel / pause / resume / idempotencyKey
 
 import type { Repository } from '../storage/repository.js';
+import { generateId } from '../../core/id.js';
 import { isJobTerminal, type EnqueueJobInput, type JobStatus, type TestJob } from './test-job.js';
 
 export interface SchedulerOptions {
@@ -52,7 +53,8 @@ export class Scheduler {
     if (dup.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING' || j.status === 'RETRY')) {
       throw new Error(`Run ${input.runId} 已有在执行中的 Job，禁止重复入队`);
     }
-    const jobId = input.jobId ?? `job-${input.runId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // 29.3：碰撞安全 ID（高吞吐入队下 Date.now+Math.random 会碰撞）
+    const jobId = input.jobId ?? generateId('job');
     const job: TestJob = {
       id: jobId,
       jobId,

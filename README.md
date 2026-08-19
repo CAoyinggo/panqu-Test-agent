@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.4.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
+> 版本：v4.5.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
 
 标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。
 
@@ -120,7 +120,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 ## 六、测试体系
 
-基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **121 个测试文件、1426 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
+基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **122 个测试文件、1430 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
 
 **核心引擎单元测试（8 个文件、225 条）**
 
@@ -144,6 +144,8 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 | `platform:test` | 19 个单元文件 | 208 | Project / Storage / SQLite / PostgreSQL / Scheduler / Worker / RBAC / Approval / Notification / Checkpoint / Idempotency / Metrics / JWT / Auth / 作用域 / Telemetry / Activation / Ops |
 | `platform:integration` | 10 个集成文件 | 64 | Run 生命周期 / Checkpoint 恢复 / 崩溃回收 / HTTP 全链路 / SQLite 持久化 / 认证 / 遥测流水线 / Web Dashboard / API 加固 / 生产就绪 |
 | `platform:e2e` | `platform-scenarios.test.ts` | 8 | S1-S8 核心场景（见「七、AI Test Platform 平台层」） |
+
+**性能与容量基线**（v4.5.0 / Phase 29）：`tests/perf/` 套件 + `src/platform/ops/perf-harness.ts`（唯一测量源）覆盖 10/50/100/500 Runs 生命周期（createRun → Scheduler → Worker → complete）吞吐/延迟、Scheduler / Audit / Telemetry 写入吞吐与内存稳定性。三类入口：`npm run perf:test`（Vitest sanity 门禁）、`npm run perf:baseline`（固化 `perf/baseline.json`）、`npm run perf:gate`（相对基线回归门禁，相对退化 > 2× 延迟 / < 50% 吞吐即失败）。默认 `npm test` 已排除 `tests/perf/`（经 `vitest.perf.config.ts` 单独运行）。
 
 ## 七、AI Test Platform 平台层
 
@@ -294,8 +296,10 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | v4.1 | 2026-08-18 | AI Test Platform 生产化（Phase 25）：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、React Web Dashboard（15+ 页面）、API 加固（链路追踪 / 限流 / 错误契约 / 分页）、生产运维（迁移 / 备份恢复 / 冒烟 / Preflight） |
 | v4.2.0 | 2026-08-19 | 生产验证闭环（Phase 26）：版本溯源与部署验收链、50 真实 TestCase 接入、四形态真实 Run 执行、故障恢复演练（S1/S2/S3 + 恢复指标）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验 + 禁止自动重触发、六类可观测告警、30 Run 生产试运行（KPI + 10 条人工 QA 对照） |
 | v4.3.0 | 2026-08-19 | 生产安全加固（Phase 27）：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ，审计/遥测成本/Job/Worker）、审批职责分离（禁止自提自批）+ 安全随机审批 ID、decodeJwt 加固、Preflight 安全策略检查（模式/JWT/口令/身份来源） |
+| v4.4.0 | 2026-08-19 | 工程治理（Phase 28）：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域反向依赖 + 修复连字符变体漏脱敏）、配置模块单一来源（删除重复 `env.ts`，`env-loader.ts` 统一 TESTFLOW_* 覆盖）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步 |
+| v4.5.0 | 2026-08-19 | 性能与容量基线（Phase 29）：10/50/100/500 Runs 生命周期吞吐/延迟基线与回归门禁（`perf:baseline` / `perf:gate` / `perf:test`）、Scheduler / Audit / Telemetry 写入吞吐、内存稳定性；性能基准暴露并修复高吞吐下 ID 碰撞缺陷（`core/id.ts` 统一 crypto.randomUUID） |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`。
 
 ## 十三、目录结构
 
@@ -321,7 +325,7 @@ test-flow/
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
 │   │   └── video.ts             # 视频场景处理器（文生/图生/全能参考/首尾帧）
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）+ env-loader.ts（TESTFLOW_* 环境变量覆盖单一来源）
-│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.3）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security
+│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.5）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security
 │   └── utils/                   # 工具：logger / metrics / retry / data-generator / mock-recorder / concurrency-controller / assertion-visualizer / exit-code / fs-utils / trace / allure-reporter / junit-reporter / oss-uploader
 ├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/ + evals/（基准评测）（120 文件 / 1420 用例，全量回归全绿）
 ├── tests/unit/                  # Vitest 单元测试（含平台 19+ 文件）
@@ -348,7 +352,7 @@ test-flow/
 5. **输出位置（强制）**：所有输出文件按 `output/<YYYY-MM-DD>/<功能名>/` 结构存放，执行脚本用 `--func <功能名>` 指定并自动创建目录，禁止输出到其他位置。
 6. **项目说明格式**：所有功能交付包的 `README-项目说明.md` 必须按 `docs/05-项目说明模板.md`（v2.1）编写。
 
-## 十四、快速开始
+## 十五、快速开始
 
 ```bash
 # 0. 首次：安装依赖 + 编译

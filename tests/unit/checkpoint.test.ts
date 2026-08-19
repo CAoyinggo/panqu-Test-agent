@@ -47,9 +47,9 @@ describe('Run 状态机', () => {
     expect(isTerminal('RUNNING')).toBe(false);
   });
 
-  it('generatePlatformRunId 统一口径', () => {
+  it('generatePlatformRunId 统一口径（29.3：碰撞安全随机尾）', () => {
     const id = generatePlatformRunId();
-    expect(id).toMatch(/^run-\d{14}-[a-z0-9]{4}$/);
+    expect(id).toMatch(/^run-\d{14}-[0-9a-f]{32}$/);
   });
 });
 

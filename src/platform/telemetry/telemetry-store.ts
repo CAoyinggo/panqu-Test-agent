@@ -2,6 +2,7 @@
 // 事件 / 成本账本 / RCA 真值 / Flaky / Healing / Release 全部落同一存储后端。
 
 import type { Repository } from '../storage/repository.js';
+import { generateId } from '../../core/id.js';
 import type {
   CostLedgerEntry,
   FlakyRecord,
@@ -12,7 +13,8 @@ import type {
 } from './telemetry-types.js';
 
 export function newId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  // 29.3：委托 core/id.ts（crypto.randomUUID，碰撞安全）
+  return generateId(prefix);
 }
 
 /** 统一遥测事件存储 */

@@ -4,6 +4,7 @@
 
 import type { Entity, Repository } from '../storage/repository.js';
 import { redactSensitive } from '../../core/redact.js';
+import { generateId } from '../../core/id.js';
 
 /** 审计动作（任务书 14 至少清单） */
 export type AuditAction =
@@ -56,7 +57,8 @@ export class AuditLog {
   }
 
   async record(input: Omit<AuditEntry, 'id' | 'entryId' | 'timestamp'>): Promise<AuditEntry> {
-    const entryId = `audit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    // 29.3：碰撞安全 ID（高吞吐下 Date.now+Math.random 会碰撞，被容量基线暴露）
+    const entryId = generateId('audit');
     const entry: AuditEntry = {
       id: entryId,
       entryId,

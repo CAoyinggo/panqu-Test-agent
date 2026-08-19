@@ -12,7 +12,7 @@
 | DEBT-03 | P1 | 重复模块 | `config/env.ts` 与 `config/env-loader.ts` 四函数重复；`applyEnvToConfig` 被 `loadConfigFromEnv` 覆盖 | 既有 qa-report DEFECT-05 | **已解决（Phase 28）** | 删除 `env.ts`，engine/execution-run-tool 统一导入 `env-loader.ts`；移除 engine 冗余 `applyEnvToConfig` 调用 |
 | DEBT-04 | P2 | 死代码 | `utils/time.ts`（20 行零引用） | Phase 27 审计 | **已解决（Phase 28）** | 已删除 |
 | DEBT-05 | P2 | 未使用模块 | `utils/assertion-visualizer.ts`（513 行）仅被自身测试引用 | Phase 27 审计 | 开放 | 保留（有通过测试的独立能力）；待确认是否需对外提供或删除 |
-| DEBT-06 | P0 | 性能基线缺失 | 无 10/50/100/500 Runs 性能基线与回归门禁 | Phase 27 审计 | 开放 | 计划 Phase 29：脚本 + 阈值 + 门禁 |
+| DEBT-06 | P0 | 性能基线缺失 | 无 10/50/100/500 Runs 性能基线与回归门禁 | Phase 27 审计 | **已解决（Phase 29）** | `src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`（baseline/gate）+ `tests/perf`（sanity 门禁）；`perf/baseline.json` 权威基线，相对退化 >2× 延迟 / <50% 吞吐即失败 |
 | DEBT-07 | P0 | 变异测试缺失 | 无 Mutation Testing；Critical 变异阈值未建立 | Phase 27 审计 | 开放 | 计划后续 Phase：引入 stryker 或等价变异工具 |
 | DEBT-08 | P1 | 覆盖率缺口 | vitest coverage include 未含 `src/platform/**` | Phase 27 审计 | 开放 | 计划后续 Phase：纳入平台层并补分支 |
 | DEBT-09 | P1 | 迁移框架缺口 | 迁移仅 up/status，无 down/回滚；未验证 backup→migrate→restore→rollback 链 | Phase 27 审计 | 开放 | 计划后续 Phase：down 迁移 + 回滚验证 |
@@ -27,3 +27,4 @@
 |---|---|---|---|---|
 | Phase 27（生产安全加固） | 0（引入新模块，未产生新债） | DEBT-（无，未清理历史债） | 6 项开放 | 持平 |
 | Phase 28（工程治理） | DEBT-12、DEBT-13（2） | DEBT-02、DEBT-03、DEBT-04、DEBT-10（4） | 7 项开放（DEBT-01/05/06/07/08/09/11 + 12/13） | 净下降 |
+| Phase 29（性能与容量基线） | DEBT-14（1） | DEBT-06、DEBT-14（2） | 7 项开放（DEBT-01/05/07/08/09/11/12/13） | 净下降 |

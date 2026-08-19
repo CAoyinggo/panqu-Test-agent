@@ -1,5 +1,7 @@
 // 统一 Run Entity（Phase 24.3）：Scheduler / Worker / Dashboard / Audit 共用
 
+import { randomUUID } from 'node:crypto';
+
 /** 触发来源 */
 export type RunTrigger =
   | 'manual'
@@ -71,5 +73,6 @@ export function generatePlatformRunId(prefix = 'run'): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `${prefix}-${ts}-${Math.random().toString(36).slice(2, 6)}`;
+  // 29.3：随机尾改 crypto.randomUUID（原 4 位 base36 在高并发 create 下会碰撞）
+  return `${prefix}-${ts}-${randomUUID().replace(/-/g, '')}`;
 }
