@@ -1,8 +1,8 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.6.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
+> 版本：v4.7.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚版）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
 
-标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。v4.5（Phase 29）建立性能与容量基线：10/50/100/500 Runs 生命周期吞吐/延迟、Scheduler / Audit / Telemetry 子系统吞吐与内存稳定性，配套相对基线回归门禁（`src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`），并修复容量基线暴露的高吞吐 ID 碰撞缺陷（`src/core/id.ts`，crypto.randomUUID）。v4.6（Phase 30）完成覆盖率补齐：`src/platform/**` 纳入 vitest coverage 统计，新增平台层集中补测 15 项，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁，全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03。
+标准化、可一键执行的多业务 AI 功能测试智能体框架。**所有 AI 功能测试任务强制按此流程执行**。每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。v4.0 起新增 **`src/platform` AI Test Platform 平台层**（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），平台能力与既有 AI Test Engine 以 **Modular Monolith** 方式共存，API 与 CLI 共用统一 Service Layer。v4.1（Phase 25）将平台升级为可长期运行的生产系统：SQLite / PostgreSQL 持久化、JWT 认证与用户体系、真实遥测（成本 / RCA / Flaky / Healing / Release）、指标自动激活、Web Dashboard、API 加固（链路追踪 / 限流 / 统一错误契约 / 分页）与生产运维（迁移 / 备份恢复 / 冒烟 / Preflight）。v4.2（Phase 26）完成生产验证闭环：真实 Run 执行引擎、故障恢复演练（S1/S2/S3）、统一发布门禁（PASS/REVIEW/BLOCK + Agent 防绕过）、备份恢复三一致校验、六类可观测告警、30 Run 生产试运行与 KPI。v4.3（Phase 27）完成生产安全加固：生产/预发模式强制非默认 JWT_SECRET（缺失即拒启）、生产模式禁用默认种子口令与静态 X-Actor/X-Role 身份伪造、运维只读端点 RBAC（OPS_READ）、审批职责分离（禁止自提自批）、安全随机审批 ID、Preflight 安全策略检查。v4.4（Phase 28）完成工程治理：共享脱敏模块上移 `src/core/redact.ts`（消除平台层对 agents 域的反向依赖，并修复连字符变体漏脱敏缺陷）、配置模块统一（删除重复 `env.ts`，`env-loader.ts` 成为 TESTFLOW_* 环境变量覆盖单一来源）、删除死代码、技术债登记（`docs/TECH-DEBT.md`）、README 目录结构同步。v4.5（Phase 29）建立性能与容量基线：10/50/100/500 Runs 生命周期吞吐/延迟、Scheduler / Audit / Telemetry 子系统吞吐与内存稳定性，配套相对基线回归门禁（`src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`），并修复容量基线暴露的高吞吐 ID 碰撞缺陷（`src/core/id.ts`，crypto.randomUUID）。v4.6（Phase 30）完成覆盖率补齐：`src/platform/**` 纳入 vitest coverage 统计，新增平台层集中补测 15 项，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁，全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03。v4.7（Phase 31）完成迁移 down / 回滚（DEBT-09）：`Migration.revert` 回滚实现、`resolveRevertTarget` 防跳级语义、SQLite / Postgres 回滚函数、CLI `migrate down` 子命令，并验证 backup→migrate→rollback→restore 完整闭环（三一致）——只要升级前有备份，迁移回滚不会造成数据永久丢失。
 
 📄 **[查看交互式 HTML 项目完整说明](file:///Users/mac/agents/test-flow-project-overview/test-flow-project-overview.html)**（含架构图与数据图表，本地打开）
 
@@ -121,7 +121,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 ## 六、测试体系
 
-基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **122 个测试文件、1445 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
+基于 Vitest（含 v8 覆盖率）。全量 `npm test` 共 **125 个测试文件、1452 条用例**（含旧用例，无回归）；`agent:test` 450 条（Phase 1-23 行为保持）。
 
 **核心引擎单元测试（8 个文件、225 条）**
 
@@ -150,6 +150,8 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 
 **平台层覆盖率补齐**（v4.6.0 / Phase 30）：新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events / notifications / migrations(Postgres) / environment-policy / scheduler / workers / checkpoint 缺口；`perf-harness.ts` 由独立性能套件运行，排除以免以 0% 虚假稀释平台层覆盖率。验收：`npm run phase30:test`（构建 + 平台层相关测试 + 完整覆盖率门禁）。
 
+**迁移 down / 回滚**（v4.7.0 / Phase 31，DEBT-09）：`Migration.revert` 回滚实现（`v1/base-schema` 回滚 = 删除全部集合表）、`resolveRevertTarget` 仅允许回滚最新已应用迁移（禁止跳级）、SQLite / Postgres 回滚函数与 CLI `migrate down` 子命令；新增 `tests/unit/migrations-down.test.ts`（5 项）+ `tests/integration/migrations-rollback.test.ts`（2 项，backup→migrate→rollback→restore 三一致闭环）。验收：`npm run phase31:test`（构建 + 迁移/运维相关测试）。
+
 ## 七、AI Test Platform 平台层
 
 v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有 AI Test Engine 共存（不拆微服务、不引入 Kafka / Kubernetes），实现多 Project / Environment 管理、Run 全生命周期、Worker 调度、RBAC / 审批门禁、事件通知、审计与运维指标。
@@ -169,7 +171,7 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | `auth/` | JWT 认证（25.3）：登录 / 刷新 / 登出 / 用户管理 / 资源作用域隔离 |
 | `telemetry/` | 真实遥测（25.4/25.5）：8 类事件流 + 成本账本 + RCA 真值 + Flaky/Healing/Release + 指标自动激活（tracked=false → 真实数据激活） |
 | `operations/` | 平台指标 14 项 + SLO 6 项（可计算指标真实统计，缺失遥测返回 null 不虚构） |
-| `ops/` | 生产运维（25.8）：schema 迁移 / 备份恢复 / 冒烟 / Preflight |
+| `ops/` | 生产运维（25.8/31）：schema 迁移与回滚（down）/ 备份恢复 / 冒烟 / Preflight |
 | `service/` | **统一 Service Layer**：API / CLI / Scheduler 共用 `PlatformService`，禁止两套业务逻辑 |
 | `api/` | HTTP API（node:http）：Bearer Token / RBAC 头 / 限流 / 幂等 / 审计 / 链路追踪 / 统一错误契约 / 分页 / Web Dashboard 静态托管 |
 
@@ -303,7 +305,7 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | v4.5.0 | 2026-08-19 | 性能与容量基线（Phase 29）：10/50/100/500 Runs 生命周期吞吐/延迟基线与回归门禁（`perf:baseline` / `perf:gate` / `perf:test`）、Scheduler / Audit / Telemetry 写入吞吐、内存稳定性；性能基准暴露并修复高吞吐下 ID 碰撞缺陷（`core/id.ts` 统一 crypto.randomUUID） |
 | v4.6.0 | 2026-08-19 | 覆盖率补齐（Phase 30）：`src/platform/**` 纳入 vitest coverage 统计，平台层全子模块满足行/函数/语句 ≥ 80、分支 ≥ 75 门禁；新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events / notifications / migrations(Postgres) / environment-policy / scheduler / workers / checkpoint 缺口；全量覆盖率 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03 |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`；Phase 31 报告见 `docs/phase31-summary.md`。
 
 ## 十三、目录结构
 

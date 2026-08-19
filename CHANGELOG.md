@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.7.0] - 2026-08-19
+
+### 新增（迁移 down / 回滚，Phase 31）
+
+- `Migration` 接口新增 `revert`（down）实现；`v1/base-schema` 回滚 = 删除全部 16 个集合表（`_migrations` 表保留为基础设施，记录由回滚流程删除）。
+- 新增回滚核心：`resolveRevertTarget`（无已应用 → null；未指定取最新；指定必须为最新，禁止跳级回滚；目标迁移必须存在且实现 revert）与 `revertSqliteMigration` / `revertPostgresMigration`（回滚后同步删除 `_migrations` 记录，返回回滚迁移 id；可再次应用恢复）。
+- CLI `migrate` 新增 `down` 子命令：`migrate down sqlite|postgres [--id <id>]`（回滚最新已应用迁移）与 `migrate down check`（展示两端已应用与可回滚状态）。
+- 验证 backup→migrate→rollback→restore 完整链：升级前 `collectSnapshot` 备份 → 回滚 schema（集合表 + 记录删除）→ 重新应用迁移恢复 → `restoreSnapshot` + `verifyRestore` 三一致（Count / Checksum / Key ID）。结论：只要升级前有备份，迁移回滚不会造成数据永久丢失。
+
+### 变更
+
+- `docs/TECH-DEBT.md`：DEBT-09（迁移框架缺口：无 down/回滚）已解决。
+
+### 测试
+
+- 新增 `tests/unit/migrations-down.test.ts`（5 项：SQLite 回滚闭环/幂等空操作/目标解析边界/mock Pool 回滚/Postgres 空态）+ `tests/integration/migrations-rollback.test.ts`（2 项：真实 SQLite 回滚闭环 + `_migrations` 基础设施保留）；全量回归：1452 passed / 18 skipped（125 个测试文件）。
+
 ## [4.6.0] - 2026-08-19
 
 ### 新增（覆盖率补齐，Phase 30）

@@ -61,7 +61,6 @@ describe('NotificationDispatcher：模板与上下文分支（Phase 30 补齐）
       name: 'spy',
       send: async (m) => {
         sent.push(`${m.title}|${m.severity}|${m.body}`);
-        return { ok: true };
       },
     };
     dispatcher.register(channel);

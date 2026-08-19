@@ -31,6 +31,8 @@ import {
   applyPostgresMigrations,
   listAppliedSqlite,
   listAppliedPostgres,
+  revertSqliteMigration,
+  revertPostgresMigration,
   MIGRATIONS,
 } from '../src/platform/ops/migrations.js';
 import { collectSnapshot, restoreSnapshot, snapshotTotal, computeSnapshotChecksum, verifyRestore } from '../src/platform/ops/backup.js';
@@ -374,6 +376,45 @@ async function main(): Promise<void> {
       } else if (sub === 'postgres') {
         const applied = await applyPostgresMigrations(createPostgresPool());
         console.log(JSON.stringify({ ok: true, appliedNow: applied, detail: `PostgreSQL 迁移完成（本次应用 ${applied.length} 项）` }, null, 2));
+      } else if (sub === 'down') {
+        // 31.2（Phase 31 / DEBT-09）：schema 回滚（down）。仅允许回滚最新已应用迁移（防跳级）。
+        // 用法：migrate down sqlite|postgres [--id <id>] ｜ migrate down check
+        if (args[2] === 'check') {
+          const dir = flagValue(args, '--data-dir') ?? platformDataDir();
+          const db = createSqliteDatabase(sqliteDataFile(dir));
+          const sqliteApplied = listAppliedSqlite(db);
+          db.close();
+          let pgApplied: string[] = [];
+          let pgOk = true;
+          try {
+            pgApplied = await listAppliedPostgres(createPostgresPool());
+          } catch {
+            pgOk = false;
+          }
+          console.log(JSON.stringify({
+            rollbackable: MIGRATIONS.filter((m) => m.revert).map((m) => m.id),
+            sqlite: { latestApplied: sqliteApplied[sqliteApplied.length - 1] ?? null, applied: sqliteApplied },
+            postgres: pgOk ? { latestApplied: pgApplied[pgApplied.length - 1] ?? null, applied: pgApplied } : { error: 'PostgreSQL 不可连接（跳过）' },
+            note: 'migrate down <sqlite|postgres> [--id <id>]：仅允许回滚最新已应用迁移',
+          }, null, 2));
+        } else if (args[2] === 'sqlite') {
+          const dir = flagValue(args, '--data-dir') ?? platformDataDir();
+          const db = createSqliteDatabase(sqliteDataFile(dir));
+          const reverted = revertSqliteMigration(db, flagValue(args, '--id') ?? undefined);
+          db.close();
+          if (reverted === null) {
+            console.log(JSON.stringify({ ok: true, reverted: null, detail: '无已应用迁移可回滚' }, null, 2));
+          } else {
+            console.log(JSON.stringify({ ok: true, reverted, detail: `SQLite 已回滚迁移 ${reverted}（集合表已删除，_migrations 记录已移除）` }, null, 2));
+          }
+        } else if (args[2] === 'postgres') {
+          const reverted = await revertPostgresMigration(createPostgresPool(), flagValue(args, '--id') ?? undefined);
+          if (reverted === null) {
+            console.log(JSON.stringify({ ok: true, reverted: null, detail: '无已应用迁移可回滚' }, null, 2));
+          } else {
+            console.log(JSON.stringify({ ok: true, reverted, detail: `PostgreSQL 已回滚迁移 ${reverted}（集合表已删除，_migrations 记录已移除）` }, null, 2));
+          }
+        } else throw new Error('用法：migrate down <sqlite|postgres|check> [--id <id>]');
       } else if (sub === 'check') {
         // 尽力而为：sqlite 直接读；postgres 失败仅提示
         const dir = flagValue(args, '--data-dir') ?? platformDataDir();
