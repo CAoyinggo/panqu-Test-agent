@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.6.0] - 2026-08-19
+
+### 新增（覆盖率补齐，Phase 30）
+
+- `vitest.config.ts` coverage include 纳入 `src/platform/**`（DEBT-08 已解决）：平台层与核心/智能层共用同一门禁（行/函数/语句 ≥ 80，分支 ≥ 75）；`perf-harness.ts` 由独立性能套件（`tests/perf` + `vitest.perf.config.ts`）运行，排除以免以 0% 虚假稀释平台层覆盖率。
+- 新增集中补测 `tests/unit/platform-coverage-gap.test.ts`（15 项）：覆盖平台层此前低于门槛的缺口模块——
+  - EventBus：`clear` / `listenerCount(type|无参)` / `totalPublished`；
+  - NotificationDispatcher：`notifyEvent` 模板与上下文后缀分支（含/省略 environment/projectId）、`buildNotificationMessage` 覆盖全部模板类型；
+  - Migrations：PostgreSQL 迁移（`ensurePostgresMigrationsTable` / `listAppliedPostgres` / `applyPostgresMigrations` 幂等，mock Pool 规避 pg-mem 多列约束 DDL 局限）与 SQLite 迁移落盘验证；
+  - EnvironmentPolicy：`describeDecision` 三种决策、无 custom 时回退单一策略源、`isProductionLike` 各档位；
+  - Scheduler：`pause`/`resume` 非执行态边界、`requeueRetries` 环境过滤、`isJobTerminal`、`clear`；
+  - WorkerRegistry：`count` / `getExecutor` / 未注册健康判定 / `healthyWorkers` 过滤 / `release` 下界 / down 心跳恢复 / 缺省选项构造；
+  - WorkerPool：执行器抛非 Error 值 → FAILED 记录原文、`recoverOrphans` 回收无主 RUNNING Job；
+  - CheckpointStore：`delete`（含不存在静默）/ `clear` / 空查询返回 null。
+- 新增脚本 `phase30:test`（构建 + 平台层相关测试 + 完整覆盖率门禁校验）。
+
+### 变更
+
+- 平台层纳入覆盖率统计后，全量门禁（行/函数/语句 ≥ 80，分支 ≥ 75）在所有平台子模块均成立：events 96.66/100/90/100、notifications 95.65/95.5/100/100、scheduler 94.87/91.07/100/100、runs 96.82/90.32/100/100、ops 94.3/78.73/95.12/94.68、workers 93.51/81.81/96.55/98.88、api 89.66/77.91/90.54/92.57 等。
+- `docs/TECH-DEBT.md`：DEBT-08（覆盖率缺口）已解决。
+
+### 测试
+
+- 新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）；全量覆盖率：Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03；全量回归：1445 passed / 18 skipped。
+
 ## [4.5.0] - 2026-08-19
 
 ### 新增（性能与容量基线，Phase 29）
