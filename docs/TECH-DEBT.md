@@ -11,7 +11,7 @@
 | DEBT-02 | P1 | 平台层反向依赖 | `platform/audit/audit-log.ts` 曾运行时依赖 `agents/tools/tool.js`（redactSensitive） | Phase 27 审计 | **已解决（Phase 28）** | 脱敏上移至 `core/redact.ts`，audit-log 改从 core 导入；tool.js 保留再导出 |
 | DEBT-03 | P1 | 重复模块 | `config/env.ts` 与 `config/env-loader.ts` 四函数重复；`applyEnvToConfig` 被 `loadConfigFromEnv` 覆盖 | 既有 qa-report DEFECT-05 | **已解决（Phase 28）** | 删除 `env.ts`，engine/execution-run-tool 统一导入 `env-loader.ts`；移除 engine 冗余 `applyEnvToConfig` 调用 |
 | DEBT-04 | P2 | 死代码 | `utils/time.ts`（20 行零引用） | Phase 27 审计 | **已解决（Phase 28）** | 已删除 |
-| DEBT-05 | P2 | 未使用模块 | `utils/assertion-visualizer.ts`（513 行）仅被自身测试引用 | Phase 27 审计 | 开放 | 保留（有通过测试的独立能力）；待确认是否需对外提供或删除 |
+| DEBT-05 | P2 | 未使用模块 | `utils/assertion-visualizer.ts`（513 行）仅被自身测试引用 | Phase 27 审计 | **已解决（Phase 34）** | 变废为用：接入 `reports/html-reporter.ts`，HTML 报告新增 4.4 断言可视化节（失败断言 Diff View + 断言热力图 + Flakiness Index），对外提供能力；新增 `tests/unit/html-reporter-visualization.test.ts`（4 项）守护接入行为 |
 | DEBT-06 | P0 | 性能基线缺失 | 无 10/50/100/500 Runs 性能基线与回归门禁 | Phase 27 审计 | **已解决（Phase 29）** | `src/platform/ops/perf-harness.ts` 唯一测量源 + `scripts/perf/run-perf.mjs`（baseline/gate）+ `tests/perf`（sanity 门禁）；`perf/baseline.json` 权威基线，相对退化 >2× 延迟 / <50% 吞吐即失败 |
 | DEBT-07 | P0 | 变异测试缺失 | 无 Mutation Testing；Critical 变异阈值未建立 | Phase 27 审计 | **已解决（Phase 32）** | 引入 Stryker + `@stryker-mutator/vitest-runner`（vitest related + perTest 覆盖率分析）；`stryker.config.mjs` 变异目标集聚焦 7 个 Critical 源文件（security/rbac/approval-center/run-schema），门禁 high=80 / low=70 / break=60；总体变异分数 98.96%（191 杀死 / 2 已知等价存活 / 0 无覆盖），security / approval-center 100%、rbac 98.44%、runs 96.55%；脚本 `phase32:test` / `mutation:test` / `mutation:dry` |
 | DEBT-08 | P1 | 覆盖率缺口 | vitest coverage include 未含 `src/platform/**` | Phase 27 审计 | **已解决（Phase 30）** | `vitest.config.ts` coverage include 纳入 `src/platform/**` 与 `src/core/id.ts`；新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events/notifications/migrations(Postgres)/environment-policy/scheduler/workers/checkpoint 缺口；平台层全子模块达标（行/函数/语句 ≥ 80，分支 ≥ 75），全量 Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03 |
@@ -32,3 +32,4 @@
 | Phase 31（迁移 down/回滚） | 0（无新债） | DEBT-09（1） | 6 项开放（DEBT-01/05/07/11/12/13） | 持平 |
 | Phase 32（变异测试） | 0（无新债） | DEBT-07（1） | 5 项开放（DEBT-01/05/11/12/13） | 净下降 |
 | Phase 33（环境策略边界） | 0（无新债） | DEBT-01（1） | 4 项开放（DEBT-05/11/12/13） | 净下降 |
+| Phase 34（断言可视化接入） | 0（无新债） | DEBT-05（1） | 3 项开放（DEBT-11/12/13） | 净下降 |

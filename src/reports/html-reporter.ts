@@ -3,6 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ReportData, CheckResult, ResponseSummary, ImpactItem } from '../core/types.js';
 import type { Reporter } from './index.js';
+import {
+  visualizeAssertion,
+  buildAssertionHeatmap,
+  type AssertionHeatmap,
+  type DiffDetail,
+  type HeatmapCell,
+} from '../utils/assertion-visualizer.js';
 
 const STATUS_BADGE: Record<string, [string, string]> = {
   PASS: ['#16a34a', 'PASS'],
@@ -75,6 +82,36 @@ function buildReport(d: ReportData): string {
   const assertGroupLabels: Record<string, string> = {
     response: 'HTTP 响应', submit: '提交结果', billing: '计费数据', headers: '响应头', env: '环境', metrics: '性能指标', custom: '自定义'
   };
+
+  // 断言可视化（DEBT-05：接入 assertion-visualizer 的 diff_view + assertion_heatmap 协议）
+  const vizModuleName = d.taskDef?.name || d.title || 'module';
+  const assertionMatrix = assertChecks.map((c) => ({
+    assertionId: `${d.taskDef?.project_id ?? 'task'}-${c.name}`,
+    name: c.name,
+    target: d.taskDef?.name || d.title || 'module',
+    path: c.path,
+    operator: c.operator,
+    failureCount: c.pass ? 0 : 1,
+    totalRuns: 1,
+  }));
+  const failedAssertions = assertChecks.filter((c) => !c.pass);
+  const heatmap: AssertionHeatmap | null = assertionMatrix.length
+    ? buildAssertionHeatmap(vizModuleName, assertionMatrix)
+    : null;
+  const diffViews = failedAssertions.map((c) =>
+    visualizeAssertion({
+      assertion_failure: {
+        operator: c.operator || 'unknown',
+        path: c.path,
+        expected: c.expected,
+        actual: c.actual,
+        message: c.detail,
+      },
+      history_metrics: [],
+      suite_assertion_matrix: assertionMatrix,
+      module_name: vizModuleName,
+    }).diff_view,
+  );
   const manualRows = (d.manual || []).map((m) => [esc(m.id), esc(m.steps || '-')]);
   const issueRows = (d.issues || []).map((i) => [esc(i.level), esc(i.title), esc(i.desc || '')]);
 
@@ -184,6 +221,28 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--rule); co
     }).join('');
     return `<h4 style="margin:14px 0 6px;font-size:13px;color:var(--muted)">${esc(label)}（${checks.length} 条）</h4><div class="table-wrap"><table><thead><tr><th>断言项</th><th>操作符</th><th>期望值</th><th>实际值</th><th>耗时</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('') : '<p class="muted">无声明式断言（仅使用业务适配器断言）</p>'}
+  <h3>4.4 断言可视化</h3>
+  <p class="muted">Diff 视图（失败断言节点级差异）+ 断言热力图（权重：0 绿 / 1-3 黄橙 / 4-5 红；Flakiness Index ${heatmap ? heatmap.flakiness_index : '-'}，基于本报告单次运行）</p>
+  ${diffViews.length ? diffViews.map((dv, i) => {
+    const failed = failedAssertions[i];
+    const rows = (dv.diff_details || []).map((dd: DiffDetail) => [
+      esc(dd.path || '/'),
+      esc(dd.change_type),
+      esc(formatValueShort(dd.expected)),
+      esc(formatValueShort(dd.actual)),
+      esc(dd.hint || ''),
+    ]);
+    return `<h4 style="margin:14px 0 6px;font-size:13px;color:var(--muted)">${esc(failed?.name || '')} ｜ ${esc(dv.data_type)} ｜ ${esc(dv.summary)}</h4>${rows.length ? tableHtml(['路径', '变更', '期望', '实际', '说明'], rows) : '<p class="muted">无节点级差异明细</p>'}`;
+  }).join('') : '<p class="muted">全部断言通过，无失败差异视图</p>'}
+  ${heatmap ? tableHtml(['断言', '目标', '路径', '操作符', '权重', '失败率', '运行'], heatmap.matrix.map((cell: HeatmapCell) => [
+    esc(cell.assertion_name),
+    esc(cell.target || '-'),
+    esc(cell.path || '-'),
+    esc(cell.operator || '-'),
+    `<span style="color:${cell.weight <= 0 ? '#16a34a' : cell.weight <= 3 ? '#d97706' : '#dc2626'};font-weight:700">${cell.weight}</span>`,
+    `${(cell.failure_rate * 100).toFixed(1)}%`,
+    `${cell.failure_count}/${cell.total_runs}`,
+  ])) : '<p class="muted">无声明式断言，无可视化数据</p>'}
 
   <h2>五、素材库使用</h2>
   ${assetHtml}

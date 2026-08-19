@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.10.0] - 2026-08-19
+
+### 新增（断言可视化接入 HTML 报告，Phase 34）
+
+- 变废为用（DEBT-05 已解决）：将此前「仅被自身测试引用」的 `utils/assertion-visualizer.ts` 断言可视化引擎接入 `reports/html-reporter.ts`，HTML 报告新增 **4.4 断言可视化** 节，复用其 Diff View（JSON/TEXT/NUMERIC/BOOLEAN/SCHEMA 节点级差异）与 Assertion Heatmap（热度权重 0 绿 / 1-3 黄橙 / 4-5 红 + Flakiness Index）两大协议。
+- 报告 4.4 节渲染内容：失败断言逐条输出节点级 Diff 明细表（路径/变更类型/期望/实际/说明），全通过时显示「无失败差异视图」；断言热力图矩阵表（断言/目标/路径/操作符/权重/失败率/运行数）覆盖全部声明式断言。
+- 新增脚本 `phase34:test`（构建 + 断言可视化接入相关测试：html-reporter-visualization + assertion-visualizer + assertion-engine + path-extractor）。
+
+### 变更
+
+- `docs/TECH-DEBT.md`：DEBT-05（`utils/assertion-visualizer.ts` 未使用模块）已解决——接入 HTML 报告器对外提供能力，消除唯一「未使用模块」开放债。
+
+### 测试
+
+- 新增 `tests/unit/html-reporter-visualization.test.ts`（4 项）：失败断言输出 Diff 视图 / 全通过时无失败差异视图但输出热力图 / 无声明式断言时无可视化数据 / HTML 特殊字符转义防注入；全量回归：1490 passed / 18 skipped（128 个测试文件）。
+
 ## [4.9.0] - 2026-08-19
 
 ### 新增（环境策略职责边界与跨层一致性，Phase 33）
