@@ -66,6 +66,26 @@ export default function RunDetail(): JSX.Element {
   const [comments, setComments] = useState<CommentEntry[]>([]);
   const [comment, setComment] = useState('');
   const [msg, setMsg] = useState('');
+  // 43.1：写操作统一错误/忙碌态（此前 doRunAgain/doClone/doSaveTemplate/doShare/doComment 无 try/catch，
+  //       失败表现为 unhandled rejection，无任何用户反馈）
+  const [actionErr, setActionErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [assignInput, setAssignInput] = useState('');
+
+  /** 43.1：写操作包装——成功刷新数据，失败展示错误 banner（不再静默吞掉） */
+  async function runAction<T>(fn: () => Promise<T>, onOk: (r: T) => void, after?: () => void): Promise<void> {
+    setActionErr('');
+    setBusy(true);
+    try {
+      const r = await fn();
+      onOk(r);
+      after?.();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const loadReport = async (): Promise<void> => {
     try {
@@ -92,27 +112,56 @@ export default function RunDetail(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const doRunAgain = async (): Promise<void> => {
-    const r = await api.post<{ runId: string; status: string }>(`/runs/${id}/rerun`);
-    setMsg(`Run Again → ${r.runId}（${r.status}，仅复制配置）`);
+  const doRunAgain = (): void => {
+    void runAction(
+      () => api.post<{ runId: string; status: string }>(`/runs/${id}/rerun`),
+      (r) => setMsg(`Run Again → ${r.runId}（${r.status}，仅复制配置）`),
+    );
   };
-  const doClone = async (): Promise<void> => {
-    const r = await api.post<{ runId: string; status: string }>(`/runs/${id}/clone`);
-    setMsg(`Clone Configuration → ${r.runId}（${r.status}）`);
+  const doClone = (): void => {
+    void runAction(
+      () => api.post<{ runId: string; status: string }>(`/runs/${id}/clone`),
+      (r) => setMsg(`Clone Configuration → ${r.runId}（${r.status}）`),
+    );
   };
-  const doSaveTemplate = async (): Promise<void> => {
-    const r = await api.post<{ id: string; name: string }>(`/runs/${id}/template`, { name: `${data?.run.projectId ?? 'run'} 模板` });
-    setMsg(`已保存模板：${r.name}（${r.id}）`);
+  const doSaveTemplate = (): void => {
+    void runAction(
+      () => api.post<{ id: string; name: string }>(`/runs/${id}/template`, { name: `${data?.run.projectId ?? 'run'} 模板` }),
+      (r) => setMsg(`已保存模板：${r.name}（${r.id}）`),
+    );
   };
-  const doShare = async (): Promise<void> => {
-    const r = await api.post<{ token: string; url: string }>(`/runs/${id}/share`);
-    setShare(r); setMsg('已生成分享链接');
+  const doShare = (): void => {
+    void runAction(
+      () => api.post<{ token: string; url: string }>(`/runs/${id}/share`),
+      (r) => { setShare(r); setMsg('已生成分享链接'); },
+    );
   };
-  const doComment = async (): Promise<void> => {
+  const doComment = (): void => {
     if (!comment.trim()) return;
-    const r = await api.post<{ mentions: string[] }>(`/runs/${id}/comments`, { text: comment });
-    setMsg(r.mentions.length ? `已评论并 @${r.mentions.join('、')}（已通知）` : '已评论');
-    setComment(''); await loadComments();
+    // 43.1 修复评论契约：服务端 addRunComment 读 c.body.body（string），此前前端发 { text } → 200 但正文恒为空
+    void runAction(
+      () => api.post<{ mentions: string[] }>(`/runs/${id}/comments`, { body: comment }),
+      (r) => {
+        setMsg(r.mentions.length ? `已评论并 @${r.mentions.join('、')}（已通知）` : '已评论');
+        setComment('');
+      },
+      () => void loadComments(),
+    );
+  };
+  // 43.2：Cancel（仅 QUEUED/RUNNING 可取消）+ Assign（指派给用户，@通知）
+  const doCancel = (): void => {
+    void runAction(
+      () => api.post<{ runId: string; status: string }>(`/runs/${id}/cancel`),
+      (r) => { setMsg(`已取消 Run：${r.runId}（${r.status}）`); void refresh(); },
+    );
+  };
+  const doAssign = (): void => {
+    const assignees = assignInput.split(',').map((s) => s.trim()).filter(Boolean);
+    if (assignees.length === 0) return;
+    void runAction(
+      () => api.post<{ runId: string; status: string; assignees: string[] }>(`/runs/${id}/assign`, { assignees }),
+      (r) => { setMsg(`已指派给 ${r.assignees.join('、')}`); setAssignInput(''); void refresh(); },
+    );
   };
 
   return (
@@ -120,6 +169,7 @@ export default function RunDetail(): JSX.Element {
       <h1 className="page-title">执行详情</h1>
       <div className="page-sub mono">{id} · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
+      {actionErr && <div className="error-banner">{actionErr}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
       {!data && !error && <Empty text="加载中…" />}
       {data && (
@@ -144,17 +194,26 @@ export default function RunDetail(): JSX.Element {
             </Table>
           </Card>
 
-          <Card title="快速复用">
+          <Card title="Run 操作">
             <div className="btn-group">
-              <button className="btn btn-sm" onClick={() => void doRunAgain()}>Run Again</button>
-              <button className="btn btn-sm" onClick={() => void doClone()}>Clone Configuration</button>
-              <button className="btn btn-sm" onClick={() => void doSaveTemplate()}>Create Template</button>
-              <button className="btn btn-sm" onClick={() => void doShare()}>Share Report</button>
+              <button className="btn btn-sm" disabled={busy} onClick={doRunAgain}>Run Again</button>
+              <button className="btn btn-sm" disabled={busy} onClick={doClone}>Clone Configuration</button>
+              <button className="btn btn-sm" disabled={busy} onClick={doSaveTemplate}>Create Template</button>
+              <button className="btn btn-sm" disabled={busy} onClick={doShare}>Share Report</button>
+              {/* 43.2：Cancel 仅 QUEUED/RUNNING 可执行（PASS/FAILED/COMPLETED 不显示） */}
+              {(data.run.status === 'QUEUED' || data.run.status === 'RUNNING') && (
+                <button className="btn btn-sm btn-danger" disabled={busy} onClick={doCancel}>Cancel Run</button>
+              )}
               {share && (
                 <a className="link mono" href={share.url} target="_blank" rel="noreferrer">{share.url}</a>
               )}
               <a className="btn btn-sm" href={`/runs/${id}/report/export?format=json`} target="_blank" rel="noreferrer">Export JSON</a>
               <a className="btn btn-sm" href={`/runs/${id}/report/export?format=html`} target="_blank" rel="noreferrer">Export HTML</a>
+            </div>
+            {/* 43.2：Assign（指派给用户，逗号分隔多个；触发 @ 通知） */}
+            <div className="form-row" style={{ marginTop: 8 }}>
+              <input aria-label="指派给（逗号分隔用户名）" placeholder="指派给用户，如 zhangsan,lisi" value={assignInput} onChange={(e) => setAssignInput(e.target.value)} />
+              <button className="btn btn-sm" disabled={busy || !assignInput.trim()} onClick={doAssign}>指派 Assign</button>
             </div>
           </Card>
 

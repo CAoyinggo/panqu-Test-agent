@@ -43,33 +43,50 @@ export default function Defects(): JSX.Element {
   const [description, setDescription] = useState('');
   const [msg, setMsg] = useState('');
   const [assignee, setAssignee] = useState('');
+  // 43.1：写操作错误反馈（此前 doCreate/doStatus/doAssign 无 try/catch，失败为 unhandled rejection）
+  const [err, setErr] = useState('');
 
   const detail = id && data ? data.find((d) => d.defectId === id) ?? null : null;
 
   const doCreate = async (): Promise<void> => {
     if (!title.trim()) { setMsg('请填写缺陷标题'); return; }
-    await api.post<Defect>('/defects', {
-      projectId,
-      title: title.trim(),
-      severity,
-      runId: runId.trim() || undefined,
-      caseId: caseId.trim() || undefined,
-      description: description.trim() || undefined,
-    });
-    setTitle(''); setRunId(''); setCaseId(''); setDescription('');
-    setMsg('缺陷已登记'); refresh();
+    setErr('');
+    try {
+      await api.post<Defect>('/defects', {
+        projectId,
+        title: title.trim(),
+        severity,
+        runId: runId.trim() || undefined,
+        caseId: caseId.trim() || undefined,
+        description: description.trim() || undefined,
+      });
+      setTitle(''); setRunId(''); setCaseId(''); setDescription('');
+      setMsg('缺陷已登记'); refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const doStatus = async (defectId: string, status: Defect['status']): Promise<void> => {
-    await api.patch<Defect>(`/defects/${defectId}/status`, { status });
-    setMsg(`已更新为 ${status}`); refresh();
+    setErr('');
+    try {
+      await api.patch<Defect>(`/defects/${defectId}/status`, { status });
+      setMsg(`已更新为 ${status}`); refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const doAssign = async (defectId: string): Promise<void> => {
     const who = assignee.trim();
     if (!who) { setMsg('请填写处理人'); return; }
-    await api.post<Defect>(`/defects/${defectId}/assign`, { assignee: who });
-    setMsg(`已指派给 ${who}`); setAssignee(''); refresh();
+    setErr('');
+    try {
+      await api.post<Defect>(`/defects/${defectId}/assign`, { assignee: who });
+      setMsg(`已指派给 ${who}`); setAssignee(''); refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   };
 
   if (detail) {
@@ -112,6 +129,7 @@ export default function Defects(): JSX.Element {
       <h1 className="page-title">Defect 管理</h1>
       <div className="page-sub">平台缺陷登记 · 关联 Run / TestCase · 状态机流转</div>
       {error && <div className="error-banner">{error}</div>}
+      {err && <div className="error-banner">{err}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
 
       <Card title="登记缺陷">

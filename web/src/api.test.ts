@@ -152,4 +152,17 @@ describe('API 客户端（Phase 42.1）', () => {
       await assertion;
     });
   });
+
+  describe('api.del 请求行为（43.1）', () => {
+    it('发送 DELETE 方法并携带认证头', async () => {
+      setSession('jwt-token', { username: 'u', role: 'QA', scopes: { projects: [], environments: [], businesses: [] } });
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+      vi.stubGlobal('fetch', fetchMock);
+      await api.del<{ ok: boolean }>('/runs/abc');
+      const [, init] = fetchMock.mock.calls[0];
+      const headers = init.headers as Record<string, string>;
+      expect(String(init.method ?? '')).toBe('DELETE');
+      expect(headers.Authorization).toBe('Bearer jwt-token');
+    });
+  });
 });

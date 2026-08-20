@@ -23,10 +23,15 @@ import TestSuites from './pages/TestSuites';
 import TestPlans from './pages/TestPlans';
 import RunTemplates from './pages/RunTemplates';
 import Defects from './pages/Defects';
+import RunCreate from './pages/RunCreate';
+import TestAssets from './pages/TestAssets';
+import AssetVersions from './pages/AssetVersions';
 
 const NAV = [
   { to: '/', label: 'QA 工作台' },
   { to: '/runs', label: '执行' },
+  { to: '/runs/new', label: '新建 Run' },
+  { to: '/assets', label: '测试资产' },
   { to: '/suites', label: 'Suites' },
   { to: '/plans', label: 'Test Plan' },
   { to: '/templates', label: 'Template' },
@@ -103,7 +108,10 @@ export default function App() {
         <Routes>
           <Route path="/" element={<QAHome />} />
           <Route path="/runs" element={<Runs />} />
+          <Route path="/runs/new" element={<RunCreate />} />
           <Route path="/runs/:id" element={<RunDetail />} />
+          <Route path="/assets" element={<TestAssets />} />
+          <Route path="/assets/:id" element={<AssetVersions />} />
           <Route path="/suites" element={<TestSuites />} />
           <Route path="/plans" element={<TestPlans />} />
           <Route path="/templates" element={<RunTemplates />} />

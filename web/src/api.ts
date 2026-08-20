@@ -181,4 +181,6 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
+  // 43.1：补 DELETE（平台端点若需删除资源时使用；当前无调用方仍保持契约完整）
+  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };

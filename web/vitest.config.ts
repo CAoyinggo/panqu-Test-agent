@@ -19,7 +19,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       reportsDirectory: '../coverage/web/',
-      include: ['src/api.ts', 'src/hooks/**/*.ts', 'src/components/**/*.tsx', 'src/pages/Login.tsx'],
+      include: ['src/api.ts', 'src/hooks/**/*.ts', 'src/components/**/*.tsx', 'src/pages/Login.tsx', 'src/pages/RunCreate.tsx', 'src/pages/TestAssets.tsx', 'src/pages/AssetVersions.tsx', 'src/pages/RunDetail.tsx'],
     },
   },
 });
