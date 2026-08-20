@@ -1,0 +1,124 @@
+# Phase 42.2：Web Dashboard CI 集成（单元/组件测试 + 真实浏览器 E2E）
+# 分级执行：
+#   - web-unit（PR / push main 门禁）：Web 前端 Vitest 单元 / 组件测试 + v8 覆盖率
+#   - web-e2e-chromium（PR / push main 门禁）：真实浏览器 E2E（Chromium，快速确定性）
+#   - web-e2e-cross-browser（Nightly 定时）：跨浏览器回归（chromium + firefox + webkit）
+#
+# 依赖：@playwright/test 已在根 devDependencies；浏览器由 actions/cache 缓存。
+# 说明：E2E 服务器为内存态平台（无外部依赖），可离线确定性执行，无需 Repository Secrets。
+
+name: Web E2E & Unit CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 每日 UTC 18:00（北京时间次日 02:00）执行跨浏览器全量回归
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  # ===== Web 前端单元 / 组件测试门禁 =====
+  web-unit:
+    name: Web Unit / Component Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci && npm --prefix web ci
+
+      - name: Web 单元 / 组件测试（Vitest + jsdom）
+        run: npm run web:test
+
+      - name: Web 测试覆盖率
+        run: npm run web:test:coverage
+
+      - name: Web 生产构建（tsc 类型检查 + vite）
+        run: npm run build:web
+
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage-${{ github.run_id }}
+          path: coverage/web/
+          retention-days: 7
+
+  # ===== 真实浏览器 E2E 门禁（Chromium，PR 快速反馈） =====
+  web-e2e-chromium:
+    name: Web E2E (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: 安装 Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Web E2E（Chromium 全量 16 个 spec）
+        run: npm run web:e2e:test
+
+      - name: 上传 Playwright 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-chromium-report-${{ github.run_id }}
+          path: tests/e2e/web/playwright-report/
+          retention-days: 7
+
+  # ===== 跨浏览器回归（仅 Nightly / 手动触发） =====
+  web-e2e-cross-browser:
+    name: Web E2E Cross-Browser (chromium+firefox+webkit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: 安装 Playwright 三浏览器
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: 跨浏览器 E2E（WEB_E2E_BROWSERS=all）
+        run: npm run web:e2e:cross
+
+      - name: 上传 Playwright 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-cross-browser-report-${{ github.run_id }}
+          path: tests/e2e/web/playwright-report/
+          retention-days: 14

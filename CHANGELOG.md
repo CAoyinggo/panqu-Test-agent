@@ -2,6 +2,29 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.17.0] - 2026-08-20
+
+### 新增（Web 前端工程化：单元/组件测试 + CI 接入 + 跨浏览器回归，Phase 42）
+
+补齐 Web Dashboard 的三层工程化保障，使前端具备与平台层同等强度的可回归性。
+
+- Web 前端单元 / 组件测试（42.1）：Vitest 4.1 + jsdom + React Testing Library（`web/vitest.config.ts` 独立配置，显式 `jsdom.url`）；新增 6 个测试文件 37 条用例：`api.test.ts`（登录契约 accessToken/roles 归一化 / 会话存取 / Bearer+X-Trace-Id 头 / 401 自动登出 / 404 兜底 / 网络错误 / 15s 超时）、`usePolling.test.tsx`（三态 + 卸载清定时器）、`ui.test.tsx`（Card/Badge/StatusBadge/MetricCard/Table/Empty/JsonBlock/fmtTime/WindowSwitcher）、`Login.test.tsx`（表单渲染/错误提示/成功回调）、`env-mini` / `env-probe`（环境探针）。v8 覆盖率：语句 94.96% / 行 96.09%，`ui.tsx`、`usePolling.ts`、`Login.tsx` 语句 100%。
+- 测试环境修复：Node ≥22 实验性 `localStorage`（`--localstorage-file` 未提供时为 `undefined`）不在 Vitest `populateGlobal` KEYS 白名单 → jsdom Web Storage 不被拷贝；`test-setup.ts` 安装内存版 `MemoryStorage` 兜底（同源键值对，行为与 Web Storage 一致），保证 `api.ts` 会话存取可测。
+- 测试驱动修复：`StatusBadge` 空字符串 `??` 不兜底（`'' ?? '—'` 仍为 `''`）→ 改 `status ? status : '—'` 空态显示占位符；测试文件从生产 `tsc -b` 构建排除（`web/tsconfig.json` `exclude`）。
+- CI 接入（42.2）：新增 `.github/workflows/web-e2e.yml` 三档分级——`web-unit`（PR/push 门禁：单元+覆盖率+构建）、`web-e2e-chromium`（PR/push 门禁：Chromium 全量 16 个 spec）、`web-e2e-cross-browser`（Nightly 定时：三浏览器全量，报告保留 14 天）；E2E 服务器为内存态平台，CI 可离线确定性执行，无需 Repository Secrets。新增脚本 `web:test` / `web:test:coverage` / `web:e2e:cross`。
+- 跨浏览器回归（42.3）：`playwright.config.ts` 增加浏览器集合门控 `WEB_E2E_BROWSERS`（默认/`chromium` 仅 Chromium、`all` 三浏览器、逗号列表指定子集）；本机安装匹配版本（Playwright 1.62.1 → firefox v1538 / webkit v2336），firefox + webkit 冒烟覆盖登录/项目/报告核心链路通过。
+
+### 变更
+
+- 版本 v4.16.0 → v4.17.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 测试
+
+- Web 单元/组件：`npm run web:test` 37 passed / 0 failed；`npm run web:test:coverage` 语句 94.96%。
+- Web E2E：`npm run web:e2e:test` Chromium 全量 74 passed / 0 failed；`WEB_E2E_BROWSERS=all` 三浏览器全量 PASS。
+- 既有 Vitest 全量回归与 `phase41:test` 链路保持 PASS（构建 + 平台回归 + Web 构建 + Chromium E2E）。
+- 报告：`docs/phase42-web-engineering-report.md`。
+
 ## [4.16.0] - 2026-08-20
 
 ### 新增（Web 真实浏览器 E2E 与体验质量，Phase 41）
