@@ -270,4 +270,62 @@ describe('E2E：AI Improvement 持续优化闭环（S1-S8）', () => {
     const pv2 = ai.prompts.add({ promptKey: 'risk', content: 'candidate v2', createdBy: 'ai-agent' });
     expect(pv2.status).toBe('DRAFT'); // 后续版本默认 DRAFT，需审批链才可激活
   });
+
+  it('S9：Evaluation → Bridge → 人工批准 → Merge 并入 Benchmark 升版（43.21 Review→Benchmark 闭环）', async () => {
+    const ai = createAIQualityService();
+    const b = makeAuthBundle();
+    await b.auth.ensureSeeded();
+    const api = await startServer(b, ai);
+    const rmToken = await login(api, 'release-mgr', 'release123');
+    const qaToken = await login(api, 'qa-a', 'qa123456');
+
+    // S9.1 真实评测失败 → 桥接为候选（BENCHMARK_FAILURE，全部 PENDING_REVIEW，禁止自动并库）
+    const bridge = await api.request('POST', '/api/ai-quality/benchmark-candidates/bridge', { token: rmToken, body: {} });
+    expect(bridge.status).toBe(200);
+    const bridgeBody = bridge.data as { ingested: number; candidates: Array<{ id: string; caseId: string; domain: string }> };
+    expect(bridgeBody.candidates.length).toBe(bridgeBody.ingested);
+    // 候选必须引用真实基准源用例（否则并入被跳过，杜绝伪造输入）
+    const resolvable = bridgeBody.candidates.filter((c) => ai.benchmarkRegistry.latest(c.domain as never)?.cases.some((x) => x.id === c.caseId));
+    if (resolvable.length === 0) {
+      // 全绿无失败或无真实源用例：验证空并入不报错即达标
+      const empty = (await api.request('POST', '/api/ai-quality/benchmark-candidates/merge', { token: rmToken, body: {} })).data as { merged: number };
+      expect(empty.merged).toBe(0);
+      return;
+    }
+
+    // 铁律：QA（无 RELEASE_APPROVE）不可并入（403，禁止 AI/低权限自动并库）
+    const denied = await api.request('POST', '/api/ai-quality/benchmark-candidates/merge', { token: qaToken, body: {} });
+    expect(denied.status).toBe(403);
+
+    // S9.2 人工批准第一条可解析候选
+    const cand = resolvable[0];
+    const approveRes = await api.request('POST', `/api/ai-quality/benchmark-candidates/${cand.id}/approve`, { token: rmToken, body: {} });
+    expect(approveRes.status).toBe(200);
+
+    // S9.3 并入：候选 → MERGED + Benchmark 升版
+    const before = ai.benchmarkRegistry.latest(cand.domain as never)!.version;
+    const merge = await api.request('POST', '/api/ai-quality/benchmark-candidates/merge', { token: rmToken, body: { candidateIds: [cand.id] } });
+    expect(merge.status).toBe(200);
+    const mergeBody = merge.data as { merged: number; benchmarkVersions: string[]; message: string };
+    expect(mergeBody.merged).toBe(1);
+    expect(mergeBody.benchmarkVersions.length).toBe(1);
+
+    const updated = ai.benchmarkCandidates.get(cand.id)!;
+    expect(updated.status).toBe('MERGED');
+    expect(updated.mergedCaseId).toBeTruthy();
+    expect(updated.mergedBenchmark).toBe(mergeBody.benchmarkVersions[0]);
+    const after = ai.benchmarkRegistry.latest(cand.domain as never)!;
+    expect(versionRankOf(after.version)).toBe(versionRankOf(before) + 1);
+    // 并入用例登记 Ground Truth（HUMAN 核实，杜绝"未追踪却声称准确率"）
+    expect(ai.groundTruthRegistry.isTracked(updated.mergedCaseId!)).toBe(true);
+
+    // S9.4 幂等：再次并入已 MERGED 候选 → 0
+    const again = (await api.request('POST', '/api/ai-quality/benchmark-candidates/merge', { token: rmToken, body: { candidateIds: [cand.id] } })).data as { merged: number };
+    expect(again.merged).toBe(0);
+  });
 });
+
+function versionRankOf(v: string): number {
+  const m = /^v(\d+)$/.exec(v);
+  return m ? Number(m[1]) : 0;
+}

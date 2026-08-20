@@ -4,6 +4,7 @@
 // 名称规范：`<DOMAIN>_BENCHMARK_<version>`（version 形如 v1/v2）。
 
 import type { EvaluationCase, EvaluationDomain } from '../contract.js';
+import { DOMAIN_LABELS } from '../contract.js';
 
 export interface BenchmarkDefinition {
   /** 注册名：`<DOMAIN>_BENCHMARK_<version>` */
@@ -60,8 +61,49 @@ export class BenchmarkRegistry {
     return { ...candidates[0], cases: [...candidates[0].cases] };
   }
 
+  /**
+   * 50.x / 43.21：把人工批准的真实失败用例并入该领域 Benchmark——以「新增版本」方式落地（Review → Benchmark）。
+   * - 新版本 = 该领域最新版全部用例 + extraCases（按 case.id 去重，绝不覆盖已有用例）。
+   * - 名称升版：`<DOMAIN>_BENCHMARK_v1` → v2 / v3 …（同一领域可多次并入，每次升版）。
+   * - 已存在同名定义（同版本）时抛错，由调用方保证原子性。
+   */
+  extendWithCases(domain: EvaluationDomain, extraCases: EvaluationCase[]): BenchmarkDefinition {
+    if (!extraCases || extraCases.length === 0) throw new Error(`Benchmark 扩充用例为空：${domain}`);
+    const base = this.latest(domain) ?? { name: `${domain}_BENCHMARK_v0`, version: 'v0', domain, cases: [] };
+    const existingIds = new Set(base.cases.map((c) => c.id));
+    const fresh = extraCases.filter((c) => !existingIds.has(c.id));
+    if (fresh.length === 0) {
+      // 全部重复（已并入过）→ 返回当前最新版，幂等
+      return { ...base, cases: [...base.cases] };
+    }
+    const nextRank = versionRank(base.version) + 1;
+    const version = `v${nextRank}`;
+    const name = `${domain}_BENCHMARK_${version}`;
+    const def: BenchmarkDefinition = {
+      name,
+      version,
+      domain,
+      description: `${DOMAIN_LABELS[domain]} 评测基准 ${version}（含人工核准的真实失败用例 ${fresh.length} 条）`,
+      cases: [...base.cases, ...fresh],
+    };
+    this.defs.set(def.name, { ...def, cases: [...def.cases] });
+    return { ...def, cases: [...def.cases] };
+  }
+
   list(): BenchmarkDefinition[] {
     return [...this.defs.values()].map((d) => ({ ...d, cases: [...d.cases] }));
+  }
+
+  /** 快照（持久化用） */
+  snapshot(): BenchmarkDefinition[] {
+    return this.list();
+  }
+
+  /** 从快照恢复（持久化用；绕过同名注册校验，直接还原） */
+  static import(defs: BenchmarkDefinition[]): BenchmarkRegistry {
+    const r = new BenchmarkRegistry();
+    for (const d of defs ?? []) r.defs.set(d.name, { ...d, cases: [...(d.cases ?? [])] });
+    return r;
   }
 
   get size(): number {

@@ -44,7 +44,7 @@ export function Badge({ kind, children }: { kind: 'ok' | 'warn' | 'err' | 'info'
 
 export function StatusBadge({ status }: { status: string }): ReactNode {
   const s = String(status ?? '').toUpperCase();
-  const kind = s === 'COMPLETED' || s === 'SUCCESS' || s === 'ACTIVE' || s === 'HEALTHY' || s === 'APPROVED' || s === 'QUEUED' || s === 'RUNNING' || s === 'PASS' || s === 'PASSED' || s === 'REVIEW'
+  const kind = s === 'COMPLETED' || s === 'SUCCESS' || s === 'ACTIVE' || s === 'HEALTHY' || s === 'APPROVED' || s === 'MERGED' || s === 'QUEUED' || s === 'RUNNING' || s === 'PASS' || s === 'PASSED' || s === 'REVIEW'
     ? s === 'RUNNING' || s === 'QUEUED' ? 'info' : s === 'REVIEW' ? 'warn' : 'ok'
     : s === 'FAILED' || s === 'ERROR' || s === 'DOWN' || s === 'REJECTED' || s === 'BLOCK' || s === 'BLOCKED' ? 'err' : 'muted';
   // 空串/undefined/null 均显示占位符（Phase 42.1：StatusBadge 空值兜底）

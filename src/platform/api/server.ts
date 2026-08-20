@@ -542,6 +542,22 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       }
       return cand;
     } },
+    // Phase 50 / 43.21：把人工批准的候选并入 Benchmark Registry（Review → Benchmark 最终落地）
+    // RELEASE_APPROVE 人工门禁（禁止 AI 自批/自动并库）；返回并入结果与升版信息。
+    { method: 'POST', segments: ['ai-quality', 'benchmark-candidates', 'merge'], handler: async (c) => {
+      requireAiApprove(c);
+      const candidateIds = Array.isArray(c.body.candidateIds) ? (c.body.candidateIds as string[]).map(String) : undefined;
+      const domains = Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined;
+      const result = aiQuality.mergeBenchmarkCandidates(c.actor, { candidateIds, domains: domains as never });
+      return {
+        ...result,
+        message: result.merged > 0
+          ? `已并入 ${result.merged} 个已批准候选${result.benchmarkVersions.length ? `，Benchmark 升版 ${result.benchmarkVersions.join('、')}` : ''}`
+          : result.skippedUnresolvable > 0
+            ? `无可并入候选：${result.skippedUnresolvable} 个无真实源用例（拒绝伪造输入）`
+            : '无可并入候选（需要先批准）',
+      };
+    } },
   ];
 
   /** 解析 ?window= 参数（默认 7d） */

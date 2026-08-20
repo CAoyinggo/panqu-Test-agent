@@ -76,6 +76,18 @@ export class GroundTruthRegistry {
   list(): GroundTruthRecord[] {
     return [...this.records.values()];
   }
+
+  /** 快照（持久化用） */
+  snapshot(): GroundTruthRecord[] {
+    return this.list();
+  }
+
+  /** 从快照恢复（持久化用） */
+  static import(records: GroundTruthRecord[]): GroundTruthRegistry {
+    const r = new GroundTruthRegistry();
+    for (const rec of records ?? []) r.records.set(rec.id, { ...rec });
+    return r;
+  }
 }
 
 /** 标准工厂：便捷构造一批用例 ID 到同来源的 Ground Truth 记录 */

@@ -483,6 +483,36 @@ function cmdBenchmarkReject(svc: AIQualityService, args: string[]): void {
   }
 }
 
+function cmdBenchmarkMerge(svc: AIQualityService, args: string[], json: boolean): void {
+  const by = requireHumanBy(args);
+  // 可选 --candidate <id>（可多次）与领域参数过滤
+  const candidateIds = args
+    .filter((a) => a.startsWith('--candidate='))
+    .map((a) => a.slice('--candidate='.length));
+  const domains = args.filter((a) => /^[A-Z_]+$/.test(a) && ['REQUIREMENT', 'TEST_DESIGN', 'RISK', 'SELECTION', 'RCA', 'DEFECT', 'HEALING', 'RELEASE'].includes(a)) as never[];
+  try {
+    const result = svc.mergeBenchmarkCandidates(by, {
+      candidateIds: candidateIds.length ? candidateIds : undefined,
+      domains: domains.length ? domains : undefined,
+    });
+    saveService(svc);
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`Benchmark 扩充并入（by ${by}）：并入 ${result.merged} 个候选${result.benchmarkVersions.length ? `，升版 ${result.benchmarkVersions.join('、')}` : ''}`);
+    for (const m of result.mergedCases) {
+      console.log(`  ${m.domain}/${m.caseId} ← candidate ${m.candidateId}`);
+    }
+    if (result.skippedUnresolvable > 0) console.log(`  跳过 ${result.skippedUnresolvable} 个无真实源用例（拒绝伪造输入）`);
+    if (result.skippedNotApproved > 0) console.log(`  跳过 ${result.skippedNotApproved} 个非 APPROVED（需先 approve）`);
+    if (result.merged === 0) console.log('  提示：先 `benchmark approve <id> --by <human>` 批准候选后再并入。');
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+}
+
 // ── canary ──
 function cmdCanaryStatus(svc: AIQualityService, json: boolean): void {
   const list = svc.experiments.list();
@@ -645,7 +675,8 @@ function main(): void {
       else if (sub === 'bridge') cmdBenchmarkBridge(svc, args.slice(1), json);
       else if (sub === 'approve') cmdBenchmarkApprove(svc, args.slice(1));
       else if (sub === 'reject') cmdBenchmarkReject(svc, args.slice(1));
-      else { console.error(`未知 benchmark 子命令：${sub}（可用 list / bridge / approve / reject）`); process.exit(2); }
+      else if (sub === 'merge') cmdBenchmarkMerge(svc, args.slice(1), json);
+      else { console.error(`未知 benchmark 子命令：${sub}（可用 list / bridge / approve / reject / merge）`); process.exit(2); }
       break;
     }
     case 'continuous': {

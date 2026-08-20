@@ -20,7 +20,10 @@ import { KnowledgeLearning, type KnowledgeCandidate, type KnowledgeItem } from '
 import { ContinuousEvalStore, runContinuousEvaluation, type ContinuousEvalRun, type ContinuousEvalScheduleName, type ContinuousEvalTrigger } from './continuous-eval.js';
 import { ImprovementAudit } from './ops.js';
 import { BenchmarkCandidateStore, bridgeEvalReport, type BenchmarkCandidate, type BenchmarkCandidateStatus, type EvalBridgeResult } from './eval-bridge.js';
-import { runAllEvaluation } from '../eval/runner.js';
+import { mergeApprovedCandidates, type BenchmarkMergeResult } from './benchmark-merge.js';
+import { runAllEvaluation, buildDefaultBenchmarks, buildDefaultGroundTruth } from '../eval/runner.js';
+import { BenchmarkRegistry } from '../eval/benchmark/registry.js';
+import { GroundTruthRegistry } from '../eval/ground-truth.js';
 import type { EvaluationDomain } from '../eval/contract.js';
 import { PLATFORM_VERSION } from '../platform/version.js';
 import type { EvalReport } from '../eval/runner.js';
@@ -35,6 +38,9 @@ export interface AIQualityServiceDeps {
   continuousEval?: ContinuousEvalStore;
   /** Phase 49：Benchmark 扩充候选（43.21 落地——真实失败经人工 Review 后并入 Benchmark） */
   benchmarkCandidates?: BenchmarkCandidateStore;
+  /** Phase 50：并入用的 Benchmark Registry / Ground Truth（持久化，跨重启保留） */
+  benchmarkRegistry?: BenchmarkRegistry;
+  groundTruthRegistry?: GroundTruthRegistry;
   audit?: ImprovementAudit;
   now?: () => string;
 }
@@ -62,6 +68,8 @@ export class AIQualityService {
   readonly knowledge: KnowledgeLearning;
   readonly continuousEval: ContinuousEvalStore;
   readonly benchmarkCandidates: BenchmarkCandidateStore;
+  readonly benchmarkRegistry: BenchmarkRegistry;
+  readonly groundTruthRegistry: GroundTruthRegistry;
   readonly audit: ImprovementAudit;
 
   constructor(deps: AIQualityServiceDeps = {}) {
@@ -73,7 +81,19 @@ export class AIQualityService {
     this.knowledge = deps.knowledge ?? new KnowledgeLearning();
     this.continuousEval = deps.continuousEval ?? new ContinuousEvalStore();
     this.benchmarkCandidates = deps.benchmarkCandidates ?? new BenchmarkCandidateStore();
+    this.benchmarkRegistry = deps.benchmarkRegistry ?? buildDefaultBenchmarks(new BenchmarkRegistry());
+    this.groundTruthRegistry = deps.groundTruthRegistry ?? buildDefaultGroundTruth(new GroundTruthRegistry(), this.benchmarkRegistry);
     this.audit = deps.audit ?? new ImprovementAudit();
+  }
+
+  /** 50.x：以当前（含并入真实失败用例的）Benchmark 注册表运行真实评测 */
+  evaluationReport(domains?: EvaluationDomain[]): EvalReport {
+    return runAllEvaluation({
+      version: PLATFORM_VERSION,
+      domains,
+      benchmarkRegistry: this.benchmarkRegistry,
+      groundTruthRegistry: this.groundTruthRegistry,
+    });
   }
 
   /** 43.2：接入各渠道反馈（统一入口） */
@@ -149,6 +169,13 @@ export class AIQualityService {
       benchmark: {
         total: evalReport.domains.reduce((s, d) => s + d.total, 0),
         tracked: evalReport.domains.reduce((s, d) => s + d.tracked, 0),
+      },
+      benchmarkExpansion: {
+        candidates: this.benchmarkCandidates.size(),
+        pendingReview: this.benchmarkCandidates.list({ status: 'PENDING_REVIEW' }).length,
+        approved: this.benchmarkCandidates.list({ status: 'APPROVED' }).length,
+        merged: this.benchmarkCandidates.list({ status: 'MERGED' }).length,
+        versions: this.benchmarkRegistry.list().map((d) => ({ name: d.name, domain: d.domain, version: d.version, cases: d.cases.length })),
       },
       feedback: {
         total: this.feedback.size(),
@@ -226,7 +253,8 @@ export class AIQualityService {
     createdBy?: string;
   }): ContinuousEvalRun {
     // 49.x：先跑真实评测一次，复用同一份报告做「回归判定」+「失败桥接」（不虚构、不重复计分）
-    const report = runAllEvaluation({ version: PLATFORM_VERSION, domains: input.domains });
+    // 50.x：评测使用当前 Benchmark 注册表（含人工并入的真实失败用例），让扩充真实影响评测结果
+    const report = this.evaluationReport(input.domains);
     const run = runContinuousEvaluation(input, { store: this.continuousEval, report });
     const bridge = this.bridgeEvaluation(report);
     this.audit.record({
@@ -256,7 +284,7 @@ export class AIQualityService {
 
   /** 49.x：运行一次真实评测并把失败桥接为反馈 + 待审候选（Continuous Evaluation 之外的独立触发入口） */
   bridgeEvaluationNow(domains?: EvaluationDomain[]): { report: EvalReport; bridge: EvalBridgeResult } {
-    const report = runAllEvaluation({ version: PLATFORM_VERSION, domains });
+    const report = this.evaluationReport(domains);
     const bridge = this.bridgeEvaluation(report);
     this.audit.record({
       proposalId: 'n/a', actor: 'SYSTEM', action: 'CREATED',
@@ -284,6 +312,34 @@ export class AIQualityService {
     return cand;
   }
 
+  /**
+   * 50.x / 43.21：把人工批准的候选并入 Benchmark Registry（Review → Benchmark 最终落地）。
+   * 必须以最新 Benchmark 注册表评测（含并入用例）；完整写入审计链路。
+   * 人工门禁由调用方（API RELEASE_APPROVE / CLI --by <human>）保证，禁止 AI 自批。
+   */
+  mergeBenchmarkCandidates(by: string, opts: { candidateIds?: string[]; domains?: EvaluationDomain[] } = {}): BenchmarkMergeResult {
+    const result = mergeApprovedCandidates(
+      {
+        candidates: this.benchmarkCandidates,
+        registry: this.benchmarkRegistry,
+        groundTruth: this.groundTruthRegistry,
+        audit: this.audit,
+      },
+      { by, candidateIds: opts.candidateIds, domains: opts.domains },
+    );
+    this.audit.record({
+      proposalId: 'n/a', actor: by, action: 'APPROVED',
+      decision: `Benchmark 扩充并入（by ${by}）：并入 ${result.merged} 个候选${result.benchmarkVersions.length ? `，升版 ${result.benchmarkVersions.join('、')}` : ''}${result.skippedUnresolvable ? `，无法并入 ${result.skippedUnresolvable}（无真实源用例）` : ''}`,
+      metrics: {
+        merged: result.merged,
+        skippedUnresolvable: result.skippedUnresolvable,
+        skippedNotApproved: result.skippedNotApproved,
+        benchmarkVersions: result.benchmarkVersions.length,
+      },
+    });
+    return result;
+  }
+
   /** 完整状态快照（持续改进闭环持久化：CLI / API 重启后恢复） */
   snapshot(): AiQualitySnapshot {
     return {
@@ -297,6 +353,8 @@ export class AIQualityService {
       knowledgeItems: this.knowledge.listItems(),
       continuousEval: this.continuousEval.snapshot(),
       benchmarkCandidates: this.benchmarkCandidates.snapshot(),
+      benchmarkDefinitions: this.benchmarkRegistry.snapshot(),
+      groundTruth: this.groundTruthRegistry.snapshot(),
       audit: this.audit.list(),
     };
   }
@@ -312,6 +370,10 @@ export class AIQualityService {
       knowledge: KnowledgeLearning.import(snap.knowledgeCandidates, snap.knowledgeItems),
       continuousEval: ContinuousEvalStore.import(snap.continuousEval ?? []),
       benchmarkCandidates: BenchmarkCandidateStore.import(snap.benchmarkCandidates ?? []),
+      // Phase 49 及更早快照没有下列字段：保持 undefined，让构造器回退到默认 v1
+      // Benchmark / Ground Truth；若导入空 Registry，升级后的旧状态将无法解析真实源用例。
+      benchmarkRegistry: snap.benchmarkDefinitions ? BenchmarkRegistry.import(snap.benchmarkDefinitions) : undefined,
+      groundTruthRegistry: snap.groundTruth ? GroundTruthRegistry.import(snap.groundTruth) : undefined,
       audit: ImprovementAudit.import(snap.audit),
     });
     return svc;
@@ -351,6 +413,10 @@ export interface AiQualitySnapshot {
   continuousEval?: ContinuousEvalRun[];
   /** Phase 49：Benchmark 扩充候选（43.21，待人工 Review） */
   benchmarkCandidates?: BenchmarkCandidate[];
+  /** Phase 50：Benchmark Registry（含并入的真实失败用例，v2/v3…） */
+  benchmarkDefinitions?: import('../eval/benchmark/registry.js').BenchmarkDefinition[];
+  /** Phase 50：Ground Truth Registry（含并入用例的 HUMAN 真值登记） */
+  groundTruth?: import('../eval/ground-truth.js').GroundTruthRecord[];
   audit: ImprovementAuditRecord[];
 }
 

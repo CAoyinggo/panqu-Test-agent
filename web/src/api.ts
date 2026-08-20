@@ -464,10 +464,13 @@ export interface BenchmarkCandidateItem {
   errors: string[];
   source: string;
   feedbackId: string;
-  status: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'MERGED';
   reviewer?: string;
   reviewedAt?: string;
   reason?: string;
+  /** Phase 50：并入 Benchmark 后记录（Review → Benchmark 落地凭据） */
+  mergedCaseId?: string;
+  mergedBenchmark?: string;
   createdAt: string;
 }
 
@@ -476,6 +479,16 @@ export interface BenchmarkBridgeResult {
   skippedDupes: number;
   feedbackIds: string[];
   candidates: BenchmarkCandidateItem[];
+  message?: string;
+}
+
+/** Phase 50：并入已批准候选的合并结果 */
+export interface BenchmarkMergeResult {
+  merged: number;
+  skippedUnresolvable: number;
+  skippedNotApproved: number;
+  mergedCases: Array<{ candidateId: string; caseId: string; domain: string }>;
+  benchmarkVersions: string[];
   message?: string;
 }
 
@@ -490,4 +503,8 @@ export function approveBenchmarkCandidate(id: string): Promise<BenchmarkCandidat
 }
 export function rejectBenchmarkCandidate(id: string, reason: string): Promise<BenchmarkCandidateItem> {
   return api.post<BenchmarkCandidateItem>(`/ai-quality/benchmark-candidates/${id}/reject`, { reason });
+}
+/** Phase 50：并入已批准候选到 Benchmark Registry（人工门禁 RELEASE_APPROVE；禁止 AI 自批/自动并库） */
+export function mergeBenchmarkCandidates(opts: { candidateIds?: string[]; domains?: string[] } = {}): Promise<BenchmarkMergeResult> {
+  return api.post<BenchmarkMergeResult>('/ai-quality/benchmark-candidates/merge', opts);
 }

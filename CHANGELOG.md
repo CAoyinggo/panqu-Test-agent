@@ -2,6 +2,30 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.25.0] - 2026-08-20
+
+### 新增（Benchmark 候选并入：Review → Benchmark，Phase 50）
+
+完成任务书 43.21 的闭环终点：把人工批准的 Benchmark 扩充候选真正并入版本化 Benchmark Registry，形成 **Evaluation Failure → Candidate → Human Review → Benchmark v2/v3 → 后续真实评测** 的可追溯闭环。
+
+- 并入核心（`src/ai-quality/benchmark-merge.ts`）：`mergeApprovedCandidates` / `mergeOne` / `candidateMatchesSource`；只处理 `APPROVED`，按领域最新版查找真实源用例并复用其 input / Ground Truth，找不到源用例则保留 APPROVED 并跳过，绝不伪造输入或 Accuracy。
+- Registry 与 Ground Truth：`BenchmarkRegistry.extendWithCases` 以新版本落地（v1→v2→v3），继承最新版全部用例并按 case id 去重；并入用例登记 `HUMAN` Ground Truth，记录 reviewer / reviewedAt / candidateId / feedbackId；Phase 49 旧快照缺少 Registry 字段时回退默认 v1，保持升级兼容。
+- 状态与持久化：`BenchmarkCandidate` 新增 `MERGED`、`mergedCaseId`、`mergedBenchmark`；`markMerged` 仅允许 APPROVED→MERGED，禁止重复并入；Benchmark Definitions 与 Ground Truth Registry 纳入快照恢复。
+- Service / API / CLI：`mergeBenchmarkCandidates` 组合 Candidate Store、Benchmark Registry、Ground Truth 与 Improvement Audit；新增 `POST /api/ai-quality/benchmark-candidates/merge`（`RELEASE_APPROVE` 人工门禁）和 `benchmark merge --by <human>` / `agent:benchmark:merge`，支持候选与领域过滤、JSON 输出及跳过原因。
+- Web：「Benchmark 扩充」Tab 新增“已并入”指标、“并入已批准候选 → 新 Benchmark 版本”按钮、`MERGED` 正向状态和并入凭据列；无 APPROVED 候选或非审批角色时禁用。
+- 测试：单元新增 8 项、集成新增 5 项、非浏览器 E2E 新增 S9、真实浏览器新增 Review→Benchmark 闭环；浏览器种子使用独立已批准候选，避免跨用例共享状态耦合。
+
+### 变更
+
+- 版本 v4.24.0 → v4.25.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 验收（真实运行）
+
+- `npm run agent:ai:unit`：101/101；`npm run agent:ai:integration`：29/29；`npm run agent:ai:e2e`：9/9。
+- `npm run web:e2e:ai`：16/16；`npm run web:e2e:test`：103/103。
+- `npm test`：1789 通过 / 18 skip / 0 失败；Platform 单元 / 集成 / E2E：227 / 94 / 16；Agent 核心 / Eval / E2E / Autonomous E2E：450 / 8 / 2 / 26；`platform:health` 为 `HEALTHY`。
+- `phase39:test` / `phase40:test` / 最终 `web:e2e` 全绿；完整记录见 `docs/phase50-summary.md`。
+
 ## [4.24.0] - 2026-08-20
 
 ### 新增（Eval → Feedback 桥接 + Benchmark 自动扩充候选，Phase 49）

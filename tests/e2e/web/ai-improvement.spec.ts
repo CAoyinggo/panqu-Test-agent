@@ -183,7 +183,7 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     await expect(page.getByText('AI 质量').first()).toBeVisible({ timeout: 15_000 });
   });
 
-  test('Benchmark 扩充 Tab：候选行渲染（待审）+ QA 只读（桥接/批准/驳回禁用）', async ({ page }) => {
+  test('Benchmark 扩充 Tab：候选行渲染（待审）+ QA 只读（桥接/批准/驳回/并入禁用）', async ({ page }) => {
     const s = seed();
     await injectSession(page, s.users.qa);
     await page.goto(`${BASE_URL}/ai-improvement`);
@@ -194,8 +194,11 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     const row = page.locator('tr', { hasText: s.aiQuality.benchmarkCandidate }).first();
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row).toContainText('PENDING_REVIEW');
-    // QA 只读 → 桥接 / 批准 / 驳回按钮禁用
+    // 指标卡含「已并入」（Phase 50）
+    await expect(page.getByText('已并入').first()).toBeVisible();
+    // QA 只读 → 桥接 / 并入 / 批准 / 驳回按钮禁用
     await expect(page.getByRole('button', { name: '运行真实评测并桥接失败' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '并入已批准候选 → 新 Benchmark 版本' })).toBeDisabled();
     await expect(row.getByRole('button', { name: /批准/ })).toBeDisabled();
     await expect(row.getByRole('button', { name: /驳回/ })).toBeDisabled();
   });
@@ -215,5 +218,28 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     // 状态行更新为 APPROVED（操作列变为 by release-mgr）
     await expect(row).toContainText('APPROVED', { timeout: 15_000 });
     await expect(row).toContainText('by release-mgr');
+  });
+
+  test('Benchmark 扩充 Tab：RELEASE_MANAGER 并入已批准候选 → MERGED + Benchmark 升版（Review → Benchmark 闭环）', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.release);
+    await page.goto(`${BASE_URL}/ai-improvement`);
+    await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Benchmark 扩充' }).click();
+    const row = page.locator('tr', { hasText: s.aiQuality.benchmarkCandidateApproved }).first();
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    // 1) 独立种子已由 RELEASE_MANAGER 人工批准，测试不依赖前一用例的共享状态。
+    await expect(row).toContainText('APPROVED', { timeout: 15_000 });
+    // 2) 并入按钮随已批准候选启用 → 点击并入
+    const mergeBtn = page.getByRole('button', { name: '并入已批准候选 → 新 Benchmark 版本' });
+    await expect(mergeBtn).toBeEnabled({ timeout: 10_000 });
+    await mergeBtn.click();
+    await expect(page.locator('.success-banner', { hasText: /并入完成/ }).first()).toBeVisible({ timeout: 10_000 });
+    // 3) 候选状态 MERGED + 并入凭据（新 Benchmark 版本 / 新用例）
+    await expect(row).toContainText('MERGED', { timeout: 15_000 });
+    await expect(row).toContainText(/RISK_BENCHMARK_v\d+/);
+    // 4) 指标卡「已并入」计数为正数；按钮会并入全部 APPROVED，故不与前序用例批准数量耦合。
+    const mergedCard = page.locator('.metric-card').filter({ has: page.locator('.metric-label', { hasText: '已并入' }) });
+    await expect(mergedCard.locator('.metric-value')).toHaveText(/^[1-9]\d*$/, { timeout: 10_000 });
   });
 });

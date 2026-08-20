@@ -8,10 +8,10 @@ import {
   getAIFeedback, verifyAIFeedback, getAIErrors, getAIImprovements, approveImprovement, rejectImprovement,
   getPrompts, getModels, getExperiments, createExperiment, getKnowledgeReview, getAIQuality,
   getContinuousEvals, runContinuousEval,
-  getBenchmarkCandidates, bridgeBenchmarkCandidates, approveBenchmarkCandidate, rejectBenchmarkCandidate,
+  getBenchmarkCandidates, bridgeBenchmarkCandidates, approveBenchmarkCandidate, rejectBenchmarkCandidate, mergeBenchmarkCandidates,
   type AIFeedbackItem, type AIErrorCluster, type ImprovementProposalItem, type PromptVersionItem,
   type ModelVersionItem, type ExperimentItem, type KnowledgeReview, type AIQualityReport,
-  type ContinuousEvalList, type BenchmarkCandidateItem,
+  type ContinuousEvalList, type BenchmarkCandidateItem, type BenchmarkMergeResult,
 } from '../api';
 import { getStoredUser } from '../api';
 import { Card, Table, Badge, StatusBadge, Empty, MetricCard, fmtTime } from '../components/ui';
@@ -108,6 +108,9 @@ export default function AIImprovement(): JSX.Element {
   };
   const rejectCandidate = (id: string): void => {
     void runAction(id, () => rejectBenchmarkCandidate(id, 'Web 人工驳回'), `Benchmark 候选 ${id} 已驳回`);
+  };
+  const mergeCandidates = (): void => {
+    void runAction('bm-merge', () => mergeBenchmarkCandidates(), 'Benchmark 扩充并入完成（已批准候选 → 新 Benchmark 版本）');
   };
 
   const pendingProposals = proposals.filter((p) => p.status === 'EVALUATING' && p.gateVerdict === 'PASS');
@@ -348,19 +351,23 @@ export default function AIImprovement(): JSX.Element {
             <div className="metric-grid">
               <MetricCard label="待审" value={benchmark.filter((b) => b.status === 'PENDING_REVIEW').length} />
               <MetricCard label="已批准" value={benchmark.filter((b) => b.status === 'APPROVED').length} hint="已并入已验证 Ground Truth 池" />
+              <MetricCard label="已并入" value={benchmark.filter((b) => b.status === 'MERGED').length} hint="已落地到 Benchmark 新版本" />
               <MetricCard label="已驳回" value={benchmark.filter((b) => b.status === 'REJECTED').length} />
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button className="btn btn-sm" disabled={!approver || busy === 'bm-bridge'} onClick={bridgeBenchmark}>
                 {busy === 'bm-bridge' ? '桥接中…' : '运行真实评测并桥接失败'}
               </button>
+              <button className="btn btn-sm btn-ok" disabled={!approver || busy === 'bm-merge' || benchmark.filter((b) => b.status === 'APPROVED').length === 0} onClick={mergeCandidates}>
+                {busy === 'bm-merge' ? '并入中…' : '并入已批准候选 → 新 Benchmark 版本'}
+              </button>
             </div>
             <div className="muted" style={{ marginBottom: 8 }}>
-              真实失败用例自动生成候选；批准后才进入已验证 Ground Truth 池（禁止 AI 自批）。桥接 / 批准 / 驳回需 RELEASE_MANAGER 或 ADMIN。
+              真实失败用例自动生成候选；批准后进入已验证 Ground Truth 池，「并入」把已批准候选落地为该领域 Benchmark 新版本（v2 / v3 …）。桥接 / 批准 / 驳回 / 并入需 RELEASE_MANAGER 或 ADMIN（禁止 AI 自批/自动并库）。
             </div>
             {benchmark.length === 0 && <Empty text="暂无 Benchmark 扩充候选。可点击上方按钮运行真实评测并把失败用例桥接为候选。" />}
             {benchmark.length > 0 && (
-              <Table head={['ID', '领域', '用例', '期望', '实际', '来源', '状态', '操作']}>
+              <Table head={['ID', '领域', '用例', '期望', '实际', '来源', '状态', '并入凭据', '操作']}>
                 {benchmark.map((b) => (
                   <tr key={b.id}>
                     <td className="mono">{b.id}</td>
@@ -370,6 +377,7 @@ export default function AIImprovement(): JSX.Element {
                     <td className="mono cell-clip">{mono(b.actual)}</td>
                     <td>{b.source}</td>
                     <td><StatusBadge status={b.status} /></td>
+                    <td className="mono cell-clip">{b.mergedBenchmark ? `${b.mergedBenchmark} / ${b.mergedCaseId ?? ''}` : '—'}</td>
                     <td>
                       {b.status === 'PENDING_REVIEW' ? (
                         <>

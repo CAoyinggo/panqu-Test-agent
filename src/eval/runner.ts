@@ -152,11 +152,12 @@ function computeDomainMetrics(domain: EvaluationDomain, results: EvaluationResul
   }
 }
 
-/** 默认 Ground Truth 登记（source=CURATED，confidence=1） */
-export function buildDefaultGroundTruth(registry: GroundTruthRegistry): GroundTruthRegistry {
+/** 默认 Ground Truth 登记（source=CURATED，confidence=1）；传入 registry 时以该注册表最新版用例为准（含并入的真实失败用例） */
+export function buildDefaultGroundTruth(registry: GroundTruthRegistry, benchmarkRegistry?: BenchmarkRegistry): GroundTruthRegistry {
   for (const domain of ALL_DOMAINS) {
+    const cases = benchmarkRegistry?.latest(domain)?.cases ?? BENCHMARK_CASES[domain];
     for (const rec of groundTruthFor(
-      BENCHMARK_CASES[domain].map((c) => c.id),
+      cases.map((c) => c.id),
       { source: 'CURATED', verifiedBy: 'phase45', confidence: 1 },
     )) {
       registry.register(rec);
@@ -189,9 +190,10 @@ export interface RunOptions {
 
 /** 运行指定领域评测，返回领域报告 */
 export function runDomain(domain: EvaluationDomain, opts: RunOptions = {}): DomainReport {
-  const cases = BENCHMARK_CASES[domain];
+  const benchmarkDef = opts.benchmarkRegistry?.latest(domain);
+  const cases = benchmarkDef?.cases ?? BENCHMARK_CASES[domain];
   const evaluator = EVALUATORS[domain];
-  const registry = opts.groundTruthRegistry ?? buildDefaultGroundTruth(new GroundTruthRegistry());
+  const registry = opts.groundTruthRegistry ?? buildDefaultGroundTruth(new GroundTruthRegistry(), opts.benchmarkRegistry);
 
   const results: EvaluationResult[] = cases.map((c) => {
     const tracked = registry.isTracked(c.id);
@@ -220,12 +222,12 @@ export function runDomain(domain: EvaluationDomain, opts: RunOptions = {}): Doma
     .filter((r) => !r.passed)
     .map((r) => ({ caseId: r.caseId, expected: r.expected, actual: r.actual, errors: r.errors }));
 
-  const benchmarkName = `${domain}_BENCHMARK_v1`;
+  const benchmarkName = benchmarkDef?.name ?? `${domain}_BENCHMARK_v1`;
   return {
     domain,
     label: DOMAIN_LABELS[domain],
     benchmark: benchmarkName,
-    benchmarkVersion: 'v1',
+    benchmarkVersion: benchmarkDef?.version ?? 'v1',
     total: cases.length,
     tracked: trackedResults.length,
     untracked: results.length - trackedResults.length,

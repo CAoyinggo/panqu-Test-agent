@@ -13,7 +13,7 @@ import type { FeedbackRegistry } from './feedback.js';
 import type { AIFeedback, FeedbackSource } from './contract.js';
 import { benchmarkCandidateFromFeedback } from './ops.js';
 
-export type BenchmarkCandidateStatus = 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+export type BenchmarkCandidateStatus = 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'MERGED';
 
 /** Benchmark 扩充候选（43.21）：真实失败用例经 Review 后进入已验证 Ground Truth 池 */
 export interface BenchmarkCandidate {
@@ -30,6 +30,9 @@ export interface BenchmarkCandidate {
   reviewer?: string;
   reviewedAt?: string;
   reason?: string;
+  /** Phase 50：并入 Benchmark 后记录（Review → Benchmark 落地） */
+  mergedCaseId?: string;
+  mergedBenchmark?: string;
   createdAt: string;
 }
 
@@ -94,6 +97,20 @@ export class BenchmarkCandidateStore {
     c.reviewer = reviewer;
     c.reviewedAt = this.now();
     c.reason = reason;
+    return c;
+  }
+
+  /**
+   * Phase 50：并入 Benchmark 后标记（仅 APPROVED 可并入；已并入/驳回不可重复）。
+   * 记录并入后的用例 id 与所在 Benchmark 版本（Review → Benchmark 落地凭据）。
+   */
+  markMerged(id: string, mergedCaseId: string, mergedBenchmark: string): BenchmarkCandidate {
+    const c = this.items.get(id);
+    if (!c) throw new Error(`Benchmark 候选不存在：${id}`);
+    if (c.status !== 'APPROVED') throw new Error(`候选 ${id} 状态为 ${c.status}，仅 APPROVED 可并入 Benchmark`);
+    c.status = 'MERGED';
+    c.mergedCaseId = mergedCaseId;
+    c.mergedBenchmark = mergedBenchmark;
     return c;
   }
 
