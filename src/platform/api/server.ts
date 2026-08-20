@@ -23,6 +23,7 @@ import { buildVersionInfo } from '../version.js';
 import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
 import { runAllEvaluation } from '../../eval/runner.js';
 import { createAIQualityService, AIQualityService } from '../../ai-quality/service.js';
+import { CONTINUOUS_EVAL_SCHEDULES } from '../../ai-quality/ops.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -470,6 +471,32 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
         experiments: report.experiments,
         knowledge: report.knowledge,
       };
+    } },
+    // Phase 48 / 43.26：Continuous Evaluation（43.20 落地）——Nightly/Weekly/Release 定时评测历史
+    // 读端点（列表/详情）认证即可（与 ai-quality 一致）；手动触发 run 需 RELEASE_APPROVE（人工门禁）。
+    { method: 'GET', segments: ['ai-quality', 'continuous-evals'], handler: async (c) => {
+      const schedule = queryParam(c.req.url, 'schedule') ?? undefined;
+      const list = schedule ? aiQuality.continuousEval.list({ schedule: schedule as never }) : aiQuality.continuousEval.list();
+      return { total: list.length, runs: list, schedules: CONTINUOUS_EVAL_SCHEDULES };
+    } },
+    { method: 'GET', segments: ['ai-quality', 'continuous-evals', ':id'], handler: async (_c, p) => {
+      const run = aiQuality.continuousEval.get(p.id);
+      if (!run) throw new HttpError(404, `Continuous Evaluation 运行不存在：${p.id}`);
+      return run;
+    } },
+    { method: 'POST', segments: ['ai-quality', 'continuous-evals', 'run'], handler: async (c) => {
+      requireAiApprove(c);
+      const schedule = String(c.body.schedule ?? 'NIGHTLY').toUpperCase();
+      if (!(['NIGHTLY', 'WEEKLY', 'RELEASE'] as string[]).includes(schedule)) {
+        throw new HttpError(400, `未知 schedule：${schedule}（NIGHTLY / WEEKLY / RELEASE）`);
+      }
+      const run = aiQuality.runContinuousEval({
+        schedule: schedule as never,
+        triggeredBy: 'MANUAL',
+        domains: Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined,
+        createdBy: c.actor,
+      });
+      return run;
     } },
   ];
 

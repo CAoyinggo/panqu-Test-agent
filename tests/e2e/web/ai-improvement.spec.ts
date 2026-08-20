@@ -21,8 +21,8 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
     // QA 只读视角横幅（人工门禁，禁止 AI 自批）
     await expect(page.locator('.info-banner', { hasText: '只读视角' }).first()).toBeVisible();
-    // 7 个 Tab
-    for (const label of ['待核验反馈', '错误聚类', '改进提案', 'Prompt / Model', 'Shadow / Canary', '知识 Review', 'AI 质量']) {
+    // 8 个 Tab（48.1：新增「持续评测」）
+    for (const label of ['待核验反馈', '错误聚类', '改进提案', 'Prompt / Model', 'Shadow / Canary', '持续评测', '知识 Review', 'AI 质量']) {
       await expect(page.getByRole('button', { name: label })).toBeVisible();
     }
   });
@@ -134,6 +134,47 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     await expect(page.locator('.success-banner', { hasText: /已批准/ }).first()).toBeVisible({ timeout: 10_000 });
     // 提案移入「已审批 / 进行中」，状态 APPROVED
     await expect(page.locator('tr', { hasText: s.aiQuality.proposalApprovable }).last()).toContainText('APPROVED', { timeout: 15_000 });
+  });
+
+  test('持续评测 Tab：Continuous Evaluation 历史渲染（Schedule / Overall / verdict / Alert / Block）', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.qa);
+    await page.goto(`${BASE_URL}/ai-improvement`);
+    await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: '持续评测' }).click();
+    // 运行历史（3 次：NIGHTLY / WEEKLY / RELEASE）+ 指标卡
+    await expect(page.getByText(/Continuous Evaluation（\d+ 次运行）/).first()).toBeVisible({ timeout: 15_000 });
+    const row = page.locator('tr', { hasText: s.aiQuality.continuousEval }).first();
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(row).toContainText('RELEASE');
+    await expect(row).toContainText('PASS');
+    await expect(row).toContainText('否');
+    // 指标卡（最近判定 / Alert / Block Release）
+    await expect(page.getByText('最近判定').first()).toBeVisible();
+    await expect(page.getByText('Block Release').first()).toBeVisible();
+    // 手动触发区：QA 只读 → 三个运行按钮禁用
+    const nightBtn = page.getByRole('button', { name: '运行 NIGHTLY' });
+    await expect(nightBtn).toBeVisible();
+    await expect(nightBtn).toBeDisabled();
+  });
+
+  test('持续评测 Tab：RELEASE_MANAGER 手动触发 RELEASE → 成功横幅 + 历史新增一行', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.release);
+    await page.goto(`${BASE_URL}/ai-improvement`);
+    await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: '持续评测' }).click();
+    const before = await page.locator('table tbody tr').count();
+    const btn = page.getByRole('button', { name: '运行 RELEASE' });
+    await expect(btn).toBeEnabled();
+    await btn.click();
+    // 成功横幅（手动触发需 RELEASE_APPROVE 人工门禁）
+    await expect(page.locator('.success-banner', { hasText: /运行完成/ }).first()).toBeVisible({ timeout: 15_000 });
+    // 历史新增一行（before + 1）
+    await expect(async () => {
+      const count = await page.locator('table tbody tr').count();
+      expect(count).toBeGreaterThan(before);
+    }).toPass({ timeout: 15_000 });
   });
 
   test('Phase 45 AI 质量页可达（导航渲染）', async ({ page }) => {

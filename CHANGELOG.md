@@ -2,6 +2,34 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.23.0] - 2026-08-20
+
+### 新增（Continuous Evaluation 落地，Phase 48）
+
+把 Phase 46 的 `ContinuousEvalSchedule` 常量升级为**真正可运行的定时评测闭环**（43.20）：真实运行 Benchmark → Compare → Detect Regression → Alert + Block Release，让「Nightly / Weekly / Release 定时评测」从「只有常量」变成「可运行、可追溯、可审计」。
+
+- 核心实现（`src/ai-quality/continuous-eval.ts`）：`ContinuousEvalStore`（历史存储：latest / 按 schedule 过滤 / snapshot·import 快照持久化）+ `runContinuousEvaluation`（复用 Phase 45 `runAllEvaluation` 真实评测 8 领域或定向领域，Compare 最近 baseline → `detectRegression` 回归判定）。
+- 回归判定（`src/ai-quality/ops.ts` `detectRegression`）：**Critical 指标上升（P0 Miss / False Pass / Unsafe Healing / Skipped Critical）→ verdict BLOCK + alertSent + releaseBlocked；普通 Overall 下降 → REVIEW；无回归 → PASS**；首次运行只记录基线不判回归（避免把自身当回归）；逐条 reasons 可回答「为什么判回归」。
+- 调度常量：nightly `0 2 * * *`（每日全量）/ weekly `0 3 * * 1`（每周深度 + 错误聚类）/ release `release-trigger`（发布前强制门禁）。
+- 集成（`src/ai-quality/service.ts`）：`AIAQualityService` 新增 `continuousEval` store + `runContinuousEval`（审计记录 + snapshot/restore 持久化 + persistToFile/loadFromFile）。
+- API（`src/platform/api/server.ts`，43.26）：`GET /api/ai-quality/continuous-evals`（列表 + schedules）/ `GET .../:id` / `POST .../run`（手动触发，RELEASE_APPROVE 人工门禁，QA 403）。
+- CLI（`bin/ai-quality-cli.ts`，43.25）：`agent:continuous:run` / `list` / `status`（status 展示最近运行、调度、Alert/Block 状态）。
+- Web（`web/src/pages/AIImprovement.tsx` + `web/src/api.ts`）：「AI 改进」页新增第 8 个「持续评测」Tab——历史表格（ID / Schedule / 触发 / Overall Baseline→Current / verdict / P0 Miss / False Pass / Alert / Block / 时间）+ 指标卡（最近 Overall / 最近判定 / Alert / Block Release）+ 手动触发按钮（NIGHTLY / WEEKLY / RELEASE，非审批角色禁用，人工门禁）。
+- 测试：单元 `tests/unit/continuous-eval.test.ts`（**11 用例**：首次基线 / 无回归 PASS / Critical Regression → BLOCK+Alert+BlockRelease / False Pass 上升 BLOCK / 普通下降 REVIEW / 定向领域 / 快照往返 / 调度常量 / Service 集成）+ 集成 `tests/integration/ai-continuous-eval-api.test.ts`（**7 用例**：列表 / 详情 / POST run RBAC + 真实运行 / 非法 schedule 400）+ E2E `tests/e2e/web/ai-improvement.spec.ts`（**2 新用例**：持续评测 Tab 历史渲染 / RELEASE_MANAGER 手动触发 → 历史新增，AI 改进页 E2E 合计 13 用例全绿）。
+- 脚本：`agent:continuous:run|list|status`、`phase48:test`；`agent:ai:unit` / `agent:ai:integration` 纳入 continuous-eval 与 ai-continuous-eval-api 测试。
+
+### 变更
+
+- 版本 v4.22.0 → v4.23.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+- 修复单元测试类型错误（`seedBaseline` 移除 store.add 自动生成的 `createdAt` 字段）。
+
+### 验收（真实运行）
+
+- `npm run web:e2e:ai`：**13 用例全绿**（11 存量 + 2 新增「持续评测」Tab）。
+- `npm test`：**1754 通过 / 18 skip，0 失败**；AI 质量相关 60 用例全绿（单元 43 + 集成 17）。
+- `npm run agent:continuous:status`：Overall **93.62%**；关键安全指标 P0 Miss / False Pass / Unsafe Healing / Skipped Critical **全 0**。
+- `npx tsc --noEmit` 通过。
+
 ## [4.22.0] - 2026-08-20
 
 ### 修复（Phase 47 复扫发现）

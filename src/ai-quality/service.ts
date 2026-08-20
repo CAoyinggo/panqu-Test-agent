@@ -17,6 +17,7 @@ import { ProposalStore, proposalFromCluster } from './improvement.js';
 import { PromptStore, ModelStore } from './versioning.js';
 import { ExperimentStore } from './experiment.js';
 import { KnowledgeLearning, type KnowledgeCandidate, type KnowledgeItem } from './knowledge-learning.js';
+import { ContinuousEvalStore, runContinuousEvaluation, type ContinuousEvalRun, type ContinuousEvalScheduleName, type ContinuousEvalTrigger } from './continuous-eval.js';
 import { ImprovementAudit } from './ops.js';
 import type { EvalReport } from '../eval/runner.js';
 
@@ -27,6 +28,7 @@ export interface AIQualityServiceDeps {
   models?: ModelStore;
   experiments?: ExperimentStore;
   knowledge?: KnowledgeLearning;
+  continuousEval?: ContinuousEvalStore;
   audit?: ImprovementAudit;
   now?: () => string;
 }
@@ -52,6 +54,7 @@ export class AIQualityService {
   readonly models: ModelStore;
   readonly experiments: ExperimentStore;
   readonly knowledge: KnowledgeLearning;
+  readonly continuousEval: ContinuousEvalStore;
   readonly audit: ImprovementAudit;
 
   constructor(deps: AIQualityServiceDeps = {}) {
@@ -61,6 +64,7 @@ export class AIQualityService {
     this.models = deps.models ?? new ModelStore();
     this.experiments = deps.experiments ?? new ExperimentStore();
     this.knowledge = deps.knowledge ?? new KnowledgeLearning();
+    this.continuousEval = deps.continuousEval ?? new ContinuousEvalStore();
     this.audit = deps.audit ?? new ImprovementAudit();
   }
 
@@ -201,6 +205,34 @@ export class AIQualityService {
     return rec;
   }
 
+  /**
+   * 48.x / 43.20：运行一次 Continuous Evaluation（真实 Benchmark → Compare → Detect Regression）。
+   * 返回运行记录；Critical Regression（verdict BLOCK）→ alertSent=true + releaseBlocked=true，
+   * 由调度方（CLI / API / 定时器）决定实际投递 Alert 与阻断发布。
+   */
+  runContinuousEval(input: {
+    schedule: ContinuousEvalScheduleName;
+    triggeredBy?: ContinuousEvalTrigger;
+    domains?: import('../eval/contract.js').EvaluationDomain[];
+    allowDrop?: number;
+    createdBy?: string;
+  }): ContinuousEvalRun {
+    const run = runContinuousEvaluation(input, { store: this.continuousEval });
+    this.audit.record({
+      proposalId: 'n/a',
+      actor: run.createdBy,
+      action: 'CREATED',
+      decision: `Continuous Evaluation ${run.schedule} 运行完成：Overall ${(run.current.overall * 100).toFixed(1)}% → verdict ${run.regression.verdict}（${run.regression.reasons.join('；')}）`,
+      metrics: {
+        overall: run.current.overall,
+        p0Miss: run.current.critical.p0Miss,
+        falsePass: run.current.critical.falsePass,
+        unsafeHealing: run.current.critical.unsafeHealing,
+      },
+    });
+    return run;
+  }
+
   /** 完整状态快照（持续改进闭环持久化：CLI / API 重启后恢复） */
   snapshot(): AiQualitySnapshot {
     return {
@@ -212,6 +244,7 @@ export class AIQualityService {
       experiments: this.experiments.list(),
       knowledgeCandidates: this.knowledge.listCandidates(),
       knowledgeItems: this.knowledge.listItems(),
+      continuousEval: this.continuousEval.snapshot(),
       audit: this.audit.list(),
     };
   }
@@ -225,6 +258,7 @@ export class AIQualityService {
       models: ModelStore.import(snap.models),
       experiments: ExperimentStore.import(snap.experiments),
       knowledge: KnowledgeLearning.import(snap.knowledgeCandidates, snap.knowledgeItems),
+      continuousEval: ContinuousEvalStore.import(snap.continuousEval ?? []),
       audit: ImprovementAudit.import(snap.audit),
     });
     return svc;
@@ -260,6 +294,8 @@ export interface AiQualitySnapshot {
   experiments: ExperimentRecord[];
   knowledgeCandidates: KnowledgeCandidate[];
   knowledgeItems: KnowledgeItem[];
+  /** Phase 48：Continuous Evaluation 历史 */
+  continuousEval?: ContinuousEvalRun[];
   audit: ImprovementAuditRecord[];
 }
 

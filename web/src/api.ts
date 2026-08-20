@@ -415,6 +415,41 @@ export function getKnowledgeReview(): Promise<KnowledgeReview> {
 export function getAIQuality(): Promise<AIQualityReport> {
   return request<AIQualityReport>('/ai-quality');
 }
+
+/** Phase 48：Continuous Evaluation（43.20）类型 */
+export interface ContinuousEvalRunItem {
+  id: string;
+  schedule: 'NIGHTLY' | 'WEEKLY' | 'RELEASE';
+  triggeredBy: 'SCHEDULE' | 'MANUAL' | 'RELEASE_GATE';
+  baseline: { overall: number; critical: { p0Miss: number; falsePass: number; unsafeHealing: number; skippedCritical: number } };
+  current: { overall: number; critical: { p0Miss: number; falsePass: number; unsafeHealing: number; skippedCritical: number } };
+  domains: Record<string, number>;
+  cost: number;
+  latencyMs: number;
+  regression: { regression: boolean; criticalRegression: boolean; reasons: string[]; verdict: 'PASS' | 'REVIEW' | 'BLOCK' };
+  alertSent: boolean;
+  releaseBlocked: boolean;
+  reportVersion: string;
+  domainCount: number;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ContinuousEvalList {
+  total: number;
+  runs: ContinuousEvalRunItem[];
+  schedules: Array<{ name: string; cronLike: string; description: string }>;
+}
+
+export function getContinuousEvals(filter?: string): Promise<ContinuousEvalList> {
+  return request<ContinuousEvalList>(`/ai-quality/continuous-evals${filter ?? ''}`);
+}
+export function runContinuousEval(schedule: string): Promise<ContinuousEvalRunItem> {
+  return api.post<ContinuousEvalRunItem>('/ai-quality/continuous-evals/run', { schedule });
+}
+export function getContinuousEvalDetail(id: string): Promise<ContinuousEvalRunItem> {
+  return request<ContinuousEvalRunItem>(`/ai-quality/continuous-evals/${id}`);
+}
 export function getAIQualityTrends(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>('/ai-quality/trends');
 }

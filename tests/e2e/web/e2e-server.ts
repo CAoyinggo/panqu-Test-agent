@@ -53,6 +53,8 @@ export interface WebE2eSeed {
     shadowExperiment: string;
     canaryExperiment: string;
     knowledgeCandidate: string;
+    /** 48.1：Continuous Evaluation 运行（持续评测 Tab 数据源） */
+    continuousEval: string;
   };
 }
 
@@ -285,6 +287,11 @@ function seedAiQuality(): { service: AIQualityService; refs: WebE2eSeed['aiQuali
     source: 'REAL_RUN', confidence: 0.85,
   });
 
+  // 10) Continuous Evaluation 历史（Phase 48 / 43.20：真实 Benchmark 确定性运行，verdict PASS）
+  svc.runContinuousEval({ schedule: 'NIGHTLY', triggeredBy: 'MANUAL', createdBy: 'release-mgr' });
+  svc.runContinuousEval({ schedule: 'WEEKLY', triggeredBy: 'SCHEDULE', createdBy: 'SYSTEM' });
+  const ceRelease = svc.runContinuousEval({ schedule: 'RELEASE', triggeredBy: 'RELEASE_GATE', createdBy: 'release-mgr' });
+
   return {
     service: svc,
     refs: {
@@ -295,6 +302,7 @@ function seedAiQuality(): { service: AIQualityService; refs: WebE2eSeed['aiQuali
       shadowExperiment: shadow.id,
       canaryExperiment: canary.id,
       knowledgeCandidate: kc.id,
+      continuousEval: ceRelease.id,
     },
   };
 }

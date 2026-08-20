@@ -7,8 +7,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   getAIFeedback, verifyAIFeedback, getAIErrors, getAIImprovements, approveImprovement, rejectImprovement,
   getPrompts, getModels, getExperiments, createExperiment, getKnowledgeReview, getAIQuality,
+  getContinuousEvals, runContinuousEval,
   type AIFeedbackItem, type AIErrorCluster, type ImprovementProposalItem, type PromptVersionItem,
   type ModelVersionItem, type ExperimentItem, type KnowledgeReview, type AIQualityReport,
+  type ContinuousEvalList,
 } from '../api';
 import { getStoredUser } from '../api';
 import { Card, Table, Badge, StatusBadge, Empty, MetricCard, fmtTime } from '../components/ui';
@@ -19,6 +21,7 @@ const TABS = [
   { key: 'proposals', label: '改进提案' },
   { key: 'versions', label: 'Prompt / Model' },
   { key: 'experiments', label: 'Shadow / Canary' },
+  { key: 'continuous', label: '持续评测' },
   { key: 'knowledge', label: '知识 Review' },
   { key: 'quality', label: 'AI 质量' },
 ] as const;
@@ -44,6 +47,7 @@ export default function AIImprovement(): JSX.Element {
   const [experiments, setExperiments] = useState<ExperimentItem[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeReview | null>(null);
   const [quality, setQuality] = useState<AIQualityReport | null>(null);
+  const [continuous, setContinuous] = useState<ContinuousEvalList | null>(null);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState('');
@@ -52,10 +56,10 @@ export default function AIImprovement(): JSX.Element {
 
   const load = async (): Promise<void> => {
     try {
-      const [f, c, p, pr, m, e, k, q] = await Promise.all([
-        getAIFeedback(), getAIErrors(), getAIImprovements(), getPrompts(), getModels(), getExperiments(), getKnowledgeReview(), getAIQuality(),
+      const [f, c, p, pr, m, e, k, q, ce] = await Promise.all([
+        getAIFeedback(), getAIErrors(), getAIImprovements(), getPrompts(), getModels(), getExperiments(), getKnowledgeReview(), getAIQuality(), getContinuousEvals(),
       ]);
-      setFeedback(f); setClusters(c); setProposals(p); setPrompts(pr); setModels(m); setExperiments(e); setKnowledge(k); setQuality(q);
+      setFeedback(f); setClusters(c); setProposals(p); setPrompts(pr); setModels(m); setExperiments(e); setKnowledge(k); setQuality(q); setContinuous(ce);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -89,6 +93,9 @@ export default function AIImprovement(): JSX.Element {
   };
   const reject = (id: string, reason: string): void => {
     void runAction(id, () => rejectImprovement(id, reason), `提案 ${id} 已驳回`);
+  };
+  const runContinuous = (schedule: string): void => {
+    void runAction(`ce-${schedule}`, () => runContinuousEval(schedule), `Continuous Evaluation ${schedule} 运行完成`);
   };
 
   const pendingProposals = proposals.filter((p) => p.status === 'EVALUATING' && p.gateVerdict === 'PASS');
@@ -277,6 +284,50 @@ export default function AIImprovement(): JSX.Element {
             </div>
           )}
         </Card>
+      )}
+
+      {tab === 'continuous' && (
+        <>
+          <Card title={`Continuous Evaluation（${continuous?.total ?? 0} 次运行）`}>
+            <div className="metric-grid">
+              <MetricCard label="最近 Overall" value={pct(continuous?.runs[0]?.current.overall)} />
+              <MetricCard label="最近判定" value={continuous?.runs[0]?.regression.verdict ?? '—'} hint={continuous?.runs[0]?.regression.reasons.slice(0, 2).join(' · ')} />
+              <MetricCard label="Alert" value={continuous?.runs[0]?.alertSent ? '已发出' : '无'} hint="Critical Regression 需告警" />
+              <MetricCard label="Block Release" value={continuous?.runs[0]?.releaseBlocked ? '已阻断' : '未阻断'} hint="verdict=BLOCK 时阻断发布" />
+            </div>
+            {continuous && continuous.runs.length > 0 && (
+              <Table head={['ID', 'Schedule', '触发', 'Overall', '判定', 'P0 Miss', 'False Pass', 'Alert', 'Block', '时间']}>
+                {continuous.runs.map((r) => (
+                  <tr key={r.id}>
+                    <td className="mono">{r.id}</td>
+                    <td><Badge kind={r.schedule === 'RELEASE' ? 'warn' : 'info'}>{r.schedule}</Badge></td>
+                    <td>{r.triggeredBy}</td>
+                    <td>{pct(r.baseline.overall)} → {pct(r.current.overall)}</td>
+                    <td><Badge kind={r.regression.verdict === 'BLOCK' ? 'err' : r.regression.verdict === 'REVIEW' ? 'warn' : 'ok'}>{r.regression.verdict}</Badge></td>
+                    <td>{r.current.critical.p0Miss}</td>
+                    <td>{r.current.critical.falsePass}</td>
+                    <td>{r.alertSent ? '是' : '否'}</td>
+                    <td>{r.releaseBlocked ? '是' : '否'}</td>
+                    <td>{fmtTime(r.createdAt)}</td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+            {(!continuous || continuous.runs.length === 0) && <Empty text="暂无运行记录。可手动触发一次以建立基线。" />}
+          </Card>
+          <Card title="手动触发（Nightly / Weekly / Release）">
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(['NIGHTLY', 'WEEKLY', 'RELEASE'] as const).map((s) => (
+                <button key={s} className="btn btn-sm" disabled={!approver || busy === `ce-${s}`} onClick={() => runContinuous(s)}>
+                  {busy === `ce-${s}` ? '运行中…' : `运行 ${s}`}
+                </button>
+              ))}
+            </div>
+            <div className="muted" style={{ marginTop: 8 }}>
+              手动触发需 RELEASE_MANAGER 或 ADMIN（人工门禁）。定时触发由 Nightly / Weekly / Release 调度（{continuous?.schedules.map((s) => `${s.name} ${s.cronLike}`).join(' · ') ?? '—'}）执行，无需人工。
+            </div>
+          </Card>
+        </>
       )}
 
       {tab === 'knowledge' && (

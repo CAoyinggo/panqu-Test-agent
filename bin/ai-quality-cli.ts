@@ -28,6 +28,7 @@ import type { AiQualitySnapshot } from '../src/ai-quality/service.js';
 import { compareAb, formatAbComparison } from '../src/ai-quality/versioning.js';
 import { formatErrorCluster } from '../src/ai-quality/error-analysis.js';
 import { ERROR_TAXONOMY_LABELS, CANARY_STAGES } from '../src/ai-quality/contract.js';
+import { CONTINUOUS_EVAL_SCHEDULES, type ContinuousEvalScheduleName } from '../src/ai-quality/continuous-eval.js';
 
 const STATE_DIR = path.resolve(process.cwd(), 'data');
 const STATE_FILE = path.join(STATE_DIR, 'ai-quality-state.json');
@@ -331,6 +332,69 @@ function cmdKnowledgeReview(svc: AIQualityService, json: boolean): void {
   }
 }
 
+// ── continuous（Phase 48 / 43.20：Continuous Evaluation 定时评测）──
+function cmdContinuousRun(svc: AIQualityService, args: string[], json: boolean): void {
+  const schedule = (flagValue(args, '--schedule') ?? 'NIGHTLY').toUpperCase() as ContinuousEvalScheduleName;
+  if (!(['NIGHTLY', 'WEEKLY', 'RELEASE'] as string[]).includes(schedule)) {
+    console.error(`未知 schedule：${schedule}（NIGHTLY / WEEKLY / RELEASE）`);
+    process.exit(2);
+  }
+  const run = svc.runContinuousEval({ schedule, triggeredBy: 'MANUAL', createdBy: 'cli-human' });
+  saveService(svc);
+  if (json) {
+    console.log(JSON.stringify(run, null, 2));
+    return;
+  }
+  console.log(`Continuous Evaluation ${run.schedule} 运行完成：`);
+  console.log(`  版本 ${run.reportVersion} · ${run.domainCount} 领域 · Overall ${pct(run.current.overall)}`);
+  console.log(`  关键安全：P0 Miss=${run.current.critical.p0Miss} False Pass=${run.current.critical.falsePass} Unsafe Healing=${run.current.critical.unsafeHealing}`);
+  console.log(`  成本 $${run.cost.toFixed(4)} · 延迟 ${run.latencyMs}ms`);
+  console.log(`  判定：${run.regression.verdict}${run.regression.criticalRegression ? '（Critical Regression）' : ''}`);
+  for (const r of run.regression.reasons) console.log(`    · ${r}`);
+  if (run.alertSent) console.log('  [ALERT] 需通知相关方：关键回归');
+  if (run.releaseBlocked) console.log('  [BLOCK] 需阻断发布：关键回归，发布门禁 BLOCK');
+}
+
+function cmdContinuousList(svc: AIQualityService, args: string[], json: boolean): void {
+  const schedule = flagValue(args, '--schedule')?.toUpperCase() as ContinuousEvalScheduleName | undefined;
+  const list = schedule ? svc.continuousEval.list({ schedule }) : svc.continuousEval.list();
+  if (json) {
+    console.log(JSON.stringify({ total: list.length, runs: list }, null, 2));
+    return;
+  }
+  if (list.length === 0) {
+    console.log('暂无 Continuous Evaluation 运行记录。可用 `continuous run --schedule NIGHTLY` 触发首次运行。');
+    return;
+  }
+  console.log(`Continuous Evaluation 历史（${list.length} 次，最新在前）`);
+  for (const r of list) {
+    console.log(`  [${r.id}] ${r.schedule} @ ${r.createdAt} by=${r.createdBy}`);
+    console.log(`        Overall ${pct(r.baseline.overall)} → ${pct(r.current.overall)} · verdict=${r.regression.verdict}${r.alertSent ? ' · ALERT' : ''}${r.releaseBlocked ? ' · BLOCK-RELEASE' : ''}`);
+    for (const reason of r.regression.reasons.slice(0, 3)) console.log(`        · ${reason}`);
+  }
+  console.log(`  调度：${CONTINUOUS_EVAL_SCHEDULES.map((s) => `${s.name}(${s.cronLike})`).join('  ')}`);
+}
+
+function cmdContinuousStatus(svc: AIQualityService, json: boolean): void {
+  const runs = svc.continuousEval.list();
+  const latest = runs[0];
+  if (json) {
+    console.log(JSON.stringify({ total: runs.length, latest: latest ?? null, schedules: CONTINUOUS_EVAL_SCHEDULES }, null, 2));
+    return;
+  }
+  if (!latest) {
+    console.log('Continuous Evaluation 未运行。`continuous run` 触发首次评测后建立基线。');
+    console.log(`  调度：${CONTINUOUS_EVAL_SCHEDULES.map((s) => `${s.name} ${s.cronLike}（${s.description}）`).join('\n        ')}`);
+    return;
+  }
+  console.log(`Continuous Evaluation 状态（共 ${runs.length} 次运行）`);
+  console.log(`  最近一次：${latest.schedule} @ ${latest.createdAt}（${latest.id}）`);
+  console.log(`  Overall ${pct(latest.baseline.overall)} → ${pct(latest.current.overall)} · verdict=${latest.regression.verdict}`);
+  console.log(`  关键安全：P0 Miss ${latest.baseline.critical.p0Miss}→${latest.current.critical.p0Miss} · False Pass ${latest.baseline.critical.falsePass}→${latest.current.critical.falsePass}`);
+  console.log(`  Alert=${latest.alertSent} · BlockRelease=${latest.releaseBlocked}`);
+  console.log(`  调度：${CONTINUOUS_EVAL_SCHEDULES.map((s) => `${s.name} ${s.cronLike}`).join('  ')}`);
+}
+
 // ── canary ──
 function cmdCanaryStatus(svc: AIQualityService, json: boolean): void {
   const list = svc.experiments.list();
@@ -417,7 +481,10 @@ function usage(): void {
   knowledge review [--json]
   canary status [--json]
   canary promote <id> --by <human> --accuracy N [--latency-ms N] [--cost N] [--failure-rate N] [--safety N]
-  canary rollback <id> --reason <...>`);
+  canary rollback <id> --reason <...>
+  continuous run --schedule NIGHTLY|WEEKLY|RELEASE [--json]
+  continuous list [--schedule X] [--json]
+  continuous status [--json]`);
 }
 
 function main(): void {
@@ -480,8 +547,16 @@ function main(): void {
       else { console.error(`未知 canary 子命令：${sub}（可用 status / promote / rollback）`); process.exit(2); }
       break;
     }
+    case 'continuous': {
+      const sub = args[1];
+      if (sub === 'run') cmdContinuousRun(svc, args.slice(1), json);
+      else if (sub === 'list') cmdContinuousList(svc, args.slice(1), json);
+      else if (sub === 'status') cmdContinuousStatus(svc, json);
+      else { console.error(`未知 continuous 子命令：${sub}（可用 run / list / status）`); process.exit(2); }
+      break;
+    }
     default:
-      console.error(`未知命令：${cmd}（可用 feedback / eval / prompt / model / improvement / knowledge / canary）`);
+      console.error(`未知命令：${cmd}（可用 feedback / eval / prompt / model / improvement / knowledge / canary / continuous）`);
       process.exit(2);
   }
 }
