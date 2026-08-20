@@ -79,10 +79,17 @@ export class QaHomeService {
     const plans = await this.deps.plans.list({});
     const templates = (await this.deps.templates.list({})).sort((a, b) => b.runCount - a.runCount);
 
-    const todayRuns = runs.filter((r) => r.createdAt.slice(0, 10) === today);
-    const runningRuns = runs.filter((r) => r.status === 'RUNNING');
-    const failedRuns = runs.filter((r) => r.status === 'FAILED').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
-    const pendingApprovals = approvals.filter((a) => a.status === 'PENDING');
+    // 41.12 修复：Runs / Approvals 也须按项目作用域过滤，否则 qa-b（order 作用域）会在
+    //       QA Home 看到 wan3 的进行中/失败 Runs 与审批（projects/defects 此前已过滤，属遗漏）。
+    const scopedRuns = (rs: TestRun[]): TestRun[] => (allowedProjects ? rs.filter((r) => allowedProjects.has(r.projectId)) : rs);
+    const runProject = new Map<string, string>();
+    for (const r of runs) runProject.set(r.runId, r.projectId);
+    const scopedApprovals = approvals.filter((a) => !allowedProjects || allowedProjects.has(runProject.get(a.runId) ?? ''));
+
+    const todayRuns = scopedRuns(runs.filter((r) => r.createdAt.slice(0, 10) === today));
+    const runningRuns = scopedRuns(runs.filter((r) => r.status === 'RUNNING'));
+    const failedRuns = scopedRuns(runs.filter((r) => r.status === 'FAILED')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
+    const pendingApprovals = scopedApprovals.filter((a) => a.status === 'PENDING');
     const recentFailures = failedRuns.map((r) => ({ runId: r.runId, status: r.status, environment: r.environment, createdAt: r.createdAt }));
     const allDefects = await this.deps.defects.list({});
     const defects = allDefects
@@ -108,7 +115,7 @@ export class QaHomeService {
     const highRiskCases = flakyCases.filter((v) => v.failures >= 2);
 
     const actionCenter: ActionItem[] = [];
-    const releaseReviews = approvals.filter((a) => a.status === 'PENDING' && a.action?.toLowerCase().includes('release'));
+    const releaseReviews = scopedApprovals.filter((a) => a.status === 'PENDING' && a.action?.toLowerCase().includes('release'));
     if (releaseReviews.length) {
       actionCenter.push({ id: 'ac-release', category: 'RELEASE', severity: 'warning', title: `${releaseReviews.length} 个 Release REVIEW 等待审批`, detail: '发布门禁需人工确认，请尽快处理', target: releaseReviews[0].approvalId });
     }

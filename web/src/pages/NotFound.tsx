@@ -5,7 +5,7 @@ import { Card } from '../components/ui';
 export default function NotFound(): JSX.Element {
   return (
     <div>
-      <div className="page-title">页面不存在</div>
+      <h1 className="page-title">页面不存在</h1>
       <Card>
         <p className="muted">您访问的页面不存在或已被移除。</p>
         <p><Link className="link" to="/">返回总览 →</Link></p>

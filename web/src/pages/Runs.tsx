@@ -20,7 +20,7 @@ export default function Runs(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">执行记录</div>
+      <h1 className="page-title">执行记录</h1>
       <div className="page-sub">全部 Run 列表 · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       <Card>

@@ -22,7 +22,7 @@ export default function Dashboard(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">平台总览</div>
+      <h1 className="page-title">平台总览</h1>
       <div className="page-sub">每 2 秒自动刷新 · 实时运营视图</div>
       {error && <div className="error-banner">{error}</div>}
       {!data && !error && <Empty text="加载中…" />}

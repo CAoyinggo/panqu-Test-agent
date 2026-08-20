@@ -29,7 +29,7 @@ export default function TelemetryActivation(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">指标激活</div>
+      <h1 className="page-title">指标激活</h1>
       <div className="page-sub">真实遥测首样本自动激活 · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       {!data && !error && <Empty text="加载中…" />}

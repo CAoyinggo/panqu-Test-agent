@@ -28,7 +28,7 @@ export default function Audit(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">审计日志</div>
+      <h1 className="page-title">审计日志</h1>
       <div className="page-sub">全部操作审计 · 每 2 秒刷新 · 最近 {data?.length ?? 0} 条</div>
       {error && <div className="error-banner">{error}</div>}
       <Card>

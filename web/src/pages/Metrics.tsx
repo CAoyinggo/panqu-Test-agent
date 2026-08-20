@@ -33,7 +33,7 @@ export default function Metrics(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">平台指标</div>
+      <h1 className="page-title">平台指标</h1>
       <div className="page-sub">真实遥测计算 · 无数据不激活 · 每 2 秒刷新</div>
       <WindowSwitcher value={window} onChange={setWindow} />
       {error && <div className="error-banner">{error}</div>}

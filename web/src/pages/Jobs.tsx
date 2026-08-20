@@ -24,7 +24,7 @@ export default function Jobs(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">调度任务</div>
+      <h1 className="page-title">调度任务</h1>
       <div className="page-sub">Scheduler 队列 · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       <Card>

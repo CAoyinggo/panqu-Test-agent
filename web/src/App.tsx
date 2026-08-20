@@ -1,6 +1,6 @@
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { clearSession, getStoredUser } from './api';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Login from './pages/Login';
 import ReadOnlyRunReport from './pages/ReadOnlyRunReport';
 import Dashboard from './pages/Dashboard';
@@ -49,10 +49,29 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // 41.2：Token 失效（401）→ 自动退出回登录页（API 层 clearSession 派发事件）
+  useEffect(() => {
+    const onUnauthorized = (): void => {
+      clearSession();
+      setUser(null);
+      navigate('/');
+    };
+    window.addEventListener('panqu:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('panqu:unauthorized', onUnauthorized);
+  }, [navigate]);
+
   if (!user) {
     // Phase 40.3：无 Token 时区分公开分享落地页（/runs/:id/report?share=<token>）与登录页
+    // 41.9：必须用 <Route path="/runs/:id/report"> 包裹，useParams 才能取到 :id；
+    //       此前直接渲染 <ReadOnlyRunReport/> 导致 id 为空 → /runs//report → 401 → 误跳登录。
     const isPublicShare = /^\/runs\/[^/]+\/report$/.test(location.pathname) && new URLSearchParams(location.search).has('share');
-    if (isPublicShare) return <ReadOnlyRunReport />;
+    if (isPublicShare) {
+      return (
+        <Routes>
+          <Route path="/runs/:id/report" element={<ReadOnlyRunReport />} />
+        </Routes>
+      );
+    }
     return <Routes><Route path="*" element={<Login onLogin={setUser} />} /></Routes>;
   }
 

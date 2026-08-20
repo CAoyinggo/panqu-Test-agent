@@ -42,18 +42,18 @@ export default function QAHome(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">QA 工作台</div>
+      <h1 className="page-title">QA 工作台</h1>
       <div className="page-sub">告诉我现在该做什么 · 每 3 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       {!data && !error && <Empty text="加载中…" />}
       {data && (
         <>
-          {/* 快速操作 */}
+          {/* 快速操作（41.3：指向真实路由，避免 /suites/new 等死链落 NotFound） */}
           <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-            <Link className="btn btn-sm" to="/suites/new">+ 新建 Suite</Link>
-            <Link className="btn btn-sm" to="/plans/new">+ 新建 Test Plan</Link>
-            <Link className="btn btn-sm" to="/templates/new">+ 新建 Run Template</Link>
-            <Link className="btn btn-sm" to="/defects/new">+ 登记 Defect</Link>
+            <Link className="btn btn-sm" to="/suites">+ 新建 Suite</Link>
+            <Link className="btn btn-sm" to="/plans">+ 新建 Test Plan</Link>
+            <Link className="btn btn-sm" to="/templates">+ 新建 Run Template</Link>
+            <Link className="btn btn-sm" to="/defects">+ 登记 Defect</Link>
             <Link className="btn btn-sm" to="/runs">历史 Runs</Link>
             <Link className="btn btn-sm" to="/approvals">待审批</Link>
           </div>
@@ -87,7 +87,7 @@ export default function QAHome(): JSX.Element {
               <Table head={['项目', '操作']}>
                 {data.projects.map((p) => (
                   <tr key={p.id}>
-                    <td className="mono">{p.id}</td>
+                    <td>{p.name} <span className="muted mono small">({p.id})</span></td>
                     <td><Link className="link" to={`/runs?project=${p.id}`}>看 Runs</Link></td>
                   </tr>
                 ))}

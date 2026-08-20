@@ -1,10 +1,10 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.15.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试 + 环境策略边界 + 断言可视化 + 依赖解耦 + 身份解析统一 + 时序卫生治理 + 非法角色拒绝安全加固 + QA 工作流产品化 + **Phase 40 工程化收尾：单资源读端点 Project Scope 加固 / Defect 缺陷平台化 / 前端断点修复与公开分享落地页 / 报告数据真实性 / QAHome 聚合缓存**）｜ 更新：2026-08-19 ｜ 维护：AI 测试智能体
+> 版本：v4.16.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试 + 环境策略边界 + 断言可视化 + 依赖解耦 + 身份解析统一 + 时序卫生治理 + 非法角色拒绝安全加固 + QA 工作流产品化 + **Phase 40 工程化收尾：读端点 Project Scope 加固 / Defect 缺陷平台化 / 公开分享落地页 / 报告数据真实性 / 聚合缓存** + **Phase 41 Web 真实浏览器 E2E：Playwright 14 套件覆盖登录→项目→QA Home→Plan→Run→Defect→Report→Share→Approval→权限隔离→错误态→可访问性→键盘→响应式→性能，17 项关键功能验收 PASS**）｜ 更新：2026-08-20 ｜ 维护：AI 测试智能体
 
 **标准化、可一键执行的多业务 AI 功能测试智能体框架**。所有 AI 功能测试任务强制按此流程执行：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
 
-自 v4.0 起，框架以 **Modular Monolith** 方式叠加 `src/platform` AI Test Platform 平台层（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），API 与 CLI 共用统一 Service Layer。平台层此后沿六条主线持续演进：**生产化与持久化**（SQLite / PostgreSQL、JWT 认证与用户体系、真实遥测、Web Dashboard、API 加固）、**生产验证闭环**（真实 Run 执行引擎、故障恢复演练、统一发布门禁、备份恢复、可观测告警）、**安全加固**（生产模式强制非默认密钥、静态身份防伪造、运维只读 RBAC、审批职责分离）、**工程治理**（覆盖率补齐、迁移回滚、变异测试、依赖解耦、身份解析统一、时序卫生治理）、**QA 工作流产品化**（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home）、**工程化收尾**（读端点 Project Scope 加固、Defect 缺陷平台化、公开分享落地页、报告数据真实性、聚合缓存）。
+自 v4.0 起，框架以 **Modular Monolith** 方式叠加 `src/platform` AI Test Platform 平台层（Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / HTTP API / 运维指标），API 与 CLI 共用统一 Service Layer。平台层此后沿七条主线持续演进：**生产化与持久化**（SQLite / PostgreSQL、JWT 认证与用户体系、真实遥测、Web Dashboard、API 加固）、**生产验证闭环**（真实 Run 执行引擎、故障恢复演练、统一发布门禁、备份恢复、可观测告警）、**安全加固**（生产模式强制非默认密钥、静态身份防伪造、运维只读 RBAC、审批职责分离）、**工程治理**（覆盖率补齐、迁移回滚、变异测试、依赖解耦、身份解析统一、时序卫生治理）、**QA 工作流产品化**（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home）、**工程化收尾**（读端点 Project Scope 加固、Defect 缺陷平台化、公开分享落地页、报告数据真实性、聚合缓存）、**Web 真实浏览器 E2E 与体验质量**（Playwright 真实浏览器操作 / 17 项关键功能验收 / 可访问性 axe-core / 键盘导航 / 响应式 / 性能与轮询治理 / API 客户端治理）。
 
 各里程碑的详细演进记录见下文 **「十二、版本历史」** 表。
 
@@ -23,13 +23,14 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | 指标 | 数值 |
 |---|---|
 | 单元测试用例 | 1586 条通过 / 18 跳过（141 个测试文件，全量回归全绿） |
+| Web 真实浏览器 E2E | 14 个 Playwright 套件（登录 / 项目 / 工作流 / Run / 缺陷 / 报告 / 分享 / 审批 / 项目隔离 / 错误态 / 可访问性 / 键盘 / 响应式 / 性能），17 项关键功能验收 PASS |
 | 全量覆盖率 | Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03（含 `src/platform/**`） |
 | 平台测试 | 单元 35 文件 + 集成 14 文件 + E2E 16 文件（Phase 40 新增 defects / phase40-scope 套件） |
 | 断言操作符 | 17 个 |
 | 核心引擎模块 | 13 个文件 |
 | 平台层模块 | 19 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
-| 版本演进 | v1.0 → v4.15.0（26 个里程碑） |
+| 版本演进 | v1.0 → v4.16.0（27 个里程碑） |
 | 运行时 | Node.js ≥ 20.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
@@ -48,7 +49,7 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | `src/plugins` | 插件式场景处理器（新模块在此扩展） | `scenes/video.ts` `loader.ts` |
 | `src/config` | 环境配置与 CLI 参数解析（schema 校验） | `config.ts` `environments.json` |
 | `src/utils` | 通用工具：数据生成、Mock 录制回放、并发、可视化、度量 | `data-generator.ts` `mock-recorder.ts` `assertion-visualizer.ts` |
-| `src/platform` | ★ AI Test Platform 平台层（v4.0-v4.15）：Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / Audit / Operations / Service / API / 存储（SQLite/PostgreSQL）/ Auth / Telemetry / Ops / Security / Test Assets / Workflow | `projects/` `runs/` `scheduler/` `workers/` `rbac/` `approval-center/` `events/` `notifications/` `audit/` `operations/` `service/` `api/` `storage/` `auth/` `telemetry/` `ops/` `security/` `test-assets/` `workflow/` |
+| `src/platform` | ★ AI Test Platform 平台层（v4.0-v4.16）：Project / Run 状态机 / Scheduler / Worker / RBAC / Approval / EventBus / Notification / Audit / Operations / Service / API / 存储（SQLite/PostgreSQL）/ Auth / Telemetry / Ops / Security / Test Assets / Workflow | `projects/` `runs/` `scheduler/` `workers/` `rbac/` `approval-center/` `events/` `notifications/` `audit/` `operations/` `service/` `api/` `storage/` `auth/` `telemetry/` `ops/` `security/` `test-assets/` `workflow/` |
 
 数据流：`CLI 入口 → 核心引擎 → 场景处理器 / 7 钩子 → 执行流水线 → 断言系统 / 数据工厂 / 环境检测 / 并发控制 → 报告四通道 + 飞书通知`。
 
@@ -167,6 +168,8 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 **身份解析统一**（v4.12.0 / Phase 36，DEBT-12）：审计确认 `resolvePrincipal` 为唯一身份解析实现（无历史版本残留），并将「静态身份来源」的守卫与解析收敛到 security 模块——新增 `resolveStaticIdentity(mode, headers)`：production 返回 `null`（防身份伪造不可绕过），其余模式从 X-Actor/X-Role 头解析（数组取首项；无 actor 默认 `api`，无 role 默认 `VIEWER`）；`api/server.ts` 静态 Token 回退改调该函数，不再直接读取 `x-actor`/`x-role` 头。新增 `tests/unit/identity-resolution-guard.test.ts`（8 项）守护：功能行为 / **结构性不可绕过**（`src/platform/**` 中 X-Actor/X-Role 头读取仅存在于 security 模块）/ `resolvePrincipal` 唯一实现 / 集成语义（production 关闭，staging 生产演练模式仍允许静态身份）。v4.13.1 补充：静态身份 role 经 `rbac.isRole` 校验，非法 X-Role（如 HACKER）拒绝 401（不再 `as Role` 硬断言），并新增 isRole 守卫 + 结构性守护测试。验收：`npm run phase36:test`（构建 + 身份解析守护 + security / auth / RBAC 相关回归）。
 
 **E2E 时序卫生治理**（v4.13.0 / Phase 37，DEBT-13，**技术债清零**）：审计确认 E2E/集成测试已普遍采用健壮模式——随机端口（`server.listen()` 无参 / `listen(0)`）、固定时钟注入（`FIXED_ISO`，固定输入→固定输出，非 flaky）、`Date.now()` 生成唯一 ID、轮询 + 超时等待；未发现硬编码端口 / 运行时时间戳固定字面量断言 / 固定长 sleep 残留。新增 `tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护固化：禁止硬编码监听端口、禁止时间字段固定 ISO 字面量断言（`FIXED_ISO` 注入除外）、禁止 ≥1000ms 固定 sleep（应为轮询+超时）、现状基线确认。验收：`npm run phase37:test`（构建 + 时序卫生守护 + 代表性 E2E/集成回归）。
+
+**Web 真实浏览器 E2E 与体验质量**（v4.16.0 / Phase 41）：将 Web Dashboard 从「代码正确 + HTTP 正确」提升到「真实浏览器操作正确 + 用户流程完整 + UI 状态正确 + 可访问 + 可回归」。基础设施：Playwright（`@playwright/test@1.62.1`）+ Chromium；内存态测试服务器 `tests/e2e/web/e2e-server.ts`（平台 + Web 构建产物，`WEB_E2E_PORT=8799`，Playwright `webServer` 自动拉起 + 种子数据）；共享助手 `helpers.ts`（UI 登录 / 会话注入 / API 认证头）。**14 个 E2E 套件**覆盖 17 项关键功能验收：`auth`（登录成功/错误密码/Token 失效）、`project`（项目列表/Run 计数/失败计数）、`workflow`（Suite→TestCase→Plan→Run→快速操作）、`run`（状态/进度/风险/覆盖/失败明细/RCA/实时刷新/无效 ID 错误态）、`defect`（从失败创建缺陷/状态流转/详情）、`report`（关键指标/无 JSON 污染/导出）、`share`（分享链接/无 Token 只读/不泄漏 JWT/非法 token 拒绝）、`approval`（发布审批/驳回/职责分离）、`project-isolation`（qa-a 见 wan3 / qa-b 见 order / 跨项目 API 403）、`error-state`（404/网络失败/限流错误态）、`accessibility`（axe-core wcag2a/aa/21a/21aa/best-practice 逐页扫描无 critical/serious）、`keyboard`（Tab 可达/焦点可见/回车提交）、`responsive`（1440/1280/1024/390/375 五档视口无溢出）、`performance`（首屏阈值/轮询治理无 429/无 console error/JS 包 < 1MB）。同阶段修复真实缺陷：登录 token 字段对齐、RunDetail 死循环刷爆限流 429、QA Home 项目作用域泄漏（Runs/Approvals 未按 scopes 过滤）、分享页路由与只读渲染、文本块链接仅靠颜色区分、按钮/徽标对比度、登录页无 h1、表单控件无可访问名、焦点不可见、窄屏导航溢出、长 ID 断行等。验收：`npm run web:e2e:test`（构建平台 + 构建 Web + Playwright 全量）；报告见 `docs/phase41-web-e2e-report.md` / `docs/phase41-frontend-quality.md` / `docs/phase41-acceptance-report.md`。
 
 ## 七、AI Test Platform 平台层
 
@@ -331,8 +334,9 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 | v4.13.0 | 2026-08-19 | E2E 时序卫生治理（Phase 37，DEBT-13，**技术债清零**）：审计确认 E2E/集成已普遍采用健壮模式（随机端口 / `FIXED_ISO` 固定时钟注入 / `Date.now()` 唯一 ID / 轮询+超时），无硬编码端口、固定时间戳断言、固定长 sleep 残留；新增 `tests/unit/e2e-timing-hygiene.test.ts`（4 项）结构性守护固化 |
 | v4.14.0 | 2026-08-19 | QA 工作流产品化（Phase 39）：新增 `src/platform/workflow/`（Test Suite / Test Plan / Run Template / Asset Versioning / Collaboration / Run Report / QA Home），复用既有 PlatformService / Repository / RBAC / Notification / Audit / Telemetry，零新增基础设施；QA Workflow API（`/test-suites`、`/test-plans`、`/run-templates`、`/assets/:id/versions|compare`、`/runs/:id/share|comments|assign|rerun|clone|template`、`/qa-home`）+ CLI 命令组（suite / plan / template / run rerun|clone / report）+ Web QA Workbench 页面（Action Center + 快速操作 + Suite/Plan/Template 管理 + Run Detail 报告摘要与复用/分享/协作）；权限错误语义化为 403 |
 | v4.15.0 | 2026-08-19 | Phase 40 工程化收尾：单资源读端点 Project Scope 加固（getSuite/getPlan/planCases/getTemplate/assetVersions/listApprovals 六处 + resolveAssetProject 解析 + 审批 runId 过滤）；Defect 缺陷平台化（`workflow/defects.ts` 真实实体 + 状态机 + severity + 指派 + DefectCreated 事件 + Web/CLI 页面 + QA Home recentDefects 真实数据）；前端断点修复（share 改 POST、Settings 双前缀、公开分享落地页无 JWT + share token 校验 + 导出直链、无 Token 跳登录、RCA 死链）；报告数据真实性（failures 由真实遥测 execution/RCA 事件聚合、decisionTrace 可读化）；QAHome / run-report TTL 聚合缓存（按 scopes 隔离） |
+| v4.16.0 | 2026-08-20 | Phase 41 Web 真实浏览器 E2E 与体验质量：Playwright + Chromium 真实浏览器测试基础设施（`tests/e2e/web/` 内存态服务器 + 种子数据 + 共享助手 + `web:e2e:test` / `web:e2e:server` 脚本）；**14 个 E2E 套件覆盖 17 项关键功能验收**（auth / project / workflow / run / defect / report / share / approval / project-isolation / error-state / accessibility / keyboard / responsive / performance）——登录→项目→QA Home→Plan→Run→Run Detail→Failure/RCA→Defect→Report→Share→Release/Approval 全流程真实浏览器验证；可访问性 axe-core 逐页扫描无 critical/serious（对比度 / 下划线链接 / h1 / 表单可访问名 / 焦点可见）；五档视口响应式无溢出；性能与轮询治理（无 429 风暴、JS 包 < 1MB、无 console error）；API 客户端统一错误处理。同阶段修复真实缺陷：登录 token 字段对齐、RunDetail 死循环刷爆限流、QA Home Runs/Approvals 项目作用域泄漏、分享页路由与只读渲染、文本块链接仅靠颜色区分、按钮/徽标对比度、登录页无 h1、表单控件无可访问名、焦点不可见、窄屏导航溢出、长 ID 断行 |
 
-在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`；Phase 31 报告见 `docs/phase31-summary.md`；Phase 32 报告见 `docs/phase32-summary.md`；Phase 33 报告见 `docs/phase33-summary.md`（含 `docs/environment-policy-boundaries.md` 职责边界文档）；Phase 34 报告见 `docs/phase34-summary.md`；Phase 35 报告见 `docs/phase35-summary.md`；Phase 36 报告见 `docs/phase36-summary.md`；Phase 37 报告见 `docs/phase37-summary.md`；最终项目验收报告见 `docs/FINAL-PROJECT-ACCEPTANCE-REPORT.md`（七大类 A-G 全部满足，判定 **PROJECT COMPLETE**，v4.13.0）；Phase 39 报告见 `docs/phase39-summary.md`（QA 工作流产品化）；Phase 40 报告见 `docs/phase40-summary.md`（工程化收尾，v4.15.0）。
+在 v3.4 之上，后续迭代进一步沉淀了通用断言引擎、数据生成 / Mock 录制回放 / 动态并发三大能力，以及断言可视化引擎，均以独立 commit 演进：`e554843` → `4c8b52b` → `4c1581d` → `ee83ebe`。Phase 20-24 各阶段报告见 `docs/`（`phase20-final-acceptance-report.md` → `phase24-final-acceptance-report.md`）；Phase 25 各阶段报告见 `docs/phase25.0-production-analysis.md` → `docs/phase25.8-production-readiness-report.md`；Phase 26 各阶段报告见 `docs/phase26.1-production-deployment-report.md` → `docs/phase26.8-production-pilot-report.md` 与 `docs/phase26-final-acceptance-report.md`；Phase 27 报告见 `docs/phase27-summary.md`；Phase 28 报告见 `docs/phase28-summary.md`；Phase 29 报告见 `docs/phase29-summary.md`；Phase 30 报告见 `docs/phase30-summary.md`，性能基线与门禁结果落 `perf/baseline.json` 与 `perf/latest.json`；Phase 31 报告见 `docs/phase31-summary.md`；Phase 32 报告见 `docs/phase32-summary.md`；Phase 33 报告见 `docs/phase33-summary.md`（含 `docs/environment-policy-boundaries.md` 职责边界文档）；Phase 34 报告见 `docs/phase34-summary.md`；Phase 35 报告见 `docs/phase35-summary.md`；Phase 36 报告见 `docs/phase36-summary.md`；Phase 37 报告见 `docs/phase37-summary.md`；最终项目验收报告见 `docs/FINAL-PROJECT-ACCEPTANCE-REPORT.md`（七大类 A-G 全部满足，判定 **PROJECT COMPLETE**，v4.13.0）；Phase 39 报告见 `docs/phase39-summary.md`（QA 工作流产品化）；Phase 40 报告见 `docs/phase40-summary.md`（工程化收尾，v4.15.0）；Phase 41 报告见 `docs/phase41-web-e2e-report.md`（E2E 测试）与 `docs/phase41-frontend-quality.md`（可访问性/响应式/性能/API 治理）与 `docs/phase41-acceptance-report.md`（17 项验收，v4.16.0）。
 
 ## 十三、目录结构
 
@@ -348,7 +352,7 @@ test-flow/
 │   ├── 05-项目说明模板.md       # 项目说明统一格式模板（通用）
 │   ├── assertion-dsl.md         # 断言 DSL 语法文档
 │   ├── FINAL-PROJECT-ACCEPTANCE-REPORT.md  # 最终项目验收报告（七大类 A-G，判定 PROJECT COMPLETE）
-│   ├── phase39-summary.md / phase40-summary.md  # QA 工作流产品化 / 工程化收尾总结
+│   ├── phase39-summary.md / phase40-summary.md / phase41-*.md  # QA 工作流产品化 / 工程化收尾 / Web E2E 与体验质量总结
 │   ├── product/                 # 产品文档：test-suite / test-plan / run-template / asset-versioning / report-sharing / qa-workflow
 │   └── phase*.summary.md        # 各阶段总结（phase13-37）
 ├── src/                         # ★ TypeScript 源码（模块化分层）
@@ -362,10 +366,10 @@ test-flow/
 │   ├── plugins/scenes/          # ★ 场景处理器（插件式，新模块在此新增）
 │   │   └── video.ts             # 视频场景处理器（文生/图生/全能参考/首尾帧）
 │   ├── config/                  # 配置：environments.json + config.ts（schema 校验）+ env-loader.ts（TESTFLOW_* 环境变量覆盖单一来源）
-│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.15）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security / test-assets / workflow
+│   ├── platform/                # ★ AI Test Platform 平台层（v4.0-v4.16）：projects / storage / runs / scheduler / workers / rbac / approval-center / events / notifications / audit / auth / telemetry / operations / ops / service / api / security / test-assets / workflow
 │   ├── web/                     # Web Dashboard 前端（React + Vite，v4.1/Phase 25.6）
 │   └── utils/                   # 工具：logger / metrics / retry / data-generator / mock-recorder / concurrency-controller / assertion-visualizer / exit-code / fs-utils / trace / allure-reporter / junit-reporter / oss-uploader
-├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/（141 文件 / 1586 用例，全量回归全绿）
+├── tests/                       # Vitest 测试：unit/（单元） + integration/ + e2e/（141 文件 / 1586 用例，全量回归全绿）+ tests/e2e/web/（14 个 Playwright 真实浏览器 E2E 套件，v4.16.0）
 ├── tests/unit/                  # Vitest 单元测试（含平台 35 文件）
 ├── bin/run-test.ts              # 执行 CLI 入口（编译为 dist/bin/run-test.js）
 ├── bin/platform-cli.ts          # 平台 CLI（v4.0/v4.3，与 API 共用 Service Layer）

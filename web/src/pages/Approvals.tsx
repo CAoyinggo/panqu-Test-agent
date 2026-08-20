@@ -43,7 +43,7 @@ export default function Approvals(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">审批中心</div>
+      <h1 className="page-title">审批中心</h1>
       <div className="page-sub">全部审批请求 · 每 2 秒刷新 · 待审批 {pending.length} 条</div>
       {error && <div className="error-banner">{error}</div>}
       {err && <div className="error-banner">{err}</div>}

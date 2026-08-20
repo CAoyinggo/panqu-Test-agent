@@ -44,22 +44,22 @@ export default function RunTemplates(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">Run Templates</div>
+      <h1 className="page-title">Run Templates</h1>
       <div className="page-sub">“这套测试我上次跑过，再跑一次”——只复制 Configuration，不复制旧结果/RCA/Release 决策</div>
       {error && <div className="error-banner">{error}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
 
       <Card title="新建 Run Template">
         <div className="form-row">
-          <input placeholder="名称（如 WAN3 回归模板）" value={name} onChange={(e) => setName(e.target.value)} />
-          <input placeholder="Suite IDs（逗号分隔）" value={suiteIds} onChange={(e) => setSuiteIds(e.target.value)} />
-          <select value={environment} onChange={(e) => setEnvironment(e.target.value)}>
+          <input aria-label="名称" placeholder="名称（如 WAN3 回归模板）" value={name} onChange={(e) => setName(e.target.value)} />
+          <input aria-label="Suite IDs（逗号分隔）" placeholder="Suite IDs（逗号分隔）" value={suiteIds} onChange={(e) => setSuiteIds(e.target.value)} />
+          <select aria-label="环境" value={environment} onChange={(e) => setEnvironment(e.target.value)}>
             {['test', 'staging', 'preprod'].map((e) => <option key={e} value={e}>{e}</option>)}
           </select>
-          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+          <select aria-label="模式" value={mode} onChange={(e) => setMode(e.target.value)}>
             {['MANUAL', 'REGRESSION', 'AUTONOMOUS'].map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <input placeholder="Budget" value={budget} onChange={(e) => setBudget(e.target.value)} style={{ width: 80 }} />
+          <input aria-label="Budget" placeholder="Budget" value={budget} onChange={(e) => setBudget(e.target.value)} style={{ width: 80 }} />
           <button className="btn btn-sm" onClick={() => void doCreate()}>创建</button>
         </div>
       </Card>

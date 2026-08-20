@@ -30,7 +30,7 @@ export default function TelemetryEvents(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">遥测事件</div>
+      <h1 className="page-title">遥测事件</h1>
       <div className="page-sub">事件流 · 每 2 秒刷新 · 最近 {data?.length ?? 0} 条</div>
       {error && <div className="error-banner">{error}</div>}
       <Card>

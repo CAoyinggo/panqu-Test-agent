@@ -1,5 +1,5 @@
 // Run Detail（Phase 39 增强）：报告摘要 / Run Again / Clone / Save Template / Share / Export / 协作评论
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import { usePolling } from '../hooks/usePolling';
@@ -42,7 +42,7 @@ interface ReportSummary {
   durationMs?: number;
   releaseDecision: { decision: string; result: string; reason?: string; timestamp?: string } | null;
   coverage: { total: number; completed: number; failed: number; remaining: number };
-  failures: unknown[];
+  failures: Array<{ caseId?: string; reason?: string; category?: string }>;
   rca: Array<{ caseId?: string; category: string; verified: boolean }>;
   cost: { value: number | null; tracked: boolean; unit: string };
   approvals: unknown[];
@@ -79,8 +79,18 @@ export default function RunDetail(): JSX.Element {
       setComments(Array.isArray(c) ? c : []);
     } catch { setComments([]); }
   };
-  const init = async (): Promise<void> => { await loadReport(); await loadComments(); };
-  void init();
+  // 41.17：报告/评论只应在挂载/切换 Run 时加载一次；此前在每次渲染都调用 init，
+  //        loadReport 的 setReport 又触发重渲染 → 无限循环 → 2s 内刷爆 API 限流(429)。
+  useEffect(() => {
+    let alive = true;
+    const run = async (): Promise<void> => {
+      await loadReport();
+      if (alive) await loadComments();
+    };
+    void run();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const doRunAgain = async (): Promise<void> => {
     const r = await api.post<{ runId: string; status: string }>(`/runs/${id}/rerun`);
@@ -107,7 +117,7 @@ export default function RunDetail(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">执行详情</div>
+      <h1 className="page-title">执行详情</h1>
       <div className="page-sub mono">{id} · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
@@ -168,6 +178,17 @@ export default function RunDetail(): JSX.Element {
                   </tr>
                 </Table>
               )}
+              {report.failures.length > 0 && (
+                <Table head={['Case', '原因', 'RCA 分类']}>
+                  {report.failures.map((f, i) => (
+                    <tr key={i}>
+                      <td className="mono">{f.caseId ?? '—'}</td>
+                      <td>{f.reason ?? '—'}</td>
+                      <td>{f.category ?? '—'}</td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
               {report.rca.length > 0 && (
                 <Table head={['Case', 'RCA 分类', '已验证']}>
                   {report.rca.map((r, i) => (
@@ -185,7 +206,7 @@ export default function RunDetail(): JSX.Element {
 
           <Card title="协作评论（@user 触发通知）">
             <div className="form-row">
-              <input placeholder="输入评论，@用户名 可通知，如 @zhangsan 请确认模型服务…" value={comment} onChange={(e) => setComment(e.target.value)} />
+              <input aria-label="评论内容（@用户名 可通知）" placeholder="输入评论，@用户名 可通知，如 @zhangsan 请确认模型服务…" value={comment} onChange={(e) => setComment(e.target.value)} />
               <button className="btn btn-sm" onClick={() => void doComment()}>评论</button>
             </div>
             {comments.length === 0 && <Empty text="暂无评论" />}

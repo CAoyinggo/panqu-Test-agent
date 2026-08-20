@@ -26,7 +26,7 @@ export default function Workers(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">Worker</div>
+      <h1 className="page-title">Worker</h1>
       <div className="page-sub">执行 Worker 池 · 每 2 秒刷新 · 在线 {data?.filter((w) => w.health === 'healthy').length ?? 0}/{data?.length ?? 0}</div>
       {error && <div className="error-banner">{error}</div>}
       <Card>

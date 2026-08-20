@@ -36,7 +36,7 @@ export default function Telemetry(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">遥测快照</div>
+      <h1 className="page-title">遥测快照</h1>
       <div className="page-sub">真实运行遥测 · 每 2 秒刷新</div>
       <WindowSwitcher value={window} onChange={setWindow} />
       {error && <div className="error-banner">{error}</div>}

@@ -44,7 +44,7 @@ export default function ReadOnlyRunReport(): JSX.Element {
   return (
     <div className="layout-solo">
       <div className="content">
-        <div className="page-title">分享报告</div>
+        <h1 className="page-title">分享报告</h1>
         <div className="page-sub mono">{id} · 只读视图（经分享链接授权访问）</div>
         {error && <div className="error-banner">{error}</div>}
         {!report && !error && <Empty text="加载中…" />}

@@ -13,7 +13,7 @@ export default function Health(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">健康检查</div>
+      <h1 className="page-title">健康检查</h1>
       <div className="page-sub">平台组件健康状态 · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
       {!data && !error && <Empty text="加载中…" />}

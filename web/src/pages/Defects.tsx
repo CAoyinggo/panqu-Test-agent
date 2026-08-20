@@ -75,7 +75,7 @@ export default function Defects(): JSX.Element {
   if (detail) {
     return (
       <div>
-        <div className="page-title"><Link className="link" to="/defects">‹ 返回缺陷列表</Link></div>
+        <h1 className="page-title"><Link className="link" to="/defects">‹ 返回缺陷列表</Link></h1>
         <Card title={`${detail.title}`}>
           <div className="grid-2">
             <div>
@@ -109,26 +109,26 @@ export default function Defects(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">Defect 管理</div>
+      <h1 className="page-title">Defect 管理</h1>
       <div className="page-sub">平台缺陷登记 · 关联 Run / TestCase · 状态机流转</div>
       {error && <div className="error-banner">{error}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
 
       <Card title="登记缺陷">
         <div className="form-row">
-          <input placeholder="项目（默认 wan3）" value={projectId} onChange={(e) => setProjectId(e.target.value)} style={{ width: 100 }} />
-          <input placeholder="标题（必填，如 首页白屏）" value={title} onChange={(e) => setTitle(e.target.value)} />
-          <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+          <input aria-label="项目（默认 wan3）" placeholder="项目（默认 wan3）" value={projectId} onChange={(e) => setProjectId(e.target.value)} style={{ width: 100 }} />
+          <input aria-label="标题（必填）" placeholder="标题（必填，如 首页白屏）" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <select aria-label="级别" value={severity} onChange={(e) => setSeverity(e.target.value)}>
             <option value="critical">critical</option>
             <option value="high">high</option>
             <option value="medium">medium</option>
             <option value="low">low</option>
           </select>
-          <input placeholder="Run ID（可选）" value={runId} onChange={(e) => setRunId(e.target.value)} />
+          <input aria-label="Run ID（可选）" placeholder="Run ID（可选）" value={runId} onChange={(e) => setRunId(e.target.value)} />
         </div>
         <div className="form-row">
-          <input placeholder="Case ID（可选）" value={caseId} onChange={(e) => setCaseId(e.target.value)} />
-          <input placeholder="描述（可选）" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <input aria-label="Case ID（可选）" placeholder="Case ID（可选）" value={caseId} onChange={(e) => setCaseId(e.target.value)} />
+          <input aria-label="描述（可选）" placeholder="描述（可选）" value={description} onChange={(e) => setDescription(e.target.value)} />
           <button className="btn btn-sm" onClick={() => void doCreate()}>登记</button>
         </div>
       </Card>

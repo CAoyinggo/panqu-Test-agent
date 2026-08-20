@@ -23,7 +23,7 @@ export default function Settings(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">平台设置</div>
+      <h1 className="page-title">平台设置</h1>
       <div className="page-sub">控制台信息 · 仅展示，配置经平台 API / CLI 修改</div>
 
       <Card title="版本信息（构建溯源）">

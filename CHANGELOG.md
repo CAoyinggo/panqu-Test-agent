@@ -2,6 +2,29 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.16.0] - 2026-08-20
+
+### 新增（Web 真实浏览器 E2E 与体验质量，Phase 41）
+
+把 Web Dashboard 从「代码正确 + HTTP 正确」提升到「真实浏览器操作正确 + 用户流程完整 + UI 状态正确 + 可访问 + 可回归」，Playwright 真实浏览器 E2E 全量覆盖登录 → 项目 → QA Home → Plan → Run → Run Detail → Failure/RCA → Defect → Report → Share → Release/Approval → 权限隔离 → 错误态 → 可访问性 → 键盘 → 响应式 → 性能。
+
+- Web E2E 基础设施（41.1）：Playwright（`@playwright/test@1.62.1`）+ Chromium；`tests/e2e/web/` 内存态测试服务器（`e2e-server.ts`，`WEB_E2E_PORT=8799`，Playwright `webServer` 自动拉起 + 种子数据）+ 共享助手（`helpers.ts`：种子清单读取 / UI 登录 / 会话注入 / API 认证头 / JSON 污染断言）+ `playwright.config.ts`；新增脚本 `web:e2e:test` / `web:e2e:server` / `web:e2e` / `phase41:test`（41.20 CI 接入）。
+- 14 个 E2E 套件覆盖 17 项关键功能验收（41.2-41.17）：`auth`（登录成功/错误密码/Token 失效跳登录）、`project`（项目列表/Run 计数/失败计数）、`workflow`（建 Suite + TestCase → 建 Plan → 对 Plan 执行 Run → 快速操作直达）、`run`（状态/进度/风险/覆盖/失败明细/RCA/实时刷新/无效 ID 错误态）、`defect`（从失败创建缺陷/状态流转/详情）、`report`（关键指标/无 JSON 污染/导出）、`share`（分享链接/无 Token 只读/不泄漏 JWT/非法 token 拒绝）、`approval`（发布审批/驳回/职责分离）、`project-isolation`（qa-a 见 wan3 / qa-b 见 order / 跨项目 API 403 / 页面错误态不泄漏）、`error-state`（404/网络失败/限流错误态可见而非白屏）、`accessibility`（axe-core wcag2a/aa/21a/21aa/best-practice 逐页扫描无 critical/serious）、`keyboard`（Tab 可达/焦点可见/回车提交）、`responsive`（1440/1280/1024/390/375 五档视口无溢出）、`performance`（首屏阈值/轮询治理无 429 风暴/无 console error/JS 包 < 1MB）。
+- 可访问性修复（41.14）：新增 `--accent-text`（#6d9bff ≈ 5.0:1）供链接/品牌/标题文字、`--ok-deep`（#14804a ≈ 5.0:1）/ `--err-deep`（#c62f41 ≈ 5.4:1）供按钮填充、`--err-soft`（#ff8f9d）供 tinted 徽标文字；`a.link` 默认下划线（文本块内链接不能仅靠颜色区分）；登录页 div 改 `<h1>`；`:focus-visible` 统一 2px 描边 + offset；逐页补齐表单控件 `label for` / `aria-label`。
+- 响应式修复（41.16）：`.nav` 允许收缩 + 换行（17 个链接 893px 宽不再溢出）、`.content` 加 `min-width:0`、网格窄屏单列、长 ID / 超长路径 `word-break: break-all`。
+- 真实缺陷修复：登录 token 字段对齐（`accessToken` 优先，回退 `token`）；RunDetail 死循环刷爆限流 429（改 useEffect `[id]` 驱动加载）；QA Home Runs/Approvals 按项目作用域过滤（41.12 修复 qa-b 可跨项目看到 wan3 数据）；分享页路由与只读渲染；API 客户端统一错误处理（41.18）。
+
+### 变更
+
+- 版本 v4.15.0 → v4.16.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+- `.gitignore` 新增 Playwright 测试产物（`test-results/` / `playwright-report/`）。
+
+### 测试
+
+- 新增 14 个 Playwright 套件（`tests/e2e/web/*.spec.ts`，14 个测试文件满足「至少 10 个」要求）+ `e2e-server.ts` / `helpers.ts` / `playwright.config.ts`；验收：`npm run web:e2e:test`（构建平台 + 构建 Web + Playwright 全量，17 项关键功能 PASS）。
+- 既有 Vitest 全量回归保持 **1586 passed / 18 skipped**（141 个测试文件）；`platform:integration` / `platform:e2e` / `phase40:test` 保持 PASS。
+- 报告：`docs/phase41-web-e2e-report.md`（E2E 测试）/ `docs/phase41-frontend-quality.md`（可访问性/响应式/性能/API 治理）/ `docs/phase41-acceptance-report.md`（17 项验收）。
+
 ## [4.15.0] - 2026-08-19
 
 ### 修复与加固（QA Workbench 工程化收尾，Phase 40）

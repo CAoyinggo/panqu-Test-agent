@@ -55,15 +55,15 @@ export default function Projects(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">项目管理</div>
+      <h1 className="page-title">项目管理</h1>
       <div className="page-sub">全部项目 · 每 2 秒刷新</div>
       {error && <div className="error-banner">{error}</div>}
 
       <Card title="创建项目">
         <form className="form-row" onSubmit={submit}>
-          <input className="input" placeholder="项目 ID（如 wan3）" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
-          <input className="input" placeholder="项目名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <input className="input" placeholder="业务线（逗号分隔，如 text-to-video,asr）" value={form.businesses} onChange={(e) => setForm({ ...form, businesses: e.target.value })} />
+          <input className="input" aria-label="项目 ID" placeholder="项目 ID（如 wan3）" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
+          <input className="input" aria-label="项目名称" placeholder="项目名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input className="input" aria-label="业务线（逗号分隔）" placeholder="业务线（逗号分隔，如 text-to-video,asr）" value={form.businesses} onChange={(e) => setForm({ ...form, businesses: e.target.value })} />
           <button className="btn" type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </form>
         {err && <div className="error-banner">{err}</div>}

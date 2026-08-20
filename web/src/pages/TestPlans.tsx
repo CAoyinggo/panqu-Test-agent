@@ -41,19 +41,19 @@ export default function TestPlans(): JSX.Element {
 
   return (
     <div>
-      <div className="page-title">Test Plans</div>
+      <h1 className="page-title">Test Plans</h1>
       <div className="page-sub">测试计划（Plan → Suite → TestCase）</div>
       {error && <div className="error-banner">{error}</div>}
       {msg && <div className="ok-banner">{msg}</div>}
 
       <Card title="新建 Test Plan">
         <div className="form-row">
-          <input placeholder="名称（如 WAN3 回归计划）" value={name} onChange={(e) => setName(e.target.value)} />
-          <input placeholder="Suite IDs（逗号分隔）" value={suiteIds} onChange={(e) => setSuiteIds(e.target.value)} />
-          <select value={environment} onChange={(e) => setEnvironment(e.target.value)}>
+          <input aria-label="名称" placeholder="名称（如 WAN3 回归计划）" value={name} onChange={(e) => setName(e.target.value)} />
+          <input aria-label="Suite IDs（逗号分隔）" placeholder="Suite IDs（逗号分隔）" value={suiteIds} onChange={(e) => setSuiteIds(e.target.value)} />
+          <select aria-label="环境" value={environment} onChange={(e) => setEnvironment(e.target.value)}>
             {['test', 'staging', 'preprod', 'production'].map((e) => <option key={e} value={e}>{e}</option>)}
           </select>
-          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+          <select aria-label="模式" value={mode} onChange={(e) => setMode(e.target.value)}>
             {['MANUAL', 'REGRESSION', 'AUTONOMOUS'].map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <button className="btn btn-sm" onClick={() => void doCreate()}>创建</button>
