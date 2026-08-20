@@ -29,3 +29,6 @@ reports/mutation/
 test-results/
 playwright-report/
 blob-report/
+
+# AI Quality CLI 持久化状态（Phase 46）
+data/ai-quality-state.json

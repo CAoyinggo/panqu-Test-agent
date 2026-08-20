@@ -259,3 +259,162 @@ export interface EvalReport {
 export function getEvalReport(): Promise<EvalReport> {
   return request<EvalReport>('/eval/report');
 }
+
+// ===== Phase 46：AI 质量优化（Feedback / Errors / Proposals / Version / Experiments / Knowledge / Quality）=====
+
+export interface AIFeedbackItem {
+  id: string;
+  runId?: string;
+  caseId?: string;
+  domain: string;
+  prediction: unknown;
+  actual: unknown;
+  feedbackType: string;
+  source: string;
+  channel?: string;
+  confidence?: number;
+  verified: boolean;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  note?: string;
+  createdAt: string;
+}
+
+export interface AIErrorCluster {
+  id: string;
+  domain: string;
+  category: string;
+  count: number;
+  cases: string[];
+  suspectedCause?: string;
+  evidence: unknown[];
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+export interface ImprovementProposalItem {
+  id: string;
+  clusterId?: string;
+  target: string;
+  problem: string;
+  hypothesis: string;
+  expectedImprovement: string;
+  risk: string;
+  evidence: unknown[];
+  status: string;
+  baselineScore?: number;
+  candidateScore?: number;
+  benchmark?: string;
+  benchmarkVersion?: string;
+  qualityScore?: number;
+  gateVerdict?: string;
+  approvalId?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PromptVersionItem {
+  id: string;
+  promptKey: string;
+  version: string;
+  content: string;
+  model?: string;
+  createdBy: string;
+  createdAt: string;
+  benchmarkScore?: number;
+  status: string;
+}
+
+export interface ModelVersionItem {
+  id: string;
+  provider: string;
+  model: string;
+  modelVersion: string;
+  configuration: Record<string, unknown>;
+  status: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ExperimentItem {
+  id: string;
+  type: string;
+  proposalId: string;
+  candidateRef: string;
+  canaryStage?: string;
+  status: string;
+  stages: Array<{ stage?: string; label: string; startedAt: string; passed: boolean; reason?: string }>;
+  activatedAt?: string;
+  rolledBackAt?: string;
+  rollbackReason?: string;
+  createdAt: string;
+}
+
+export interface KnowledgeReview {
+  candidates: Array<{ id: string; category: string; content: string; source: string; confidence: number; status: string; createdAt: string }>;
+  items: Array<{ id: string; category: string; content: string; source: string; confidence: number; verified: boolean; version: number; usageCount: number; successCount: number; failureCount: number; status: string }>;
+  quality: { total: number; totalUsages: number; hitRate: number; successRate: number; outdatedRate: number; unusedRate: number };
+}
+
+export interface AIQualityReport {
+  accuracy: number;
+  falsePass: number;
+  p0Miss: number;
+  rcaAccuracy: number;
+  selectionRecall: number;
+  defectQuality: number;
+  healingSafety: number;
+  cost: number;
+  latency: number;
+  feedback: { total: number; verified: number; errorClusters: number };
+  proposals: { total: number; byStatus: Record<string, number> };
+  experiments: { total: number; shadow: number; canary: number };
+  knowledge: { candidates: number; active: number; quality: { total: number; successRate: number; unusedRate: number } };
+}
+
+/** Phase 46：AI Quality 相关 API 客户端 */
+export function getAIFeedback(filter?: string): Promise<AIFeedbackItem[]> {
+  return request<AIFeedbackItem[]>(`/ai-feedback${filter ?? ''}`);
+}
+export function verifyAIFeedback(id: string, note?: string): Promise<AIFeedbackItem> {
+  return api.post<AIFeedbackItem>(`/ai-feedback/${id}/verify`, { note });
+}
+export function getAIErrors(): Promise<AIErrorCluster[]> {
+  return request<AIErrorCluster[]>('/ai-errors');
+}
+export function getAIImprovements(filter?: string): Promise<ImprovementProposalItem[]> {
+  return request<ImprovementProposalItem[]>(`/ai-improvements${filter ?? ''}`);
+}
+export function approveImprovement(id: string): Promise<ImprovementProposalItem> {
+  return api.post<ImprovementProposalItem>(`/ai-improvements/${id}/approve`);
+}
+export function rejectImprovement(id: string, reason: string): Promise<ImprovementProposalItem> {
+  return api.post<ImprovementProposalItem>(`/ai-improvements/${id}/reject`, { reason });
+}
+export function getPrompts(key?: string): Promise<PromptVersionItem[]> {
+  return request<PromptVersionItem[]>(`/prompts${key ? `?key=${encodeURIComponent(key)}` : ''}`);
+}
+export function getPromptVersions(id: string): Promise<PromptVersionItem[]> {
+  return request<PromptVersionItem[]>(`/prompts/${id}/versions`);
+}
+export function getModels(): Promise<ModelVersionItem[]> {
+  return request<ModelVersionItem[]>('/models');
+}
+export function getExperiments(filter?: string): Promise<ExperimentItem[]> {
+  return request<ExperimentItem[]>(`/experiments${filter ?? ''}`);
+}
+export function createExperiment(type: string, proposalId: string, candidateRef: string): Promise<ExperimentItem> {
+  return api.post<ExperimentItem>('/experiments', { type, proposalId, candidateRef });
+}
+export function getKnowledgeReview(): Promise<KnowledgeReview> {
+  return request<KnowledgeReview>('/knowledge/review');
+}
+export function getAIQuality(): Promise<AIQualityReport> {
+  return request<AIQualityReport>('/ai-quality');
+}
+export function getAIQualityTrends(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/ai-quality/trends');
+}

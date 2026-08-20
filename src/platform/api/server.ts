@@ -22,6 +22,7 @@ import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
 import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
 import { runAllEvaluation } from '../../eval/runner.js';
+import { createAIQualityService, AIQualityService } from '../../ai-quality/service.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -51,6 +52,10 @@ export interface ApiServerOptions {
   now?: () => string;
   /** Web Dashboard 静态目录（25.6）：提供时挂载 / 与 /assets/*（SPA fallback） */
   webDir?: string;
+  /** Phase 46：AI Quality 服务（可注入共享/持久化实例；缺省每服务器新建） */
+  aiQuality?: AIQualityService;
+  /** Phase 46：AI Quality 状态持久化文件路径（提供时启动自动加载、写操作后自动保存，跨重启保留改进闭环） */
+  aiQualityStateFile?: string;
 }
 
 interface Route {
@@ -109,6 +114,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   let boundPort: number | undefined;
   const hits = new Map<string, { windowStart: number; count: number }>();
 
+  // ── Phase 46：AI 质量优化服务（Feedback / Error / Proposal / Version / Experiment / Knowledge）──
+  // 每台服务器实例持有独立状态（或注入共享/持久化实例）；写操作一律走人工审批门禁（禁止 AI 自批）。
+  // 配置 aiQualityStateFile 时：启动自动从文件恢复，写操作（POST）后自动保存，保证改进闭环跨重启持久化。
+  const aiQuality: AIQualityService = opts.aiQuality ?? (opts.aiQualityStateFile ? AIQualityService.loadFromFile(opts.aiQualityStateFile) : createAIQualityService());
+
   // ── 认证解析：JWT 优先；静态 Token → internal/test 模式（production 关闭 X-Header 直信任）──
   async function resolvePrincipal(authHeader: string | undefined, req: http.IncomingMessage): Promise<Principal | null> {
     const cred = parseBearer(authHeader);
@@ -137,6 +147,15 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   function requireOpsRead(c: Ctx): void {
     if (!hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
       throw new HttpError(403, `角色 ${c.role} 无权读取运维数据（需 OPS_READ 权限）`);
+    }
+  }
+
+  // ── Phase 46：AI 质量写操作门禁 —— 人工审批（verify / approve / reject / create experiment）──
+  // 这些动作会改变生产 AI 行为（Prompt / Model / Knowledge / Healing / Release 策略），
+  // 必须由具备 RELEASE_APPROVE 权限的角色（RELEASE_MANAGER / ADMIN）人工执行，禁止 AI 自批。
+  function requireAiApprove(c: Ctx): void {
+    if (!hasPermission(c.role, 'RELEASE_APPROVE' satisfies Permission)) {
+      throw new HttpError(403, `角色 ${c.role} 无权执行 AI 质量审批（需 RELEASE_APPROVE 权限，禁止 AI 自批）`);
     }
   }
 
@@ -341,6 +360,116 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       if (!domains.includes(domain)) throw new HttpError(404, `未知评测领域：${domain}`);
       const report = runAllEvaluation();
       return { ...report, domains: report.domains.filter((d) => d.domain === domain), overall: report.domains.find((d) => d.domain === domain)?.score ?? 0 };
+    } },
+
+    // ── Phase 46：AI 质量优化（Feedback / Error / Proposal / Version / Experiment / Knowledge / Quality）──
+    // 统一 JWT / RBAC / 审计 / 人工审批。读端点（与 eval/report 一致）认证即可；
+    // 写端点（verify / approve / reject / create experiment）需 RELEASE_APPROVE（人工门禁，禁止 AI 自批）。
+    // 43.26 API：GET /ai-feedback；POST /ai-feedback/:id/verify
+    { method: 'GET', segments: ['ai-feedback'], handler: async (c) => maybePaginate(c.req.url, aiQuality.feedback.list({
+      domain: queryParam(c.req.url, 'domain') ?? undefined,
+      source: queryParam(c.req.url, 'source') ?? undefined,
+      feedbackType: queryParam(c.req.url, 'feedbackType') ?? undefined,
+      channel: queryParam(c.req.url, 'channel') ?? undefined,
+      verified: queryParam(c.req.url, 'verified') !== null ? queryParam(c.req.url, 'verified') === 'true' : undefined,
+    })) },
+    { method: 'POST', segments: ['ai-feedback', ':id', 'verify'], handler: async (c, p) => {
+      requireAiApprove(c);
+      let fb: import('../../ai-quality/contract.js').AIFeedback;
+      try {
+        fb = aiQuality.feedback.verify(p.id, String(c.body.by ?? c.actor), c.body.note ? String(c.body.note) : undefined);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      aiQuality.audit.record({ proposalId: 'n/a', actor: c.actor, action: 'CREATED', decision: `人工核验反馈 ${p.id}`, metrics: { verified: 1 } });
+      return fb;
+    } },
+    // 43.26 API：GET /ai-errors
+    { method: 'GET', segments: ['ai-errors'], handler: async () => aiQuality.errorClusters() },
+    // 43.26 API：GET /ai-improvements；POST /ai-improvements/:id/approve|reject
+    { method: 'GET', segments: ['ai-improvements'], handler: async (c) => maybePaginate(c.req.url, aiQuality.proposals.list({
+      status: queryParam(c.req.url, 'status') ?? undefined,
+      target: queryParam(c.req.url, 'target') ?? undefined,
+      domain: queryParam(c.req.url, 'domain') ?? undefined,
+    })) },
+    { method: 'POST', segments: ['ai-improvements', ':id', 'approve'], handler: async (c, p) => {
+      requireAiApprove(c);
+      let approved: import('../../ai-quality/contract.js').ImprovementProposal;
+      try {
+        approved = aiQuality.proposals.approve(p.id, c.actor);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      aiQuality.audit.record({
+        proposalId: p.id, actor: c.actor, action: 'APPROVED',
+        baseline: approved.baselineScore != null ? String(approved.baselineScore) : undefined,
+        candidate: approved.candidateScore != null ? String(approved.candidateScore) : undefined,
+        benchmark: approved.benchmark, approvalId: approved.approvalId,
+        metrics: { baseline: approved.baselineScore ?? 0, candidate: approved.candidateScore ?? 0 },
+        decision: '人工批准提案',
+      });
+      return approved;
+    } },
+    { method: 'POST', segments: ['ai-improvements', ':id', 'reject'], handler: async (c, p) => {
+      requireAiApprove(c);
+      let rejected: import('../../ai-quality/contract.js').ImprovementProposal;
+      try {
+        rejected = aiQuality.proposals.reject(p.id, c.actor, String(c.body.reason ?? '人工拒绝'));
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      aiQuality.audit.record({ proposalId: p.id, actor: c.actor, action: 'REJECTED', decision: rejected.rejectedReason ?? '人工拒绝' });
+      return rejected;
+    } },
+    // 43.26 API：GET /prompts；GET /prompts/:id/versions；GET /models
+    { method: 'GET', segments: ['prompts'], handler: async (c) => maybePaginate(c.req.url, aiQuality.prompts.list(queryParam(c.req.url, 'key') ?? undefined)) },
+    { method: 'GET', segments: ['prompts', ':id', 'versions'], handler: async (_c, p) => {
+      const v = aiQuality.prompts.get(p.id);
+      if (!v) throw new HttpError(404, `Prompt 版本不存在：${p.id}`);
+      return aiQuality.prompts.list(v.promptKey); // 同 key 的全部版本（v1 → v2 → ...）
+    } },
+    { method: 'GET', segments: ['models'], handler: async () => aiQuality.models.list() },
+    // 43.26 API：GET /experiments；POST /experiments（创建 Shadow / Canary 实验）
+    { method: 'GET', segments: ['experiments'], handler: async (c) => maybePaginate(c.req.url, aiQuality.experiments.list({
+      type: queryParam(c.req.url, 'type') ?? undefined,
+      status: queryParam(c.req.url, 'status') ?? undefined,
+    })) },
+    { method: 'POST', segments: ['experiments'], handler: async (c) => {
+      requireAiApprove(c);
+      const type = String(c.body.type ?? 'SHADOW').toUpperCase();
+      const proposalId = String(c.body.proposalId ?? '');
+      const candidateRef = String(c.body.candidateRef ?? '');
+      if (!proposalId || !candidateRef) throw new HttpError(400, 'experiments 需要 proposalId 与 candidateRef');
+      if (type === 'CANARY') return aiQuality.experiments.createCanary({ proposalId, candidateRef });
+      if (type === 'SHADOW') return aiQuality.experiments.createShadow({ proposalId, candidateRef });
+      throw new HttpError(400, `未知实验类型：${type}（SHADOW / CANARY）`);
+    } },
+    // 43.26 API：GET /knowledge/review（候选 + 生产知识 + 质量指标）
+    { method: 'GET', segments: ['knowledge', 'review'], handler: async () => ({
+      candidates: aiQuality.knowledge.listCandidates(),
+      items: aiQuality.knowledge.listItems(),
+      quality: aiQuality.knowledge.qualityMetrics(),
+    }) },
+    // 43.26 API：GET /ai-quality；GET /ai-quality/trends
+    { method: 'GET', segments: ['ai-quality'], handler: async () => aiQuality.aiQualityReport(runAllEvaluation()) },
+    { method: 'GET', segments: ['ai-quality', 'trends'], handler: async () => {
+      const report = aiQuality.aiQualityReport(runAllEvaluation());
+      return {
+        generatedAt: (report.regression as { generatedAt?: string } | undefined)?.generatedAt,
+        overall: report.accuracy,
+        falsePass: report.falsePass,
+        p0Miss: report.p0Miss,
+        rcaAccuracy: report.rcaAccuracy,
+        selectionRecall: report.selectionRecall,
+        defectQuality: report.defectQuality,
+        healingSafety: report.healingSafety,
+        cost: report.cost,
+        latency: report.latency,
+        feedback: report.feedback,
+        proposals: report.proposals,
+        experiments: report.experiments,
+        knowledge: report.knowledge,
+      };
     } },
   ];
 
@@ -721,6 +850,10 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       };
       const result = await m.route.handler(ctx, m.params);
       sendJson(res, 200, result);
+      // Phase 46：AI 质量状态持久化——写操作（POST）成功后落盘，跨重启保留改进闭环
+      if (opts.aiQualityStateFile && method === 'POST') {
+        aiQuality.persistToFile(opts.aiQualityStateFile);
+      }
     } catch (err) {
       const e = err as Error;
       // 27.2：HttpError 携带显式状态码（如读端点 RBAC 的 403 Forbidden）；

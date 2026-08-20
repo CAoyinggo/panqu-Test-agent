@@ -27,6 +27,7 @@ import RunCreate from './pages/RunCreate';
 import TestAssets from './pages/TestAssets';
 import AssetVersions from './pages/AssetVersions';
 import AIQuality from './pages/AIQuality';
+import AIImprovement from './pages/AIImprovement';
 
 const NAV = [
   { to: '/', label: 'QA 工作台' },
@@ -41,6 +42,7 @@ const NAV = [
   { to: '/approvals', label: '审批' },
   { to: '/metrics', label: '指标' },
   { to: '/ai-quality', label: 'AI 质量' },
+  { to: '/ai-improvement', label: 'AI 改进' },
   { to: '/telemetry', label: '遥测' },
   { to: '/telemetry/events', label: '事件' },
   { to: '/telemetry/activation', label: '激活' },

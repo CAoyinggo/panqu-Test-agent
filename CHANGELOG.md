@@ -2,6 +2,37 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.21.0] - 2026-08-20
+
+### 新增（AI 质量优化、反馈学习与持续改进闭环，Phase 46）
+
+让 AI Test Platform 形成「测试 AI 本身」的持续优化闭环：
+Failure → Error Analysis → Root Cause → Improvement Proposal → Candidate → Offline Evaluation →
+Regression Benchmark → Approval → Activate → Observe → Learn。核心原则：**统一反馈结构（禁止各模块各自维护不同 Feedback）；先离线评测再上线（禁止发现问题直接改生产 Prompt）；人工门禁（RELEASE_APPROVE，禁止 AI 自批）；安全上线（Shadow 只读 → Canary 5%→20%→50%→100%，异常自动停止/回滚）；确定性优先（分类/聚类/评测可复现、零 token）；完整审计链路**。
+
+- 统一 AI Feedback（`src/ai-quality/contract.ts` / `feedback.ts`，43.1/43.2）：AIFeedback 契约（domain / prediction / actual / feedbackType / source / channel / verified），接入 8 渠道（HUMAN_CORRECTION / RCA_VERIFICATION / DEFECT_REVIEW / RELEASE_REVIEW / HEALING_REVIEW / BENCHMARK_FAILURE / PRODUCTION_INCIDENT / FLAKY_CONFIRMATION）；AI 预测 vs 人工真值自动记 INCORRECT；人工核验门禁。
+- 错误分类与聚类（`src/ai-quality/error-analysis.ts`，43.3/43.4）：统一 Error Taxonomy（WRONG / MISSING / OVER_PREDICTION / UNDER_PREDICTION / DUPLICATE / UNSAFE / INCONSISTENT / LOW_VALUE）；确定性聚类键 domain+category（同一聚类 id 恒定 → 提案幂等去重）；ErrorCluster（count / cases / suspectedCause / evidence）。
+- 改进提案（`src/ai-quality/improvement.ts`，43.5/43.6/43.11）：autoProposals 从聚类自动生成提案（幂等）；recordEvaluation 离线评测 baseline vs candidate → gateVerdict（PASS/REVIEW/BLOCK）；状态机 PROPOSED → EVALUATING → APPROVED → ACTIVATED / REJECTED / ROLLED_BACK。
+- Prompt / Model 版本管理（`src/ai-quality/versioning.ts`，43.7/43.8）：PromptVersion（promptKey / version / content / benchmarkScore / status / parentVersion）与 ModelVersion（provider / model / modelVersion / configuration）；A/B 对比（Accuracy / Latency / Cost / Failure Rate / Safety 五维，43.9）；多目标评分（Quality / Safety / Latency / Cost，保留原始指标，43.10）。
+- Shadow / Canary / 自动回滚（`src/ai-quality/experiment.ts`，43.12/43.13/43.14）：Shadow 只读不生效；Canary 5%→20%→50%→100% 每阶段检查（异常自动停止、严重自动回滚）；rollback 恢复基线并记录 RollbackReason / Evidence / Metrics。
+- Knowledge 学习 / 质量 / 衰减（`src/ai-quality/knowledge-learning.ts`，43.15/43.16/43.17）：错误 → Verified → Candidate → 人工 Review → Activate（禁止 LLM 直接进生产 Knowledge，必须有 Source / Confidence / Verification / Version）；qualityMetrics（Hit / Success / Outdated / Unused Rate）；EffectiveWeight 综合 usage / success / failure / age（持续有效的旧知识减缓衰减、频繁失败快速降权，不再只按时间下降）。
+- 运营能力（`src/ai-quality/ops.ts`，43.19-43.24）：Continuous Evaluation（Nightly/Weekly/Release，Critical Regression → Alert + Block）；Benchmark 自动扩充（真实 Production Failure / Human Correction / RCA Error / Release Miss / Unsafe Healing / Defect Error → Verified Ground Truth → Benchmark Candidate → Review）；Change Impact（Prompt/Model/Tool/Knowledge 变更 → Affected Benchmarks/Agents/Projects/Runs → Targeted Evaluation）；AI Release Gate（Code Release + AI Release：Quality/Safety/Cost PASS + Approval 才 Release）；Improvement Audit（proposalId / actor / baseline / candidate / benchmark / approvalId / metrics / decision / timestamp）。
+- 持久化（`src/ai-quality/service.ts`）：snapshot / restore + `persistToFile` / `loadFromFile`（原子写），改进闭环跨重启保留；server 配置 `aiQualityStateFile` 时启动自动加载、写操作（POST）后自动保存。
+- API（`src/platform/api/server.ts`，43.26）：GET /api/ai-feedback、POST /api/ai-feedback/:id/verify、GET /api/ai-errors、GET /api/ai-improvements、POST /api/ai-improvements/:id/approve|reject、GET /api/prompts、GET /api/prompts/:id/versions、GET /api/models、GET /api/experiments、POST /api/experiments、GET /api/knowledge/review、GET /api/ai-quality、GET /api/ai-quality/trends；写操作统一 RELEASE_APPROVE 门禁（QA 403），未认证 401。
+- CLI（`bin/ai-quality-cli.ts` + package.json，43.25）：agent:ai-quality / agent:feedback:list|verify / agent:eval:errors|improve / agent:prompt:list|compare / agent:model:list|compare / agent:improvement:list|approve|reject / agent:knowledge:review / agent:canary:status|promote|rollback。
+- Web Dashboard（`web/src/pages/AIImprovement.tsx` + `web/src/App.tsx` + `web/src/api.ts`，43.18/43.22）：导航「AI 改进」页，7 Tab（待核验反馈 / 错误聚类 / 改进提案 / Prompt·Model 版本 / Shadow·Canary 实验 / 知识 Review / AI 质量）；审批类操作仅 RELEASE_MANAGER / ADMIN 可执行，非审批角色只读（按钮禁用）。
+- 测试（86 新用例）：单元 feedback-registry(10) / error-analysis(5) / improvement-proposal(12) / prompt-model-version(6) / knowledge-learning(5) / shadow-canary(6) / ai-improvement-ops(12) / ai-quality-service(12 含持久化) + 集成 ai-improvement-api(10) + E2E ai-improvement-flow(4, S1-S8) + ai-quality-dashboard(4)。
+- 文档：`docs/ai-quality/`（feedback / error-analysis / improvement / prompt-versioning / model-versioning / shadow-canary / knowledge-learning / rollback）+ `docs/phase46-summary.md`。
+
+### 变更
+
+- 版本 v4.20.0 → v4.21.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 测试
+
+- Phase 46 新增 11 测试文件 **86 / 86 passed**；关键安全指标（falsePass / p0Miss / unsafeHealing）为 0；人工门禁 QA 写操作 403、RELEASE_MANAGER 成功；未授权访问 401；持久化（persist/load）跨重启保留。
+- 全量回归保持 PASS（`npm test` / `npm run platform:test` / `npm run platform:integration` / `npm run platform:e2e` 等）。
+
 ## [4.20.0] - 2026-08-20
 
 ### 新增（AI 测试质量评测，Phase 45）
