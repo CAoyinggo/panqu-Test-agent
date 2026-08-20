@@ -66,4 +66,22 @@ test.describe('Responsive（41.16）', () => {
       await ctx.close();
     }
   });
+
+  test('新建 Run / 测试资产：五档视口无水平溢出（44.1）', async ({ browser }) => {
+    const s = seed();
+    for (const vp of VIEWPORTS) {
+      const ctx = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
+      const page = await ctx.newPage();
+      await loginViaUi(page, s.users.qa);
+      for (const [path, heading] of [
+        ['/runs/new', '新建 Run'],
+        ['/assets', '测试资产'],
+      ] as const) {
+        await page.goto(`${BASE_URL}${path}`);
+        await expect(page.getByRole('heading', { name: heading }).first()).toBeVisible({ timeout: 15_000 });
+        await assertNoBodyOverflow(page);
+      }
+      await ctx.close();
+    }
+  });
 });

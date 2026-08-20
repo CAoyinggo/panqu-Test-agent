@@ -1,7 +1,7 @@
 // Phase 43.2：新建 Run 页面组件测试（RunCreate.tsx）
 // 覆盖：渲染表单字段 / 提交调用 POST /runs 全参数 / 项目 ID 为空时禁用创建
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import RunCreate from './RunCreate';
@@ -69,5 +69,39 @@ describe('RunCreate 页面（43.2）', () => {
     await user.type(screen.getByLabelText('项目 ID（必填）'), 'wan3');
     await user.click(screen.getByRole('button', { name: '创建 Run' }));
     await waitFor(() => expect(screen.getByText('没有权限创建 Run')).toBeInTheDocument());
+  });
+
+  it('携带 Template ID / 模式 / 资产版本 JSON（44.2 覆盖收口）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { runId: 'run-tpl-1', status: 'QUEUED' }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('项目 ID（必填）'));
+    await user.type(screen.getByLabelText('项目 ID（必填）'), 'wan3');
+    await user.type(screen.getByLabelText('Template ID（可选）'), 'tpl-9');
+    await user.type(screen.getByLabelText('模式（可选）'), 'smoke');
+    // JSON 含花括号特殊字符 → 用 fireEvent.change 直接设值（user-event 会误解析 { / }）
+    fireEvent.change(screen.getByLabelText('资产版本（可选 JSON）'), { target: { value: '{"WAN3-CORE-001": 2}' } });
+    await user.click(screen.getByRole('button', { name: '创建 Run' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init.body));
+    expect(body.templateId).toBe('tpl-9');
+    expect(body.mode).toBe('smoke');
+    expect(body.assetVersion).toEqual({ 'WAN3-CORE-001': 2 });
+  });
+
+  it('资产版本 JSON 非法 → 展示错误 banner 且不发请求（44.2 覆盖收口）', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText('项目 ID（必填）'));
+    await user.type(screen.getByLabelText('项目 ID（必填）'), 'wan3');
+    // 非法 JSON → 同样用 fireEvent.change 设值（含 { 需绕过 user-event 键解析）
+    fireEvent.change(screen.getByLabelText('资产版本（可选 JSON）'), { target: { value: '{bad json' } });
+    await user.click(screen.getByRole('button', { name: '创建 Run' }));
+    await waitFor(() => expect(screen.getByText(/in JSON at position|Unexpected token/)).toBeInTheDocument());
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

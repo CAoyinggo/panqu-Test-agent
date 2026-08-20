@@ -45,11 +45,13 @@ export default function TestAssets(): JSX.Element {
     const load = async (): Promise<void> => {
       try {
         const [a, s] = await Promise.all([
-          api.get<TestAsset[]>('/test-assets'),
+          api.get<{ items?: TestAsset[] } | TestAsset[]>('/test-assets'),
           api.get<AssetStats>('/test-assets/stats'),
         ]);
         if (!alive) return;
-        setItems(Array.isArray(a) ? a : []);
+        // 后端契约：{ items: [...] }（与 /knowledge 一致）；兼容裸数组
+        const list = Array.isArray(a) ? a : (a.items ?? []);
+        setItems(list);
         setStats(s);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));

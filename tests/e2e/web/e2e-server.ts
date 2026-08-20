@@ -40,6 +40,8 @@ export interface WebE2eSeed {
   cases: string[];
   /** 41.12：项目隔离（order 项目仅 qa-b 可访问） */
   orderProject: { projectId: string; runId: string; environment: string };
+  /** 44.1：版本化资产（TestAssets / AssetVersions 页面数据源） */
+  assetVersions: { assetId: string };
 }
 
 /** 种子全部测试数据，返回清单 */
@@ -152,6 +154,18 @@ async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl'>
   await S.startRun(rOrder.runId);
   await S.completeRun(rOrder.runId);
 
+  // 9) 43.3 测试资产 + 版本历史（TestAssets / AssetVersions 页面数据源）
+  //    导入 WAN3 真实 Test Case 目录（幂等），并对 WAN3-CORE-001 记录 v1/v2 两个版本供版本追溯/对比。
+  await bundle.testAssets.importCatalog(undefined, { projectId: 'wan3', now });
+  await bundle.workflow.versions.recordVersion({
+    assetType: 'test-case', assetId: 'WAN3-CORE-001', changeReason: '初版', createdBy: QA_ACTOR, now,
+    snapshot: { title: '文生视频-落日海岸', steps: ['打开视频制作页', '输入提示词并生成'], expected: '生成成功' },
+  });
+  await bundle.workflow.versions.recordVersion({
+    assetType: 'test-case', assetId: 'WAN3-CORE-001', changeReason: '补充校验步骤', createdBy: 'qa-b', now,
+    snapshot: { title: '文生视频-落日海岸', steps: ['打开视频制作页', '输入提示词并生成', '核对落库与播放'], expected: '生成成功；结果可播放' },
+  });
+
   return {
     projectId: 'wan3',
     users: {
@@ -182,6 +196,8 @@ async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl'>
     share: { runId: r1.runId, token: share.token },
     cases: ['wan3-1080p-10s', 'wan3-1080p-5s'],
     orderProject: { projectId: 'order', runId: rOrder.runId, environment: 'test' },
+    // 44.1：版本化资产（AssetVersions 页面数据源）
+    assetVersions: { assetId: 'WAN3-CORE-001' },
   };
 }
 

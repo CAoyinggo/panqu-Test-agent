@@ -133,4 +133,20 @@ test.describe('Accessibility（41.14）', () => {
     await expectSingleH1(guest);
     await ctx.close();
   });
+
+  test('新建 Run / 测试资产 / 资产版本追溯无严重 axe 违规（44.1）', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.qa);
+    for (const [path, heading] of [
+      ['/runs/new', '新建 Run'],
+      ['/assets', '测试资产'],
+      [`/assets/${s.assetVersions.assetId}`, '资产版本追溯'],
+    ] as const) {
+      await page.goto(`${BASE_URL}${path}`);
+      await expect(page.getByRole('heading', { name: heading }).first()).toBeVisible({ timeout: 15_000 });
+      await expectAxeClean(page, heading);
+      await expectSingleH1(page);
+      await expectMainLandmarkAndNamedControls(page);
+    }
+  });
 });

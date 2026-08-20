@@ -512,8 +512,13 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
         res.end(content);
         return true;
       }
-      sendError(res, 404, 'not_found', `${pathname} 不存在`, { requestId: 'static', traceId: 'static' });
-      return true;
+      // 44.1 修复：/assets/:id（资产版本追溯 SPA 路由）与 vite 产物目录 /assets/* 冲突。
+      // 文件不存在时：带扩展名的视为真实静态资源缺失 → 404；无扩展名（SPA 客户端路由）→ 回退，
+      // 由 SPA fallback 返回 index.html（避免将 /assets/WAN3-CORE-001 误判为静态文件 404）。
+      if (path.extname(pathname).length > 0) {
+        sendError(res, 404, 'not_found', `${pathname} 不存在`, { requestId: 'static', traceId: 'static' });
+      }
+      return false;
     }
     return false;
   }

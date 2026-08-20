@@ -44,7 +44,7 @@ describe('TestAssets 页面（43.3）', () => {
 
   it('渲染统计卡片与资产列表（复用 / 新接入 / 优先级）', async () => {
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(jsonResponse(200, ASSETS))
+      .mockResolvedValueOnce(jsonResponse(200, { items: ASSETS, source: 'platform-test-assets' }))
       .mockResolvedValueOnce(jsonResponse(200, STATS)));
     renderPage();
     await waitFor(() => expect(screen.getByText('资产总数')).toBeInTheDocument());

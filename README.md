@@ -1,6 +1,6 @@
 # 盼趣AI 测试执行流程（test-flow）
 
-> 版本：v4.18.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试 + 环境策略边界 + 断言可视化 + 依赖解耦 + 身份解析统一 + 时序卫生治理 + 非法角色拒绝安全加固 + QA 工作流产品化 + **Phase 40 工程化收尾：读端点 Project Scope 加固 / Defect 缺陷平台化 / 公开分享落地页 / 报告数据真实性 / 聚合缓存** + **Phase 41 Web 真实浏览器 E2E：Playwright 14 套件覆盖登录→项目→QA Home→Plan→Run→Defect→Report→Share→Approval→权限隔离→错误态→可访问性→键盘→响应式→性能，17 项关键功能验收 PASS** + **Phase 42 Web 前端工程化：Vitest 单元/组件测试（37 用例 / 覆盖 94.96%）+ CI 接入（web-e2e.yml 三档分级）+ 跨浏览器回归（WEB_E2E_BROWSERS 门控 chromium/firefox/webkit）** + **Phase 43 Web 交互正确性：写操作统一错误反馈 / 评论契约修复（{ body }）/ Run 全生命周期（新建 / Cancel / Assign）/ 测试资产与版本追溯 Web 暴露（TestAssets / AssetVersions）**）｜ 更新：2026-08-20 ｜ 维护：AI 测试智能体
+> 版本：v4.19.0（AI Test Platform 生产化 + 生产安全加固 + 工程治理 + 性能容量基线 + 覆盖率补齐 + 迁移回滚 + 变异测试 + 环境策略边界 + 断言可视化 + 依赖解耦 + 身份解析统一 + 时序卫生治理 + 非法角色拒绝安全加固 + QA 工作流产品化 + **Phase 40 工程化收尾：读端点 Project Scope 加固 / Defect 缺陷平台化 / 公开分享落地页 / 报告数据真实性 / 聚合缓存** + **Phase 41 Web 真实浏览器 E2E：Playwright 14 套件覆盖登录→项目→QA Home→Plan→Run→Defect→Report→Share→Approval→权限隔离→错误态→可访问性→键盘→响应式→性能，17 项关键功能验收 PASS** + **Phase 42 Web 前端工程化：Vitest 单元/组件测试（37 用例 / 覆盖 94.96%）+ CI 接入（web-e2e.yml 三档分级）+ 跨浏览器回归（WEB_E2E_BROWSERS 门控 chromium/firefox/webkit）** + **Phase 43 Web 交互正确性：写操作统一错误反馈 / 评论契约修复（{ body }）/ Run 全生命周期（新建 / Cancel / Assign）/ 测试资产与版本追溯 Web 暴露（TestAssets / AssetVersions）** + **Phase 44 真实浏览器 E2E 覆盖收口：RunCreate / Run 操作 / 测试资产 / 资产版本追溯 4 新套件 + 可访问性/键盘/响应式扩展新页面 + 单元覆盖缺口闭合（68 用例 / 行覆盖 99.67%）+ Chromium 87 E2E 全绿 + 跨浏览器验证**）｜ 更新：2026-08-20 ｜ 维护：AI 测试智能体
 
 **标准化、可一键执行的多业务 AI 功能测试智能体框架**。所有 AI 功能测试任务强制按此流程执行：每个业务功能在 `src/cases/{feature}/` 下独占一个子文件夹即可独立接入，当前内置 `wan3`（视频生成）作为示例模块，实际使用时可将任意业务（如 `user`、`order`、`payment`）替换接入，无需改动框架代码。
 
@@ -23,7 +23,7 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | 指标 | 数值 |
 |---|---|
 | 单元测试用例 | 1586 条通过 / 18 跳过（141 个测试文件，全量回归全绿） |
-| Web 真实浏览器 E2E | 14 个 Playwright 套件（登录 / 项目 / 工作流 / Run / 缺陷 / 报告 / 分享 / 审批 / 项目隔离 / 错误态 / 可访问性 / 键盘 / 响应式 / 性能），17 项关键功能验收 PASS |
+| Web 真实浏览器 E2E | 18 个 Playwright 套件（登录 / 项目 / 工作流 / Run / 新建 Run / Run 操作 / 缺陷 / 测试资产 / 资产版本追溯 / 报告 / 分享 / 审批 / 项目隔离 / 错误态 / 可访问性 / 键盘 / 响应式 / 性能），17 项关键功能验收 PASS |
 | 全量覆盖率 | Statements 90.45 / Branch 79.77 / Functions 91.51 / Lines 92.03（含 `src/platform/**`） |
 | 平台测试 | 单元 35 文件 + 集成 14 文件 + E2E 16 文件（Phase 40 新增 defects / phase40-scope 套件） |
 | 断言操作符 | 17 个 |

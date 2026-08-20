@@ -108,6 +108,41 @@ test.describe('Keyboard Navigation（41.15）', () => {
     await expectFocusVisible(page);
   });
 
+  test('新建 Run 表单全键盘填写并 Enter 提交（44.1）', async ({ page }, testInfo) => {
+    const s = seed();
+    await injectSession(page, s.users.qa);
+    await page.goto(`${BASE_URL}/runs/new`);
+    await expect(page.getByRole('heading', { name: '新建 Run' }).first()).toBeVisible({ timeout: 15_000 });
+    // 项目框有默认值 wan3 → 全选覆盖避免 wan3wan3
+    await page.getByLabel('项目 ID（必填）').focus();
+    await keyboardReplace(page, s.projectId);
+    if (!isWebKit(testInfo)) {
+      await page.keyboard.press('Tab'); // → 环境 select
+      await page.keyboard.press('Tab'); // → 触发 select
+      await page.keyboard.press('Tab'); // → Feature 输入框
+      await page.keyboard.type('keyboard-e2e-run');
+      // 连续 Tab 到「创建 Run」按钮（健壮：不硬编码导航项数量）
+      for (let i = 0; i < 20; i++) {
+        await page.keyboard.press('Tab');
+        const focused = await page.evaluate(() => document.activeElement?.textContent ?? document.activeElement?.getAttribute('aria-label') ?? '');
+        if (focused === '创建 Run') break;
+      }
+      await expect(page.getByRole('button', { name: '创建 Run' })).toBeFocused();
+      await expectFocusVisible(page);
+      await page.keyboard.press('Enter');
+    } else {
+      // WebKit：select/按钮不在 Tab 顺序 → 直接聚焦提交按钮 + Enter
+      const create = page.getByRole('button', { name: '创建 Run' });
+      await create.focus();
+      await expect(create).toBeFocused();
+      await expectFocusVisible(page);
+      await page.keyboard.press('Enter');
+    }
+    // 创建成功 → 跳转新 Run 详情页
+    await expect(page).toHaveURL(/\/runs\/run-\d+/, { timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: '执行详情' }).first()).toBeVisible({ timeout: 15_000 });
+  });
+
   test('Defect 表单全键盘填写并 Enter 提交（唯一缺陷名，隔离安全）', async ({ page }, testInfo) => {
     const s = seed();
     await injectSession(page, s.users.qa);

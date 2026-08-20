@@ -2,7 +2,7 @@
 // 覆盖：登录契约（accessToken 主用 / roles 归一化）/ 会话存取 / 认证头透传 /
 //      统一错误契约 ApiError（string|object error）/ 401 自动登出 / 网络错误 / 超时
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, login, getToken, getStoredUser, setSession, clearSession, ApiError } from './api';
+import { api, login, logout, getToken, getStoredUser, setSession, clearSession, ApiError } from './api';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -163,6 +163,43 @@ describe('API 客户端（Phase 42.1）', () => {
       const headers = init.headers as Record<string, string>;
       expect(String(init.method ?? '')).toBe('DELETE');
       expect(headers.Authorization).toBe('Bearer jwt-token');
+    });
+  });
+
+  describe('api.patch 请求行为（44.2 覆盖收口）', () => {
+    it('发送 PATCH 方法并携带 JSON body 与认证头', async () => {
+      setSession('jwt-token', { username: 'u', role: 'QA', scopes: { projects: [], environments: [], businesses: [] } });
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+      vi.stubGlobal('fetch', fetchMock);
+      await api.patch<{ ok: boolean }>('/runs/abc/status', { status: 'PAUSED' });
+      const [, init] = fetchMock.mock.calls[0];
+      const headers = init.headers as Record<string, string>;
+      expect(String(init.method ?? '')).toBe('PATCH');
+      expect(headers.Authorization).toBe('Bearer jwt-token');
+      expect(String(init.body)).toBe(JSON.stringify({ status: 'PAUSED' }));
+    });
+  });
+
+  describe('logout 登出（44.2 覆盖收口）', () => {
+    it('成功登出：POST /logout 携带 Bearer 并清会话', async () => {
+      setSession('jwt-token', { username: 'u', role: 'QA', scopes: { projects: [], environments: [], businesses: [] } });
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+      vi.stubGlobal('fetch', fetchMock);
+      await logout();
+      const [input] = fetchMock.mock.calls[0];
+      const [, init] = fetchMock.mock.calls[0];
+      const headers = init.headers as Record<string, string>;
+      expect(String(init.method ?? '')).toBe('POST');
+      expect(String(input)).toContain('/logout');
+      expect(headers.Authorization).toBe('Bearer jwt-token');
+      expect(getToken()).toBeNull();
+    });
+
+    it('登出接口失败 → 仍清会话（忽略登出失败）', async () => {
+      setSession('jwt-token', { username: 'u', role: 'QA', scopes: { projects: [], environments: [], businesses: [] } });
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+      await expect(logout()).resolves.toBeUndefined();
+      expect(getToken()).toBeNull();
     });
   });
 });
