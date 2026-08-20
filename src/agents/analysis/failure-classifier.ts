@@ -67,6 +67,7 @@ const HTTP_STATUS_MAP: Record<number, { category: FailureCategory; note: string 
   403: { category: 'AUTH_ERROR', note: 'HTTP 403 无权限' },
   404: { category: 'TEST_CODE_ERROR', note: 'HTTP 404 路径/资源不存在' },
   408: { category: 'TIMEOUT', note: 'HTTP 408 请求超时' },
+  413: { category: 'DATA_ERROR', note: 'HTTP 413 请求体过大' },
   429: { category: 'RATE_LIMIT_ERROR', note: 'HTTP 429 限流' },
   500: { category: 'MODEL_ERROR', note: 'HTTP 500 服务端错误' },
   502: { category: 'MODEL_ERROR', note: 'HTTP 502 网关错误' },

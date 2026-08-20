@@ -21,6 +21,7 @@ import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
 import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
+import { runAllEvaluation } from '../../eval/runner.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -330,6 +331,17 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['jobs'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listJobs()); } },
     { method: 'GET', segments: ['audit'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listAudit()); } },
     { method: 'GET', segments: ['workers'], handler: async (c) => { requireOpsRead(c); return maybePaginate(c.req.url, await c.service.listWorkers()); } },
+
+    // Phase 45：AI 测试质量评测（AI Quality Dashboard 数据源）
+    // 确定性规则评测（model=rules），无外部依赖、不消耗 token；权限同只读运维数据。
+    { method: 'GET', segments: ['eval', 'report'], handler: async () => runAllEvaluation() },
+    { method: 'GET', segments: ['eval', 'report', ':domain'], handler: async (c, p) => {
+      const domain = (p.domain ?? '').toUpperCase();
+      const domains = ['REQUIREMENT', 'TEST_DESIGN', 'RISK', 'SELECTION', 'RCA', 'DEFECT', 'HEALING', 'RELEASE'];
+      if (!domains.includes(domain)) throw new HttpError(404, `未知评测领域：${domain}`);
+      const report = runAllEvaluation();
+      return { ...report, domains: report.domains.filter((d) => d.domain === domain), overall: report.domains.find((d) => d.domain === domain)?.score ?? 0 };
+    } },
   ];
 
   /** 解析 ?window= 参数（默认 7d） */

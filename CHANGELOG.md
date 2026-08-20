@@ -2,6 +2,75 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.20.0] - 2026-08-20
+
+### 新增（AI 测试质量评测，Phase 45）
+
+解决「AI 到底测得好不好？」——建立 AI Test → Evaluation → Ground Truth → Score → Error Analysis → Benchmark → Improvement → Regression 的可量化、可比较、可回归、可证明闭环。核心原则：**没有 Ground Truth，就不能声称 Accuracy；有 GT → tracked=true；无 GT → tracked=false → score=null**；绝对禁止为 Dashboard 好看自动给 95%。
+
+- 统一评测契约（`src/eval/contract.ts`）：8 领域（REQUIREMENT / TEST_DESIGN / RISK / SELECTION / RCA / DEFECT / HEALING / RELEASE）统一 Evaluation Case / Result / Report 结构；`tracked` 语义区分真实可判定结果与未跟踪（score=null）；`isPassed` / 评分标准统一。
+- Ground Truth Registry（`src/eval/ground-truth.ts`）：来源 HUMAN / REAL_PRODUCTION / REAL_RUN / CURATED / GENERATED + 置信度（confident / likely / uncertain）+ 校验（isVerified / verifiedBy / verifiedAt / verificationEvidence）；注册即跟踪，禁止无来源的虚构真值。
+- 8 领域版本化 Benchmark（`src/eval/benchmark/`）：Requirement 36 / Test Design 22 / Risk 32 / Selection 30 / RCA 38 / Defect 30 / Healing 20 / Release 30，共 **238 条 tracked 用例**；覆盖普通 / 复杂 / 模糊 / 缺字段 / 矛盾 / 异常等场景；Benchmark 版本化（REQUIREMENT_BENCHMARK_v1 等）。
+- 确定性规则评测器（`src/eval/evaluator/` × 8 + `src/eval/runner.ts`）：模型 model=rules，零外部依赖、零 token 消耗、可离线确定性执行；每领域输出领域级 metrics + 逐条 Case 结果（expected / actual / errors / evidence）。
+- 指标体系（`src/eval/metrics.ts` / `score.ts`）：Completeness / Precision / Recall / F1 / Coverage Score / Redundancy Score / Executability Score / Critical Miss Rate（P0 Miss）/ Recall@TopK / Precision@TopK / Top-1 / Top-3 Accuracy / Unknown Rate / False Root Cause Rate / Healing Success Rate / Unsafe Healing Rate / Rollback Success Rate / False Pass Rate / False Block Rate 等。
+- 版本对比与回归门禁（`src/eval/regression.ts`）：compare / regression 支持 v4.19.0 vs v4.20.0 式对比，自动标记 Improved / Regressed / Unchanged；Critical 指标下降（P0 Recall / Unsafe Healing / False Pass）→ BLOCK（CLI 退出码 1）；普通小幅下降 → REVIEW。
+- 决策 Replay（`src/eval/replay.ts`）：read-only、无 production mutation / defect create / release；确定性模块 same input → same output；LLM 模块记录 model / promptVersion / temperature / seed / tools / timestamp。
+- 成本跟踪（`src/eval/cost.ts`）：每次评测记录 model / modelVersion / promptVersion / toolVersion / agentVersion + inputTokens / outputTokens / latencyMs / cost；报告同时呈现 Score + Cost。
+- 安全治理（`src/eval/`）：Healing 评测区分 SAFE / RISKY / DANGEROUS（严禁自愈却产出建议 → DANGEROUS，掩盖真实 Bug 的高危自愈）；目标 Unsafe Healing Rate = 0；Release 评测重点 False Pass = 0。
+- Web AI Quality Dashboard（`web/src/pages/AIQuality.tsx`）：/ai-quality 页展示 8 领域分数 + Overall + 四关键安全指标（P0 Miss / False Pass / Unsafe Healing / Skipped Critical）+ 每领域逐条 Case 明细（Expected / Actual / Errors）+ 成本信息；`web/src/api.ts` 新增 `getEvalReport`。
+- API（`src/platform/api/server.ts`）：GET `/api/eval/report`（全量报告）/ GET `/api/eval/report/:domain`（单领域，未知领域 404）；权限同只读运维数据（OPS_READ）。
+- CLI（`bin/eval-cli.ts` + package.json 脚本）：`agent:eval:all` / `agent:eval:report` / `agent:eval:compare --baseline` / `agent:eval:regression` / `agent:eval:unit` / `agent:eval:integration` / `agent:eval:e2e` / `agent:eval:test` / `phase45:test`；CLI run 默认保存报告到 `eval-reports/`（已 gitignore）。
+- 测试：`tests/unit/evaluation-contract.test.ts`（11）/ `ground-truth.test.ts`（11）/ `evaluation-regression.test.ts`（15）/ `benchmark-registry.test.ts`（11）/ `decision-replay.test.ts`（9）= 57 单元用例 + `tests/integration/evaluation-api.test.ts`（4）+ `tests/e2e/evaluation-dashboard.test.ts`（3）+ `web/src/pages/AIQuality.test.tsx`（组件测试）全绿。
+- 文档：`docs/evaluation/overview.md` / `benchmark.md` / `ground-truth.md` / `metrics.md` / `model-comparison.md` / `regression-gate.md` + `docs/phase45-summary.md`。
+
+### 变更
+
+- 版本 v4.19.0 → v4.20.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+- `src/agents/self-healing/healing-analyzer.ts` / `src/agents/analysis/failure-classifier.ts`：与评测框架对齐（供规则评测读取真实决策行为）。
+
+### 测试
+
+- 评测单元 57 passed；评测集成 4 passed；评测 E2E 3 passed；Web 组件（AIQuality）passed。
+- `npm run agent:eval:all`：Overall 93.6%（238 条 tracked）；**关键安全指标 P0 Miss=0 / False Pass=0 / Unsafe Healing=0 / Skipped Critical=0**；8 领域全绿（Requirement 85.6 / Test Design 92.8 / Risk 100 / Selection 99.8 / RCA 89.5 / Defect 95.5 / Healing 95 / Release 93.3）。
+- 全量回归：`npm test` 144 文件 1650 passed / 18 skipped；`npm run web:test` 11 文件 72 passed；`npm run build` 通过。
+
+## [4.19.0] - 2026-08-20
+
+### 新增（真实浏览器 E2E 覆盖收口 + 单元覆盖缺口闭合，Phase 44）
+
+- RunCreate / Run 操作（Cancel / Assign / Retry）/ TestAssets / AssetVersions 4 个新 Playwright 套件，Chromium 87 E2E 全量全绿。
+- 可访问性 / 键盘 / 响应式扩展至新页面（RunCreate、TestAssets、AssetVersions、Run Detail 全生命周期控件）。
+- 单元覆盖缺口闭合：`api.test.ts` 登出契约 + RunCreate 全参数 + AssetVersions 单版本分支，68 用例 / 行覆盖 99.67%。
+- `/assets/:id` SPA 路由冲突修复；测试资产 `{ items }` 契约对齐。
+
+### 变更
+
+- 版本 v4.18.0 → v4.19.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 测试
+
+- Web 单元 68 passed / 行覆盖 99.67%；Web E2E Chromium 全量全绿；既有全量回归保持 PASS。
+- 报告：`docs/phase44-summary.md`。
+
+## [4.18.0] - 2026-08-20
+
+### 新增（Web 交互正确性 + Run 全生命周期 + 测试资产暴露，Phase 43）
+
+- 写操作统一错误反馈：`Defects.tsx`（create/status/assign）与 `RunDetail.tsx`（Run Again / Clone / Template / Share / Comment / Cancel / Assign 经 `runAction` 包装）补 try/catch + 错误 banner，失败不再静默 unhandled rejection。
+- **评论契约修复**：服务端读 `c.body.body`，此前前端发 `{ text }` → 200 但正文恒为空，改为 `{ body }`；`api.ts` 补 `del`（DELETE）；`Runs.tsx` 支持 `?project=` 项目过滤。
+- Run 全生命周期 Web 呈现：新建 Run 页 `/runs/new`（全参数）/ Cancel（仅 QUEUED/RUNNING 显示）/ Assign（逗号分隔多用户，空输入禁用）。
+- 测试资产 Web 暴露：`/assets`（TestAssets 统计+列表）+ `/assets/:id`（AssetVersions 版本历史+字段级对比），复用既有后端端点零改动。
+- 测试覆盖补强：RunDetail 回归测试扩展至 14 用例 → 行覆盖 100%；新增 RunCreate（3）/ TestAssets（2）/ AssetVersions（2）；全量 59 用例 / 行覆盖 95.12%，`tsc -b` 通过。
+
+### 变更
+
+- 版本 v4.17.0 → v4.18.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 测试
+
+- Web 单元/组件 59 passed / 行覆盖 95.12%；`cd web && npx vitest run --coverage`。
+- 报告：`docs/phase43-summary.md`。
+
 ## [4.17.0] - 2026-08-20
 
 ### 新增（Web 前端工程化：单元/组件测试 + CI 接入 + 跨浏览器回归，Phase 42）

@@ -96,6 +96,26 @@ export function isPathFailure(failed: CaseExecutionResult): boolean {
   return PATH_FAILURE_HINTS.some((re) => re.test(blob));
 }
 
+/** 服务级错误征兆（模型/网关/数据库/连接故障）——路径失效背后的真实原因 */
+const SERVICE_ERROR_HINTS = [
+  /50[0-9]|502|503|504|gateway|service unavailable|server error/i,
+  /database\s+unavailable|db\s+unavailable|数据库故障|数据库不可用|db\s+error/i,
+  /econnrefused|connection\s+refused/i,
+];
+
+/**
+ * 判断失败是否伴随服务级错误（Phase 45 DANGEROUS 防护）。
+ * 当错误/断言明细指向模型/网关/数据库/连接故障时，路径自愈会掩盖真实 Bug，
+ * 必须禁止路径修复建议，改由 RCA/缺陷流程登记真实问题。
+ */
+export function hasServiceError(failed: CaseExecutionResult): boolean {
+  const blob = [
+    failed.error ?? '',
+    ...(failed.checks ?? []).map((c) => `${c.name} ${c.detail}`),
+  ].join(' ');
+  return SERVICE_ERROR_HINTS.some((re) => re.test(blob));
+}
+
 /** 提取错误码不匹配（期望 vs 实际）。返回 { oldCode=期望码, newCode=实际码 } 或 null */
 export function extractErrorCodeMismatch(text: string): { oldCode: string; newCode: string } | null {
   // 期望在前（英文）：expected 4001, got 4003
@@ -155,6 +175,9 @@ export function analyzeHealing(input: HealingAnalyzerInput): HealingAnalysis {
   const suggestions: HealingSuggestion[] = [];
   for (const f of input.failedCases) {
     if (!isPathFailure(f)) continue;
+    // Phase 45 DANGEROUS 防护：伴随服务级错误（503/数据库故障/连接拒绝）时禁止路径自愈，
+    // 否则会把真实 Bug（模型/网关/数据库故障）误当作"字段重命名"而掩盖。
+    if (hasServiceError(f)) continue;
     // 失效路径：优先取断言名中的路径，其次错误消息
     const blob = [
       ...(f.checks ?? []).filter((c) => !c.pass).map((c) => c.detail),

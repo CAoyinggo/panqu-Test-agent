@@ -184,3 +184,78 @@ export const api = {
   // 43.1：补 DELETE（平台端点若需删除资源时使用；当前无调用方仍保持契约完整）
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
+
+// ===== Phase 45：AI 质量评测报告（GET /api/eval/report）=====
+// 确定性规则评测（model=rules），返回当前 AI 测试质量评测报告。
+
+/** 关键安全指标：任意非 0 都代表命中安全风险，需重点处理 */
+export interface EvalCritical {
+  p0Miss: number;
+  falsePass: number;
+  unsafeHealing: number;
+  skippedCritical: number;
+}
+
+export interface EvalCost {
+  cost: number;
+  totalTokens: number;
+  latencyMs: number;
+}
+
+export interface EvalVersionInfo {
+  model: string;
+  modelVersion: string;
+  promptVersion: string;
+  toolVersion: string;
+  agentVersion: string;
+}
+
+/** 领域内逐条评测结果 */
+export interface EvalResult {
+  caseId: string;
+  domain: string;
+  score: number;
+  passed: boolean;
+  tracked: boolean;
+  expected: string;
+  actual: string;
+  errors: string[];
+  evidence?: string;
+}
+
+export interface EvalDomainFailure {
+  caseId: string;
+  expected: string;
+  actual: string;
+  errors: string[];
+}
+
+export interface EvalDomain {
+  domain: string;
+  label: string;
+  benchmark: string;
+  benchmarkVersion: string;
+  total: number;
+  tracked: number;
+  untracked: number;
+  passed: number;
+  score: number;
+  metrics: Record<string, number>;
+  failures: EvalDomainFailure[];
+  results: EvalResult[];
+}
+
+export interface EvalReport {
+  version: string;
+  generatedAt: string;
+  overall: number;
+  critical: EvalCritical;
+  cost: EvalCost;
+  versionInfo: EvalVersionInfo;
+  domains: EvalDomain[];
+}
+
+/** Phase 45：获取当前 AI 评测报告（确定性规则评测，model=rules） */
+export function getEvalReport(): Promise<EvalReport> {
+  return request<EvalReport>('/eval/report');
+}
