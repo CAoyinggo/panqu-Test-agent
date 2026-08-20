@@ -64,7 +64,19 @@ function numberFlag(args: string[], name: string, fallback: number): number {
 }
 
 const pct = (n: number): string => `${(n * 100).toFixed(1)}%`;
-const mono = (s: unknown): string => (s === undefined || s === null ? '—' : String(s));
+/** 展示值：对象紧凑 JSON，其余原样；空为占位 */
+function mono(s: unknown): string {
+  if (s === undefined || s === null) return '—';
+  if (typeof s === 'object') {
+    try {
+      const j = JSON.stringify(s);
+      return j && j.length > 60 ? `${j.slice(0, 57)}…` : (j ?? '—');
+    } catch {
+      return String(s);
+    }
+  }
+  return String(s);
+}
 
 // ── feedback ──
 function cmdFeedbackList(svc: AIQualityService, args: string[], json: boolean): void {
@@ -395,6 +407,82 @@ function cmdContinuousStatus(svc: AIQualityService, json: boolean): void {
   console.log(`  调度：${CONTINUOUS_EVAL_SCHEDULES.map((s) => `${s.name} ${s.cronLike}`).join('  ')}`);
 }
 
+// ── benchmark（Phase 49 / 43.21：Benchmark 自动扩充——真实失败经人工 Review 后并入）──
+function cmdBenchmarkList(svc: AIQualityService, args: string[], json: boolean): void {
+  const list = svc.benchmarkCandidates.list({
+    status: flagValue(args, '--status')?.toUpperCase() as never,
+    domain: flagValue(args, '--domain')?.toUpperCase() as never,
+  });
+  if (json) {
+    console.log(JSON.stringify({ total: list.length, candidates: list }, null, 2));
+    return;
+  }
+  if (list.length === 0) {
+    console.log('暂无 Benchmark 扩充候选。`benchmark bridge` 运行真实评测并把失败用例桥接为候选。');
+    return;
+  }
+  console.log(`Benchmark 扩充候选（${list.length} 个，最新在前）`);
+  for (const c of list) {
+    console.log(`  [${c.id}] ${c.domain}/${c.caseId} status=${c.status} 来源=${c.source}${c.reviewer ? ` review=${c.reviewer}` : ''}`);
+    console.log(`        期望=${mono(c.expected)} 实际=${mono(c.actual)}${c.errors.length ? ` 错误=${c.errors.join('；')}` : ''}${c.reason ? ` 原因=${c.reason}` : ''}`);
+  }
+  console.log('  提示：approve 后进入已验证 Ground Truth 池；reject 需原因。均须 --by <human>（禁止 AI 自批）。');
+}
+
+function cmdBenchmarkBridge(svc: AIQualityService, args: string[], json: boolean): void {
+  const by = requireHumanBy(args);
+  const domains = args.filter((a) => /^[A-Z_]+$/.test(a) && ['REQUIREMENT', 'TEST_DESIGN', 'RISK', 'SELECTION', 'RCA', 'DEFECT', 'HEALING', 'RELEASE'].includes(a)) as never[];
+  const { report, bridge } = svc.bridgeEvaluationNow(domains.length ? domains : undefined);
+  saveService(svc);
+  if (json) {
+    console.log(JSON.stringify({ ingested: bridge.ingested, skippedDupes: bridge.skippedDupes, feedbackIds: bridge.feedbackIds, candidates: bridge.candidates, report: { overall: report.overall, tracked: report.domains.reduce((s, d) => s + d.tracked, 0) } }, null, 2));
+    return;
+  }
+  console.log(`Benchmark 失败桥接（by ${by}）：Overall ${pct(report.overall)} · 失败用例 ${bridge.ingested + bridge.skippedDupes}（新增 ${bridge.ingested}，幂等去重 ${bridge.skippedDupes}）`);
+  console.log(`  新增反馈 ${bridge.feedbackIds.length} 条 → 待审候选 ${bridge.candidates.length} 个`);
+  for (const c of bridge.candidates.slice(0, 10)) {
+    console.log(`    [${c.id}] ${c.domain}/${c.caseId} 期望=${mono(c.expected)} 实际=${mono(c.actual)}`);
+  }
+  if (bridge.candidates.length > 10) console.log(`    … 其余 ${bridge.candidates.length - 10} 个`);
+
+  void by;
+}
+
+function cmdBenchmarkApprove(svc: AIQualityService, args: string[]): void {
+  const id = args[1];
+  if (!id) {
+    console.error('benchmark approve 需要候选 ID');
+    process.exit(2);
+  }
+  const by = requireHumanBy(args);
+  try {
+    const c = svc.reviewBenchmarkCandidate(id, 'APPROVED', by);
+    saveService(svc);
+    console.log(`Benchmark 候选 ${id} 已批准（by ${by}）：${c.domain}/${c.caseId} → 进入已验证 Ground Truth 池`);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+}
+
+function cmdBenchmarkReject(svc: AIQualityService, args: string[]): void {
+  const id = args[1];
+  if (!id) {
+    console.error('benchmark reject 需要候选 ID');
+    process.exit(2);
+  }
+  const by = requireHumanBy(args);
+  const reason = flagValue(args, '--reason') ?? '人工驳回（无有效 Ground Truth）';
+  try {
+    const c = svc.reviewBenchmarkCandidate(id, 'REJECTED', by, reason);
+    saveService(svc);
+    console.log(`Benchmark 候选 ${id} 已驳回（by ${by}）：${c.domain}/${c.caseId} 原因=${reason}`);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+}
+
 // ── canary ──
 function cmdCanaryStatus(svc: AIQualityService, json: boolean): void {
   const list = svc.experiments.list();
@@ -482,6 +570,10 @@ function usage(): void {
   canary status [--json]
   canary promote <id> --by <human> --accuracy N [--latency-ms N] [--cost N] [--failure-rate N] [--safety N]
   canary rollback <id> --reason <...>
+  benchmark list [--status X] [--domain X] [--json]
+  benchmark bridge --by <human> [--json]
+  benchmark approve <id> --by <human>
+  benchmark reject <id> --by <human> --reason <...>
   continuous run --schedule NIGHTLY|WEEKLY|RELEASE [--json]
   continuous list [--schedule X] [--json]
   continuous status [--json]`);
@@ -547,6 +639,15 @@ function main(): void {
       else { console.error(`未知 canary 子命令：${sub}（可用 status / promote / rollback）`); process.exit(2); }
       break;
     }
+    case 'benchmark': {
+      const sub = args[1];
+      if (sub === 'list') cmdBenchmarkList(svc, args.slice(1), json);
+      else if (sub === 'bridge') cmdBenchmarkBridge(svc, args.slice(1), json);
+      else if (sub === 'approve') cmdBenchmarkApprove(svc, args.slice(1));
+      else if (sub === 'reject') cmdBenchmarkReject(svc, args.slice(1));
+      else { console.error(`未知 benchmark 子命令：${sub}（可用 list / bridge / approve / reject）`); process.exit(2); }
+      break;
+    }
     case 'continuous': {
       const sub = args[1];
       if (sub === 'run') cmdContinuousRun(svc, args.slice(1), json);
@@ -556,7 +657,7 @@ function main(): void {
       break;
     }
     default:
-      console.error(`未知命令：${cmd}（可用 feedback / eval / prompt / model / improvement / knowledge / canary / continuous）`);
+      console.error(`未知命令：${cmd}（可用 feedback / eval / prompt / model / improvement / knowledge / canary / benchmark / continuous）`);
       process.exit(2);
   }
 }

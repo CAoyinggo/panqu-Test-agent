@@ -498,6 +498,50 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       });
       return run;
     } },
+    // Phase 49 / 43.26：Benchmark 扩充候选（43.21 落地）——真实失败用例经人工 Review 后并入 Benchmark
+    // 读端点认证即可；bridge（跑真实评测）+ approve/reject（人工门禁）需 RELEASE_APPROVE（禁止 AI 自批）。
+    { method: 'GET', segments: ['ai-quality', 'benchmark-candidates'], handler: async (c) => {
+      const status = queryParam(c.req.url, 'status') ?? undefined;
+      const domain = queryParam(c.req.url, 'domain') ?? undefined;
+      return maybePaginate(c.req.url, aiQuality.benchmarkCandidates.list({
+        status: status as never,
+        domain: domain as never,
+      }));
+    } },
+    { method: 'POST', segments: ['ai-quality', 'benchmark-candidates', 'bridge'], handler: async (c) => {
+      requireAiApprove(c);
+      const domains = Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined;
+      const { bridge } = aiQuality.bridgeEvaluationNow(domains as never);
+      return {
+        ingested: bridge.ingested,
+        skippedDupes: bridge.skippedDupes,
+        feedbackIds: bridge.feedbackIds,
+        candidates: bridge.candidates,
+        message: bridge.ingested > 0
+          ? `已桥接 ${bridge.ingested} 条失败→反馈，生成 ${bridge.candidates.length} 个待审候选`
+          : `无新增失败用例（幂等去重 ${bridge.skippedDupes} 条）`,
+      };
+    } },
+    { method: 'POST', segments: ['ai-quality', 'benchmark-candidates', ':id', 'approve'], handler: async (c, p) => {
+      requireAiApprove(c);
+      let cand: import('../../ai-quality/eval-bridge.js').BenchmarkCandidate;
+      try {
+        cand = aiQuality.reviewBenchmarkCandidate(p.id, 'APPROVED', c.actor);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      return cand;
+    } },
+    { method: 'POST', segments: ['ai-quality', 'benchmark-candidates', ':id', 'reject'], handler: async (c, p) => {
+      requireAiApprove(c);
+      let cand: import('../../ai-quality/eval-bridge.js').BenchmarkCandidate;
+      try {
+        cand = aiQuality.reviewBenchmarkCandidate(p.id, 'REJECTED', c.actor, c.body.reason ? String(c.body.reason) : undefined);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      return cand;
+    } },
   ];
 
   /** 解析 ?window= 参数（默认 7d） */

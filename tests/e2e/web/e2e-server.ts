@@ -55,6 +55,8 @@ export interface WebE2eSeed {
     knowledgeCandidate: string;
     /** 48.1：Continuous Evaluation 运行（持续评测 Tab 数据源） */
     continuousEval: string;
+    /** 49.1：Benchmark 扩充候选（Benchmark 扩充 Tab 数据源，待人工 Review） */
+    benchmarkCandidate: string;
   };
 }
 
@@ -292,6 +294,16 @@ function seedAiQuality(): { service: AIQualityService; refs: WebE2eSeed['aiQuali
   svc.runContinuousEval({ schedule: 'WEEKLY', triggeredBy: 'SCHEDULE', createdBy: 'SYSTEM' });
   const ceRelease = svc.runContinuousEval({ schedule: 'RELEASE', triggeredBy: 'RELEASE_GATE', createdBy: 'release-mgr' });
 
+  // 11) Benchmark 扩充候选（Phase 49 / 43.21：真实失败用例，待人工 Review）
+  const bmc = svc.benchmarkCandidates.add({
+    domain: 'RISK', caseId: 'risk-bridge-e2e',
+    expected: ['concurrency', 'dependency'],
+    actual: ['concurrency'],
+    errors: ['遗漏依赖风险（dependency）'],
+    source: 'EVALUATION',
+    feedbackId: fbRisk.id,
+  });
+
   return {
     service: svc,
     refs: {
@@ -303,6 +315,7 @@ function seedAiQuality(): { service: AIQualityService; refs: WebE2eSeed['aiQuali
       canaryExperiment: canary.id,
       knowledgeCandidate: kc.id,
       continuousEval: ceRelease.id,
+      benchmarkCandidate: bmc.id,
     },
   };
 }

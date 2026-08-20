@@ -8,9 +8,10 @@ import {
   getAIFeedback, verifyAIFeedback, getAIErrors, getAIImprovements, approveImprovement, rejectImprovement,
   getPrompts, getModels, getExperiments, createExperiment, getKnowledgeReview, getAIQuality,
   getContinuousEvals, runContinuousEval,
+  getBenchmarkCandidates, bridgeBenchmarkCandidates, approveBenchmarkCandidate, rejectBenchmarkCandidate,
   type AIFeedbackItem, type AIErrorCluster, type ImprovementProposalItem, type PromptVersionItem,
   type ModelVersionItem, type ExperimentItem, type KnowledgeReview, type AIQualityReport,
-  type ContinuousEvalList,
+  type ContinuousEvalList, type BenchmarkCandidateItem,
 } from '../api';
 import { getStoredUser } from '../api';
 import { Card, Table, Badge, StatusBadge, Empty, MetricCard, fmtTime } from '../components/ui';
@@ -22,6 +23,7 @@ const TABS = [
   { key: 'versions', label: 'Prompt / Model' },
   { key: 'experiments', label: 'Shadow / Canary' },
   { key: 'continuous', label: '持续评测' },
+  { key: 'benchmark', label: 'Benchmark 扩充' },
   { key: 'knowledge', label: '知识 Review' },
   { key: 'quality', label: 'AI 质量' },
 ] as const;
@@ -48,6 +50,7 @@ export default function AIImprovement(): JSX.Element {
   const [knowledge, setKnowledge] = useState<KnowledgeReview | null>(null);
   const [quality, setQuality] = useState<AIQualityReport | null>(null);
   const [continuous, setContinuous] = useState<ContinuousEvalList | null>(null);
+  const [benchmark, setBenchmark] = useState<BenchmarkCandidateItem[]>([]);
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState('');
@@ -56,10 +59,10 @@ export default function AIImprovement(): JSX.Element {
 
   const load = async (): Promise<void> => {
     try {
-      const [f, c, p, pr, m, e, k, q, ce] = await Promise.all([
-        getAIFeedback(), getAIErrors(), getAIImprovements(), getPrompts(), getModels(), getExperiments(), getKnowledgeReview(), getAIQuality(), getContinuousEvals(),
+      const [f, c, p, pr, m, e, k, q, ce, bm] = await Promise.all([
+        getAIFeedback(), getAIErrors(), getAIImprovements(), getPrompts(), getModels(), getExperiments(), getKnowledgeReview(), getAIQuality(), getContinuousEvals(), getBenchmarkCandidates(),
       ]);
-      setFeedback(f); setClusters(c); setProposals(p); setPrompts(pr); setModels(m); setExperiments(e); setKnowledge(k); setQuality(q); setContinuous(ce);
+      setFeedback(f); setClusters(c); setProposals(p); setPrompts(pr); setModels(m); setExperiments(e); setKnowledge(k); setQuality(q); setContinuous(ce); setBenchmark(bm);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -96,6 +99,15 @@ export default function AIImprovement(): JSX.Element {
   };
   const runContinuous = (schedule: string): void => {
     void runAction(`ce-${schedule}`, () => runContinuousEval(schedule), `Continuous Evaluation ${schedule} 运行完成`);
+  };
+  const bridgeBenchmark = (): void => {
+    void runAction('bm-bridge', () => bridgeBenchmarkCandidates(), 'Benchmark 失败桥接完成（真实评测失败 → 反馈 + 待审候选）');
+  };
+  const approveCandidate = (id: string): void => {
+    void runAction(id, () => approveBenchmarkCandidate(id), `Benchmark 候选 ${id} 已批准 → 进入已验证 Ground Truth 池`);
+  };
+  const rejectCandidate = (id: string): void => {
+    void runAction(id, () => rejectBenchmarkCandidate(id, 'Web 人工驳回'), `Benchmark 候选 ${id} 已驳回`);
   };
 
   const pendingProposals = proposals.filter((p) => p.status === 'EVALUATING' && p.gateVerdict === 'PASS');
@@ -326,6 +338,52 @@ export default function AIImprovement(): JSX.Element {
             <div className="muted" style={{ marginTop: 8 }}>
               手动触发需 RELEASE_MANAGER 或 ADMIN（人工门禁）。定时触发由 Nightly / Weekly / Release 调度（{continuous?.schedules.map((s) => `${s.name} ${s.cronLike}`).join(' · ') ?? '—'}）执行，无需人工。
             </div>
+          </Card>
+        </>
+      )}
+
+      {tab === 'benchmark' && (
+        <>
+          <Card title={`Benchmark 扩充候选（${benchmark.filter((b) => b.status === 'PENDING_REVIEW').length} 待审 / 共 ${benchmark.length}）`}>
+            <div className="metric-grid">
+              <MetricCard label="待审" value={benchmark.filter((b) => b.status === 'PENDING_REVIEW').length} />
+              <MetricCard label="已批准" value={benchmark.filter((b) => b.status === 'APPROVED').length} hint="已并入已验证 Ground Truth 池" />
+              <MetricCard label="已驳回" value={benchmark.filter((b) => b.status === 'REJECTED').length} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button className="btn btn-sm" disabled={!approver || busy === 'bm-bridge'} onClick={bridgeBenchmark}>
+                {busy === 'bm-bridge' ? '桥接中…' : '运行真实评测并桥接失败'}
+              </button>
+            </div>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              真实失败用例自动生成候选；批准后才进入已验证 Ground Truth 池（禁止 AI 自批）。桥接 / 批准 / 驳回需 RELEASE_MANAGER 或 ADMIN。
+            </div>
+            {benchmark.length === 0 && <Empty text="暂无 Benchmark 扩充候选。可点击上方按钮运行真实评测并把失败用例桥接为候选。" />}
+            {benchmark.length > 0 && (
+              <Table head={['ID', '领域', '用例', '期望', '实际', '来源', '状态', '操作']}>
+                {benchmark.map((b) => (
+                  <tr key={b.id}>
+                    <td className="mono">{b.id}</td>
+                    <td>{b.domain}</td>
+                    <td className="mono">{b.caseId}</td>
+                    <td className="mono cell-clip">{mono(b.expected)}</td>
+                    <td className="mono cell-clip">{mono(b.actual)}</td>
+                    <td>{b.source}</td>
+                    <td><StatusBadge status={b.status} /></td>
+                    <td>
+                      {b.status === 'PENDING_REVIEW' ? (
+                        <>
+                          <button className="btn btn-sm btn-ok" disabled={!approver || busy === b.id} onClick={() => approveCandidate(b.id)}>批准</button>{' '}
+                          <button className="btn btn-sm btn-danger" disabled={!approver || busy === b.id} onClick={() => rejectCandidate(b.id)}>驳回</button>
+                        </>
+                      ) : (
+                        <span className="muted">{b.reviewer ? `by ${b.reviewer}` : '—'}{b.reason ? `：${b.reason}` : ''}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            )}
           </Card>
         </>
       )}

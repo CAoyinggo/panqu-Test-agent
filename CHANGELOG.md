@@ -2,6 +2,33 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.24.0] - 2026-08-20
+
+### 新增（Eval → Feedback 桥接 + Benchmark 自动扩充候选，Phase 49）
+
+打通「Benchmark Failure → Feedback → 聚类 → 提案」自动链路（43.2 / 43.21 落地）：**Evaluation 失败自动进入 Feedback Registry（BENCHMARK_FAILURE 渠道）+ 生成 Benchmark 扩充候选（PENDING_REVIEW，必须人工 Review 才可并入）**，让 Benchmark 越来越接近真实业务、而不是越来越人工构造。
+
+- 核心实现（`src/ai-quality/eval-bridge.ts`，新增）：`extractEvalFailures`（只提取 **tracked 失败用例**，跳过 passed 与未 tracked——未追踪无 Ground Truth 绝不虚构反馈）+ `bridgeEvalReport`（每条 tracked 失败 → BENCHMARK_FAILURE 渠道反馈：EVALUATION 来源、INCORRECT 类型、prediction=actual（AI 实际输出）、actual=expected（真值）、verified=false 待人工核验 + PENDING_REVIEW 候选；**幂等去重**：同 caseId+期望/实际已在库则跳过，重复跑评测不刷屏）。
+- `BenchmarkCandidateStore`（`src/ai-quality/eval-bridge.ts`）：候选存储（add/get/list({status,domain})/size/snapshot/import）+ **Review 状态机**：approve → APPROVED、reject → REJECTED（记录 reviewer/reviewedAt/reason；已处理候选不可重复操作）。
+- Service 集成（`src/ai-quality/service.ts`）：`benchmarkCandidates` store + `bridgeEvaluation(report)`（幂等桥接）+ `bridgeEvaluationNow(domains?)`（运行真实评测并桥接 + 审计）+ `reviewBenchmarkCandidate(id, decision, reviewer, reason?)`（人工 Review 统一入口，approve/reject 均写审计）；**`runContinuousEval` 重构**：同一份真实报告同时用于回归判定 + 失败桥接（不虚构、不重复计分），Continuous Evaluation 每次运行自动沉淀真实失败为待审候选；snapshot/restore + persist/load 跨重启保留。
+- API（`src/platform/api/server.ts`，43.26）：`GET /api/ai-quality/benchmark-candidates`（列表 + status/domain 过滤 + 分页，认证可读）/ `POST .../bridge`（运行真实评测并桥接，RELEASE_APPROVE 人工门禁，QA 403）/ `POST .../:id/approve` / `POST .../:id/reject`（人工 Review，禁止 AI 自批）。
+- CLI（`bin/ai-quality-cli.ts`，43.25）：`agent:benchmark:list` / `agent:benchmark:bridge --by <human>` / `agent:benchmark:approve <id> --by <human>` / `agent:benchmark:reject <id> --by <human> --reason`。
+- Web（`web/src/pages/AIImprovement.tsx` + `web/src/api.ts`）：「AI 改进」页新增第 9 个「Benchmark 扩充」Tab——指标卡（待审 / 已批准 / 已驳回）+ 「运行真实评测并桥接失败」按钮（RELEASE_APPROVE 门禁）+ 候选表格（ID / 领域 / 用例 / 期望 / 实际 / 来源 / 状态 / 操作，PENDING_REVIEW 显示 批准/驳回）。
+- 测试：单元 `tests/unit/eval-bridge.test.ts`（**14 用例**：extractEvalFailures / bridgeEvalReport / 幂等 / Error Taxonomy 推导 / CandidateStore 状态机 + 快照往返 / Service 集成）+ 集成 `tests/integration/ai-benchmark-candidates-api.test.ts`（**7 用例**：列表 / 401 / bridge RBAC + 真实桥接 + 幂等 / approve·reject QA 403 + RELEASE_MANAGER 成功 + 重复操作 400）+ E2E `tests/e2e/web/ai-improvement.spec.ts`（**2 新用例**：Benchmark 扩充 Tab 渲染 + QA 只读 / RELEASE_MANAGER 批准候选 → APPROVED，AI 改进页 E2E 合计 15 用例全绿）。
+- 脚本：`agent:benchmark:list|bridge|approve|reject`、`phase49:test`；`agent:ai:unit` / `agent:ai:integration` 纳入 eval-bridge 与 ai-benchmark-candidates-api 测试。
+
+### 变更
+
+- 版本 v4.23.0 → v4.24.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 验收（真实运行）
+
+- `npm run web:e2e:ai`：**15 用例全绿**（13 存量 + 2 新增「Benchmark 扩充」Tab）。
+- `npm test`：**1775 通过 / 18 skip，0 失败**；AI 质量相关 21 用例全绿（单元 14 + 集成 7）。
+- `npm run web:e2e:test`：**102 用例全绿**。
+- `npm run agent:benchmark:bridge -- --by cli-human`：真实评测 Overall **93.6%**，桥接 **31 个失败候选**（REQUIREMENT/RCA/DEFECT/HEALING/RELEASE 等，全部 PENDING_REVIEW）；关键安全指标 P0 Miss / False Pass / Unsafe Healing **全 0**。
+- `npx tsc --noEmit` 通过。
+
 ## [4.23.0] - 2026-08-20
 
 ### 新增（Continuous Evaluation 落地，Phase 48）

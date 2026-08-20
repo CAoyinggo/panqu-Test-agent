@@ -19,6 +19,10 @@ import { ExperimentStore } from './experiment.js';
 import { KnowledgeLearning, type KnowledgeCandidate, type KnowledgeItem } from './knowledge-learning.js';
 import { ContinuousEvalStore, runContinuousEvaluation, type ContinuousEvalRun, type ContinuousEvalScheduleName, type ContinuousEvalTrigger } from './continuous-eval.js';
 import { ImprovementAudit } from './ops.js';
+import { BenchmarkCandidateStore, bridgeEvalReport, type BenchmarkCandidate, type BenchmarkCandidateStatus, type EvalBridgeResult } from './eval-bridge.js';
+import { runAllEvaluation } from '../eval/runner.js';
+import type { EvaluationDomain } from '../eval/contract.js';
+import { PLATFORM_VERSION } from '../platform/version.js';
 import type { EvalReport } from '../eval/runner.js';
 
 export interface AIQualityServiceDeps {
@@ -29,6 +33,8 @@ export interface AIQualityServiceDeps {
   experiments?: ExperimentStore;
   knowledge?: KnowledgeLearning;
   continuousEval?: ContinuousEvalStore;
+  /** Phase 49：Benchmark 扩充候选（43.21 落地——真实失败经人工 Review 后并入 Benchmark） */
+  benchmarkCandidates?: BenchmarkCandidateStore;
   audit?: ImprovementAudit;
   now?: () => string;
 }
@@ -55,6 +61,7 @@ export class AIQualityService {
   readonly experiments: ExperimentStore;
   readonly knowledge: KnowledgeLearning;
   readonly continuousEval: ContinuousEvalStore;
+  readonly benchmarkCandidates: BenchmarkCandidateStore;
   readonly audit: ImprovementAudit;
 
   constructor(deps: AIQualityServiceDeps = {}) {
@@ -65,6 +72,7 @@ export class AIQualityService {
     this.experiments = deps.experiments ?? new ExperimentStore();
     this.knowledge = deps.knowledge ?? new KnowledgeLearning();
     this.continuousEval = deps.continuousEval ?? new ContinuousEvalStore();
+    this.benchmarkCandidates = deps.benchmarkCandidates ?? new BenchmarkCandidateStore();
     this.audit = deps.audit ?? new ImprovementAudit();
   }
 
@@ -217,20 +225,63 @@ export class AIQualityService {
     allowDrop?: number;
     createdBy?: string;
   }): ContinuousEvalRun {
-    const run = runContinuousEvaluation(input, { store: this.continuousEval });
+    // 49.x：先跑真实评测一次，复用同一份报告做「回归判定」+「失败桥接」（不虚构、不重复计分）
+    const report = runAllEvaluation({ version: PLATFORM_VERSION, domains: input.domains });
+    const run = runContinuousEvaluation(input, { store: this.continuousEval, report });
+    const bridge = this.bridgeEvaluation(report);
     this.audit.record({
       proposalId: 'n/a',
       actor: run.createdBy,
       action: 'CREATED',
-      decision: `Continuous Evaluation ${run.schedule} 运行完成：Overall ${(run.current.overall * 100).toFixed(1)}% → verdict ${run.regression.verdict}（${run.regression.reasons.join('；')}）`,
+      decision: `Continuous Evaluation ${run.schedule} 运行完成：Overall ${(run.current.overall * 100).toFixed(1)}% → verdict ${run.regression.verdict}（${run.regression.reasons.join('；')}）；失败桥接 ${bridge.ingested} 条→反馈 / ${bridge.candidates.length} 个待审候选`,
       metrics: {
         overall: run.current.overall,
         p0Miss: run.current.critical.p0Miss,
         falsePass: run.current.critical.falsePass,
         unsafeHealing: run.current.critical.unsafeHealing,
+        bridged: bridge.ingested,
+        candidates: bridge.candidates.length,
       },
     });
     return run;
+  }
+
+  /**
+   * 49.x / 43.21：把一份 EvalReport 的 tracked 失败用例桥接为 BENCHMARK_FAILURE 反馈 + Benchmark 扩充候选。
+   * 幂等：同 caseId + 期望/实际 已在库则跳过。候选一律 PENDING_REVIEW，必须人工 Review（禁止自动并入）。
+   */
+  bridgeEvaluation(report: EvalReport): EvalBridgeResult {
+    return bridgeEvalReport({ feedback: this.feedback, candidates: this.benchmarkCandidates }, report);
+  }
+
+  /** 49.x：运行一次真实评测并把失败桥接为反馈 + 待审候选（Continuous Evaluation 之外的独立触发入口） */
+  bridgeEvaluationNow(domains?: EvaluationDomain[]): { report: EvalReport; bridge: EvalBridgeResult } {
+    const report = runAllEvaluation({ version: PLATFORM_VERSION, domains });
+    const bridge = this.bridgeEvaluation(report);
+    this.audit.record({
+      proposalId: 'n/a', actor: 'SYSTEM', action: 'CREATED',
+      decision: `Benchmark 失败桥接：新增 ${bridge.ingested} 条反馈、${bridge.candidates.length} 个待审候选（幂等去重 ${bridge.skippedDupes}）`,
+      metrics: { ingested: bridge.ingested, candidates: bridge.candidates.length, skippedDupes: bridge.skippedDupes },
+    });
+    return { report, bridge };
+  }
+
+  /**
+   * 49.x：人工 Review Benchmark 扩充候选（approve 才可并入 Benchmark；reject 记录原因）。
+   * 必须人工（禁止 AI 自批），完整写入审计链路。
+   */
+  reviewBenchmarkCandidate(id: string, decision: 'APPROVED' | 'REJECTED', reviewer: string, reason?: string): BenchmarkCandidate {
+    const cand = decision === 'APPROVED'
+      ? this.benchmarkCandidates.approve(id, reviewer)
+      : this.benchmarkCandidates.reject(id, reviewer, reason ?? '人工驳回');
+    this.audit.record({
+      proposalId: 'n/a', actor: reviewer,
+      action: decision === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+      candidate: id,
+      decision: `${decision === 'APPROVED' ? '人工批准' : '人工驳回'} Benchmark 候选 ${id}（${cand.domain}/${cand.caseId}）${reason ? `：${reason}` : ''}`,
+      metrics: { approved: cand.status === 'APPROVED' ? 1 : 0 },
+    });
+    return cand;
   }
 
   /** 完整状态快照（持续改进闭环持久化：CLI / API 重启后恢复） */
@@ -245,6 +296,7 @@ export class AIQualityService {
       knowledgeCandidates: this.knowledge.listCandidates(),
       knowledgeItems: this.knowledge.listItems(),
       continuousEval: this.continuousEval.snapshot(),
+      benchmarkCandidates: this.benchmarkCandidates.snapshot(),
       audit: this.audit.list(),
     };
   }
@@ -259,6 +311,7 @@ export class AIQualityService {
       experiments: ExperimentStore.import(snap.experiments),
       knowledge: KnowledgeLearning.import(snap.knowledgeCandidates, snap.knowledgeItems),
       continuousEval: ContinuousEvalStore.import(snap.continuousEval ?? []),
+      benchmarkCandidates: BenchmarkCandidateStore.import(snap.benchmarkCandidates ?? []),
       audit: ImprovementAudit.import(snap.audit),
     });
     return svc;
@@ -296,6 +349,8 @@ export interface AiQualitySnapshot {
   knowledgeItems: KnowledgeItem[];
   /** Phase 48：Continuous Evaluation 历史 */
   continuousEval?: ContinuousEvalRun[];
+  /** Phase 49：Benchmark 扩充候选（43.21，待人工 Review） */
+  benchmarkCandidates?: BenchmarkCandidate[];
   audit: ImprovementAuditRecord[];
 }
 

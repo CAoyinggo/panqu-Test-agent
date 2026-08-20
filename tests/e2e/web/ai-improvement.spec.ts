@@ -21,8 +21,8 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
     // QA 只读视角横幅（人工门禁，禁止 AI 自批）
     await expect(page.locator('.info-banner', { hasText: '只读视角' }).first()).toBeVisible();
-    // 8 个 Tab（48.1：新增「持续评测」）
-    for (const label of ['待核验反馈', '错误聚类', '改进提案', 'Prompt / Model', 'Shadow / Canary', '持续评测', '知识 Review', 'AI 质量']) {
+    // 9 个 Tab（48.1：持续评测；49.1：Benchmark 扩充）
+    for (const label of ['待核验反馈', '错误聚类', '改进提案', 'Prompt / Model', 'Shadow / Canary', '持续评测', 'Benchmark 扩充', '知识 Review', 'AI 质量']) {
       await expect(page.getByRole('button', { name: label })).toBeVisible();
     }
   });
@@ -181,5 +181,39 @@ test.describe('AI Improvement（47.1 / 46 改进闭环 Web）', () => {
     await injectSession(page, seed().users.qa);
     await page.goto(`${BASE_URL}/ai-quality`);
     await expect(page.getByText('AI 质量').first()).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('Benchmark 扩充 Tab：候选行渲染（待审）+ QA 只读（桥接/批准/驳回禁用）', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.qa);
+    await page.goto(`${BASE_URL}/ai-improvement`);
+    await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Benchmark 扩充' }).click();
+    await expect(page.getByText(/Benchmark 扩充候选/).first()).toBeVisible({ timeout: 15_000 });
+    // 种子候选行（待审 PENDING_REVIEW）
+    const row = page.locator('tr', { hasText: s.aiQuality.benchmarkCandidate }).first();
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(row).toContainText('PENDING_REVIEW');
+    // QA 只读 → 桥接 / 批准 / 驳回按钮禁用
+    await expect(page.getByRole('button', { name: '运行真实评测并桥接失败' })).toBeDisabled();
+    await expect(row.getByRole('button', { name: /批准/ })).toBeDisabled();
+    await expect(row.getByRole('button', { name: /驳回/ })).toBeDisabled();
+  });
+
+  test('Benchmark 扩充 Tab：RELEASE_MANAGER 批准候选 → 成功横幅 + 状态 APPROVED（禁止 AI 自批，人工门禁）', async ({ page }) => {
+    const s = seed();
+    await injectSession(page, s.users.release);
+    await page.goto(`${BASE_URL}/ai-improvement`);
+    await expect(page.getByText('AI Improvement').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Benchmark 扩充' }).click();
+    const row = page.locator('tr', { hasText: s.aiQuality.benchmarkCandidate }).first();
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    const approveBtn = row.getByRole('button', { name: /批准/ });
+    await expect(approveBtn).toBeEnabled();
+    await approveBtn.click();
+    await expect(page.locator('.success-banner', { hasText: /已批准/ }).first()).toBeVisible({ timeout: 10_000 });
+    // 状态行更新为 APPROVED（操作列变为 by release-mgr）
+    await expect(row).toContainText('APPROVED', { timeout: 15_000 });
+    await expect(row).toContainText('by release-mgr');
   });
 });

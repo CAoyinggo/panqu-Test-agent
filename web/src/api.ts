@@ -453,3 +453,41 @@ export function getContinuousEvalDetail(id: string): Promise<ContinuousEvalRunIt
 export function getAIQualityTrends(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>('/ai-quality/trends');
 }
+
+/** Phase 49：Benchmark 扩充候选（43.21）类型 */
+export interface BenchmarkCandidateItem {
+  id: string;
+  domain: string;
+  caseId: string;
+  expected: unknown;
+  actual: unknown;
+  errors: string[];
+  source: string;
+  feedbackId: string;
+  status: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+  reviewer?: string;
+  reviewedAt?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface BenchmarkBridgeResult {
+  ingested: number;
+  skippedDupes: number;
+  feedbackIds: string[];
+  candidates: BenchmarkCandidateItem[];
+  message?: string;
+}
+
+export function getBenchmarkCandidates(filter?: string): Promise<BenchmarkCandidateItem[]> {
+  return request<BenchmarkCandidateItem[]>(`/ai-quality/benchmark-candidates${filter ?? ''}`);
+}
+export function bridgeBenchmarkCandidates(domains?: string[]): Promise<BenchmarkBridgeResult> {
+  return api.post<BenchmarkBridgeResult>('/ai-quality/benchmark-candidates/bridge', domains && domains.length ? { domains } : {});
+}
+export function approveBenchmarkCandidate(id: string): Promise<BenchmarkCandidateItem> {
+  return api.post<BenchmarkCandidateItem>(`/ai-quality/benchmark-candidates/${id}/approve`);
+}
+export function rejectBenchmarkCandidate(id: string, reason: string): Promise<BenchmarkCandidateItem> {
+  return api.post<BenchmarkCandidateItem>(`/ai-quality/benchmark-candidates/${id}/reject`, { reason });
+}

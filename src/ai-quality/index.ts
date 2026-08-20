@@ -16,6 +16,7 @@ export { ExperimentStore, createExperimentStore } from './experiment.js';
 export { KnowledgeLearning, createKnowledgeLearning } from './knowledge-learning.js';
 export { detectRegression, aiReleaseGate, computeChangeImpact, benchmarkCandidateFromFeedback, CONTINUOUS_EVAL_SCHEDULES } from './ops.js';
 export { ImprovementAudit, createImprovementAudit } from './ops.js';
+export { BenchmarkCandidateStore, createBenchmarkCandidateStore, bridgeEvalReport, extractEvalFailures, type BenchmarkCandidate, type BenchmarkCandidateStatus, type EvalBridgeResult, type EvalBridgeDeps } from './eval-bridge.js';
 export type { ErrorAnalysisSource, ErrorAnalysisOptions } from './error-analysis.js';
 export type { CreateProposalInput, ImprovementGateInput, ImprovementGateResult, ProposalStoreOptions } from './improvement.js';
 export type { ExperimentOptions, ShadowObservation } from './experiment.js';
