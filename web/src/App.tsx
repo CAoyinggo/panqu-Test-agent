@@ -125,6 +125,7 @@ export default function App() {
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/ai-quality" element={<AIQuality />} />
+          <Route path="/ai-improvement" element={<AIImprovement />} />
           <Route path="/telemetry" element={<Telemetry />} />
           <Route path="/telemetry/events" element={<TelemetryEvents />} />
           <Route path="/telemetry/activation" element={<TelemetryActivation />} />

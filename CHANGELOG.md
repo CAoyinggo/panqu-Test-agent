@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.22.0] - 2026-08-20
+
+### 修复（Phase 47 复扫发现）
+
+- **Web「AI 改进」页可达性缺陷**：侧边栏导航已有 `/ai-improvement`，但 `web/src/App.tsx` 的 `<Routes>` 缺少对应 `<Route>`，点击落到 `<NotFound>`。新增 `<Route path="/ai-improvement" element={<AIImprovement />} />`，Phase 46 改进页现可正常访问。
+
+### 新增（Web「AI 质量 / AI 改进」页真实浏览器 E2E 覆盖，Phase 47）
+
+- E2E 种子注入（`tests/e2e/web/e2e-server.ts`）：`seedAiQuality()` 确定性注入 AI 质量闭环数据（未核验 INCORRECT 反馈 3 条 / 已核验 CORRECT 1 条 / 自动提案 → Gate PASS 可审批 + APPROVED / Prompt risk v1·v2 / Model deepseek v3·v4 / Shadow COMPLETED + Canary RUNNING@5% / 知识候选 PENDING_REVIEW），经 `createPlatformServer({ aiQuality })` 注入；`WebE2eSeed` 新增 `aiQuality` 清单字段。
+- 真实浏览器 Playwright E2E（`tests/e2e/web/ai-improvement.spec.ts`，**11 用例**）：未认证重定向 / 导航 + 7 Tab + QA 只读横幅 / 待核验反馈（QA 核验禁用）/ 错误聚类 / 改进提案（Gate PASS + 已审批）/ Prompt·Model 版本 / Shadow·Canary 实验（QA 创建禁用）/ 知识 Review / AI 质量聚合指标 / **RBAC 人工门禁：RELEASE_MANAGER 批准 → 成功横幅 + APPROVED** / Phase 45 AI 质量页可达。
+- 脚本：`web:e2e:ai`（定向 AI 页 E2E）、`phase47:test`（Phase 46 + AI 页 E2E + 全量 Web E2E）。
+
+### 变更
+
+- 版本 v4.21.0 → v4.22.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 验收（真实运行）
+
+- `npm run web:e2e:test`：**98 用例全绿**（87 存量 + 11 新增）。
+- `npm test`：**1736 通过 / 18 skip，0 失败**；`platform:integration` 94 通过；`platform:e2e` 16 通过。
+
 ## [4.21.0] - 2026-08-20
 
 ### 新增（AI 质量优化、反馈学习与持续改进闭环，Phase 46）

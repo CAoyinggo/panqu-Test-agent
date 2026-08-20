@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.21.0",
+  "version": "4.22.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
@@ -82,6 +82,7 @@
     "web:test": "npm --prefix web run test",
     "web:test:coverage": "npm --prefix web run test:coverage",
     "web:e2e:test": "npm run build && npm run build:web && playwright test -c dist/tests/e2e/web/playwright.config.js",
+    "web:e2e:ai": "npm run build && npm run build:web && playwright test -c dist/tests/e2e/web/playwright.config.js ai-improvement",
     "web:e2e:server": "npm run build && node dist/tests/e2e/web/e2e-server.js",
     "web:e2e": "npm run web:e2e:test",
     "web:e2e:cross": "npm run build && npm run build:web && WEB_E2E_BROWSERS=chromium playwright test -c dist/tests/e2e/web/playwright.config.js && WEB_E2E_BROWSERS=firefox playwright test -c dist/tests/e2e/web/playwright.config.js && WEB_E2E_BROWSERS=webkit playwright test -c dist/tests/e2e/web/playwright.config.js",
@@ -112,6 +113,7 @@
     "agent:ai:e2e": "vitest run tests/e2e/ai-improvement-flow.test.ts tests/e2e/ai-quality-dashboard.test.ts",
     "agent:ai:test": "npm run agent:ai:unit && npm run agent:ai:integration && npm run agent:ai:e2e",
     "phase46:test": "npm run agent:ai:test && npm run agent:ai-quality && npm run web:test",
+    "phase47:test": "npm run phase46:test && npm run web:e2e:ai && npm run web:e2e:test",
     "platform:version": "npm run build && node dist/bin/platform-cli.js platform version",
     "platform:assets": "npm run build && node dist/bin/platform-cli.js platform assets",
     "platform:onboarding": "npm run build && node dist/bin/platform-cli.js platform assets import && vitest run tests/e2e/project-onboarding.test.ts",

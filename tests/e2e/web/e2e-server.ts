@@ -14,6 +14,8 @@ import { createPlatformService } from '../../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../../src/platform/service/index.js';
 import { createPlatformServer } from '../../../src/platform/api/index.js';
 import { standardEnvironments } from '../../../src/platform/projects/project-schema.js';
+import { createAIQualityService } from '../../../src/ai-quality/service.js';
+import type { AIQualityService } from '../../../src/ai-quality/service.js';
 
 export const WEB_E2E_PORT = Number(process.env.WEB_E2E_PORT ?? 8799);
 export const WEB_E2E_HOST = process.env.WEB_E2E_HOST ?? '127.0.0.1';
@@ -42,10 +44,20 @@ export interface WebE2eSeed {
   orderProject: { projectId: string; runId: string; environment: string };
   /** 44.1：版本化资产（TestAssets / AssetVersions 页面数据源） */
   assetVersions: { assetId: string };
+  /** 47.1：AI 质量闭环（AI 改进页数据源） */
+  aiQuality: {
+    feedbackUnverified: string;
+    proposalApprovable: string;
+    proposalApproved: string;
+    promptKey: string;
+    shadowExperiment: string;
+    canaryExperiment: string;
+    knowledgeCandidate: string;
+  };
 }
 
 /** 种子全部测试数据，返回清单 */
-async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl'>> {
+async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl' | 'aiQuality'>> {
   const S = bundle.service;
   const now = (): string => new Date().toISOString();
   const QA_ACTOR = 'qa-a';
@@ -201,6 +213,92 @@ async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl'>
   };
 }
 
+/** 47.1：种子 AI 质量闭环数据（AI 改进页数据源，确定性可重复） */
+function seedAiQuality(): { service: AIQualityService; refs: WebE2eSeed['aiQuality'] } {
+  const svc = createAIQualityService();
+
+  // 1) 未核验反馈（待核验 Tab：INCORRECT + UNDER_PREDICTION / WRONG 聚类）
+  const fbRisk = svc.ingest({
+    domain: 'RISK', prediction: 'P2', actual: 'P0',
+    feedbackType: 'INCORRECT', source: 'HUMAN', channel: 'HUMAN_CORRECTION',
+    note: 'E2E：P2 实为 P0', verified: false,
+  });
+  svc.ingest({
+    domain: 'RCA', prediction: 'NETWORK', actual: 'MODEL',
+    feedbackType: 'INCORRECT', source: 'HUMAN', channel: 'RCA_VERIFICATION',
+    note: 'E2E：根因判错', verified: false,
+  });
+  svc.ingest({
+    domain: 'RELEASE', prediction: 'PASS', actual: 'BLOCK',
+    feedbackType: 'INCORRECT', source: 'PRODUCTION', channel: 'PRODUCTION_INCIDENT',
+    note: 'E2E：漏判发布阻断', verified: false,
+  });
+  // 2) 已核验正确反馈（不进入待核验列表）
+  svc.ingest({
+    domain: 'RISK', prediction: 'P1', actual: 'P1',
+    feedbackType: 'CORRECT', source: 'HUMAN', channel: 'HUMAN_CORRECTION', verified: true,
+  });
+
+  // 3) 自动提案（从错误聚类生成）
+  const created = svc.autoProposals();
+  const approvable = created[0];
+
+  // 4) 离线评测 → EVALUATING + Gate PASS（可审批提案，保持未审批供 E2E 人工审批）
+  svc.proposals.recordEvaluation(approvable.id, {
+    baselineScore: 0.9, candidateScore: 0.94,
+    benchmark: 'RISK_BENCHMARK', benchmarkVersion: 'v1',
+    critical: { falsePass: 0, unsafeHealing: 0, p0Miss: 0 },
+    qualityDelta: 0.01, qualityScore: 0.92,
+  });
+
+  // 5) 离线评测另一提案 → EVALUATING + Gate PASS，再人工审批 → APPROVED（创建实验数据源；必须人工，禁止 AI 自批）
+  svc.proposals.recordEvaluation(created[1].id, {
+    baselineScore: 0.88, candidateScore: 0.9,
+    benchmark: 'RCA_BENCHMARK', benchmarkVersion: 'v1',
+    critical: { falsePass: 0, unsafeHealing: 0, p0Miss: 0 },
+    qualityDelta: 0.01, qualityScore: 0.9,
+  });
+  const approved = svc.proposals.approve(created[1].id, 'release-mgr');
+
+  // 6) Prompt 版本：v1 ACTIVE + v2 DRAFT
+  const pv1 = svc.prompts.add({ promptKey: 'risk', content: '风险评估 Prompt v1（E2E）', createdBy: 'release-mgr' });
+  svc.prompts.recordScore(pv1.id, 0.9);
+  const pv2 = svc.prompts.add({ promptKey: 'risk', content: '风险评估 Prompt v2（E2E）', createdBy: 'release-mgr' });
+  svc.prompts.recordScore(pv2.id, 0.94);
+
+  // 7) Model 版本：v3 ACTIVE + v4 DRAFT
+  const mv3 = svc.models.add({ provider: 'deepseek', model: 'deepseek-chat', modelVersion: 'v3', configuration: { temperature: 0.2 }, createdBy: 'release-mgr' });
+  svc.models.setActive(mv3.id);
+  svc.models.add({ provider: 'deepseek', model: 'deepseek-chat', modelVersion: 'v4', configuration: { temperature: 0.1 }, createdBy: 'release-mgr' });
+
+  // 8) 实验：Shadow COMPLETED + Canary RUNNING@5%
+  const shadow = svc.experiments.createShadow({ proposalId: approved.id, candidateRef: 'risk-candidate' });
+  svc.experiments.recordShadowObservation(shadow.id, {
+    baseline: { accuracy: 0.9, latencyMs: 500, cost: 0.001, failureRate: 0.05, safety: 0 },
+    candidate: { accuracy: 0.94, latencyMs: 480, cost: 0.0011, failureRate: 0.03, safety: 0 },
+  });
+  const canary = svc.experiments.createCanary({ proposalId: approved.id, candidateRef: 'risk-candidate' });
+
+  // 9) 知识候选（PENDING_REVIEW，未经 Review 不进入生产）
+  const kc = svc.knowledge.createCandidate({
+    category: 'RISK', content: 'P0 级风险不应被降级为 P2（E2E 知识候选）',
+    source: 'REAL_RUN', confidence: 0.85,
+  });
+
+  return {
+    service: svc,
+    refs: {
+      feedbackUnverified: fbRisk.id,
+      proposalApprovable: approvable.id,
+      proposalApproved: approved.id,
+      promptKey: 'risk',
+      shadowExperiment: shadow.id,
+      canaryExperiment: canary.id,
+      knowledgeCandidate: kc.id,
+    },
+  };
+}
+
 /** 启动 Web E2E 服务器（长驻）；供 Playwright webServer 调用 */
 export async function startWebE2eServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const bundle = createPlatformService({
@@ -213,6 +311,7 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
   await bundle.auth.ensureSeeded();
 
   const seeded = await seed(bundle);
+  const aiQuality = seedAiQuality();
   const webDir = path.join(process.cwd(), 'web', 'dist');
   if (!fs.existsSync(path.join(webDir, 'index.html'))) {
     throw new Error(`Web Dashboard 未构建：${webDir}（先运行 npm run build:web）`);
@@ -226,13 +325,15 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
     host: WEB_E2E_HOST,
     now: () => new Date().toISOString(),
     webDir,
+    // 47.1：注入种子 AI 质量闭环服务（AI 改进页有真实数据渲染）
+    aiQuality: aiQuality.service,
     // 41.13：E2E 测试连跑时 QA Home 3s 轮询 + 登录 + 多页操作会在 60s 窗口内超过默认
     //       120 req/min/IP 配额 → 429 使页面数据加载失败。测试环境放开配额，避免误伤。
     rateLimitPerMinute: 100_000,
   });
   const { url } = await server.listen();
   const baseUrl = url.replace(/\/$/, '');
-  const manifest: WebE2eSeed = { baseUrl, ...seeded };
+  const manifest: WebE2eSeed = { baseUrl, ...seeded, aiQuality: aiQuality.refs };
   fs.writeFileSync(SEED_FILE, JSON.stringify(manifest, null, 2));
   console.log(`WEB_E2E_SERVER=${baseUrl}`);
   console.log(`WEB_E2E_SEED=${SEED_FILE}`);
