@@ -5,6 +5,7 @@
 
 import type { EvaluationCase, EvaluationDomain } from '../contract.js';
 import { DOMAIN_LABELS } from '../contract.js';
+export { ContentAddressedBenchmarkStore, type BenchmarkManifest, type BenchmarkIntegrityReport, type ContentAddressedBenchmarkSnapshot } from './content-store.js';
 
 export interface BenchmarkDefinition {
   /** 注册名：`<DOMAIN>_BENCHMARK_<version>` */
