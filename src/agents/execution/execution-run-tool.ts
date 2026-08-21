@@ -14,6 +14,8 @@ import { autoLoadScenes } from '../../plugins/loader.js';
 import { getDataFactory } from '../../core/data-factory.js';
 import { logger } from '../../utils/logger.js';
 import { computeOutcome, ExecutionOutcome } from './execution-schema.js';
+import type { RunTaskResult } from '../../core/engine.js';
+import type { LoadedCase as RunnerLoadedCase } from '../../cases/loader.js';
 
 /** 执行选项 */
 export interface ExecutionRunOptions {
@@ -30,6 +32,36 @@ export type ExecutionRunner = (
   cases: LoadedCase[],
   options: ExecutionRunOptions,
 ) => Promise<ExecutionOutcome>;
+
+/** 将核心引擎结果转为 Agent CaseResult；执行状态采用 fail-closed 语义。 */
+export function caseResultFromEngine(
+  c: RunnerLoadedCase,
+  result: RunTaskResult,
+  durationMs: number,
+) {
+  const pass = result.executed && result.status === 'PASS' && result.passRate === 100 && !result.hasBlockingIssue;
+  return {
+    caseId: String(c.def.extra?.agentTestCaseId ?? c.def.name),
+    name: c.name,
+    feature: c.feature,
+    scene: c.def.scene,
+    priority: Array.isArray(c.def.tags) ? c.def.tags.find((t) => /^P[0-3]$/.test(t)) : undefined,
+    tags: c.def.tags,
+    executed: result.executed,
+    status: result.status,
+    pass,
+    passRate: pass ? result.passRate : 0,
+    error: pass ? undefined : result.status === 'NOT_EXECUTED'
+      ? 'NOT_EXECUTED：未完成真实 Processor 执行'
+      : result.status === 'BLOCKED'
+        ? 'BLOCKED：执行未完成或没有有效断言'
+        : result.status === 'FAIL'
+          ? 'FAIL：断言未通过'
+          : undefined,
+    checks: result.checks.map((check) => ({ name: check.name, pass: check.pass, detail: check.detail, level: check.level })),
+    durationMs,
+  };
+}
 
 /** 真实执行器：调用现有 Engine 逐条执行用例并聚合结果 */
 export const realEngineRunner: ExecutionRunner = async (cases, options) => {
@@ -55,7 +87,7 @@ export const realEngineRunner: ExecutionRunner = async (cases, options) => {
   for (const c of cases) {
     const t0 = Date.now();
     try {
-      const { files, passRate, hasBlockingIssue } = await engine.runTask(
+      const engineResult = await engine.runTask(
         cfg,
         c.def,
         envName,
@@ -65,24 +97,16 @@ export const realEngineRunner: ExecutionRunner = async (cases, options) => {
         undefined,
         options.autoSetup === true,
       );
-      reports.push(...files);
-      results.push({
-        caseId: String(c.def.extra?.agentTestCaseId ?? c.def.name),
-        name: c.name,
-        feature: c.feature,
-        scene: c.def.scene,
-        priority: Array.isArray(c.def.tags) ? c.def.tags.find((t) => /^P[0-3]$/.test(t)) : undefined,
-        tags: c.def.tags,
-        pass: passRate === 100 && !hasBlockingIssue,
-        passRate,
-        durationMs: Date.now() - t0,
-      });
+      reports.push(...engineResult.files);
+      results.push(caseResultFromEngine(c, engineResult, Date.now() - t0));
     } catch (e: any) {
       results.push({
         caseId: String(c.def.extra?.agentTestCaseId ?? c.def.name),
         name: c.name,
         feature: c.feature,
         scene: c.def.scene,
+        executed: false,
+        status: 'BLOCKED' as const,
         pass: false,
         passRate: 0,
         error: e.message,
@@ -91,7 +115,8 @@ export const realEngineRunner: ExecutionRunner = async (cases, options) => {
     }
   }
 
-  const outcome = computeOutcome(feature, results, { reports, executed: true });
+  const allExecuted = results.length > 0 && results.every((result) => result.executed !== false && result.status !== 'NOT_EXECUTED');
+  const outcome = computeOutcome(feature, results, { reports, executed: allExecuted });
   logger.info(`执行引擎完成：${outcome.summary}`);
   return outcome;
 };

@@ -4,6 +4,7 @@
 // 额外携带 caseId（对应 Test DSL 用例 ID）与断言明细（CheckResult 摘要）。
 
 import type { CheckResult } from '../../core/types.js';
+import type { CoreExecutionStatus } from '../../core/execution-status.js';
 
 /** 单条用例执行结果 */
 export interface CaseExecutionResult {
@@ -17,6 +18,10 @@ export interface CaseExecutionResult {
   tags?: string[];
   pass: boolean;
   passRate: number;
+  /** 当前用例是否完成了真实 Processor 调用。 */
+  executed?: boolean;
+  /** 核心执行状态；NOT_EXECUTED/BLOCKED 永远不能视为通过。 */
+  status?: CoreExecutionStatus;
   error?: string;
   timedOut?: boolean;
   durationMs?: number;
@@ -65,6 +70,16 @@ export function normalizeCaseExecutionResult(data: Record<string, unknown>): Cas
     pass: data.pass === true,
     passRate: typeof data.passRate === 'number' ? data.passRate : (data.pass === true ? 100 : 0),
   };
+  result.executed = data.executed !== false;
+  result.status = isCoreExecutionStatus(data.status)
+    ? data.status
+    : result.executed
+      ? result.pass ? 'PASS' : 'FAIL'
+      : 'NOT_EXECUTED';
+  if (!result.executed || result.status === 'NOT_EXECUTED' || result.status === 'BLOCKED') {
+    result.pass = false;
+    result.passRate = 0;
+  }
   if (data.feature) result.feature = String(data.feature);
   if (data.scene) result.scene = String(data.scene);
   if (data.priority) result.priority = String(data.priority);
@@ -100,10 +115,16 @@ export function checksFromResults(checks: CheckResult[]): CaseExecutionResult['c
 
 /** 由结果数组计算汇总 */
 export function computeOutcome(feature: string, results: CaseExecutionResult[], extra: Partial<ExecutionOutcome> = {}): ExecutionOutcome {
-  const passed = results.filter((r) => r.pass && !r.timedOut).length;
-  const timedOut = results.filter((r) => r.timedOut).length;
-  const failed = results.length - passed - timedOut;
-  const total = results.length;
+  const safeResults = results.map((result) => {
+    if (result.executed === false || result.status === 'BLOCKED' || result.status === 'NOT_EXECUTED') {
+      return { ...result, pass: false, passRate: 0 };
+    }
+    return result;
+  });
+  const passed = safeResults.filter((r) => r.pass && !r.timedOut).length;
+  const timedOut = safeResults.filter((r) => r.timedOut).length;
+  const failed = safeResults.length - passed - timedOut;
+  const total = safeResults.length;
   const passRate = total > 0 ? Math.round((passed / total) * 1000) / 10 : 0;
   return {
     feature,
@@ -112,12 +133,16 @@ export function computeOutcome(feature: string, results: CaseExecutionResult[], 
     failed,
     timedOut,
     passRate,
-    results,
+    results: safeResults,
     reports: extra.reports ?? [],
-    executed: extra.executed ?? true,
+    executed: extra.executed ?? (safeResults.length > 0 && safeResults.every((r) => r.executed !== false && r.status !== 'NOT_EXECUTED')),
     plan: extra.plan,
     summary: extra.summary ?? `共 ${total} 条：通过 ${passed}，失败 ${failed}${timedOut ? `，超时 ${timedOut}` : ''}，通过率 ${passRate}%`,
   };
+}
+
+function isCoreExecutionStatus(value: unknown): value is CoreExecutionStatus {
+  return value === 'PASS' || value === 'FAIL' || value === 'BLOCKED' || value === 'NOT_EXECUTED';
 }
 
 /** 判断数据是否「像 ExecutionOutcome」 */

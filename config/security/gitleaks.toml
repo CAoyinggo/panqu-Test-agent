@@ -1,6 +1,6 @@
 # Gitleaks 配置 — test-flow 项目密钥泄露扫描
-# 使用方式：gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json
-# 排除 .env.example（占位符）、测试文件、node_modules
+# 使用方式：gitleaks detect --config config/security/gitleaks.toml --report-format json --report-path security-reports/gitleaks.json
+# 排除 config/env 下的环境模板（占位符）、测试文件、node_modules
 
 [extend]
 useDefault = true
@@ -10,7 +10,7 @@ useDefault = true
 description = "排除占位符、示例值、测试文件、配置文件"
 paths = [
   '''node_modules/.*''',
-  '''.env.example''',
+  '''config/env/\.env(?:\.[a-z]+)?\.example''',
   '''\.git/.*''',
   '''dist/.*''',
   '''output/.*''',
@@ -21,7 +21,7 @@ paths = [
   '''tsconfig\.json''',
   '''package-lock\.json''',
   '''package\.json''',
-  '''\.dockerignore''',
+  '''deploy/docker/Dockerfile\.dockerignore''',
 ]
 
 # 允许的占位符模式（不视为泄露）

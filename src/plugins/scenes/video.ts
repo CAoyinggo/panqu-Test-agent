@@ -2,6 +2,7 @@
 // 实现 SceneHandler 接口，封装提交/详情/状态/计费分析
 import type { RunContext, SubmitResult, BillingData } from '../../core/types.js';
 import type { SceneHandler } from '../../core/scene-handler.js';
+import type { CanonicalSceneId } from '../../core/canonical-scene.js';
 import { resolveExtraValue } from '../../integrations/assets.js';
 import { logger } from '../../utils/logger.js';
 import fs from 'node:fs';
@@ -9,10 +10,10 @@ import path from 'node:path';
 
 export class VideoSceneHandler implements SceneHandler {
   name = 'video';
-  scenes = ['文生视频', '图生视频', '全能参考', '首尾帧'];
+  supportedScenes = ['video'] as const satisfies readonly CanonicalSceneId[];
 
-  match(scene: string): boolean {
-    return this.scenes.some((s) => (scene || '').includes(s));
+  supports(scene: CanonicalSceneId): boolean {
+    return this.supportedScenes.includes(scene);
   }
 
   async submit(ctx: RunContext): Promise<{ taskId: number | null; submit: Partial<SubmitResult> }> {

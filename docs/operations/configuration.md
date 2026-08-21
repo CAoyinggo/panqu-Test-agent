@@ -34,9 +34,9 @@
 
 ## 4. 模板文件
 
-- `.env.example`：全量模板
-- `.env.staging.example`：staging 候选
-- `.env.production.example`：production（仅占位符）
+- `config/env/.env.example`：全量模板
+- `config/env/.env.staging.example`：staging 候选
+- `config/env/.env.production.example`：production（仅占位符）
 
 真实 `.env` 已被 `.gitignore` 排除；模板文件允许入库（不含真实值）。
 

@@ -1,20 +1,22 @@
 # Docker Compose：一键运行测试智能体，支持多环境切换
 # 使用方式：
-#   docker compose run --rm test-flow --task src/cases/wan3 --func wan3 --ci
-#   docker compose --profile preonline run --rm test-flow --task src/cases --ci
+#   docker compose -f deploy/docker-compose.yml run --rm test-flow --task src/cases/wan3 --func wan3 --ci
+#   docker compose -f deploy/docker-compose.yml --profile preonline run --rm test-flow --task src/cases --ci
 
 services:
   test-flow:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
     image: test-flow:latest
     container_name: test-flow
     volumes:
       # 报告输出挂载到宿主机，方便查看
-      - ./output:/app/output
+      - ../output:/app/output
       # 用例目录挂载（开发时热更新用例，无需重新构建镜像）
-      - ./src/cases:/app/src/cases:ro
+      - ../src/cases:/app/src/cases:ro
       # 素材库挂载（音频/图片/视频/文本）
-      - ./assets:/app/assets:ro
+      - ../assets:/app/assets:ro
     environment:
       - TESTFLOW_ENV=${TESTFLOW_ENV:-test}
       - TESTFLOW_OUTPUT_DIR=/app/output
@@ -40,13 +42,15 @@ services:
 
   # 预发布环境
   test-flow-preonline:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
     image: test-flow:latest
     container_name: test-flow-preonline
     volumes:
-      - ./output:/app/output
-      - ./src/cases:/app/src/cases:ro
-      - ./assets:/app/assets:ro
+      - ../output:/app/output
+      - ../src/cases:/app/src/cases:ro
+      - ../assets:/app/assets:ro
     environment:
       - TESTFLOW_ENV=preonline
       - TESTFLOW_OUTPUT_DIR=/app/output

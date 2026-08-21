@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ── 编译 TypeScript 源码
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -12,16 +12,19 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 COPY bin/ ./bin/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 RUN npm run build
 
 # ── Stage 2: Runtime ── 仅保留编译产物 + 运行时依赖
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 WORKDIR /app
 
-# 复制依赖清单，仅安装生产依赖
+# 复制依赖清单，仅安装生产依赖；运行阶段只需 node，移除 npm/npx 以缩小攻击面
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # 复制编译产物 + 配置 + 用例
 COPY --from=builder /app/dist/ ./dist/

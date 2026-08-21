@@ -129,8 +129,8 @@ security:sast:
   image: returntocorp/semgrep:latest
   needs: []
   script:
-    - semgrep --config semgrep.yml --sarif --output security-reports/semgrep.sarif . || true
-    - semgrep --config semgrep.yml --json --output security-reports/semgrep.json . || true
+    - semgrep --config config/security/semgrep.yml --sarif --output security-reports/semgrep.sarif . || true
+    - semgrep --config config/security/semgrep.yml --json --output security-reports/semgrep.json . || true
     - |
       ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
       echo "Semgrep 扫描完成：$ERROR_COUNT 个 ERROR 级别问题"
@@ -157,7 +157,7 @@ security:secrets:
   needs: []
   script:
     - mkdir -p security-reports
-    - gitleaks detect --config .gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source . || true
+    - gitleaks detect --config config/security/gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source . || true
     - |
       LEAK_COUNT=$(node -e "try{const r=require('./security-reports/gitleaks.json');console.log(r.length||0)}catch(e){console.log(0)}" 2>/dev/null || echo "0")
       echo "Gitleaks 扫描完成：$LEAK_COUNT 个密钥泄露"
@@ -196,7 +196,7 @@ security:trivy:
     - |
       if command -v docker &>/dev/null; then
         export DOCKER_BUILDKIT=1
-        docker build --cache-from=type=local,src=.docker-cache --cache-to=type=local,dest=.docker-cache -t test-flow:ci-scan .
+        docker build -f deploy/docker/Dockerfile --cache-from=type=local,src=.docker-cache --cache-to=type=local,dest=.docker-cache -t test-flow:ci-scan .
         trivy image --exit-code 1 --severity HIGH,CRITICAL --format json --output security-reports/trivy-image.json test-flow:ci-scan
         echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
       else
@@ -333,7 +333,7 @@ release:image:
       echo "镜像 tag: $IMAGE_TAG"
     # 构建镜像（复用 BuildKit 缓存）
     - export DOCKER_BUILDKIT=1
-    - docker build -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
+    - docker build -f deploy/docker/Dockerfile -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
     # 推送镜像
     - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
     - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"

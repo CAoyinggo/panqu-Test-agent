@@ -9,9 +9,9 @@ output-ci/
 # Environment variables (secrets)
 .env
 .env.*
-!.env.example
-!.env.staging.example
-!.env.production.example
+!config/env/.env.example
+!config/env/.env.staging.example
+!config/env/.env.production.example
 
 # Security scan reports (CI artifacts, not version controlled)
 security-reports/
@@ -19,7 +19,7 @@ security-reports/
 .docker-cache/
 
 # Test coverage reports
-coverage/
+/coverage/
 
 # Mutation testing artifacts (Stryker)
 .stryker-tmp/

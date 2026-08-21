@@ -17,6 +17,8 @@ import { logger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
 import { writeJson } from '../utils/fs-utils.js';
 import path from 'node:path';
+import { toCanonicalSceneId } from './canonical-scene.js';
+import { evaluateCoreExecution, type CoreExecutionStatus } from './execution-status.js';
 
 export interface PipelineOptions {
   cfg: AppConfig;
@@ -43,6 +45,10 @@ export interface PipelineResult {
   manual: Array<{ id: string; steps: string }>;
   issues: any[];
   passRate: number;
+  /** Processor 是否完成了真实调用。 */
+  executed: boolean;
+  /** Fail-closed 执行状态。 */
+  status: CoreExecutionStatus;
   assetInfo: any;
   semiAuto: boolean;
   taskId: number | null;
@@ -131,7 +137,12 @@ export class Pipeline {
 
   /** 执行完整流水线，返回结果（供报告器使用） */
   async run(): Promise<PipelineResult> {
-    const { cfg, session, taskDef, handler } = this.opts;
+    const { cfg, session, taskDef } = this.opts;
+    const canonicalScene = toCanonicalSceneId(taskDef.scene);
+    const handler = canonicalScene && this.opts.handler?.supportedScenes.includes(canonicalScene)
+      && this.opts.handler.supports(canonicalScene)
+      ? this.opts.handler
+      : null;
     const semiAuto = !handler;
     const env = session.env;
     const ctx = this.buildCtx();
@@ -143,6 +154,7 @@ export class Pipeline {
     let assetScan: any = { exists: false, byType: { image: [], audio: [], video: [], text: [] }, bySubdir: {} };
     let resolvedAssets: any[] = [];
     let mainError: Error | null = null;
+    let processorInvoked = false;
 
     await this.hooks.run('beforeAll', ctx);
     logger.step(`========== 开始执行：${taskDef.name}（${env} 环境） ==========`);
@@ -245,6 +257,7 @@ export class Pipeline {
       // 提交任务
       if (!taskId) {
         if (handler) {
+          processorInvoked = true;
           await this.hooks.run('beforeStep', ctx);
           logger.step('[5/10] 提交任务...');
           http.setStep('5-submit');
@@ -260,6 +273,7 @@ export class Pipeline {
           ctx.submit.err = '该场景未接入脚本处理器，需人工操作或后续接入';
         }
       } else {
+        if (handler) processorInvoked = true;
         logger.step(`[5/10] 使用已有任务 ID：${taskId}（跳过提交）`);
         ctx.submit.taskId = taskId;
         ctx.submit.status = '使用已有任务';
@@ -413,16 +427,23 @@ export class Pipeline {
     if (ctx.submit.status === '失败') {
       issues.push({ level: '阻塞', title: '任务生成失败', desc: ctx.submit.err || '模型接入点或账号权限问题' });
     }
-    if (semiAuto) {
-      issues.push({ level: '待接入', title: '场景未接入脚本处理器', desc: '半自动执行：需人工完成主链路，后续在 plugins/scenes/ 新增处理器接入' });
+    const execution = evaluateCoreExecution({
+      hasProcessor: Boolean(handler),
+      processorInvoked,
+      error: mainError,
+      checks,
+    });
+    if (execution.status === 'NOT_EXECUTED') {
+      issues.push({ level: '阻塞', title: 'NOT_EXECUTED', desc: execution.reason ?? '场景未接入 Processor，禁止进入 PASS' });
+    } else if (execution.status === 'BLOCKED') {
+      issues.push({ level: '阻塞', title: 'BLOCKED', desc: execution.reason ?? '执行未完成，禁止进入 PASS' });
     }
     if (billingData.modelTrend && !billingData.modelTrend.found) {
       issues.push({ level: '数据异常', title: '模型趋势中未统计到本次模型', desc: '需确认计费统计是否覆盖当前模型' });
     }
     checks.filter((c: any) => !c.pass).forEach((c: any) => issues.push({ level: '数据异常', title: c.name, desc: c.detail }));
 
-    const passCount = checks.filter((c: any) => c.pass).length;
-    const passRate = checks.length ? Math.round((passCount / checks.length) * 100) : 100;
+    const passRate = execution.passRate;
 
     const assetInfo = {
       exists: assetScan.exists,
@@ -443,6 +464,8 @@ export class Pipeline {
       manual,
       issues,
       passRate,
+      executed: execution.executed,
+      status: execution.status,
       assetInfo,
       semiAuto,
       taskId: ctx.taskId,

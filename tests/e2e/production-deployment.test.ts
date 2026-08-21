@@ -47,9 +47,9 @@ describe('Phase 26.1 Production Deployment', () => {
     }
   });
 
-  it('部署配置模板：三个 .env 模板存在且不含真实敏感值，.gitignore 白名单放行', () => {
+  it('部署配置模板：config/env 下三个 .env 模板存在且不含真实敏感值，.gitignore 白名单放行', () => {
     for (const name of ['.env.example', '.env.staging.example', '.env.production.example']) {
-      const file = path.join(REPO, name);
+      const file = path.join(REPO, 'config', 'env', name);
       expect(fs.existsSync(file), `${name} 存在`).toBe(true);
       const content = fs.readFileSync(file, 'utf-8');
       // 不允许真实密钥入库：这些字段要么为空要么是占位符
@@ -60,8 +60,8 @@ describe('Phase 26.1 Production Deployment', () => {
       }
     }
     const gitignore = fs.readFileSync(path.join(REPO, '.gitignore'), 'utf-8');
-    expect(gitignore).toContain('!.env.staging.example');
-    expect(gitignore).toContain('!.env.production.example');
+    expect(gitignore).toContain('!config/env/.env.staging.example');
+    expect(gitignore).toContain('!config/env/.env.production.example');
   });
 
   it('部署验收链：sqlite(staging) 下 health 全 ok、preflight 无 BLOCK、smoke 全 PASS', async () => {
