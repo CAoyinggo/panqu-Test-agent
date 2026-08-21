@@ -212,7 +212,7 @@
     "*.{ts,js,tsx,jsx}": "bash scripts/security/pre-commit-scan.sh"
   },
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=24.11.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

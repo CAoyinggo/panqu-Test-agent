@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ── 编译 TypeScript 源码
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY tests/ ./tests/
 RUN npm run build
 
 # ── Stage 2: Runtime ── 仅保留编译产物 + 运行时依赖
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 WORKDIR /app
 

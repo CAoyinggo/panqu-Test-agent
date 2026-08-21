@@ -50,7 +50,7 @@ test-flow 覆盖从用例定义、脚本执行、断言核验、数据生成、�
 | 平台层模块 | 19 个子模块（`src/platform/`） |
 | 标准生命周期钩子 | 7 个 |
 | 版本演进 | v1.0 → v4.18.0（29 个里程碑） |
-| 运行时 | Node.js ≥ 20.11 |
+| 运行时 | Node.js ≥ 24.11 |
 
 **技术栈**：TypeScript + ESM（NodeNext 严格模式）、Vitest + v8 覆盖率、ajv JSON Schema 校验、p-limit 并发池、chokidar 文件监听、Docker 镜像化。
 
@@ -500,4 +500,4 @@ node dist/bin/run-test.js --help
 | `npm run build:web` | 构建 Web Dashboard 前端（React + Vite） |
 | `node dist/bin/run-test.js --help` | 查看执行参数 |
 
-**依赖**：Node.js ≥ 20.11（内置 fetch）、TypeScript；运行时依赖 `ali-oss`、`chokidar`、`p-limit`；登录态文件 `/Users/mac/agents/test-Configuration/session-cookies.json`（已有 test / preonline 两环境）。
+**依赖**：Node.js ≥ 24.11（内置 fetch）、TypeScript；运行时依赖 `ali-oss`、`chokidar`、`p-limit`；登录态文件由 `TESTFLOW_SESSION_COOKIES_PATH` 指定。
