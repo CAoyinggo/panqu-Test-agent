@@ -46,7 +46,7 @@ export function timestamp(): number {
  * 输出根目录优先使用 TESTFLOW_OUTPUT_DIR 环境变量，未设置时回退到默认路径
  */
 export function outputDir(func?: string): string {
-  const outputRoot = process.env.TESTFLOW_OUTPUT_DIR || '/Users/mac/agents/output';
+  const outputRoot = process.env.TESTFLOW_OUTPUT_DIR || path.resolve('output');
   const base = path.join(outputRoot, todayStr());
   const f = (func || '').trim();
   const dir = f ? path.join(base, f) : base;

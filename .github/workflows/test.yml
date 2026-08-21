@@ -74,11 +74,17 @@ jobs:
           TESTFLOW_OSS_ACCESS_KEY_ID: ${{ secrets.TESTFLOW_OSS_ACCESS_KEY_ID }}
           TESTFLOW_OSS_ACCESS_KEY_SECRET: ${{ secrets.TESTFLOW_OSS_ACCESS_KEY_SECRET }}
           TESTFLOW_REPORT_BASE_URL: ${{ secrets.TESTFLOW_REPORT_BASE_URL }}
+          TESTFLOW_OUTPUT_DIR: ${{ github.workspace }}/output
         run: |
-          node dist/bin/run-test.js \
-            --task ${{ github.event.inputs.task || 'src/cases' }} \
-            ${{ github.event.inputs.func && format('--func {0}', github.event.inputs.func) || '' }} \
-            --ci --upload-reports
+          if [ -z "${TESTFLOW_COOKIE:-}" ]; then
+            echo "TESTFLOW_COOKIE 未配置：运行可复现的本地测试套件，跳过真实环境用例"
+            npm test
+          else
+            node dist/bin/run-test.js \
+              --task ${{ github.event.inputs.task || 'src/cases' }} \
+              ${{ github.event.inputs.func && format('--func {0}', github.event.inputs.func) || '' }} \
+              --ci --upload-reports
+          fi
 
       - name: Generate Allure HTML report
         if: always()

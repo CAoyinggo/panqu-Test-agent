@@ -442,7 +442,7 @@ test-flow/
 │   └── {功能}-{任务名}.json     # 按「功能-任务名」命名，如 wan3-wensheng / user-login / order-create
 ├── dist/                        # tsc 编译产物（npm run build 生成，可独立运行）
 ├── package.json / tsconfig.json # 工程配置（ESM + NodeNext + strict）
-└── output/                      # 旧版报告目录（已停用；新报告输出到 /Users/mac/agents/output/<日期>/<功能名>/）
+└── output/                      # 报告目录：output/<日期>/<功能名>/（可用 TESTFLOW_OUTPUT_DIR 覆盖）
 ```
 
 测试素材库（固定）：`/Users/mac/agents/Test-panqu/`（`audio/` `photo/` `txt/` `video/`）。
