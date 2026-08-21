@@ -141,6 +141,26 @@ export class EvaluationQueue<T = unknown> {
     };
   }
 
+  snapshot(): EvaluationQueueJob<T>[] {
+    return this.list();
+  }
+
+  /** 进程恢复时 RUNNING lease 一律失效并原 job requeue，避免僵尸 worker 迟到提交。 */
+  static restore<T>(snapshot: EvaluationQueueJob<T>[]): EvaluationQueue<T> {
+    const queue = new EvaluationQueue<T>();
+    for (const stored of snapshot) {
+      const job = cloneJob(stored);
+      if (job.status === 'RUNNING') {
+        job.status = 'QUEUED';
+        job.error = `requeued after queue recovery: ${job.workerId ?? 'unknown worker'}`;
+        clearLease(job);
+      }
+      queue.jobs.set(job.id, job);
+      queue.order.push(job.id);
+    }
+    return queue;
+  }
+
   private requireActiveLease(jobId: string, token: string): EvaluationQueueJob<T> {
     const job = this.jobs.get(jobId);
     if (!job) throw new Error(`Evaluation job 不存在：${jobId}`);
