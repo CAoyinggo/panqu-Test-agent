@@ -151,6 +151,8 @@
     "platform:production:smoke": "npm run platform:smoke",
     "platform:production:e2e": "npm run build && vitest run tests/e2e/production-deployment.test.ts",
     "platform:recovery:test": "npm run build && vitest run tests/e2e/recovery-drill.test.ts",
+    "platform:data:archive": "npm run build && node dist/bin/phase51-cli.js data archive",
+    "platform:data:restore": "npm run build && node dist/bin/phase51-cli.js data restore",
     "platform:release-gate:test": "npm run build && vitest run tests/e2e/release-gate-real.test.ts",
     "platform:backup-restore:test": "npm run build && vitest run tests/e2e/backup-restore-real.test.ts",
     "platform:pilot": "npm run build && node dist/bin/run-pilot.js",
