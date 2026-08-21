@@ -18,6 +18,7 @@ export { detectRegression, aiReleaseGate, computeChangeImpact, benchmarkCandidat
 export { ImprovementAudit, createImprovementAudit } from './ops.js';
 export { BenchmarkCandidateStore, createBenchmarkCandidateStore, bridgeEvalReport, extractEvalFailures, type BenchmarkCandidate, type BenchmarkCandidateStatus, type EvalBridgeResult, type EvalBridgeDeps } from './eval-bridge.js';
 export { mergeApprovedCandidates, candidateMatchesSource, type BenchmarkMergeResult, type BenchmarkMergeDeps, type BenchmarkMergeOptions } from './benchmark-merge.js';
+export { ProjectAIQualityRegistry, createProjectAIQualityRegistry, type ProjectAIQualitySnapshot, type ProjectAIQualityRegistryOptions } from './project-service.js';
 export type { ErrorAnalysisSource, ErrorAnalysisOptions } from './error-analysis.js';
 export type { CreateProposalInput, ImprovementGateInput, ImprovementGateResult, ProposalStoreOptions } from './improvement.js';
 export type { ExperimentOptions, ShadowObservation } from './experiment.js';

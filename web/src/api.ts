@@ -7,6 +7,7 @@ const AUTH_BASE = '/auth';
 const TOKEN_KEY = 'panqu_token';
 const USER_KEY = 'panqu_user';
 const TRACE_KEY = 'panqu_trace_id';
+const EVALUATION_PROJECT_KEY = 'panqu_evaluation_project';
 
 /** 请求超时（ms）：超过则视为 network timeout 错误（41.18） */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -112,6 +113,22 @@ export function getStoredUser(): AuthUser | null {
   }
 }
 
+/** Phase 51.1：AI Evaluation 的显式项目上下文。 */
+export function getEvaluationProjectId(): string {
+  const userProjects = getStoredUser()?.scopes.projects ?? [];
+  const selected = localStorage.getItem(EVALUATION_PROJECT_KEY);
+  if (selected && (userProjects.length === 0 || userProjects.includes(selected))) return selected;
+  const fallback = userProjects[0] ?? 'wan3';
+  localStorage.setItem(EVALUATION_PROJECT_KEY, fallback);
+  return fallback;
+}
+
+export function setEvaluationProjectId(projectId: string): void {
+  const normalized = projectId.trim();
+  if (!normalized) throw new Error('Evaluation projectId 不能为空');
+  localStorage.setItem(EVALUATION_PROJECT_KEY, normalized);
+}
+
 export function setSession(token: string, user: AuthUser): void {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -120,6 +137,7 @@ export function setSession(token: string, user: AuthUser): void {
 export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(EVALUATION_PROJECT_KEY);
   // 41.2：通知 App 会话失效 → 自动退出回登录页（避免停留在 Dashboard 死循环）
   window.dispatchEvent(new CustomEvent('panqu:unauthorized'));
 }
@@ -128,7 +146,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Trace-Id': getSessionTraceId() };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetchWithTimeout(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetchWithTimeout(`${API_BASE}${evaluationScopedPath(path)}`, { ...init, headers });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     const err = parseApiError(res, body);
@@ -137,6 +155,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw err;
   }
   return (await res.json()) as T;
+}
+
+/** 仅为 AI Evaluation 资源注入项目作用域，不改变平台其它 API 的 URL 契约。 */
+function evaluationScopedPath(path: string): string {
+  const prefixes = [
+    '/eval/', '/evaluation/', '/ai-feedback', '/ai-errors', '/ai-improvements',
+    '/prompts', '/models', '/experiments', '/knowledge/review', '/ai-quality',
+  ];
+  if (!prefixes.some((prefix) => path === prefix || path.startsWith(prefix))) return path;
+  if (/[?&]projectId=/.test(path)) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(getEvaluationProjectId())}`;
 }
 
 export async function login(username: string, password: string): Promise<{ token: string; user: AuthUser }> {
@@ -162,7 +191,17 @@ export async function login(username: string, password: string): Promise<{ token
   const user: AuthUser = {
     username: String(raw.username ?? ''),
     role: roles[0] ?? 'VIEWER',
-    scopes: { projects: [], environments: [], businesses: [] },
+    scopes: {
+      projects: Array.isArray((raw.scopes as Record<string, unknown> | undefined)?.projects)
+        ? ((raw.scopes as Record<string, unknown>).projects as unknown[]).map(String)
+        : [],
+      environments: Array.isArray((raw.scopes as Record<string, unknown> | undefined)?.environments)
+        ? ((raw.scopes as Record<string, unknown>).environments as unknown[]).map(String)
+        : [],
+      businesses: Array.isArray((raw.scopes as Record<string, unknown> | undefined)?.businesses)
+        ? ((raw.scopes as Record<string, unknown>).businesses as unknown[]).map(String)
+        : [],
+    },
   };
   setSession(token, user);
   return { token, user };

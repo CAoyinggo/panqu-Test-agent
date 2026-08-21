@@ -14,15 +14,15 @@ import path from 'node:path';
 import type { PlatformService } from '../service/platform-service.js';
 import type { Role } from '../rbac/rbac.js';
 import { hasPermission, isRole, type Permission } from '../rbac/rbac.js';
-import { assertRunAccess } from '../rbac/scopes.js';
+import { assertProjectAccess, assertRunAccess } from '../rbac/scopes.js';
 import type { AuthService } from '../auth/auth-service.js';
 import type { User } from '../auth/user.js';
 import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
 import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
-import { runAllEvaluation } from '../../eval/runner.js';
 import { createAIQualityService, AIQualityService } from '../../ai-quality/service.js';
+import { ProjectAIQualityRegistry } from '../../ai-quality/project-service.js';
 import { CONTINUOUS_EVAL_SCHEDULES } from '../../ai-quality/ops.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
@@ -55,6 +55,8 @@ export interface ApiServerOptions {
   webDir?: string;
   /** Phase 46：AI Quality 服务（可注入共享/持久化实例；缺省每服务器新建） */
   aiQuality?: AIQualityService;
+  /** Phase 51.1：项目级 AI Evaluation 状态；提供时优先于单实例 aiQuality。 */
+  aiQualityProjects?: ProjectAIQualityRegistry;
   /** Phase 46：AI Quality 状态持久化文件路径（提供时启动自动加载、写操作后自动保存，跨重启保留改进闭环） */
   aiQualityStateFile?: string;
 }
@@ -118,7 +120,31 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // ── Phase 46：AI 质量优化服务（Feedback / Error / Proposal / Version / Experiment / Knowledge）──
   // 每台服务器实例持有独立状态（或注入共享/持久化实例）；写操作一律走人工审批门禁（禁止 AI 自批）。
   // 配置 aiQualityStateFile 时：启动自动从文件恢复，写操作（POST）后自动保存，保证改进闭环跨重启持久化。
-  const aiQuality: AIQualityService = opts.aiQuality ?? (opts.aiQualityStateFile ? AIQualityService.loadFromFile(opts.aiQualityStateFile) : createAIQualityService());
+  const legacyAiQuality: AIQualityService = opts.aiQuality ?? (opts.aiQualityStateFile ? AIQualityService.loadFromFile(opts.aiQualityStateFile) : createAIQualityService());
+  const aiQualityProjects = opts.aiQualityProjects ?? new ProjectAIQualityRegistry({ initial: { wan3: legacyAiQuality } });
+
+  /** Phase 51.1：解析 + 校验项目作用域，并返回该项目独立 AI Evaluation 分区。 */
+  function aiQualityFor(c: Ctx): AIQualityService {
+    const requested = queryParam(c.req.url, 'projectId')
+      ?? (c.body.projectId ? String(c.body.projectId) : null)
+      ?? (Array.isArray(c.req.headers['x-project-id']) ? c.req.headers['x-project-id'][0] : c.req.headers['x-project-id'])
+      ?? (c.user?.scopes?.projects?.length === 1 ? c.user.scopes.projects[0] : null)
+      ?? 'wan3';
+    const projectId = String(requested);
+    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(404, `Project 不存在：${projectId}`);
+    if (c.user) assertProjectAccess({ roles: c.user.roles, scopes: c.user.scopes }, projectId);
+    return aiQualityProjects.forProject(projectId);
+  }
+
+  function evaluationProjectId(c: Ctx): string {
+    const requested = queryParam(c.req.url, 'projectId')
+      ?? (c.body.projectId ? String(c.body.projectId) : null)
+      ?? (Array.isArray(c.req.headers['x-project-id']) ? c.req.headers['x-project-id'][0] : c.req.headers['x-project-id'])
+      ?? (c.user?.scopes?.projects?.length === 1 ? c.user.scopes.projects[0] : null)
+      ?? 'wan3';
+    aiQualityFor(c); // 同步执行存在性 + Project Scope 校验
+    return String(requested);
+  }
 
   // ── 认证解析：JWT 优先；静态 Token → internal/test 模式（production 关闭 X-Header 直信任）──
   async function resolvePrincipal(authHeader: string | undefined, req: http.IncomingMessage): Promise<Principal | null> {
@@ -354,20 +380,20 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
     // Phase 45：AI 测试质量评测（AI Quality Dashboard 数据源）
     // 确定性规则评测（model=rules），无外部依赖、不消耗 token；权限同只读运维数据。
-    { method: 'GET', segments: ['eval', 'report'], handler: async () => runAllEvaluation() },
+    { method: 'GET', segments: ['eval', 'report'], handler: async (c) => ({ projectId: evaluationProjectId(c), ...aiQualityFor(c).evaluationReport() }) },
     { method: 'GET', segments: ['eval', 'report', ':domain'], handler: async (c, p) => {
       const domain = (p.domain ?? '').toUpperCase();
       const domains = ['REQUIREMENT', 'TEST_DESIGN', 'RISK', 'SELECTION', 'RCA', 'DEFECT', 'HEALING', 'RELEASE'];
       if (!domains.includes(domain)) throw new HttpError(404, `未知评测领域：${domain}`);
-      const report = runAllEvaluation();
-      return { ...report, domains: report.domains.filter((d) => d.domain === domain), overall: report.domains.find((d) => d.domain === domain)?.score ?? 0 };
+      const report = aiQualityFor(c).evaluationReport([domain as never]);
+      return { projectId: evaluationProjectId(c), ...report, domains: report.domains.filter((d) => d.domain === domain), overall: report.domains.find((d) => d.domain === domain)?.score ?? 0 };
     } },
 
     // ── Phase 46：AI 质量优化（Feedback / Error / Proposal / Version / Experiment / Knowledge / Quality）──
     // 统一 JWT / RBAC / 审计 / 人工审批。读端点（与 eval/report 一致）认证即可；
     // 写端点（verify / approve / reject / create experiment）需 RELEASE_APPROVE（人工门禁，禁止 AI 自批）。
     // 43.26 API：GET /ai-feedback；POST /ai-feedback/:id/verify
-    { method: 'GET', segments: ['ai-feedback'], handler: async (c) => maybePaginate(c.req.url, aiQuality.feedback.list({
+    { method: 'GET', segments: ['ai-feedback'], handler: async (c) => maybePaginate(c.req.url, aiQualityFor(c).feedback.list({
       domain: queryParam(c.req.url, 'domain') ?? undefined,
       source: queryParam(c.req.url, 'source') ?? undefined,
       feedbackType: queryParam(c.req.url, 'feedbackType') ?? undefined,
@@ -378,17 +404,17 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       let fb: import('../../ai-quality/contract.js').AIFeedback;
       try {
-        fb = aiQuality.feedback.verify(p.id, String(c.body.by ?? c.actor), c.body.note ? String(c.body.note) : undefined);
+        fb = aiQualityFor(c).feedback.verify(p.id, String(c.body.by ?? c.actor), c.body.note ? String(c.body.note) : undefined);
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }
-      aiQuality.audit.record({ proposalId: 'n/a', actor: c.actor, action: 'CREATED', decision: `人工核验反馈 ${p.id}`, metrics: { verified: 1 } });
+      aiQualityFor(c).audit.record({ proposalId: 'n/a', actor: c.actor, action: 'CREATED', decision: `人工核验反馈 ${p.id}`, metrics: { verified: 1 } });
       return fb;
     } },
     // 43.26 API：GET /ai-errors
-    { method: 'GET', segments: ['ai-errors'], handler: async () => aiQuality.errorClusters() },
+    { method: 'GET', segments: ['ai-errors'], handler: async (c) => aiQualityFor(c).errorClusters() },
     // 43.26 API：GET /ai-improvements；POST /ai-improvements/:id/approve|reject
-    { method: 'GET', segments: ['ai-improvements'], handler: async (c) => maybePaginate(c.req.url, aiQuality.proposals.list({
+    { method: 'GET', segments: ['ai-improvements'], handler: async (c) => maybePaginate(c.req.url, aiQualityFor(c).proposals.list({
       status: queryParam(c.req.url, 'status') ?? undefined,
       target: queryParam(c.req.url, 'target') ?? undefined,
       domain: queryParam(c.req.url, 'domain') ?? undefined,
@@ -397,11 +423,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       let approved: import('../../ai-quality/contract.js').ImprovementProposal;
       try {
-        approved = aiQuality.proposals.approve(p.id, c.actor);
+        approved = aiQualityFor(c).proposals.approve(p.id, c.actor);
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }
-      aiQuality.audit.record({
+      aiQualityFor(c).audit.record({
         proposalId: p.id, actor: c.actor, action: 'APPROVED',
         baseline: approved.baselineScore != null ? String(approved.baselineScore) : undefined,
         candidate: approved.candidateScore != null ? String(approved.candidateScore) : undefined,
@@ -415,23 +441,23 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       let rejected: import('../../ai-quality/contract.js').ImprovementProposal;
       try {
-        rejected = aiQuality.proposals.reject(p.id, c.actor, String(c.body.reason ?? '人工拒绝'));
+        rejected = aiQualityFor(c).proposals.reject(p.id, c.actor, String(c.body.reason ?? '人工拒绝'));
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }
-      aiQuality.audit.record({ proposalId: p.id, actor: c.actor, action: 'REJECTED', decision: rejected.rejectedReason ?? '人工拒绝' });
+      aiQualityFor(c).audit.record({ proposalId: p.id, actor: c.actor, action: 'REJECTED', decision: rejected.rejectedReason ?? '人工拒绝' });
       return rejected;
     } },
     // 43.26 API：GET /prompts；GET /prompts/:id/versions；GET /models
-    { method: 'GET', segments: ['prompts'], handler: async (c) => maybePaginate(c.req.url, aiQuality.prompts.list(queryParam(c.req.url, 'key') ?? undefined)) },
-    { method: 'GET', segments: ['prompts', ':id', 'versions'], handler: async (_c, p) => {
-      const v = aiQuality.prompts.get(p.id);
+    { method: 'GET', segments: ['prompts'], handler: async (c) => maybePaginate(c.req.url, aiQualityFor(c).prompts.list(queryParam(c.req.url, 'key') ?? undefined)) },
+    { method: 'GET', segments: ['prompts', ':id', 'versions'], handler: async (c, p) => {
+      const v = aiQualityFor(c).prompts.get(p.id);
       if (!v) throw new HttpError(404, `Prompt 版本不存在：${p.id}`);
-      return aiQuality.prompts.list(v.promptKey); // 同 key 的全部版本（v1 → v2 → ...）
+      return aiQualityFor(c).prompts.list(v.promptKey); // 同 key 的全部版本（v1 → v2 → ...）
     } },
-    { method: 'GET', segments: ['models'], handler: async () => aiQuality.models.list() },
+    { method: 'GET', segments: ['models'], handler: async (c) => aiQualityFor(c).models.list() },
     // 43.26 API：GET /experiments；POST /experiments（创建 Shadow / Canary 实验）
-    { method: 'GET', segments: ['experiments'], handler: async (c) => maybePaginate(c.req.url, aiQuality.experiments.list({
+    { method: 'GET', segments: ['experiments'], handler: async (c) => maybePaginate(c.req.url, aiQualityFor(c).experiments.list({
       type: queryParam(c.req.url, 'type') ?? undefined,
       status: queryParam(c.req.url, 'status') ?? undefined,
     })) },
@@ -441,21 +467,23 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       const proposalId = String(c.body.proposalId ?? '');
       const candidateRef = String(c.body.candidateRef ?? '');
       if (!proposalId || !candidateRef) throw new HttpError(400, 'experiments 需要 proposalId 与 candidateRef');
-      if (type === 'CANARY') return aiQuality.experiments.createCanary({ proposalId, candidateRef });
-      if (type === 'SHADOW') return aiQuality.experiments.createShadow({ proposalId, candidateRef });
+      if (type === 'CANARY') return aiQualityFor(c).experiments.createCanary({ proposalId, candidateRef });
+      if (type === 'SHADOW') return aiQualityFor(c).experiments.createShadow({ proposalId, candidateRef });
       throw new HttpError(400, `未知实验类型：${type}（SHADOW / CANARY）`);
     } },
     // 43.26 API：GET /knowledge/review（候选 + 生产知识 + 质量指标）
-    { method: 'GET', segments: ['knowledge', 'review'], handler: async () => ({
-      candidates: aiQuality.knowledge.listCandidates(),
-      items: aiQuality.knowledge.listItems(),
-      quality: aiQuality.knowledge.qualityMetrics(),
+    { method: 'GET', segments: ['knowledge', 'review'], handler: async (c) => ({
+      projectId: evaluationProjectId(c),
+      candidates: aiQualityFor(c).knowledge.listCandidates(),
+      items: aiQualityFor(c).knowledge.listItems(),
+      quality: aiQualityFor(c).knowledge.qualityMetrics(),
     }) },
     // 43.26 API：GET /ai-quality；GET /ai-quality/trends
-    { method: 'GET', segments: ['ai-quality'], handler: async () => aiQuality.aiQualityReport(runAllEvaluation()) },
-    { method: 'GET', segments: ['ai-quality', 'trends'], handler: async () => {
-      const report = aiQuality.aiQualityReport(runAllEvaluation());
+    { method: 'GET', segments: ['ai-quality'], handler: async (c) => ({ projectId: evaluationProjectId(c), ...aiQualityFor(c).aiQualityReport(aiQualityFor(c).evaluationReport()) }) },
+    { method: 'GET', segments: ['ai-quality', 'trends'], handler: async (c) => {
+      const report = aiQualityFor(c).aiQualityReport(aiQualityFor(c).evaluationReport());
       return {
+        projectId: evaluationProjectId(c),
         generatedAt: (report.regression as { generatedAt?: string } | undefined)?.generatedAt,
         overall: report.accuracy,
         falsePass: report.falsePass,
@@ -476,11 +504,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     // 读端点（列表/详情）认证即可（与 ai-quality 一致）；手动触发 run 需 RELEASE_APPROVE（人工门禁）。
     { method: 'GET', segments: ['ai-quality', 'continuous-evals'], handler: async (c) => {
       const schedule = queryParam(c.req.url, 'schedule') ?? undefined;
-      const list = schedule ? aiQuality.continuousEval.list({ schedule: schedule as never }) : aiQuality.continuousEval.list();
-      return { total: list.length, runs: list, schedules: CONTINUOUS_EVAL_SCHEDULES };
+      const list = schedule ? aiQualityFor(c).continuousEval.list({ schedule: schedule as never }) : aiQualityFor(c).continuousEval.list();
+      return { projectId: evaluationProjectId(c), total: list.length, runs: list, schedules: CONTINUOUS_EVAL_SCHEDULES };
     } },
-    { method: 'GET', segments: ['ai-quality', 'continuous-evals', ':id'], handler: async (_c, p) => {
-      const run = aiQuality.continuousEval.get(p.id);
+    { method: 'GET', segments: ['ai-quality', 'continuous-evals', ':id'], handler: async (c, p) => {
+      const run = aiQualityFor(c).continuousEval.get(p.id);
       if (!run) throw new HttpError(404, `Continuous Evaluation 运行不存在：${p.id}`);
       return run;
     } },
@@ -490,7 +518,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       if (!(['NIGHTLY', 'WEEKLY', 'RELEASE'] as string[]).includes(schedule)) {
         throw new HttpError(400, `未知 schedule：${schedule}（NIGHTLY / WEEKLY / RELEASE）`);
       }
-      const run = aiQuality.runContinuousEval({
+      const run = aiQualityFor(c).runContinuousEval({
         schedule: schedule as never,
         triggeredBy: 'MANUAL',
         domains: Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined,
@@ -503,7 +531,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['ai-quality', 'benchmark-candidates'], handler: async (c) => {
       const status = queryParam(c.req.url, 'status') ?? undefined;
       const domain = queryParam(c.req.url, 'domain') ?? undefined;
-      return maybePaginate(c.req.url, aiQuality.benchmarkCandidates.list({
+      return maybePaginate(c.req.url, aiQualityFor(c).benchmarkCandidates.list({
         status: status as never,
         domain: domain as never,
       }));
@@ -511,7 +539,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'POST', segments: ['ai-quality', 'benchmark-candidates', 'bridge'], handler: async (c) => {
       requireAiApprove(c);
       const domains = Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined;
-      const { bridge } = aiQuality.bridgeEvaluationNow(domains as never);
+      const { bridge } = aiQualityFor(c).bridgeEvaluationNow(domains as never);
       return {
         ingested: bridge.ingested,
         skippedDupes: bridge.skippedDupes,
@@ -526,7 +554,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       let cand: import('../../ai-quality/eval-bridge.js').BenchmarkCandidate;
       try {
-        cand = aiQuality.reviewBenchmarkCandidate(p.id, 'APPROVED', c.actor);
+        cand = aiQualityFor(c).reviewBenchmarkCandidate(p.id, 'APPROVED', c.actor);
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }
@@ -536,7 +564,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       let cand: import('../../ai-quality/eval-bridge.js').BenchmarkCandidate;
       try {
-        cand = aiQuality.reviewBenchmarkCandidate(p.id, 'REJECTED', c.actor, c.body.reason ? String(c.body.reason) : undefined);
+        cand = aiQualityFor(c).reviewBenchmarkCandidate(p.id, 'REJECTED', c.actor, c.body.reason ? String(c.body.reason) : undefined);
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }
@@ -548,7 +576,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       requireAiApprove(c);
       const candidateIds = Array.isArray(c.body.candidateIds) ? (c.body.candidateIds as string[]).map(String) : undefined;
       const domains = Array.isArray(c.body.domains) ? (c.body.domains as never[]) : undefined;
-      const result = aiQuality.mergeBenchmarkCandidates(c.actor, { candidateIds, domains: domains as never });
+      const result = aiQualityFor(c).mergeBenchmarkCandidates(c.actor, { candidateIds, domains: domains as never });
       return {
         ...result,
         message: result.merged > 0
@@ -556,6 +584,43 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
           : result.skippedUnresolvable > 0
             ? `无可并入候选：${result.skippedUnresolvable} 个无真实源用例（拒绝伪造输入）`
             : '无可并入候选（需要先批准）',
+      };
+    } },
+
+    // Phase 51.1：项目级 AI Evaluation 只读面；所有结果均由 projectId 分区并经过 JWT Project Scope。
+    { method: 'GET', segments: ['evaluation', 'report'], handler: async (c) => ({
+      projectId: evaluationProjectId(c),
+      report: aiQualityFor(c).evaluationReport(),
+    }) },
+    { method: 'GET', segments: ['evaluation', 'benchmarks'], handler: async (c) => ({
+      projectId: evaluationProjectId(c),
+      benchmarks: aiQualityFor(c).benchmarkRegistry.list(),
+    }) },
+    { method: 'GET', segments: ['evaluation', 'ground-truth'], handler: async (c) => ({
+      projectId: evaluationProjectId(c),
+      records: aiQualityFor(c).groundTruthRegistry.list(),
+    }) },
+    { method: 'GET', segments: ['evaluation', 'history'], handler: async (c) => ({
+      projectId: evaluationProjectId(c),
+      runs: aiQualityFor(c).continuousEval.list(),
+      audit: aiQualityFor(c).audit.list(),
+    }) },
+    { method: 'GET', segments: ['evaluation', 'telemetry'], handler: async (c) => {
+      const projectId = evaluationProjectId(c);
+      const events = (await c.service.telemetryEvents()).filter((event) => event.projectId === projectId);
+      return { projectId, total: events.length, events: maybePaginate(c.req.url, events) };
+    } },
+    { method: 'GET', segments: ['evaluation', 'scope'], handler: async (c) => {
+      const projectId = evaluationProjectId(c);
+      const aq = aiQualityFor(c);
+      return {
+        projectId,
+        benchmarkVersions: aq.benchmarkRegistry.list().map((b) => ({ name: b.name, version: b.version, caseCount: b.cases.length })),
+        groundTruthCount: aq.groundTruthRegistry.size,
+        evaluationCount: aq.continuousEval.size(),
+        feedbackCount: aq.feedback.size(),
+        knowledgeCount: aq.knowledge.listItems().length,
+        auditCount: aq.audit.list().length,
       };
     } },
   ];
@@ -939,7 +1004,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       sendJson(res, 200, result);
       // Phase 46：AI 质量状态持久化——写操作（POST）成功后落盘，跨重启保留改进闭环
       if (opts.aiQualityStateFile && method === 'POST') {
-        aiQuality.persistToFile(opts.aiQualityStateFile);
+        if (opts.aiQualityProjects) aiQualityProjects.persistToFile(opts.aiQualityStateFile);
+        else legacyAiQuality.persistToFile(opts.aiQualityStateFile);
       }
     } catch (err) {
       const e = err as Error;

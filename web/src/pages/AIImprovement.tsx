@@ -9,6 +9,7 @@ import {
   getPrompts, getModels, getExperiments, createExperiment, getKnowledgeReview, getAIQuality,
   getContinuousEvals, runContinuousEval,
   getBenchmarkCandidates, bridgeBenchmarkCandidates, approveBenchmarkCandidate, rejectBenchmarkCandidate, mergeBenchmarkCandidates,
+  api, getEvaluationProjectId, setEvaluationProjectId,
   type AIFeedbackItem, type AIErrorCluster, type ImprovementProposalItem, type PromptVersionItem,
   type ModelVersionItem, type ExperimentItem, type KnowledgeReview, type AIQualityReport,
   type ContinuousEvalList, type BenchmarkCandidateItem, type BenchmarkMergeResult,
@@ -40,6 +41,8 @@ function canApprove(): boolean {
 }
 
 export default function AIImprovement(): JSX.Element {
+  const [projectId, setProjectId] = useState(() => getEvaluationProjectId());
+  const [projects, setProjects] = useState<string[]>(() => getStoredUser()?.scopes.projects ?? []);
   const [tab, setTab] = useState<TabKey>('feedback');
   const [feedback, setFeedback] = useState<AIFeedbackItem[]>([]);
   const [clusters, setClusters] = useState<AIErrorCluster[]>([]);
@@ -69,7 +72,21 @@ export default function AIImprovement(): JSX.Element {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    setEvaluationProjectId(projectId);
+    void load();
+  }, [projectId]);
+
+  useEffect(() => {
+    const scoped = getStoredUser()?.scopes.projects ?? [];
+    if (scoped.length > 0) {
+      setProjects(scoped);
+      return;
+    }
+    void api.get<Array<{ id: string }>>('/projects')
+      .then((items) => setProjects(items.map((item) => item.id)))
+      .catch(() => setProjects([projectId]));
+  }, [projectId]);
 
   const pending = useMemo(() => feedback.filter((x) => !x.verified), [feedback]);
   const unverifiedClusters = useMemo(() => clusters.filter((c) => c.count > 0), [clusters]);
@@ -120,6 +137,19 @@ export default function AIImprovement(): JSX.Element {
     <div>
       <h1 className="page-title">AI Improvement</h1>
       <div className="page-sub">AI 质量优化 · 反馈学习 · 持续改进闭环（Feedback → 聚类 → 提案 → 评测 → 审批 → Shadow → Canary → 回滚）</div>
+      <div className="form-row" style={{ marginBottom: 14 }}>
+        <label htmlFor="evaluation-project">Evaluation Project</label>
+        <select
+          id="evaluation-project"
+          aria-label="Evaluation Project"
+          className="select"
+          value={projectId}
+          onChange={(event) => setProjectId(event.target.value)}
+        >
+          {(projects.length > 0 ? projects : [projectId]).map((id) => <option key={id} value={id}>{id}</option>)}
+        </select>
+        <span className="page-sub" style={{ marginBottom: 0 }}>Benchmark、Ground Truth、历史与 Telemetry 均按项目隔离</span>
+      </div>
       {!approver && <div className="info-banner">当前为只读视角：核验 / 审批 / 创建实验需 RELEASE_MANAGER 或 ADMIN 权限（人工门禁，禁止 AI 自批）。</div>}
       {error && <div className="error-banner">{error}</div>}
       {msg && <div className="success-banner">{msg}</div>}

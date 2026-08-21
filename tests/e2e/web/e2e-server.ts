@@ -16,6 +16,7 @@ import { createPlatformServer } from '../../../src/platform/api/index.js';
 import { standardEnvironments } from '../../../src/platform/projects/project-schema.js';
 import { createAIQualityService } from '../../../src/ai-quality/service.js';
 import type { AIQualityService } from '../../../src/ai-quality/service.js';
+import { createProjectAIQualityRegistry } from '../../../src/ai-quality/project-service.js';
 
 export const WEB_E2E_PORT = Number(process.env.WEB_E2E_PORT ?? 8799);
 export const WEB_E2E_HOST = process.env.WEB_E2E_HOST ?? '127.0.0.1';
@@ -42,6 +43,7 @@ export interface WebE2eSeed {
   cases: string[];
   /** 41.12：项目隔离（order 项目仅 qa-b 可访问） */
   orderProject: { projectId: string; runId: string; environment: string };
+  orderEvaluation: { feedbackUnverified: string };
   /** 44.1：版本化资产（TestAssets / AssetVersions 页面数据源） */
   assetVersions: { assetId: string };
   /** 47.1：AI 质量闭环（AI 改进页数据源） */
@@ -63,7 +65,7 @@ export interface WebE2eSeed {
 }
 
 /** 种子全部测试数据，返回清单 */
-async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl' | 'aiQuality'>> {
+async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl' | 'aiQuality' | 'orderEvaluation'>> {
   const S = bundle.service;
   const now = (): string => new Date().toISOString();
   const QA_ACTOR = 'qa-a';
@@ -347,6 +349,15 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
 
   const seeded = await seed(bundle);
   const aiQuality = seedAiQuality();
+  const orderAiQuality = createAIQualityService();
+  const orderFeedback = orderAiQuality.ingest({
+    domain: 'RCA', prediction: 'TIMEOUT', actual: 'DEPENDENCY',
+    feedbackType: 'INCORRECT', source: 'HUMAN', channel: 'RCA_VERIFICATION',
+    note: 'E2E order：订单依赖超时归因修正', verified: false,
+  });
+  const aiQualityProjects = createProjectAIQualityRegistry({
+    initial: { wan3: aiQuality.service, order: orderAiQuality },
+  });
   const webDir = path.join(process.cwd(), 'web', 'dist');
   if (!fs.existsSync(path.join(webDir, 'index.html'))) {
     throw new Error(`Web Dashboard 未构建：${webDir}（先运行 npm run build:web）`);
@@ -362,13 +373,17 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
     webDir,
     // 47.1：注入种子 AI 质量闭环服务（AI 改进页有真实数据渲染）
     aiQuality: aiQuality.service,
+    aiQualityProjects,
     // 41.13：E2E 测试连跑时 QA Home 3s 轮询 + 登录 + 多页操作会在 60s 窗口内超过默认
     //       120 req/min/IP 配额 → 429 使页面数据加载失败。测试环境放开配额，避免误伤。
     rateLimitPerMinute: 100_000,
   });
   const { url } = await server.listen();
   const baseUrl = url.replace(/\/$/, '');
-  const manifest: WebE2eSeed = { baseUrl, ...seeded, aiQuality: aiQuality.refs };
+  const manifest: WebE2eSeed = {
+    baseUrl, ...seeded, aiQuality: aiQuality.refs,
+    orderEvaluation: { feedbackUnverified: orderFeedback.id },
+  };
   fs.writeFileSync(SEED_FILE, JSON.stringify(manifest, null, 2));
   console.log(`WEB_E2E_SERVER=${baseUrl}`);
   console.log(`WEB_E2E_SEED=${SEED_FILE}`);

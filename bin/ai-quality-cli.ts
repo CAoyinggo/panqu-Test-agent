@@ -18,7 +18,7 @@
 //   node dist/bin/ai-quality-cli.js canary rollback <id> --reason <...>
 // 铁律：
 //   - approve / reject / verify / promote 视为人工动作，必须显式 --by <human>（禁止 AI 自批）。
-//   - 状态跨进程持久化到 data/ai-quality-state.json（gitignore），保证持续改进闭环不丢失。
+//   - Phase 51.1：所有命令支持 --project <id>，状态按项目持久化，禁止跨项目共享 Benchmark/Ground Truth。
 //   - 不虚构 Ground Truth / 不伪造指标；无数据时如实输出。
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
@@ -32,11 +32,27 @@ import { CONTINUOUS_EVAL_SCHEDULES, type ContinuousEvalScheduleName } from '../s
 
 const STATE_DIR = path.resolve(process.cwd(), 'data');
 const STATE_FILE = path.join(STATE_DIR, 'ai-quality-state.json');
+const PROJECT_STATE_DIR = path.join(STATE_DIR, 'ai-quality-projects');
+let activeProjectId = 'wan3';
 
-function loadService(): AIQualityService {
-  if (fs.existsSync(STATE_FILE)) {
+function normalizeProjectId(value: string): string {
+  const id = String(value ?? '').trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error(`projectId 非法：${id}`);
+  return id;
+}
+
+function projectStateFile(projectId: string): string {
+  return path.join(PROJECT_STATE_DIR, `${normalizeProjectId(projectId)}.json`);
+}
+
+function loadService(projectId = activeProjectId): AIQualityService {
+  activeProjectId = normalizeProjectId(projectId);
+  const scopedFile = projectStateFile(activeProjectId);
+  // wan3 首次升级时兼容 Phase 46-50 单文件状态；保存后写入项目分区目录。
+  const sourceFile = fs.existsSync(scopedFile) ? scopedFile : activeProjectId === 'wan3' && fs.existsSync(STATE_FILE) ? STATE_FILE : scopedFile;
+  if (fs.existsSync(sourceFile)) {
     try {
-      const snap = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as AiQualitySnapshot;
+      const snap = JSON.parse(fs.readFileSync(sourceFile, 'utf8')) as AiQualitySnapshot;
       return AIQualityService.restore(snap);
     } catch (err) {
       console.error(`状态文件损坏，使用空状态重建：${(err as Error).message}`);
@@ -46,8 +62,11 @@ function loadService(): AIQualityService {
 }
 
 function saveService(svc: AIQualityService): void {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(svc.snapshot(), null, 2), 'utf8');
+  const file = projectStateFile(activeProjectId);
+  fs.mkdirSync(PROJECT_STATE_DIR, { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(svc.snapshot(), null, 2), 'utf8');
+  fs.renameSync(tmp, file);
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -616,7 +635,8 @@ function main(): void {
     usage();
     return;
   }
-  const svc = loadService();
+  const projectId = flagValue(args, '--project') ?? 'wan3';
+  const svc = loadService(projectId);
   const json = hasFlag(args, '--json');
   switch (cmd) {
     case 'feedback': {
