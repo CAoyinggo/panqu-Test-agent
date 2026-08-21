@@ -221,15 +221,16 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     }
   }
 
-  /** Phase 52：ADMIN/RELEASE_MANAGER 对应平台的 FINANCE/PROJECT_OWNER 管理授权。 */
   function requireCostManage(c: Ctx): void {
-    requireAiApprove(c);
+    if (!hasPermission(c.role, 'COST_MANAGE' satisfies Permission)) {
+      throw new HttpError(403, `角色 ${c.role} 无权修改成本治理策略（仅 ADMIN/FINANCE/PROJECT_OWNER）`);
+    }
   }
 
   function costProjectId(c: Ctx, explicit?: string): string | undefined {
     const projectId = explicit ?? queryParam(c.req.url, 'projectId') ?? (c.body.projectId ? String(c.body.projectId) : undefined);
     if (!projectId) {
-      if (c.role !== 'ADMIN' && c.role !== 'RELEASE_MANAGER') throw new HttpError(403, '仅 ADMIN/FINANCE/PROJECT_OWNER 可以查看全部成本');
+      if (!hasPermission(c.role, 'COST_READ_ALL' satisfies Permission)) throw new HttpError(403, '仅 ADMIN/FINANCE/PROJECT_OWNER 可以查看全部成本');
       return undefined;
     }
     if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(404, `Project 不存在：${projectId}`);

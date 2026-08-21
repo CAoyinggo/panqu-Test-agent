@@ -8,11 +8,13 @@ export type Role =
   | 'QA'
   | 'DEVELOPER'
   | 'RELEASE_MANAGER'
+  | 'FINANCE'
+  | 'PROJECT_OWNER'
   | 'VIEWER'
   | 'SERVICE_ACCOUNT';
 
 /** 平台角色清单（单一权威源：守卫 / 校验 / 文档共用，防止角色漂移） */
-export const ROLES: readonly Role[] = ['ADMIN', 'QA', 'DEVELOPER', 'RELEASE_MANAGER', 'VIEWER', 'SERVICE_ACCOUNT'];
+export const ROLES: readonly Role[] = ['ADMIN', 'QA', 'DEVELOPER', 'RELEASE_MANAGER', 'FINANCE', 'PROJECT_OWNER', 'VIEWER', 'SERVICE_ACCOUNT'];
 
 /** 角色类型守卫：非法字符串（如 X-Role: HACKER）不被当作合法 Role（防身份伪造升级） */
 export function isRole(v: unknown): v is Role {
@@ -33,7 +35,10 @@ export type Permission =
   | 'RELEASE_APPROVE'
   | 'PRODUCTION_ACCESS'
   // 27.2：运维只读（审计日志 / 遥测成本 / Job / Worker 基础设施状态）
-  | 'OPS_READ';
+  | 'OPS_READ'
+  // Phase 52：成本全局读取与生产治理修改（专用权限，不复用 Release 审批）。
+  | 'COST_READ_ALL'
+  | 'COST_MANAGE';
 
 /** 全部权限（ADMIN 持有） */
 export const ALL_PERMISSIONS: readonly Permission[] = [
@@ -49,6 +54,8 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'RELEASE_APPROVE',
   'PRODUCTION_ACCESS',
   'OPS_READ',
+  'COST_READ_ALL',
+  'COST_MANAGE',
 ];
 
 /** 角色 → 权限矩阵（单一策略源） */
@@ -77,6 +84,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'PRODUCTION_ACCESS',
     'OPS_READ',
   ],
+  FINANCE: ['PROJECT_READ', 'OPS_READ', 'COST_READ_ALL', 'COST_MANAGE'],
+  PROJECT_OWNER: ['PROJECT_READ', 'PROJECT_WRITE', 'OPS_READ', 'COST_READ_ALL', 'COST_MANAGE'],
   VIEWER: ['PROJECT_READ', 'ASSET_READ'],
   SERVICE_ACCOUNT: ['TEST_RUN', 'ASSET_READ', 'DEFECT_CREATE', 'OPS_READ'],
 };

@@ -8,4 +8,4 @@ Phase 52 使用 `CostAttribution` 作为统一成本事实。每条记录必须�
 
 平台 `TelemetryService.recordLLM` 产生的真实 token/cost 会由 Cost API 幂等桥接为 `LLM` attribution；缺失 projectId 的旧记录不会被猜测归属。
 
-隔离规则：所有非全局查询必须带 Project Scope；QA/Viewer 只能读授权项目，ADMIN 与映射为 FINANCE/PROJECT_OWNER 的 RELEASE_MANAGER 才能读全局成本。任何项目缺失都不会回退到其它项目。
+隔离规则：所有非全局查询必须带 Project Scope；QA/Viewer 只能读授权项目，只有 ADMIN/FINANCE/PROJECT_OWNER 能读全局成本。任何项目缺失都不会回退到其它项目。

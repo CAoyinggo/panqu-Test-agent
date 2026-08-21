@@ -31,9 +31,9 @@
 
 ## Final regression
 
-- `npm test`：189 files PASS / 4 SKIP；1863 tests PASS / 18 SKIP。
+- `npm test`：189 files PASS / 4 SKIP；1864 tests PASS / 18 SKIP。
 - Agent：core 450、eval 8、E2E 2、autonomous E2E 26，全部通过；Eval Regression Overall 93.6% → 93.6%，Gate PASS。
-- Platform：unit 227、integration 94、E2E 16；Health `HEALTHY`。
+- Platform：unit 228、integration 94、E2E 16；Health `HEALTHY`。
 - Phase 39 / 40 / 51：PASS；Phase 51 专项 49。
 - Phase 52：14 files / 23 tests PASS；Cost Chromium 2/2。
 - Web Unit：11 files / 73 tests PASS；全量 Chromium Web E2E：115/115 PASS。

@@ -31,6 +31,10 @@ describe('Phase 52 Cost API / RBAC / Project Scope', () => {
     expect((await request('GET', '/api/cost/projects/order', qa)).status).toBe(403);
     expect((await request('POST', '/api/budgets?projectId=wan3', qa, { daily: 10 })).status).toBe(403);
     expect((await request('POST', '/api/budgets?projectId=wan3', admin, { daily: 10 })).status).toBe(200);
+    const financeResponse = await fetch(`${url}/api/budgets?projectId=wan3`, { method: 'POST', headers: { Authorization: 'Bearer dev-token', 'Content-Type': 'application/json', 'X-Actor': 'finance-a', 'X-Role': 'FINANCE' }, body: JSON.stringify({ weekly: 20 }) });
+    expect(financeResponse.status).toBe(200);
+    const release = await login('release-mgr', 'release123');
+    expect((await request('POST', '/api/budgets?projectId=wan3', release, { daily: 1 })).status).toBe(403);
   });
 
   it('真实 Telemetry recordLLM 自动桥接到统一 Cost Attribution', async () => {

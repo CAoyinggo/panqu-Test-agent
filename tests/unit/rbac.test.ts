@@ -39,13 +39,14 @@ describe('RBAC 角色 / 权限矩阵', () => {
   it('角色清单与权限覆盖至少清单', () => {
     const roles = Object.keys(ROLE_PERMISSIONS);
     expect(roles.sort()).toEqual(
-      ['ADMIN', 'QA', 'DEVELOPER', 'RELEASE_MANAGER', 'VIEWER', 'SERVICE_ACCOUNT'].sort(),
+      ['ADMIN', 'QA', 'DEVELOPER', 'RELEASE_MANAGER', 'FINANCE', 'PROJECT_OWNER', 'VIEWER', 'SERVICE_ACCOUNT'].sort(),
     );
     // 权限至少清单全部在 ALL_PERMISSIONS 中
     for (const p of [
       'PROJECT_READ', 'PROJECT_WRITE', 'TEST_RUN', 'TEST_CANCEL', 'TEST_RETRY',
       'ASSET_READ', 'ASSET_WRITE', 'DEFECT_CREATE', 'HEALING_APPROVE',
       'RELEASE_APPROVE', 'PRODUCTION_ACCESS',
+      'COST_READ_ALL', 'COST_MANAGE',
     ]) {
       expect(ALL_PERMISSIONS).toContain(p);
     }
@@ -65,6 +66,16 @@ describe('RBAC 角色 / 权限矩阵', () => {
     expect(hasPermission('RELEASE_MANAGER', 'HEALING_APPROVE')).toBe(true);
     expect(hasPermission('DEVELOPER', 'TEST_CANCEL')).toBe(false);
     expect(hasPermission('SERVICE_ACCOUNT', 'TEST_RUN')).toBe(true);
+  });
+
+  it('成本治理只有 ADMIN / FINANCE / PROJECT_OWNER 可管理', () => {
+    for (const role of ['ADMIN', 'FINANCE', 'PROJECT_OWNER'] as const) {
+      expect(hasPermission(role, 'COST_READ_ALL')).toBe(true);
+      expect(hasPermission(role, 'COST_MANAGE')).toBe(true);
+    }
+    for (const role of ['QA', 'DEVELOPER', 'RELEASE_MANAGER', 'VIEWER', 'SERVICE_ACCOUNT'] as const) {
+      expect(hasPermission(role, 'COST_MANAGE')).toBe(false);
+    }
   });
 
   it('审批权限映射：healing → HEALING_APPROVE，其余 → RELEASE_APPROVE', () => {
