@@ -6,7 +6,7 @@
 //   npx stryker run --dryRunOnly   —— 仅校验测试环境可用（不生成变异）
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 const config = {
-  $schema: './node_modules/@stryker-mutator/core/schema/stryker-schema.json',
+  $schema: '../../node_modules/@stryker-mutator/core/schema/stryker-schema.json',
   testRunner: 'vitest',
   vitest: {
     // related 模式：每个变异只运行与该源文件相关的测试，显著缩短变异测试时长

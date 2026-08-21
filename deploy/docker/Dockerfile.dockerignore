@@ -9,7 +9,7 @@ dist/
 test-flow-*.tgz
 .env
 .env.*
-!.env.example
+!config/env/.env.example
 debug/
 security-reports/
 .trivycache/

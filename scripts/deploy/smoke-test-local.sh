@@ -25,7 +25,7 @@ if ! command -v docker &>/dev/null; then
   exit 0
 fi
 
-DOCKER_BUILDKIT=1 docker build -t "$IMAGE_TAG" . 2>&1 | tail -5
+DOCKER_BUILDKIT=1 docker build -f deploy/docker/Dockerfile -t "$IMAGE_TAG" . 2>&1 | tail -5
 echo "✅ 镜像构建完成"
 echo ""
 

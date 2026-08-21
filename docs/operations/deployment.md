@@ -40,7 +40,7 @@ npm run platform:smoke       # 真实运营闭环冒烟（独立数据目录）
 复制对应模板并填写（敏感项由部署环境注入，禁止入库）：
 
 ```bash
-cp .env.staging.example .env
+cp config/env/.env.staging.example .env
 ```
 
 关键项见 `docs/operations/configuration.md`。staging 推荐：`PLATFORM_STORAGE=sqlite`（或 `postgres`）、`PLATFORM_ENVIRONMENT=staging`、`JWT_SECRET` 必填。

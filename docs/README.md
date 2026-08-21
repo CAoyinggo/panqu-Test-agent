@@ -4,6 +4,7 @@
 
 ## 主题文档
 
+- [版本变更记录](CHANGELOG.md)
 - [断言 DSL](assertion-dsl.md)
 - [环境策略边界](environment-policy-boundaries.md)
 - [运维与部署](operations/)

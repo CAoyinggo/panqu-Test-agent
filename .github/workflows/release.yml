@@ -42,7 +42,7 @@ jobs:
       - name: Semgrep scan
         uses: returntocorp/semgrep-action@v1
         with:
-          config: semgrep.yml
+          config: config/security/semgrep.yml
           generateSarifReport: true
           sarifOutput: security-reports/semgrep.sarif
 
@@ -58,6 +58,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: config/security/gitleaks.toml
 
       # 4. License check — 非阻塞
       - name: License check
@@ -106,6 +107,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: deploy/docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

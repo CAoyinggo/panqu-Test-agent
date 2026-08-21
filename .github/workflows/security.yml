@@ -47,13 +47,13 @@ jobs:
         uses: returntocorp/semgrep-action@v1
         with:
           config: >-
-            ./semgrep.yml
+            ./config/security/semgrep.yml
           generateSarifReport: true
           sarifOutput: security-reports/semgrep.sarif
       - name: Save Semgrep JSON report
         run: |
           mkdir -p security-reports
-          semgrep --config semgrep.yml --json --output security-reports/semgrep.json . || true
+          semgrep --config config/security/semgrep.yml --json --output security-reports/semgrep.json . || true
       - name: Check for ERROR severity
         run: |
           ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
@@ -90,7 +90,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_CONFIG: config/security/gitleaks.toml
         with:
           report-format: json
           report-path: security-reports/gitleaks.json
@@ -114,6 +114,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: deploy/docker/Dockerfile
           load: true
           tags: test-flow:ci-scan
           cache-from: type=gha

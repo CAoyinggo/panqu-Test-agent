@@ -170,7 +170,7 @@ DSL 语法完整说明见 [docs/assertion-dsl.md](docs/assertion-dsl.md)。
 | `platform:integration` | 10 个集成文件 | 64 | Run 生命周期 / Checkpoint 恢复 / 崩溃回收 / HTTP 全链路 / SQLite 持久化 / 认证 / 遥测流水线 / Web Dashboard / API 加固 / 生产就绪 |
 | `platform:e2e` | `platform-scenarios.test.ts` | 8 | S1-S8 核心场景（见「七、AI Test Platform 平台层」） |
 
-**性能与容量基线**（v4.5.0 / Phase 29）：`tests/perf/` 套件 + `src/platform/ops/perf-harness.ts`（唯一测量源）覆盖 10/50/100/500 Runs 生命周期（createRun → Scheduler → Worker → complete）吞吐/延迟、Scheduler / Audit / Telemetry 写入吞吐与内存稳定性。三类入口：`npm run perf:test`（Vitest sanity 门禁）、`npm run perf:baseline`（固化 `perf/baseline.json`）、`npm run perf:gate`（相对基线回归门禁，相对退化 > 2× 延迟 / < 50% 吞吐即失败）。默认 `npm test` 已排除 `tests/perf/`（经 `vitest.perf.config.ts` 单独运行）。
+**性能与容量基线**（v4.5.0 / Phase 29）：`tests/perf/` 套件 + `src/platform/ops/perf-harness.ts`（唯一测量源）覆盖 10/50/100/500 Runs 生命周期（createRun → Scheduler → Worker → complete）吞吐/延迟、Scheduler / Audit / Telemetry 写入吞吐与内存稳定性。三类入口：`npm run perf:test`（Vitest sanity 门禁）、`npm run perf:baseline`（固化 `perf/baseline.json`）、`npm run perf:gate`（相对基线回归门禁，相对退化 > 2× 延迟 / < 50% 吞吐即失败）。默认 `npm test` 已排除 `tests/perf/`（经 `config/test/vitest.perf.config.ts` 单独运行）。
 
 **平台层覆盖率补齐**（v4.6.0 / Phase 30）：新增 `tests/unit/platform-coverage-gap.test.ts`（15 项）补齐 events / notifications / migrations(Postgres) / environment-policy / scheduler / workers / checkpoint 缺口；`perf-harness.ts` 由独立性能套件运行，排除以免以 0% 虚假稀释平台层覆盖率。验收：`npm run phase30:test`（构建 + 平台层相关测试 + 完整覆盖率门禁）。
 
@@ -317,11 +317,11 @@ v4.0 新增 `src/platform/` 平台层，以 **Modular Monolith** 方式与既有
 
 | 设施 | 路径 | 能力 |
 |---|---|---|
-| Docker | `Dockerfile` `docker-compose.yml` | 镜像构建、`docker:build/run/test` 脚本、配置外部化（.env） |
+| Docker | `deploy/docker/` `deploy/docker-compose.yml` | 镜像构建、`docker:build/run/test` 脚本、配置外部化（.env） |
 | GitHub Actions | `.github/workflows/` | `test.yml`（含缓存）、`release.yml`、`security.yml` + Dependabot |
 | GitLab CI | `.gitlab-ci.yml` | 多平台 CI 兼容 |
 | 提交门禁 | `.husky/` `lint-staged` | pre-commit 安全扫描、commit-msg 校验 |
-| 安全扫描 | `scripts/security/` `semgrep.yml` `.gitleaks.toml` | Semgrep 静态分析、Gitleaks 密钥检测、npm audit 依赖审计、License 合规、本地扫描，产物落 `security-reports/` |
+| 安全扫描 | `scripts/security/` `config/security/` | Semgrep 静态分析、Gitleaks 密钥检测、npm audit 依赖审计、License 合规、本地扫描，产物落 `security-reports/` |
 | 报告归档 | `oss-uploader.ts` | 基于 ali-oss 上传报告 |
 
 配套脚本：`deploy:smoke`（本地冒烟）、`deploy:notify`（飞书通知）、`ci:summary`（GitHub Summary）。
@@ -398,6 +398,7 @@ Phase 52 报告见 `docs/phase52-summary.md`，成本治理设计见 `docs/cost/
 test-flow/
 ├── README.md                    # 本文件（完整项目说明）
 ├── docs/                        # 流程与模板文档
+│   ├── CHANGELOG.md             # 版本变更记录（Keep a Changelog）
 │   ├── 01-测试流程SOP.md        # 完整流程规范（含「新模块接入指引」）
 │   ├── 02-模板合集.md           # 测试用例 / 数据需求清单 / 启动检查清单 三合一模板
 │   ├── 02-测试用例模板.md       # 测试用例模板（独立版）
@@ -429,12 +430,18 @@ test-flow/
 ├── bin/run-test.ts              # 执行 CLI 入口（编译为 dist/bin/run-test.js）
 ├── bin/platform-cli.ts          # 平台 CLI（v4.0/v4.3，与 API 共用 Service Layer）
 ├── scripts/                     # 构建/迁移/安全/CI 工具
+├── config/                      # 仓库级配置：环境模板与安全扫描规则
+│   ├── env/                     # .env.example / staging / production 模板
+│   ├── security/                # Semgrep / Gitleaks 配置
+│   └── test/                    # 性能测试 / Mutation Testing 配置
+├── deploy/                      # 容器化部署入口
+│   ├── docker/                  # Dockerfile + Dockerfile.dockerignore
+│   └── docker-compose.yml       # 多环境 Compose 编排
 ├── tasks/                       # JSON 任务定义（迁移源，保留）
 │   ├── _template.json           # 新任务定义模板
 │   └── {功能}-{任务名}.json     # 按「功能-任务名」命名，如 wan3-wensheng / user-login / order-create
 ├── dist/                        # tsc 编译产物（npm run build 生成，可独立运行）
 ├── package.json / tsconfig.json # 工程配置（ESM + NodeNext + strict）
-├── CHANGELOG.md                 # 版本变更记录（Keep a Changelog）
 └── output/                      # 旧版报告目录（已停用；新报告输出到 /Users/mac/agents/output/<日期>/<功能名>/）
 ```
 

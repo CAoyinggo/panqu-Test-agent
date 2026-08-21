@@ -19,7 +19,7 @@ echo ""
 # ── 1. SAST (Semgrep) ──
 echo "── [1/4] SAST 扫描 (Semgrep) ──"
 if command -v semgrep &>/dev/null; then
-  semgrep --config semgrep.yml --json --output "$REPORT_DIR/semgrep.json" . 2>/dev/null || true
+  semgrep --config config/security/semgrep.yml --json --output "$REPORT_DIR/semgrep.json" . 2>/dev/null || true
   ERROR_COUNT=$(python3 -c "
 import json
 try:
@@ -44,7 +44,7 @@ echo ""
 # ── 2. 密钥泄露 (Gitleaks) ──
 echo "── [2/4] 密钥泄露扫描 (Gitleaks) ──"
 if command -v gitleaks &>/dev/null; then
-  gitleaks detect --config .gitleaks.toml --report-format json --report-path "$REPORT_DIR/gitleaks.json" --source . 2>/dev/null || true
+  gitleaks detect --config config/security/gitleaks.toml --report-format json --report-path "$REPORT_DIR/gitleaks.json" --source . 2>/dev/null || true
   LEAK_COUNT=$(python3 -c "
 import json
 try:

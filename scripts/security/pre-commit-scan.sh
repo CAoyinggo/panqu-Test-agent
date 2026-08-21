@@ -18,7 +18,7 @@ echo "── Pre-commit SAST 扫描 ──"
 echo "扫描文件：$#"
 
 # 运行 semgrep，仅扫描暂存文件
-semgrep --config semgrep.yml --json --output "$REPORT_DIR/semgrep-precommit.json" "$@" 2>/dev/null || true
+semgrep --config config/security/semgrep.yml --json --output "$REPORT_DIR/semgrep-precommit.json" "$@" 2>/dev/null || true
 
 # 检查 ERROR 级别问题
 ERROR_COUNT=$(python3 -c "

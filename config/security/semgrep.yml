@@ -1,6 +1,6 @@
 # Semgrep SAST 规则集 — test-flow 项目安全扫描
 # 覆盖：硬编码密钥、SQL 注入、命令注入、不安全正则表达式
-# 使用方式：semgrep --config semgrep.yml --sarif --output security-reports/semgrep.sarif
+# 使用方式：semgrep --config config/security/semgrep.yml --sarif --output security-reports/semgrep.sarif
 
 rules:
   # ── 1. 硬编码密钥检测 ──
@@ -49,7 +49,7 @@ rules:
       cwe: "CWE-798"
     paths:
       exclude:
-        - "*.env.example"
+        - "config/env/*.example"
         - "*.test.ts"
         - "node_modules/**"
 
