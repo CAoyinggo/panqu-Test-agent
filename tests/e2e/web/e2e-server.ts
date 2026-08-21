@@ -17,6 +17,7 @@ import { standardEnvironments } from '../../../src/platform/projects/project-sch
 import { createAIQualityService } from '../../../src/ai-quality/service.js';
 import type { AIQualityService } from '../../../src/ai-quality/service.js';
 import { createProjectAIQualityRegistry } from '../../../src/ai-quality/project-service.js';
+import { EvaluationScaleService } from '../../../src/eval/scale/operations.js';
 
 export const WEB_E2E_PORT = Number(process.env.WEB_E2E_PORT ?? 8799);
 export const WEB_E2E_HOST = process.env.WEB_E2E_HOST ?? '127.0.0.1';
@@ -44,6 +45,7 @@ export interface WebE2eSeed {
   /** 41.12：项目隔离（order 项目仅 qa-b 可访问） */
   orderProject: { projectId: string; runId: string; environment: string };
   orderEvaluation: { feedbackUnverified: string };
+  evaluationScale: { benchmark: string; archivedRecord: string };
   /** 44.1：版本化资产（TestAssets / AssetVersions 页面数据源） */
   assetVersions: { assetId: string };
   /** 47.1：AI 质量闭环（AI 改进页数据源） */
@@ -65,7 +67,7 @@ export interface WebE2eSeed {
 }
 
 /** 种子全部测试数据，返回清单 */
-async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl' | 'aiQuality' | 'orderEvaluation'>> {
+async function seed(bundle: PlatformBundle): Promise<Omit<WebE2eSeed, 'baseUrl' | 'aiQuality' | 'orderEvaluation' | 'evaluationScale'>> {
   const S = bundle.service;
   const now = (): string => new Date().toISOString();
   const QA_ACTOR = 'qa-a';
@@ -358,6 +360,34 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
   const aiQualityProjects = createProjectAIQualityRegistry({
     initial: { wan3: aiQuality.service, order: orderAiQuality },
   });
+  const evaluationScale = new EvaluationScaleService();
+  const seedScaleProject = (projectId: string, aiService: AIQualityService): void => {
+    const state = evaluationScale.forProject(projectId);
+    state.queue.enqueue({ id: `${projectId}-eval-queued`, projectId, domains: ['REQUIREMENT', 'RISK', 'RCA', 'RELEASE'] });
+    evaluationScale.setWorkers(projectId, [
+      { id: `${projectId}-worker-1`, status: 'BUSY', processed: 40, failedAttempts: 1, busyMs: 4000 },
+      { id: `${projectId}-worker-2`, status: 'IDLE', processed: 35, failedAttempts: 0, busyMs: 3200 },
+    ]);
+    evaluationScale.setCapacity(projectId, {
+      workers: 2, submitted: 100, completed: 99, failed: 1, queued: 1, running: 0, retries: 2,
+      throughputPerSecond: projectId === 'wan3' ? 24.5 : 12.25, wallTimeMs: 4040,
+      queueDelay: { p50: 2, p95: 8, p99: 12 }, execution: { p50: 10, p95: 22, p99: 35 }, workerUtilization: 0.89,
+    });
+    evaluationScale.ingestMetrics(projectId, Array.from({ length: 12 }, (_, index) => ({
+      id: `${projectId}-metric-${index}`, timestamp: `2026-08-21T0${index % 2}:00:00.000Z`, projectId,
+      model: index % 2 ? 'rules-v2' : 'rules-v1', benchmark: 'RISK_BENCHMARK_v1',
+      score: 0.9 + (index % 5) / 100, latencyMs: 10 + index, cost: index / 1000, success: index !== 11,
+    })));
+    const baseline = { score: 0.95, benchmarkChecksum: 'benchmark-sha-v1', benchmarkHealthy: true, modelVersion: 'rules-v1', promptVersion: 'prompt-v1', latencyMs: 20, cost: 0.01 };
+    evaluationScale.setDrift(projectId, baseline, projectId === 'wan3' ? { ...baseline, score: 0.9 } : baseline);
+    state.lifecycle.add({ id: `${projectId}-archive-me`, projectId, kind: 'EvaluationResult', traceId: `${projectId}-trace-archive`, createdAt: '2025-01-01T00:00:00.000Z', payload: { result: 'REAL_E2E_SEED' } });
+    state.lifecycle.add({ id: `${projectId}-hot`, projectId, kind: 'Telemetry', createdAt: '2026-08-21T00:00:00.000Z', payload: { count: 1 } });
+    for (const def of aiService.benchmarkRegistry.list()) {
+      state.benchmarks.createVersion({ name: def.name, version: def.version, domain: def.domain, cases: def.cases, source: 'CURATED', datasetMetadata: { e2e: true } });
+    }
+  };
+  seedScaleProject('wan3', aiQuality.service);
+  seedScaleProject('order', orderAiQuality);
   const webDir = path.join(process.cwd(), 'web', 'dist');
   if (!fs.existsSync(path.join(webDir, 'index.html'))) {
     throw new Error(`Web Dashboard 未构建：${webDir}（先运行 npm run build:web）`);
@@ -374,6 +404,7 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
     // 47.1：注入种子 AI 质量闭环服务（AI 改进页有真实数据渲染）
     aiQuality: aiQuality.service,
     aiQualityProjects,
+    evaluationScale,
     // 41.13：E2E 测试连跑时 QA Home 3s 轮询 + 登录 + 多页操作会在 60s 窗口内超过默认
     //       120 req/min/IP 配额 → 429 使页面数据加载失败。测试环境放开配额，避免误伤。
     rateLimitPerMinute: 100_000,
@@ -383,6 +414,7 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
   const manifest: WebE2eSeed = {
     baseUrl, ...seeded, aiQuality: aiQuality.refs,
     orderEvaluation: { feedbackUnverified: orderFeedback.id },
+    evaluationScale: { benchmark: 'RISK_BENCHMARK_v1', archivedRecord: 'wan3-archive-me' },
   };
   fs.writeFileSync(SEED_FILE, JSON.stringify(manifest, null, 2));
   console.log(`WEB_E2E_SERVER=${baseUrl}`);

@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.26.0] - 2026-08-21
+
+### 新增（AI Evaluation 生产规模化与长期运营，Phase 51）
+
+- 多项目隔离：Benchmark、Ground Truth、Evaluation、History、Telemetry、Knowledge、Audit 全部使用强制 project partition；API/CLI/Web 统一 project scope，JWT 越权返回 403。
+- 并发与调度：10/50/100 concurrent runner；Evaluation Queue lease/heartbeat/requeue/retry；1/2/5/10 Worker Pool 覆盖 10/50/100/500 jobs，旧 lease late completion 被拒绝。
+- 长期数据：HOT/WARM/COLD/ARCHIVED Retention；checksum Archive/Restore 保持 ID/trace/payload；Audit/Benchmark/GroundTruth 普通清理 protected。
+- Benchmark：内容寻址 case blob + version manifest，支持跨版本 dedup、checksum、missing/duplicate/mutation/corruption 检测、Evaluation BLOCK 与健康版本 rollback。
+- Metrics：Hourly/Daily/Project/Model/Benchmark 增量聚合；100-record Raw/Aggregated Count/Average/P95/Failure/Cost 零误差；Score/Benchmark/Model/Prompt/Latency/Cost Drift 进入 REVIEW/BLOCK。
+- Recovery：六类组件 Detect→Alert→Recover；case checkpoint 断点续跑；Ground Truth unavailable PAUSED 且禁止 stale fallback；500-case process-kill 演练无重复。
+- 对外能力：新增 Scale API、Phase 51 CLI、Web `Scale` 页面及五个 Playwright 套件；生产规模 LOAD TEST 覆盖 5 Projects / 20 Users / 500 real case refs / 100 jobs / 10 workers / 3 rounds。
+
+### 变更
+
+- 版本 v4.25.0 → v4.26.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 验收（真实运行）
+
+- Phase 51 专项：49；Scale：15；Recovery：9；Web 专项：10，全部通过。
+- 全量 Vitest 1838 PASS / 18 SKIP；Web Unit 72；Web E2E 113；Agent 450/8/2/26；Platform 227/94/16；Phase 39/40 PASS；Platform Health=HEALTHY。
+
 ## [4.25.0] - 2026-08-20
 
 ### 新增（Benchmark 候选并入：Review → Benchmark，Phase 50）

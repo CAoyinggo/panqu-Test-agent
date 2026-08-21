@@ -28,6 +28,7 @@ import TestAssets from './pages/TestAssets';
 import AssetVersions from './pages/AssetVersions';
 import AIQuality from './pages/AIQuality';
 import AIImprovement from './pages/AIImprovement';
+import Scale from './pages/Scale';
 
 const NAV = [
   { to: '/', label: 'QA 工作台' },
@@ -43,6 +44,7 @@ const NAV = [
   { to: '/metrics', label: '指标' },
   { to: '/ai-quality', label: 'AI 质量' },
   { to: '/ai-improvement', label: 'AI 改进' },
+  { to: '/scale', label: 'Scale' },
   { to: '/telemetry', label: '遥测' },
   { to: '/telemetry/events', label: '事件' },
   { to: '/telemetry/activation', label: '激活' },
@@ -126,6 +128,7 @@ export default function App() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/ai-quality" element={<AIQuality />} />
           <Route path="/ai-improvement" element={<AIImprovement />} />
+          <Route path="/scale" element={<Scale />} />
           <Route path="/telemetry" element={<Telemetry />} />
           <Route path="/telemetry/events" element={<TelemetryEvents />} />
           <Route path="/telemetry/activation" element={<TelemetryActivation />} />

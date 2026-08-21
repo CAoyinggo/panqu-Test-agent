@@ -547,3 +547,57 @@ export function rejectBenchmarkCandidate(id: string, reason: string): Promise<Be
 export function mergeBenchmarkCandidates(opts: { candidateIds?: string[]; domains?: string[] } = {}): Promise<BenchmarkMergeResult> {
   return api.post<BenchmarkMergeResult>('/ai-quality/benchmark-candidates/merge', opts);
 }
+
+// ===== Phase 51：Production Scale =====
+export interface EvaluationScaleReport {
+  projectId: string;
+  throughput: number;
+  activeWorkers: number;
+  workers: Array<{ id: string; status: string; processed: number; failedAttempts: number; busyMs: number }>;
+  queue: Record<'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED', number>;
+  p50: number;
+  p95: number;
+  p99: number;
+  queueLatency: { p50: number; p95: number; p99: number };
+  workerUtilization: number;
+  errorRate: number;
+  retryRate: number;
+  cost: number;
+  dataGrowth: number;
+  archive: Record<'HOT' | 'WARM' | 'COLD' | 'ARCHIVED', number>;
+  drift: { verdict: string; signals: Array<{ type: string; verdict: string; baseline: unknown; current: unknown; reason: string }> };
+  recovery: { health: string; recoveryRate: number; alerts: Array<{ id: string; component: string; message: string; recoveredAt?: string }> };
+  benchmarkStorage: { versions: number; logicalCases: number; uniqueBlobs: number; deduplicatedCases: number; dedupRatio: number };
+}
+
+export interface AggregatedMetricItem {
+  dimension: string;
+  key: string;
+  count: number;
+  averageScore: number;
+  p95LatencyMs: number;
+  cost: number;
+  failures: number;
+  failureRate: number;
+}
+
+function projectQuery(path: string, extra = ''): string {
+  return `${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(getEvaluationProjectId())}${extra}`;
+}
+
+export function getEvaluationScale(): Promise<EvaluationScaleReport> {
+  return request<EvaluationScaleReport>('/evaluation/scale');
+}
+export function getAggregatedMetrics(dimension: string, key?: string): Promise<{ projectId: string; metrics: AggregatedMetricItem[] }> {
+  const extra = `&dimension=${encodeURIComponent(dimension)}${key ? `&key=${encodeURIComponent(key)}` : ''}`;
+  return request(projectQuery('/metrics/aggregated', extra));
+}
+export function getBenchmarkIntegrity(name: string): Promise<{ projectId: string; valid: boolean; checksum: string; caseCount: number; issues: string[] }> {
+  return request(projectQuery(`/benchmarks/${encodeURIComponent(name)}/integrity`));
+}
+export function archiveEvaluationData(before?: string): Promise<{ projectId: string; archived: number; checksum: string; stats: Record<string, number> }> {
+  return api.post('/data/archive', { projectId: getEvaluationProjectId(), before });
+}
+export function restoreEvaluationData(): Promise<{ projectId: string; restored: number; unchanged: number; stats: Record<string, number> }> {
+  return api.post('/data/restore', { projectId: getEvaluationProjectId() });
+}

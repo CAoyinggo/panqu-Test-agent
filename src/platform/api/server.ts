@@ -24,6 +24,7 @@ import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type Plat
 import { createAIQualityService, AIQualityService } from '../../ai-quality/service.js';
 import { ProjectAIQualityRegistry } from '../../ai-quality/project-service.js';
 import { CONTINUOUS_EVAL_SCHEDULES } from '../../ai-quality/ops.js';
+import { EvaluationScaleService } from '../../eval/scale/operations.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -57,6 +58,8 @@ export interface ApiServerOptions {
   aiQuality?: AIQualityService;
   /** Phase 51.1：项目级 AI Evaluation 状态；提供时优先于单实例 aiQuality。 */
   aiQualityProjects?: ProjectAIQualityRegistry;
+  /** Phase 51.8：项目级 Evaluation 规模、生命周期、指标与恢复运维面。 */
+  evaluationScale?: EvaluationScaleService;
   /** Phase 46：AI Quality 状态持久化文件路径（提供时启动自动加载、写操作后自动保存，跨重启保留改进闭环） */
   aiQualityStateFile?: string;
 }
@@ -122,6 +125,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // 配置 aiQualityStateFile 时：启动自动从文件恢复，写操作（POST）后自动保存，保证改进闭环跨重启持久化。
   const legacyAiQuality: AIQualityService = opts.aiQuality ?? (opts.aiQualityStateFile ? AIQualityService.loadFromFile(opts.aiQualityStateFile) : createAIQualityService());
   const aiQualityProjects = opts.aiQualityProjects ?? new ProjectAIQualityRegistry({ initial: { wan3: legacyAiQuality } });
+  const evaluationScale = opts.evaluationScale ?? new EvaluationScaleService();
 
   /** Phase 51.1：解析 + 校验项目作用域，并返回该项目独立 AI Evaluation 分区。 */
   function aiQualityFor(c: Ctx): AIQualityService {
@@ -174,6 +178,12 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   function requireOpsRead(c: Ctx): void {
     if (!hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
       throw new HttpError(403, `角色 ${c.role} 无权读取运维数据（需 OPS_READ 权限）`);
+    }
+  }
+
+  function requireEvaluationRead(c: Ctx): void {
+    if (!hasPermission(c.role, 'PROJECT_READ' satisfies Permission) && !hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
+      throw new HttpError(403, `角色 ${c.role} 无权读取 Evaluation 规模数据`);
     }
   }
 
@@ -602,7 +612,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     }) },
     { method: 'GET', segments: ['evaluation', 'history'], handler: async (c) => ({
       projectId: evaluationProjectId(c),
-      runs: aiQualityFor(c).continuousEval.list(),
+      runs: maybePaginate(c.req.url, aiQualityFor(c).continuousEval.list()),
       audit: aiQualityFor(c).audit.list(),
     }) },
     { method: 'GET', segments: ['evaluation', 'telemetry'], handler: async (c) => {
@@ -622,6 +632,71 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
         knowledgeCount: aq.knowledge.listItems().length,
         auditCount: aq.audit.list().length,
       };
+    } },
+
+    // Phase 51.8：Production Scale 运维 API；读操作需项目读取权限，写操作需人工 RELEASE_APPROVE。
+    { method: 'GET', segments: ['evaluation', 'queue'], handler: async (c) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      const queue = evaluationScale.forProject(projectId).queue;
+      return { projectId, counts: queue.counts(), jobs: maybePaginate(c.req.url, queue.list({ projectId })) };
+    } },
+    { method: 'GET', segments: ['evaluation', 'workers'], handler: async (c) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      return { projectId, workers: evaluationScale.forProject(projectId).workers };
+    } },
+    { method: 'GET', segments: ['evaluation', 'scale'], handler: async (c) => {
+      requireEvaluationRead(c);
+      return evaluationScale.scale(evaluationProjectId(c));
+    } },
+    { method: 'GET', segments: ['benchmarks', ':id', 'integrity'], handler: async (c, p) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      try {
+        return { projectId, ...evaluationScale.benchmarkIntegrity(projectId, decodeURIComponent(p.id)) };
+      } catch (err) {
+        throw new HttpError(/不存在/.test((err as Error).message) ? 404 : 409, (err as Error).message);
+      }
+    } },
+    { method: 'POST', segments: ['data', 'archive'], handler: async (c) => {
+      requireAiApprove(c);
+      const projectId = evaluationProjectId(c);
+      const before = c.body.before ? new Date(String(c.body.before)) : undefined;
+      if (before && Number.isNaN(before.getTime())) throw new HttpError(400, 'before 必须是合法 ISO 时间');
+      const artifact = evaluationScale.archive(projectId, c.actor, before);
+      return { projectId, archived: artifact.records.length, checksum: artifact.checksum, stats: evaluationScale.forProject(projectId).lifecycle.stats() };
+    } },
+    { method: 'POST', segments: ['data', 'restore'], handler: async (c) => {
+      requireAiApprove(c);
+      const projectId = evaluationProjectId(c);
+      try {
+        return { projectId, ...evaluationScale.restore(projectId, c.actor), stats: evaluationScale.forProject(projectId).lifecycle.stats() };
+      } catch (err) {
+        throw new HttpError(409, (err as Error).message);
+      }
+    } },
+    { method: 'GET', segments: ['metrics', 'aggregated'], handler: async (c) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      const dimension = queryParam(c.req.url, 'dimension') ?? 'project';
+      if (!['hourly', 'daily', 'project', 'model', 'benchmark'].includes(dimension)) throw new HttpError(400, `未知 aggregation dimension：${dimension}`);
+      return { projectId, dimension, metrics: evaluationScale.aggregate(projectId, dimension as never, queryParam(c.req.url, 'key') ?? undefined) };
+    } },
+    { method: 'GET', segments: ['metrics', 'drift'], handler: async (c) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      return { projectId, ...evaluationScale.drift(projectId) };
+    } },
+    { method: 'GET', segments: ['recovery', 'status'], handler: async (c) => {
+      requireEvaluationRead(c);
+      const projectId = evaluationProjectId(c);
+      return { projectId, ...evaluationScale.forProject(projectId).recovery.status() };
+    } },
+    { method: 'GET', segments: ['evaluation', 'scale', 'audit'], handler: async (c) => {
+      requireOpsRead(c);
+      const projectId = evaluationProjectId(c);
+      return { projectId, audit: evaluationScale.listAudit(projectId) };
     } },
   ];
 
