@@ -11,6 +11,7 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 2000): { d
 
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const run = async (): Promise<void> => {
       try {
         const value = await fetcherRef.current();
@@ -21,14 +22,17 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs = 2000): { d
       } catch (err) {
         if (alive) setError((err as Error).message);
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoading(false);
+          // Phase 53 reliability scan：完成后再安排下一次，慢请求不会与下一轮重叠形成风暴。
+          timer = setTimeout(() => void run(), intervalMs);
+        }
       }
     };
     void run();
-    const timer = setInterval(() => void run(), intervalMs);
     return () => {
       alive = false;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [intervalMs, tick]);
 

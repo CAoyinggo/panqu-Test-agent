@@ -25,6 +25,13 @@ import { createAIQualityService, AIQualityService } from '../../ai-quality/servi
 import { ProjectAIQualityRegistry } from '../../ai-quality/project-service.js';
 import { CONTINUOUS_EVAL_SCHEDULES } from '../../ai-quality/ops.js';
 import { EvaluationScaleService } from '../../eval/scale/operations.js';
+import {
+  CostGovernanceService,
+  forecastCapacity,
+  type CapacitySample,
+  type CostBudgetInput,
+  type ModelPolicy,
+} from '../../cost/governance.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
@@ -62,6 +69,9 @@ export interface ApiServerOptions {
   evaluationScale?: EvaluationScaleService;
   /** Phase 52.1：Scale 运维状态原子快照；重启后恢复 Queue/Metrics/Recovery/Lifecycle/Integrity/Audit。 */
   evaluationScaleStateFile?: string;
+  /** Phase 52：成本治理状态；可注入或原子持久化。 */
+  costGovernance?: CostGovernanceService;
+  costGovernanceStateFile?: string;
   /** Phase 46：AI Quality 状态持久化文件路径（提供时启动自动加载、写操作后自动保存，跨重启保留改进闭环） */
   aiQualityStateFile?: string;
 }
@@ -132,6 +142,15 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   const persistEvaluationScale = (): void => {
     if (opts.evaluationScaleStateFile) evaluationScale.persistToFile(opts.evaluationScaleStateFile);
   };
+  const costGovernance = opts.costGovernance
+    ?? (opts.costGovernanceStateFile ? CostGovernanceService.loadFromFile(opts.costGovernanceStateFile) : new CostGovernanceService());
+  const persistCostGovernance = (): void => {
+    if (opts.costGovernanceStateFile) costGovernance.persistToFile(opts.costGovernanceStateFile);
+  };
+  const syncTelemetryCosts = async (): Promise<void> => {
+    const entries = await opts.service.deps.telemetry.costs.list({});
+    for (const entry of entries) costGovernance.ingestTelemetry(entry);
+  };
 
   /** Phase 51.1：解析 + 校验项目作用域，并返回该项目独立 AI Evaluation 分区。 */
   function aiQualityFor(c: Ctx): AIQualityService {
@@ -200,6 +219,23 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     if (!hasPermission(c.role, 'RELEASE_APPROVE' satisfies Permission)) {
       throw new HttpError(403, `角色 ${c.role} 无权执行 AI 质量审批（需 RELEASE_APPROVE 权限，禁止 AI 自批）`);
     }
+  }
+
+  /** Phase 52：ADMIN/RELEASE_MANAGER 对应平台的 FINANCE/PROJECT_OWNER 管理授权。 */
+  function requireCostManage(c: Ctx): void {
+    requireAiApprove(c);
+  }
+
+  function costProjectId(c: Ctx, explicit?: string): string | undefined {
+    const projectId = explicit ?? queryParam(c.req.url, 'projectId') ?? (c.body.projectId ? String(c.body.projectId) : undefined);
+    if (!projectId) {
+      if (c.role !== 'ADMIN' && c.role !== 'RELEASE_MANAGER') throw new HttpError(403, '仅 ADMIN/FINANCE/PROJECT_OWNER 可以查看全部成本');
+      return undefined;
+    }
+    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(404, `Project 不存在：${projectId}`);
+    if (c.user) assertProjectAccess({ roles: c.user.roles, scopes: c.user.scopes }, projectId);
+    if (!hasPermission(c.role, 'PROJECT_READ' satisfies Permission) && !hasPermission(c.role, 'OPS_READ' satisfies Permission)) throw new HttpError(403, `角色 ${c.role} 无权读取成本`);
+    return projectId;
   }
 
   // ── 认证路由（无需静态 Token 即可访问 login/refresh；logout/info 需有效凭证）──
@@ -707,6 +743,41 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       const projectId = evaluationProjectId(c);
       return { projectId, audit: evaluationScale.listAudit(projectId) };
     } },
+
+    // Phase 52.27：Cost / Budget / Capacity / Model Policy / Optimization API。
+    { method: 'GET', segments: ['cost', 'summary'], handler: async (c) => {
+      await syncTelemetryCosts();
+      const projectId = costProjectId(c);
+      const filter = { projectId, window: (queryParam(c.req.url, 'window') ?? '7d') as never, model: queryParam(c.req.url, 'model') ?? undefined, provider: queryParam(c.req.url, 'provider') ?? undefined, evaluationId: queryParam(c.req.url, 'evaluationId') ?? undefined, benchmarkId: queryParam(c.req.url, 'benchmarkId') ?? undefined, releaseId: queryParam(c.req.url, 'releaseId') ?? undefined };
+      return { ...costGovernance.summary(filter), trend: costGovernance.ledger.trend(filter, (queryParam(c.req.url, 'grain') ?? 'daily') as never) };
+    } },
+    { method: 'GET', segments: ['cost', 'projects', ':id'], handler: async (c, p) => {
+      await syncTelemetryCosts();
+      const projectId = costProjectId(c, p.id)!;
+      return { projectId, ...costGovernance.summary({ projectId, window: (queryParam(c.req.url, 'window') ?? '7d') as never }) };
+    } },
+    { method: 'GET', segments: ['cost', 'forecast'], handler: async (c) => {
+      await syncTelemetryCosts();
+      const projectId = costProjectId(c);
+      const records = costGovernance.ledger.list({ projectId });
+      const daily = new Map<string, CapacitySample>();
+      for (const record of records) { const day = record.timestamp.slice(0, 10); const sample = daily.get(day) ?? { timestamp: `${day}T00:00:00.000Z`, runs: 0, cost: 0, queuePeak: 0, workersPeak: 1 }; sample.cost += record.totalCost; sample.runs = new Set(records.filter((r) => r.timestamp.startsWith(day)).map((r) => r.runId).filter(Boolean)).size; daily.set(day, sample); }
+      return { projectId, forecasts: (['1h', '6h', '24h', '7d', '30d'] as const).map((horizon) => forecastCapacity([...daily.values()], horizon)) };
+    } },
+    { method: 'GET', segments: ['cost', 'anomalies'], handler: async (c) => { const projectId = costProjectId(c); return { projectId, anomalies: costGovernance.anomalies.filter((a) => !projectId || a.projectId === projectId) }; } },
+    { method: 'GET', segments: ['budgets'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.budgets.list(projectId); } },
+    { method: 'POST', segments: ['budgets'], handler: async (c) => { requireCostManage(c); const projectId = costProjectId(c); const value = costGovernance.setBudget({ ...(c.body as unknown as CostBudgetInput), projectId }, c.actor); persistCostGovernance(); return value; } },
+    { method: 'PATCH', segments: ['budgets', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.budgets.get(p.id); if (!existing) throw new HttpError(404, `预算不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchBudget(p.id, c.body as Partial<CostBudgetInput>, c.actor); persistCostGovernance(); return value; } },
+    { method: 'GET', segments: ['workers', 'capacity'], handler: async (c) => { requireOpsRead(c); return { ...costGovernance.scaling(), limits: { minWorkers: 1, maxWorkers: 20, maxConcurrentJobs: 4 } }; } },
+    { method: 'GET', segments: ['workers', 'scaling'], handler: async (c) => { requireOpsRead(c); return costGovernance.scaling(); } },
+    { method: 'POST', segments: ['workers', 'scaling'], handler: async (c) => { requireCostManage(c); const decision = costGovernance.scale(c.body as never, { minWorkers: Number(c.body.minWorkers ?? 1), maxWorkers: Number(c.body.maxWorkers ?? 20), jobsPerWorker: Number(c.body.jobsPerWorker ?? 20), scaleUpQueueAgeMs: Number(c.body.scaleUpQueueAgeMs ?? 30_000), cooldownMs: Number(c.body.cooldownMs ?? 60_000), maxEstimatedCost: c.body.maxEstimatedCost === undefined ? undefined : Number(c.body.maxEstimatedCost) }, c.actor); persistCostGovernance(); return decision; } },
+    { method: 'GET', segments: ['model-policies'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.policies.list(projectId); } },
+    { method: 'POST', segments: ['model-policies'], handler: async (c) => { requireCostManage(c); const projectId = costProjectId(c); const value = costGovernance.setPolicy({ ...(c.body as unknown as Omit<ModelPolicy, 'id' | 'updatedAt'>), projectId }, c.actor); persistCostGovernance(); return value; } },
+    { method: 'PATCH', segments: ['model-policies', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.policies.get(p.id); if (!existing) throw new HttpError(404, `模型策略不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchPolicy(p.id, c.body as Partial<Omit<ModelPolicy, 'id'>>, c.actor); persistCostGovernance(); return value; } },
+    { method: 'GET', segments: ['optimizations'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.listOptimizations(projectId); } },
+    { method: 'POST', segments: ['optimizations', ':id', 'approve'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(404, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'APPROVED', c.actor); persistCostGovernance(); return value; } },
+    { method: 'POST', segments: ['optimizations', ':id', 'reject'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(404, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'REJECTED', c.actor); persistCostGovernance(); return value; } },
+    { method: 'GET', segments: ['cost', 'audit'], handler: async (c) => { requireOpsRead(c); const projectId = costProjectId(c); return { projectId, audit: costGovernance.listAudit(projectId) }; } },
   ];
 
   /** 解析 ?window= 参数（默认 7d） */

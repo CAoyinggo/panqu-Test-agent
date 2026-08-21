@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.27.0] - 2026-08-21
+
+### 新增（成本治理、资源优化与容量自适应，Phase 52）
+
+- 统一 Cost Attribution：LLM/Compute/Storage/Network/Worker/Other 按 Project、Run、Evaluation、Benchmark、Model、Provider、Release、Version 精确归属，支持 today/7d/30d/release/version 与日/周/月趋势。
+- Cost Budget 与 Guard：daily/weekly/monthly/perRun/perEvaluation/perRelease；90% WARNING、100% EXCEEDED；复用自治预算并输出 AUTONOMOUS_STOP reason/budget/used/remaining/trace。
+- 联合优化：value/cost test selection、Model Policy + 质量/成本/延迟路由 trace、成本版本回归、Pareto frontier。
+- 容量自适应：Queue/Age/Utilization/Priority/Estimated Cost 驱动 desired workers，min/max/cooldown 防震荡，CPU/Memory/Concurrency 防超载；1h/6h/24h/7d/30d 确定性预测。
+- 治理闭环：成本异常进入 Dashboard/Audit/Feishu，优化默认仅建议，生产变更强制人工批准，Shadow + 5/20/50/100 Canary，异常 STOP、严重回归 ROLLBACK。
+- 产品化：Cost Overview + Capacity Dashboard、12 个 CLI 脚本、17 个 API 路由、原子状态持久化；全部受 JWT/RBAC/Project Scope/Audit 保护。
+
+### 变更
+
+- 版本 v4.26.0 → v4.27.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
+### 验收
+
+- Phase 52 指定测试：14 文件 / 23 用例全绿；真实 Chromium Cost Dashboard：2/2。
+- S1–S10、Cost Attribution/Budget/Anomaly/Model Routing/Worker Scaling/Capacity/Forecast/Optimization/Canary/Rollback、Project Isolation/Audit 全部 PASS。
+- 五项未授权/跨项目关键安全指标均为 0；完整历史回归见 `docs/phase52-summary.md`。
+
 ## [4.26.0] - 2026-08-21
 
 ### 新增（AI Evaluation 生产规模化与长期运营，Phase 51）

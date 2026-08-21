@@ -50,11 +50,12 @@ test.describe('Frontend Performance（41.17）', () => {
     });
     await page.goto(`${BASE_URL}/`);
     await expect(page.getByRole('heading', { name: 'QA 工作台' }).first()).toBeVisible({ timeout: CONTENT_MS });
-    const t0 = Date.now();
+    const initialHitCount = qaHomeHits.length;
     await page.waitForTimeout(7_500); // 初始 + 3s + 6s 轮询窗口
-    const windowHits = qaHomeHits.filter((ts) => ts >= t0);
-    expect(windowHits.length, `7.5s 窗口内 qa-home 请求应约 2-3 次（3s 轮询），实际 ${windowHits.length} 次`).toBeGreaterThanOrEqual(1);
-    expect(windowHits.length, `qa-home 请求异常频繁（${windowHits.length} 次）→ 轮询未治理`).toBeLessThanOrEqual(5);
+    // 使用单调计数差，不依赖 Date.now；宿主时钟校正不会制造“0 次请求”的假失败。
+    const windowHits = qaHomeHits.length - initialHitCount;
+    expect(windowHits, `7.5s 窗口内 qa-home 请求应约 2-3 次（3s 轮询），实际 ${windowHits} 次`).toBeGreaterThanOrEqual(1);
+    expect(windowHits, `qa-home 请求异常频繁（${windowHits} 次）→ 轮询未治理`).toBeLessThanOrEqual(5);
   });
 
   test('Run Detail 轮询治理：2s 轮询不刷爆（无 429 风暴）', async ({ page }) => {

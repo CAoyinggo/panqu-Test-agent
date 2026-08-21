@@ -601,3 +601,36 @@ export function archiveEvaluationData(before?: string): Promise<{ projectId: str
 export function restoreEvaluationData(): Promise<{ projectId: string; restored: number; unchanged: number; stats: Record<string, number> }> {
   return api.post('/data/restore', { projectId: getEvaluationProjectId() });
 }
+
+// ===== Phase 52：Cost Governance / Capacity =====
+export interface CostOverviewReport {
+  totalCost: number;
+  currency: string;
+  recordCount: number;
+  byProject: Record<string, number>;
+  byRun: Record<string, number>;
+  byEvaluation: Record<string, number>;
+  byBenchmark: Record<string, number>;
+  byModel: Record<string, number>;
+  byProvider: Record<string, number>;
+  byCategory: Record<string, number>;
+  costPerRun: number | null;
+  costPerEvaluation: number | null;
+  costPerBenchmark: number | null;
+  costPerProject: number | null;
+  trend: Array<{ period: string; cost: number }>;
+}
+export interface CostForecastReport { projectId?: string; forecasts: Array<{ horizon: string; expectedRuns: number; expectedCost: number; expectedQueue: number; expectedWorkerCount: number; trace: string[] }> }
+export interface CostAnomalyItem { id: string; severity: string; current: number; baseline: number; ratio: number; message: string; timestamp: string }
+export interface CapacityReport { currentWorkers: number; lastScaledAt?: number; events: Array<{ action: string; desiredWorkers: number; currentWorkers: number; reason: string; at: string; actor: string }>; limits?: { minWorkers: number; maxWorkers: number; maxConcurrentJobs: number } }
+export interface CostBudgetItem { id: string; projectId?: string; daily?: number; weekly?: number; monthly?: number; perRun?: number; perEvaluation?: number; perRelease?: number }
+
+export function getCostOverview(filters: { projectId: string; window: string; grain: string; model?: string; provider?: string; evaluationId?: string; benchmarkId?: string; releaseId?: string }): Promise<CostOverviewReport> {
+  const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== undefined && v !== '') as Array<[string, string]>);
+  return api.get(`/cost/summary?${query.toString()}`);
+}
+export function getCostForecast(projectId: string): Promise<CostForecastReport> { return api.get(`/cost/forecast?projectId=${encodeURIComponent(projectId)}`); }
+export function getCostAnomalies(projectId: string): Promise<{ projectId: string; anomalies: CostAnomalyItem[] }> { return api.get(`/cost/anomalies?projectId=${encodeURIComponent(projectId)}`); }
+export function getWorkerCapacity(): Promise<CapacityReport> { return api.get('/workers/capacity'); }
+export function getWorkerScaling(): Promise<CapacityReport> { return api.get('/workers/scaling'); }
+export function getCostBudgets(projectId: string): Promise<CostBudgetItem[]> { return api.get(`/budgets?projectId=${encodeURIComponent(projectId)}`); }

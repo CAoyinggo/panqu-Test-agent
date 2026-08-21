@@ -80,4 +80,16 @@ describe('usePolling（Phase 42.1）', () => {
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
     expect(result.current.data).toEqual({ n: 2 });
   });
+
+  it('慢请求完成前不会启动重叠轮询', async () => {
+    vi.useFakeTimers();
+    let resolve!: (value: number) => void;
+    const fetcher = vi.fn(() => new Promise<number>((done) => { resolve = done; }));
+    renderHook(() => usePolling(fetcher, 1000));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await act(async () => { resolve(1); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });

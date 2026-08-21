@@ -25,3 +25,5 @@ export {
   type SuiteConstraints,
   type SuiteSelection,
 } from './cost-optimizer.js';
+
+export * from './governance.js';

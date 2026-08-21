@@ -18,6 +18,7 @@ import { createAIQualityService } from '../../../src/ai-quality/service.js';
 import type { AIQualityService } from '../../../src/ai-quality/service.js';
 import { createProjectAIQualityRegistry } from '../../../src/ai-quality/project-service.js';
 import { EvaluationScaleService } from '../../../src/eval/scale/operations.js';
+import { CostGovernanceService, detectCostAnomaly } from '../../../src/cost/governance.js';
 
 export const WEB_E2E_PORT = Number(process.env.WEB_E2E_PORT ?? 8799);
 export const WEB_E2E_HOST = process.env.WEB_E2E_HOST ?? '127.0.0.1';
@@ -388,6 +389,14 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
   };
   seedScaleProject('wan3', aiQuality.service);
   seedScaleProject('order', orderAiQuality);
+  const costGovernance = new CostGovernanceService();
+  for (const [projectId, amount] of [['wan3', 42], ['order', 30]] as const) {
+    costGovernance.ledger.record({ projectId, runId: `${projectId}-cost-run`, evaluationId: `${projectId}-eval`, benchmarkId: 'RISK_BENCHMARK_v1', releaseId: 'v4.27', provider: 'openai', model: projectId === 'wan3' ? 'gpt-4o-mini' : 'qwen-plus', category: 'LLM', quantity: amount, unitCost: 1, currency: 'CNY', timestamp: '2026-08-21T01:00:00.000Z' });
+    costGovernance.setBudget({ projectId, daily: 50, monthly: 200 }, 'admin');
+  }
+  const seededAnomaly = detectCostAnomaly([10, 12, 8], 42, 'wan3', '2026-08-21T01:30:00.000Z');
+  if (seededAnomaly) costGovernance.addAnomaly(seededAnomaly);
+  costGovernance.scale({ queueLength: 100, oldestQueueAgeMs: 60_000, utilization: 0.9, priority: 0.9, estimatedCost: 42, currentWorkers: 1, now: Date.parse('2026-08-21T01:00:00.000Z') }, { minWorkers: 1, maxWorkers: 5, jobsPerWorker: 20, scaleUpQueueAgeMs: 30_000, cooldownMs: 0 }, 'admin');
   const webDir = path.join(process.cwd(), 'web', 'dist');
   if (!fs.existsSync(path.join(webDir, 'index.html'))) {
     throw new Error(`Web Dashboard 未构建：${webDir}（先运行 npm run build:web）`);
@@ -405,6 +414,7 @@ export async function startWebE2eServer(): Promise<{ url: string; close: () => P
     aiQuality: aiQuality.service,
     aiQualityProjects,
     evaluationScale,
+    costGovernance,
     // 41.13：E2E 测试连跑时 QA Home 3s 轮询 + 登录 + 多页操作会在 60s 窗口内超过默认
     //       120 req/min/IP 配额 → 429 使页面数据加载失败。测试环境放开配额，避免误伤。
     rateLimitPerMinute: 100_000,
