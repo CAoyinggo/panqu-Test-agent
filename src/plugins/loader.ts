@@ -32,9 +32,9 @@ export async function autoLoadScenes(): Promise<Record<string, SceneHandler>> {
       for (const [, exportValue] of Object.entries(mod)) {
         if (typeof exportValue === 'function' && (exportValue as any).prototype) {
           const instance = new (exportValue as any)() as SceneHandler;
-          if (instance.name && typeof instance.match === 'function') {
+          if (instance.name && Array.isArray(instance.supportedScenes) && typeof instance.supports === 'function') {
             handlers[instance.name] = instance;
-            logger.info(`  自动注册场景处理器：${instance.name}（${file}）`);
+            logger.info(`  自动注册场景处理器：${instance.name} [${instance.supportedScenes.join(',')}]（${file}）`);
             break;
           }
         }

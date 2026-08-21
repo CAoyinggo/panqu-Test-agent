@@ -221,6 +221,10 @@ export interface ReportData {
   manual: Array<{ id: string; steps: string }>;
   issues: IssueItem[];
   passRate: number;
+  /** 是否完成真实 Processor 执行。 */
+  executed?: boolean;
+  /** PASS / FAIL / BLOCKED / NOT_EXECUTED。 */
+  executionStatus?: import('./execution-status.js').CoreExecutionStatus;
   assetInfo: AssetInfo;
   /** 执行追踪 ID（Phase 3） */
   traceId?: string;

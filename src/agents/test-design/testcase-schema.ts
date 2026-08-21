@@ -5,6 +5,7 @@
 import type { TaskDef, AssertionConfig } from '../../core/types.js';
 import type { AssertionRule, AssertionOperator } from '../../core/assertion-operators.js';
 import type { LoadedCase } from '../../cases/loader.js';
+import { toCanonicalSceneId, type CanonicalSceneId } from '../../core/canonical-scene.js';
 
 /** 优先级 */
 export type TestPriority = 'P0' | 'P1' | 'P2' | 'P3';
@@ -162,10 +163,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** 按 feature 推断默认场景处理器 */
-function inferScene(feature: string): string {
+function inferScene(feature: string): CanonicalSceneId | null {
   const f = feature.toLowerCase();
   if (f === 'wan3' || f.includes('video')) return 'video';
-  return f || 'video';
+  return null;
 }
 
 /** 合并步骤输入为 extra（供 TaskDef 使用） */
@@ -183,7 +184,7 @@ function mergeStepInputs(steps: TestStep[]): Record<string, unknown> {
  */
 export function toTaskDef(testCase: TestCase): TaskDef {
   const firstSubmit = testCase.steps.find((s) => s.action === 'submit');
-  const scene = firstSubmit?.scene ?? inferScene(testCase.feature);
+  const scene = toCanonicalSceneId(firstSubmit?.scene) ?? inferScene(testCase.feature) ?? firstSubmit?.scene ?? testCase.feature;
 
   const rules: AssertionRule[] = testCase.assertions.map((a) => ({
     target: a.target ?? 'submit',

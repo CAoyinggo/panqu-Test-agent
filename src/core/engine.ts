@@ -33,6 +33,8 @@ import { generateAllureResults } from '../utils/allure-reporter.js';
 import { resolvePlaceholders } from '../utils/data-generator.js';
 import { createRecordSession, createReplaySession, type RecordSession, type ReplaySession } from '../utils/mock-recorder.js';
 import { DynamicConcurrencyController, createDefaultConcurrencyConfig } from '../utils/concurrency-controller.js';
+import { toCanonicalSceneId } from './canonical-scene.js';
+import type { CoreExecutionStatus } from './execution-status.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
@@ -42,8 +44,10 @@ export function registerScene(name: string, handler: SceneHandler): void {
 }
 
 export function findHandler(scene: string): SceneHandler | null {
+  const canonical = toCanonicalSceneId(scene);
+  if (!canonical) return null;
   for (const h of Object.values(SCENES)) {
-    if (h.match(scene)) return h;
+    if (h.supportedScenes.includes(canonical) && h.supports(canonical)) return h;
   }
   return null;
 }
@@ -53,10 +57,13 @@ export interface EngineOptions {
 }
 
 /** 单任务执行结果 */
-interface RunTaskResult {
+export interface RunTaskResult {
   files: string[];
   passRate: number;
   hasBlockingIssue: boolean;
+  executed: boolean;
+  status: CoreExecutionStatus;
+  checks: PipelineResult['checks'];
 }
 
 export class Engine {
@@ -96,7 +103,11 @@ export class Engine {
     const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff, debugLevel }, this.hooks);
     const result: PipelineResult = await pipeline.run();
 
-    const hasBlockingIssue = result.issues.some((i) => i.level === '阻塞');
+    const hasBlockingIssue = result.status === 'BLOCKED' || result.status === 'NOT_EXECUTED'
+      || result.issues.some((i) => i.level === '阻塞');
+    const executionStatus: CoreExecutionStatus = hasBlockingIssue && result.status === 'PASS'
+      ? 'BLOCKED'
+      : result.status;
 
     // 设置 metrics 通过率
     metrics.setPassRate(result.passRate);
@@ -114,6 +125,8 @@ export class Engine {
       manual: result.manual,
       issues: result.issues,
       passRate: result.passRate,
+      executed: result.executed,
+      executionStatus,
       assetInfo: result.assetInfo,
       traceId: getTraceId(),
       metrics: metrics.toJSON(),
@@ -129,7 +142,14 @@ export class Engine {
     for (const r of reporters) {
       files.push(...r.write(dir, taskDef.name, reportData));
     }
-    return { files, passRate: result.passRate, hasBlockingIssue };
+    return {
+      files,
+      passRate: result.passRate,
+      hasBlockingIssue,
+      executed: result.executed,
+      status: executionStatus,
+      checks: result.checks,
+    };
   }
 
   /**
