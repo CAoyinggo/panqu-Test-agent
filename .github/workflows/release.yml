@@ -40,11 +40,12 @@ jobs:
 
       # 2. Semgrep SAST — 阻塞（ERROR 级别）
       - name: Semgrep scan
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: config/security/semgrep.yml
-          generateSarifReport: true
-          sarifOutput: security-reports/semgrep.sarif
+        run: |
+          mkdir -p security-reports
+          docker run --rm --entrypoint semgrep \
+            -v "$PWD:/src" returntocorp/semgrep:latest \
+            --config /src/config/security/semgrep.yml \
+            --sarif --output /src/security-reports/semgrep.sarif /src
 
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v3

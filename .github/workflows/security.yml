@@ -15,6 +15,10 @@ on:
     # 每日凌晨 3:00 定时全量安全扫描（北京时间）
     - cron: '0 19 * * *'  # UTC 19:00 = CST 03:00
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   # ── 1. 依赖漏洞扫描（npm audit） ──
   audit:
@@ -43,17 +47,19 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Semgrep scan
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            ./config/security/semgrep.yml
-          generateSarifReport: true
-          sarifOutput: security-reports/semgrep.sarif
-      - name: Save Semgrep JSON report
+      - name: Semgrep SARIF scan
         run: |
           mkdir -p security-reports
-          semgrep --config config/security/semgrep.yml --json --output security-reports/semgrep.json . || true
+          docker run --rm --entrypoint semgrep \
+            -v "$PWD:/src" returntocorp/semgrep:latest \
+            --config /src/config/security/semgrep.yml \
+            --sarif --output /src/security-reports/semgrep.sarif /src
+      - name: Save Semgrep JSON report
+        run: |
+          docker run --rm --entrypoint semgrep \
+            -v "$PWD:/src" returntocorp/semgrep:latest \
+            --config /src/config/security/semgrep.yml \
+            --json --output /src/security-reports/semgrep.json /src
       - name: Check for ERROR severity
         run: |
           ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
@@ -91,9 +97,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: config/security/gitleaks.toml
-        with:
-          report-format: json
-          report-path: security-reports/gitleaks.json
       - name: Upload secrets report
         if: always()
         uses: actions/upload-artifact@v4

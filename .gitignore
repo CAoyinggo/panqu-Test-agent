@@ -19,7 +19,7 @@ security-reports/
 .docker-cache/
 
 # Test coverage reports
-coverage/
+/coverage/
 
 # Mutation testing artifacts (Stryker)
 .stryker-tmp/

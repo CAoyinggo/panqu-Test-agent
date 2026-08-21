@@ -21,7 +21,7 @@ WORKDIR /app
 
 # 复制依赖清单，仅安装生产依赖
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # 复制编译产物 + 配置 + 用例
 COPY --from=builder /app/dist/ ./dist/
