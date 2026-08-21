@@ -4,6 +4,7 @@ export {
   type AggregatedMetric,
   type AggregationDimension,
   type EvaluationTelemetryRecord,
+  type EvaluationMetricsSnapshot,
 } from './aggregation.js';
 export {
   detectEvaluationDrift,

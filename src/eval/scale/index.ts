@@ -8,4 +8,4 @@ export {
 } from './concurrent-runner.js';
 export { EvaluationQueue, type EvaluationJobStatus, type EvaluationLease, type EvaluationQueueJob } from './evaluation-queue.js';
 export { EvaluationWorkerPool, type EvaluationWorkerState, type WorkerPoolMetrics } from './worker-pool.js';
-export { EvaluationScaleService, type EvaluationProjectOperations, type EvaluationScaleAudit } from './operations.js';
+export { EvaluationScaleService, type EvaluationProjectOperations, type EvaluationScaleAudit, type EvaluationScaleSnapshot } from './operations.js';

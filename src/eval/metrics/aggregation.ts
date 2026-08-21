@@ -32,6 +32,18 @@ export interface AggregatedMetric {
   failureRate: number;
 }
 
+export interface EvaluationMetricsSnapshot {
+  schemaVersion: 1;
+  ingestedIds: string[];
+  buckets: Record<AggregationDimension, Record<string, {
+    count: number;
+    scoreSum: number;
+    costSum: number;
+    failures: number;
+    latencyHistogram: Array<[number, number]>;
+  }>>;
+}
+
 export class EvaluationMetricsAggregator {
   private readonly buckets = new Map<AggregationDimension, Map<string, MutableAggregate>>();
   private readonly ingestedIds = new Set<string>();
@@ -88,6 +100,30 @@ export class EvaluationMetricsAggregator {
 
   get recordCount(): number {
     return this.ingestedIds.size;
+  }
+
+  snapshot(): EvaluationMetricsSnapshot {
+    const buckets = {} as EvaluationMetricsSnapshot['buckets'];
+    for (const dimension of ['hourly', 'daily', 'project', 'model', 'benchmark'] as const) {
+      buckets[dimension] = Object.fromEntries([...this.buckets.get(dimension)!].map(([key, bucket]) => [key, {
+        count: bucket.count, scoreSum: bucket.scoreSum, costSum: bucket.costSum, failures: bucket.failures,
+        latencyHistogram: [...bucket.latencyHistogram],
+      }]));
+    }
+    return { schemaVersion: 1, ingestedIds: [...this.ingestedIds], buckets };
+  }
+
+  static restore(snapshot: EvaluationMetricsSnapshot): EvaluationMetricsAggregator {
+    if (snapshot.schemaVersion !== 1) throw new Error('Evaluation metrics snapshot 版本不支持');
+    const aggregator = new EvaluationMetricsAggregator();
+    for (const id of snapshot.ingestedIds) aggregator.ingestedIds.add(id);
+    for (const dimension of ['hourly', 'daily', 'project', 'model', 'benchmark'] as const) {
+      const map = aggregator.buckets.get(dimension)!;
+      for (const [key, bucket] of Object.entries(snapshot.buckets[dimension] ?? {})) {
+        map.set(key, { ...bucket, latencyHistogram: new Map(bucket.latencyHistogram) });
+      }
+    }
+    return aggregator;
   }
 }
 

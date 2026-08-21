@@ -8,6 +8,7 @@ export {
   type RecoveryComponent,
   type RecoveryHealth,
   type RecoveryStatus,
+  type RecoverySnapshot,
   type ResumableEvaluationDeps,
   type ResumableEvaluationInput,
 } from './coordinator.js';

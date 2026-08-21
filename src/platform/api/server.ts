@@ -60,6 +60,8 @@ export interface ApiServerOptions {
   aiQualityProjects?: ProjectAIQualityRegistry;
   /** Phase 51.8：项目级 Evaluation 规模、生命周期、指标与恢复运维面。 */
   evaluationScale?: EvaluationScaleService;
+  /** Phase 52.1：Scale 运维状态原子快照；重启后恢复 Queue/Metrics/Recovery/Lifecycle/Integrity/Audit。 */
+  evaluationScaleStateFile?: string;
   /** Phase 46：AI Quality 状态持久化文件路径（提供时启动自动加载、写操作后自动保存，跨重启保留改进闭环） */
   aiQualityStateFile?: string;
 }
@@ -125,7 +127,11 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // 配置 aiQualityStateFile 时：启动自动从文件恢复，写操作（POST）后自动保存，保证改进闭环跨重启持久化。
   const legacyAiQuality: AIQualityService = opts.aiQuality ?? (opts.aiQualityStateFile ? AIQualityService.loadFromFile(opts.aiQualityStateFile) : createAIQualityService());
   const aiQualityProjects = opts.aiQualityProjects ?? new ProjectAIQualityRegistry({ initial: { wan3: legacyAiQuality } });
-  const evaluationScale = opts.evaluationScale ?? new EvaluationScaleService();
+  const evaluationScale = opts.evaluationScale
+    ?? (opts.evaluationScaleStateFile ? EvaluationScaleService.loadFromFile(opts.evaluationScaleStateFile) : new EvaluationScaleService());
+  const persistEvaluationScale = (): void => {
+    if (opts.evaluationScaleStateFile) evaluationScale.persistToFile(opts.evaluationScaleStateFile);
+  };
 
   /** Phase 51.1：解析 + 校验项目作用域，并返回该项目独立 AI Evaluation 分区。 */
   function aiQualityFor(c: Ctx): AIQualityService {
@@ -665,13 +671,16 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       const before = c.body.before ? new Date(String(c.body.before)) : undefined;
       if (before && Number.isNaN(before.getTime())) throw new HttpError(400, 'before 必须是合法 ISO 时间');
       const artifact = evaluationScale.archive(projectId, c.actor, before);
+      persistEvaluationScale();
       return { projectId, archived: artifact.records.length, checksum: artifact.checksum, stats: evaluationScale.forProject(projectId).lifecycle.stats() };
     } },
     { method: 'POST', segments: ['data', 'restore'], handler: async (c) => {
       requireAiApprove(c);
       const projectId = evaluationProjectId(c);
       try {
-        return { projectId, ...evaluationScale.restore(projectId, c.actor), stats: evaluationScale.forProject(projectId).lifecycle.stats() };
+        const restored = evaluationScale.restore(projectId, c.actor);
+        persistEvaluationScale();
+        return { projectId, ...restored, stats: evaluationScale.forProject(projectId).lifecycle.stats() };
       } catch (err) {
         throw new HttpError(409, (err as Error).message);
       }

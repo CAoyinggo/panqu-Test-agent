@@ -17,6 +17,12 @@ export interface RecoveryStatus {
   recoveryRate: number;
 }
 
+export interface RecoverySnapshot {
+  schemaVersion: 1;
+  components: Record<RecoveryComponent, RecoveryHealth>;
+  alerts: RecoveryAlert[];
+}
+
 export class RecoveryCoordinator {
   private readonly components: Record<RecoveryComponent, RecoveryHealth> = {
     STORAGE: 'HEALTHY', WORKER: 'HEALTHY', QUEUE: 'HEALTHY', TELEMETRY: 'HEALTHY',
@@ -55,6 +61,18 @@ export class RecoveryCoordinator {
       alerts: structuredClone(this.alerts),
       recoveryRate: this.alerts.length === 0 ? 1 : recovered / this.alerts.length,
     };
+  }
+
+  snapshot(): RecoverySnapshot {
+    return { schemaVersion: 1, components: structuredClone(this.components), alerts: structuredClone(this.alerts) };
+  }
+
+  static restore(snapshot: RecoverySnapshot): RecoveryCoordinator {
+    if (snapshot.schemaVersion !== 1) throw new Error('Recovery snapshot 版本不支持');
+    const coordinator = new RecoveryCoordinator();
+    Object.assign(coordinator.components, structuredClone(snapshot.components));
+    coordinator.alerts.push(...structuredClone(snapshot.alerts));
+    return coordinator;
   }
 }
 
