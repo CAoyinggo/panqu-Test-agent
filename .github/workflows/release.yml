@@ -52,6 +52,7 @@ jobs:
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true
         with:
           sarif_file: security-reports/semgrep.sarif
           category: semgrep

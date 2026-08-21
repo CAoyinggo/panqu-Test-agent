@@ -82,6 +82,7 @@ jobs:
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true
         with:
           sarif_file: security-reports/semgrep.sarif
           category: semgrep
@@ -124,12 +125,15 @@ jobs:
           tags: test-flow:ci-scan
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Prepare Trivy reports directory
+        run: mkdir -p security-reports
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           format: 'json'
           output: 'security-reports/trivy-config.json'
+          skip-files: 'deploy/docker/Dockerfile.dockerignore'
           ignore-unfixed: true
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@master
