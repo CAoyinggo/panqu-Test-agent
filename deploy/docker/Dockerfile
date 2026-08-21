@@ -20,9 +20,11 @@ FROM node:24-alpine AS runtime
 
 WORKDIR /app
 
-# 复制依赖清单，仅安装生产依赖
+# 复制依赖清单，仅安装生产依赖；运行阶段只需 node，移除 npm/npx 以缩小攻击面
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # 复制编译产物 + 配置 + 用例
 COPY --from=builder /app/dist/ ./dist/
