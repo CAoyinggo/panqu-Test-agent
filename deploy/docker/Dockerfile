@@ -12,6 +12,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 COPY bin/ ./bin/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 RUN npm run build
 
 # ── Stage 2: Runtime ── 仅保留编译产物 + 运行时依赖
