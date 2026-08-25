@@ -9,7 +9,7 @@ import { RunRecord, FlakyAnalysis, isFlakyLike, normalizeFlakyAnalysis, buildFla
 import { analyzeFlakiness } from './flaky-analyzer.js';
 
 /** 系统提示词：只做解释，不改统计 */
-const SYSTEM_PROMPT = `你是 Flaky Test 分析专家。基于给定的 Flaky 统计结果（规则已计算），
+export const FLAKY_SYSTEM_PROMPT = `你是 Flaky Test 分析专家。基于给定的 Flaky 统计结果（规则已计算），
 解释为何这些用例不稳定，并给出处理建议。只输出 JSON：
 {"summary":"一句话汇总（说明 flaky/unstable 用例数与主要模式）","notes":[{"caseId":"tc-01","note":"该用例不稳定原因分析"}]}`;
 
@@ -60,14 +60,14 @@ export class FlakyAgent extends BaseAgent<FlakyAgentInput, FlakyAnalysis> {
       null,
       2,
     );
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'flaky',
+        agent: this.name,
+        system: FLAKY_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
     const parsed = parseLLMJson<Record<string, unknown>>(resp);
     if (typeof parsed?.summary !== 'string') {
       throw new Error('LLM Flaky 解释缺少 summary');

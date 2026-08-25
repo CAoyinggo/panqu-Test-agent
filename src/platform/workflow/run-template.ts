@@ -6,6 +6,7 @@
 import type { Entity, Repository } from '../storage/repository.js';
 import { generateEntityId } from '../storage/repository.js';
 import type { TestPlanMode } from './test-plan.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export interface RunTemplate extends Entity {
   id: string;
@@ -104,7 +105,7 @@ export class RunTemplateService {
 
   async update(id: string, input: Partial<Pick<RunTemplate, 'name' | 'description' | 'environment' | 'suiteIds' | 'mode' | 'budget' | 'releaseGate'>>): Promise<RunTemplate> {
     const t = await this.repo.get(id);
-    if (!t) throw new Error(`Run Template 不存在：${id}`);
+    if (!t) throw new CodedError(ErrorCode.NOT_FOUND, `Run Template 不存在：${id}`);
     const updated: RunTemplate = { ...t, ...input, id, updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
     return updated;
@@ -113,7 +114,7 @@ export class RunTemplateService {
   /** 记录一次复用（Run 成功后由 RunService 调用；真实计数不虚构） */
   async recordRun(id: string): Promise<RunTemplate> {
     const t = await this.repo.get(id);
-    if (!t) throw new Error(`Run Template 不存在：${id}`);
+    if (!t) throw new CodedError(ErrorCode.NOT_FOUND, `Run Template 不存在：${id}`);
     const updated = { ...t, runCount: t.runCount + 1, updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
     return updated;
@@ -122,7 +123,7 @@ export class RunTemplateService {
   /** 解析模板为可执行的 Run 配置（仅 Configuration） */
   async resolve(id: string): Promise<RunConfigSource> {
     const t = await this.repo.get(id);
-    if (!t) throw new Error(`Run Template 不存在：${id}`);
+    if (!t) throw new CodedError(ErrorCode.NOT_FOUND, `Run Template 不存在：${id}`);
     return {
       projectId: t.projectId,
       environment: t.environment,

@@ -1,0 +1,23 @@
+{
+  "scenarioId": "SCN-wan3-provider-failure-refund",
+  "mode": "BLOCKED",
+  "patterns": ["PROVIDER_FAILURE", "STATE_MACHINE", "BILLING", "ATOMICITY"],
+  "operations": [
+    {"id": "STEP-001", "intent": "inject-deterministic-provider-failure", "binding": null, "bindingRequired": true},
+    {"id": "STEP-002", "intent": "submit-correlated-task", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-003", "intent": "observe-terminal-task-state", "observer": null, "bindingRequired": true},
+    {"id": "STEP-004", "intent": "observe-provider-attempts", "observer": null, "bindingRequired": true},
+    {"id": "STEP-005", "intent": "observe-charge-and-refund", "observer": null, "bindingRequired": true}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-001", "target": "injectedFailureClass", "operator": "EQUALS", "expected": "PROVIDER_ERROR"},
+    {"id": "AS-002", "ac": "AC-002", "operation": "STEP-003", "target": "terminalState", "operator": "EQUALS", "expectedFrom": "resolvedStateMachine.providerFailureState"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-003", "target": "failureClass", "operator": "EQUALS", "expected": "PROVIDER_ERROR"},
+    {"id": "AS-004", "ac": "AC-003", "operation": "STEP-004", "target": "providerCallCount", "operator": "COUNT_EQUALS", "expectedFrom": "resolvedRetryPolicy.expectedAttempts"},
+    {"id": "AS-005", "ac": "AC-003", "operation": "STEP-005", "target": "chargeCount", "operator": "COUNT_EQUALS", "expected": 1},
+    {"id": "AS-006", "ac": "AC-003", "operation": "STEP-005", "target": "refundCount", "operator": "COUNT_EQUALS", "expected": 1},
+    {"id": "AS-007", "ac": "AC-003", "operation": "STEP-005", "target": "netAmount", "operator": "EQUALS", "expected": 0}
+  ],
+  "requiredEvidenceKinds": ["RESPONSE", "STATE_BEFORE", "STATE_AFTER", "PROVIDER_CALL", "BILLING_RECORD"],
+  "blockedCodes": ["MISSING_API_CONTRACT", "MISSING_DEPENDENCY", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+}

@@ -1,0 +1,23 @@
+{
+  "scenarioId": "SCN-profile-update-persistence",
+  "mode": "EXECUTABLE",
+  "patterns": ["FUNCTIONAL", "PERSISTENCE", "AUTHORIZATION"],
+  "operations": [
+    {"id": "STEP-001", "method": "GET", "path": "/__fixtures/profile/users/${PROFILE_USER_ID}", "purpose": "capture-before-state"},
+    {"id": "STEP-002", "method": "PUT", "path": "/__fixtures/profile/users/${PROFILE_USER_ID}", "purpose": "update-owned-profile"},
+    {"id": "STEP-003", "method": "GET", "path": "/__fixtures/profile/users/${PROFILE_USER_ID}", "purpose": "observe-persisted-state"}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-002", "target": "status", "operator": "EQUALS", "expected": 200},
+    {"id": "AS-002", "ac": "AC-001", "operation": "STEP-002", "target": "body.data.displayName", "operator": "EQUALS", "expectedFrom": "input.PROFILE_DISPLAY_NAME"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.displayName", "operator": "EQUALS", "expectedFrom": "input.PROFILE_DISPLAY_NAME"},
+    {"id": "AS-004", "ac": "AC-003", "operation": "STEP-003", "target": "body.data.email", "operator": "UNCHANGED", "expectedFrom": "STEP-001.originalEmail"},
+    {"id": "AS-005", "ac": "AC-003", "operation": "STEP-003", "target": "body.data.role", "operator": "UNCHANGED", "expectedFrom": "STEP-001.originalRole"},
+    {"id": "AS-006", "ac": "AC-003", "operation": "STEP-003", "target": "body.data.tenantId", "operator": "UNCHANGED", "expectedFrom": "STEP-001.originalTenantId"},
+    {"id": "AS-007", "ac": "AC-003", "operation": "STEP-003", "target": "body.data.projectId", "operator": "UNCHANGED", "expectedFrom": "STEP-001.originalProjectId"},
+    {"id": "AS-008", "ac": "AC-003", "operation": "STEP-001", "target": "status", "operator": "EQUALS", "expected": 200},
+    {"id": "AS-009", "ac": "AC-002", "operation": "STEP-003", "target": "status", "operator": "EQUALS", "expected": 200}
+  ],
+  "requiredEvidenceKinds": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER"],
+  "blockedCodes": []
+}

@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   FallbackLLMProvider,
+  LLMError,
   MockLLMProvider,
   classifyLLMError,
   isRetryable,
@@ -18,17 +19,20 @@ const req: LLMRequest = { messages: [{ role: 'user', content: 'hi' }] };
 /** 始终抛错的 Provider */
 class ThrowingProvider implements LLMProvider {
   name: string;
-  private message: string;
+  private failure: Error;
   calls = 0;
-  constructor(name: string, message: string) {
+  constructor(name: string, failure: string | Error) {
     this.name = name;
-    this.message = message;
+    this.failure = typeof failure === 'string' ? new Error(failure) : failure;
   }
   async generate(): Promise<LLMResponse> {
     this.calls++;
-    throw new Error(this.message);
+    throw this.failure;
   }
 }
+
+const httpFailure = (status: number, message = `HTTP ${status}`): LLMError =>
+  new LLMError(message, { kind: 'http', status, message });
 
 describe('llm - 错误分类', () => {
   it('timeout / abort / 超时 识别为 timeout', () => {
@@ -37,10 +41,11 @@ describe('llm - 错误分类', () => {
     expect(classifyLLMError(new Error('请求 timed out'))).toMatchObject({ kind: 'timeout' });
   });
 
-  it('HTTP 状态码识别', () => {
-    expect(classifyLLMError(new Error('LLM 请求失败（HTTP 429）：rate limit'))).toMatchObject({ kind: 'http', status: 429 });
-    expect(classifyLLMError(new Error('LLM 请求失败（HTTP 503）：service unavailable'))).toMatchObject({ kind: 'http', status: 503 });
-    expect(classifyLLMError(new Error('LLM 请求失败（HTTP 401）：unauthorized'))).toMatchObject({ kind: 'http', status: 401 });
+  it('HTTP 状态只从结构化 LLMError 读取，不解析自由文本', () => {
+    expect(classifyLLMError(httpFailure(429))).toMatchObject({ kind: 'http', status: 429 });
+    expect(classifyLLMError(httpFailure(503))).toMatchObject({ kind: 'http', status: 503 });
+    expect(classifyLLMError(httpFailure(401))).toMatchObject({ kind: 'http', status: 401 });
+    expect(classifyLLMError(new Error('LLM 请求失败（HTTP 429）：rate limit'))).toMatchObject({ kind: 'unknown' });
   });
 
   it('网络错误识别', () => {
@@ -62,8 +67,8 @@ describe('llm - 错误分类', () => {
   });
 
   it('shouldFallback 便捷判断', () => {
-    expect(shouldFallback(new Error('LLM 请求失败（HTTP 429）'))).toBe(true);
-    expect(shouldFallback(new Error('LLM 请求失败（HTTP 400）'))).toBe(false);
+    expect(shouldFallback(httpFailure(429))).toBe(true);
+    expect(shouldFallback(httpFailure(400))).toBe(false);
   });
 });
 
@@ -89,7 +94,7 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('主 HTTP 429 → 回退模型接管', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 429）：rate limit');
+    const primary = new ThrowingProvider('primary', httpFailure(429, 'LLM 请求失败（HTTP 429）：rate limit'));
     const fallback = new MockLLMProvider({ defaultResponse: 'fallback-429' });
     const llm = new FallbackLLMProvider({ primary, fallback });
     const r = await llm.generate(req);
@@ -98,7 +103,7 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('主 HTTP 503 → 回退模型接管', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 503）：unavailable');
+    const primary = new ThrowingProvider('primary', httpFailure(503, 'LLM 请求失败（HTTP 503）：unavailable'));
     const fallback = new MockLLMProvider({ defaultResponse: 'fallback-503' });
     const llm = new FallbackLLMProvider({ primary, fallback });
     const r = await llm.generate(req);
@@ -106,7 +111,7 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('主 HTTP 400（非可重试）不触发回退，直接抛错', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 400）：bad request');
+    const primary = new ThrowingProvider('primary', httpFailure(400, 'LLM 请求失败（HTTP 400）：bad request'));
     const fallback = new MockLLMProvider({ defaultResponse: 'should-not-use' });
     const llm = new FallbackLLMProvider({ primary, fallback });
     await expect(llm.generate(req)).rejects.toThrow('HTTP 400');
@@ -114,7 +119,7 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('主 HTTP 401（鉴权）不触发回退', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 401）：unauthorized');
+    const primary = new ThrowingProvider('primary', httpFailure(401, 'LLM 请求失败（HTTP 401）：unauthorized'));
     const fallback = new MockLLMProvider({ defaultResponse: 'no' });
     const llm = new FallbackLLMProvider({ primary, fallback });
     await expect(llm.generate(req)).rejects.toThrow('HTTP 401');
@@ -122,8 +127,8 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('主备都失败 → 确定性回退内容', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 429）');
-    const fallback = new ThrowingProvider('fallback', 'LLM 请求失败（HTTP 503）');
+    const primary = new ThrowingProvider('primary', httpFailure(429));
+    const fallback = new ThrowingProvider('fallback', httpFailure(503));
     const llm = new FallbackLLMProvider({ primary, fallback, deterministicFallback: '{"ok":true}' });
     const r = await llm.generate(req);
     expect(r.content).toBe('{"ok":true}');
@@ -138,8 +143,8 @@ describe('llm - FallbackLLMProvider 回退链', () => {
   });
 
   it('回退事件监听记录 from/to/attempt', async () => {
-    const primary = new ThrowingProvider('primary', 'LLM 请求失败（HTTP 429）');
-    const fallback = new ThrowingProvider('fallback', 'LLM 请求失败（HTTP 503）');
+    const primary = new ThrowingProvider('primary', httpFailure(429));
+    const fallback = new ThrowingProvider('fallback', httpFailure(503));
     const events: Array<{ from: string; to: string; attempt: number }> = [];
     const llm = new FallbackLLMProvider({
       primary,

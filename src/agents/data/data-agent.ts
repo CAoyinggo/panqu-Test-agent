@@ -11,14 +11,17 @@ import type { TestCase } from '../test-design/testcase-schema.js';
 import type { DataContext } from '../../core/types.js';
 import {
   DataPlan,
+  type DataPrepareResult,
   DATA_PLAN_JSON_SCHEMA,
   isDataPlanLike,
   validateDataPlan,
 } from './data-schema.js';
 import { analyzeDataPlan } from './data-analyzer.js';
+import { DataPrepareTool } from './data-prepare-tool.js';
+import type { DataPrepareInput } from './data-prepare-tool.js';
 
 /** 系统提示词：要求 LLM 严格按 Schema 输出 DataPlan */
-const SYSTEM_PROMPT = `你是测试数据准备规划师。根据测试需求与用例规划数据准备方案。
+export const DATA_SYSTEM_PROMPT = `你是测试数据准备规划师。根据测试需求与用例规划数据准备方案。
 输出必须严格符合如下 JSON Schema（只输出 JSON，不要任何解释或 Markdown 围栏）：
 ${JSON.stringify(DATA_PLAN_JSON_SCHEMA, null, 2)}
 
@@ -63,28 +66,51 @@ export class DataAgent extends BaseAgent<DataAgentInput, DataPlan> {
     return plan;
   }
 
-  /**
-   * 经 Tool Registry 实际准备测试数据。
-   * 若未注册 data.prepare Tool，返回空 DataContext（计划本身不受影响）。
-   */
-  async prepareData(plan: DataPlan, context: AgentContext): Promise<DataContext> {
-    if (!plan.needsSetup) return {};
+  /** 经 Tool Registry 实际准备测试数据，并返回可供编排器 fail-close 的结构化终态。 */
+  async prepareDataResult(plan: DataPlan, context: AgentContext, signal?: AbortSignal): Promise<DataPrepareResult> {
+    if (!plan.needsSetup) return { status: 'NOT_REQUIRED', context: {} };
     if (!context.tools.has('data.prepare')) {
-      context.logger.warn('未注册 data.prepare Tool，跳过实际数据准备（可注册 DataPrepareTool）');
-      return {};
+      const error = '未注册 data.prepare Tool，无法满足数据准备前置条件';
+      context.logger.warn(error);
+      return { status: 'BLOCKED', context: {}, error };
     }
-    const result = await context.tools.call<{ factoryName: string; params?: Record<string, unknown> }, DataContext>(
+    const registeredTool = context.tools.get('data.prepare');
+    const prepareInput: DataPrepareInput = {
+      factoryName: plan.factoryName,
+      params: plan.generateParams,
+    };
+    const factory = registeredTool instanceof DataPrepareTool
+      ? registeredTool.bindFactory(prepareInput)
+      : undefined;
+    const result = await context.tools.call<DataPrepareInput, DataContext>(
       'data.prepare',
-      { factoryName: plan.factoryName, params: plan.generateParams },
+      prepareInput,
       context,
+      { signal },
     );
     if (!result.ok) {
-      context.logger.warn(`数据准备失败：${result.error}`);
-      return {};
+      const status = result.status === 'TIMEOUT'
+        ? 'TIMEOUT'
+        : result.status === 'CANCELLED'
+          ? 'CANCELLED'
+          : 'FAILED';
+      const error = `数据准备${status === 'TIMEOUT' ? '超时' : status === 'CANCELLED' ? '取消' : '失败'}：${result.error ?? 'unknown error'}`;
+      context.logger.warn(error);
+      return { status, context: {}, error };
     }
     const data = result.data ?? {};
+    if (Object.keys(data).length === 0) {
+      const error = '数据准备返回空 DataContext，无法证明前置数据已就绪';
+      context.logger.warn(error);
+      return { status: 'EMPTY', context: {}, error };
+    }
     plan.dataContext = data;
-    return data;
+    return { status: 'READY', context: data, factory };
+  }
+
+  /** 兼容旧调用方；新编排链必须使用 prepareDataResult 并校验 status。 */
+  async prepareData(plan: DataPlan, context: AgentContext): Promise<DataContext> {
+    return (await this.prepareDataResult(plan, context)).context;
   }
 
   /** LLM 规划：构造提示 → 解析 JSON → 校验 → 归一化 */
@@ -100,14 +126,14 @@ ${testCases
     .map((c) => `- ${c.id} [${c.priority}] ${c.name}（tags: ${c.tags.join(',')}，断言: ${c.assertions.map((a) => a.target ?? 'submit').join(',')}）`)
     .join('\n')}`;
 
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'data',
+        agent: this.name,
+        system: DATA_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp); // 非法 JSON 抛错 → 回退
     if (!isDataPlanLike(parsed)) {
@@ -126,7 +152,7 @@ export function createDataAgent(): DataAgent {
 }
 
 // 重导出 schema / analyzer / tool 便于外部消费
-export { DataPlan, DataAction, CaseDataAssignment, DataNeedType } from './data-schema.js';
+export { DataPlan, DataAction, CaseDataAssignment, DataNeedType, DataPrepareResult, DataPrepareStatus } from './data-schema.js';
 export { DATA_PLAN_JSON_SCHEMA, normalizeDataPlan, validateDataPlan } from './data-schema.js';
 export { analyzeDataPlan, DataAnalyzerInput } from './data-analyzer.js';
 export { DataPrepareTool, createDataPrepareTool, DataPrepareInput } from './data-prepare-tool.js';

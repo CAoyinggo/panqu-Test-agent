@@ -14,6 +14,7 @@ import {
 import { ProjectService } from '../../src/platform/projects/index.js';
 import { InMemoryRepository } from '../../src/platform/storage/index.js';
 import type { RunCheckpoint, TestRun } from '../../src/platform/runs/index.js';
+import { verifiedExecutionRecord } from '../helpers/platform-run.js';
 
 function makeEnv(): { svc: RunService; projects: ProjectService } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p24r-'));
@@ -27,11 +28,14 @@ function makeEnv(): { svc: RunService; projects: ProjectService } {
 }
 
 describe('Run 状态机', () => {
-  it('合法迁移：QUEUED→RUNNING→PAUSED→RUNNING→COMPLETED', () => {
-    expect(transitionRun('QUEUED', 'RUNNING')).toBe('RUNNING');
+  it('合法迁移：QUEUED→PLANNING→GATED→RUNNING→EVIDENCE_READY→COMPLETED', () => {
+    expect(transitionRun('QUEUED', 'PLANNING')).toBe('PLANNING');
+    expect(transitionRun('PLANNING', 'GATED')).toBe('GATED');
+    expect(transitionRun('GATED', 'RUNNING')).toBe('RUNNING');
     expect(transitionRun('RUNNING', 'PAUSED')).toBe('PAUSED');
-    expect(transitionRun('PAUSED', 'RUNNING')).toBe('RUNNING');
-    expect(transitionRun('RUNNING', 'COMPLETED')).toBe('COMPLETED');
+    expect(transitionRun('PAUSED', 'PLANNING')).toBe('PLANNING');
+    expect(transitionRun('RUNNING', 'EVIDENCE_READY')).toBe('EVIDENCE_READY');
+    expect(transitionRun('EVIDENCE_READY', 'COMPLETED')).toBe('COMPLETED');
   });
 
   it('非法迁移抛错：QUEUED→COMPLETED、COMPLETED→RUNNING', () => {
@@ -41,9 +45,12 @@ describe('Run 状态机', () => {
 
   it('canTransition / isTerminal', () => {
     expect(canTransition('QUEUED', 'CANCELLED')).toBe(true);
-    expect(canTransition('RUNNING', 'COMPLETED')).toBe(true);
+    expect(canTransition('RUNNING', 'COMPLETED')).toBe(false);
+    expect(canTransition('EVIDENCE_READY', 'COMPLETED')).toBe(true);
     expect(isTerminal('COMPLETED')).toBe(true);
     expect(isTerminal('FAILED')).toBe(true);
+    expect(isTerminal('BLOCKED')).toBe(true);
+    expect(isTerminal('TIMEOUT')).toBe(true);
     expect(isTerminal('RUNNING')).toBe(false);
   });
 
@@ -68,11 +75,16 @@ describe('RunService 生命周期', () => {
     const { svc } = makeEnv();
     const run = await svc.create({ projectId: 'wan3', environment: 'test', trigger: 'manual' });
     const started = await svc.start(run.runId);
-    expect(started.status).toBe('RUNNING');
+    expect(started.status).toBe('PLANNING');
     expect(started.startedAt).toBeTruthy();
+    await svc.markGated(run.runId);
+    await svc.beginExecution(run.runId);
     const paused = await svc.pause(run.runId);
     expect(paused.status).toBe('PAUSED');
-    await svc.resume(run.runId);
+    expect((await svc.resume(run.runId)).status).toBe('PLANNING');
+    await svc.markGated(run.runId);
+    await svc.beginExecution(run.runId);
+    await svc.recordExecution(run.runId, verifiedExecutionRecord(run.runId));
     const done = await svc.complete(run.runId, 100);
     expect(done.status).toBe('COMPLETED');
     expect(done.finishedAt).toBeTruthy();

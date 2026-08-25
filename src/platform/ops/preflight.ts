@@ -47,16 +47,24 @@ function checkSqlite(): PlatformCheck {
   }
 }
 
-/** PostgreSQL 连通性探测（DATABASE_URL 或默认本地连接；失败仅 WARN 不阻断） */
+/** PostgreSQL 连通性探测；生产类模式缺配置/不可连接均为 BLOCK。 */
 async function checkPostgres(): Promise<PlatformCheck> {
-  const pool = createPostgresPool();
+  const mode = resolvePlatformMode();
+  const productionLike = mode === 'production' || mode === 'staging';
+  let pool: ReturnType<typeof createPostgresPool> | undefined;
   try {
+    pool = createPostgresPool({ productionLike });
     await pool.query('SELECT 1');
     return { name: 'PostgreSQL 存储', ok: true, level: 'PASS', detail: '可连接（pool.query SELECT 1 通过）' };
   } catch (e) {
-    return { name: 'PostgreSQL 存储', ok: false, level: 'WARN', detail: `不可连接：${(e as Error).message.split('\n')[0]}` };
+    return {
+      name: 'PostgreSQL 存储',
+      ok: false,
+      level: productionLike ? 'BLOCK' : 'WARN',
+      detail: `不可连接：${(e as Error).message.split('\n')[0]}`,
+    };
   } finally {
-    await pool.end().catch(() => undefined);
+    await pool?.end().catch(() => undefined);
   }
 }
 

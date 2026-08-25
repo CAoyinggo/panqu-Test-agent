@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
-import type { PlatformHttpServer } from '../../src/platform/api/index.js';
+import type { PlatformHttpServer, RateLimiter } from '../../src/platform/api/index.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 const FIXED_MS = Date.parse(FIXED_ISO);
@@ -23,6 +23,20 @@ interface TestServer {
 
 const opened: TestServer[] = [];
 
+function redisTestLimiter(): RateLimiter {
+  return {
+    kind: 'redis',
+    start: async () => undefined,
+    consume: async () => ({
+      limited: false,
+      remaining: 119,
+      resetAt: new Date(FIXED_MS + 60_000).toISOString(),
+      limit: 120,
+    }),
+    close: async () => undefined,
+  };
+}
+
 async function makeServer(opts: { mode?: 'development' | 'test' | 'staging' | 'production'; withAuth?: boolean } = {}): Promise<TestServer> {
   const bundle = createPlatformService({
     seedProject: true,
@@ -35,8 +49,10 @@ async function makeServer(opts: { mode?: 'development' | 'test' | 'staging' | 'p
     service: bundle.service,
     auth: opts.withAuth ? bundle.auth : undefined,
     mode: opts.mode,
-    token: STATIC_TOKEN,
+    // staging/production 禁止静态 Token（fail fast）；仅 development/test 传入
+    ...(opts.mode !== 'staging' && opts.mode !== 'production' ? { token: STATIC_TOKEN } : {}),
     now: () => FIXED_ISO,
+    ...((opts.mode === 'staging' || opts.mode === 'production') ? { rateLimiter: redisTestLimiter() } : {}),
   });
   const { url } = await server.listen();
   const ts: TestServer = {
@@ -138,7 +154,19 @@ describe('X-Actor/X-Role 内部模式', () => {
       body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
     });
     expect(res.status).toBe(401);
-    expect((res.data as { error: string }).error).toBe('unauthorized');
+    expect((res.data as { error: string }).error).toBe('AUTH_FAILED');
+  });
+
+  it('staging/production：配置静态 Token 直接启动失败（禁止 dev-token / PLATFORM_API_TOKEN 回退）', () => {
+    const bundle = createPlatformService({ seedProject: false, seedUsers: false, jwtSecret: JWT_SECRET });
+    expect(() => createPlatformServer({ service: bundle.service, auth: bundle.auth, mode: 'staging', token: STATIC_TOKEN })).toThrow(/禁止静态 Bearer Token/);
+    expect(() => createPlatformServer({ service: bundle.service, auth: bundle.auth, mode: 'production', token: STATIC_TOKEN })).toThrow(/禁止静态 Bearer Token/);
+  });
+
+  it('staging/production：未启用 JWT AuthService 直接启动失败（强制 JWT）', () => {
+    const bundle = createPlatformService({ seedProject: false, seedUsers: false, jwtSecret: JWT_SECRET });
+    expect(() => createPlatformServer({ service: bundle.service, mode: 'staging' })).toThrow(/必须启用 JWT 认证服务/);
+    expect(() => createPlatformServer({ service: bundle.service, mode: 'production' })).toThrow(/必须启用 JWT 认证服务/);
   });
 
   it('S6 production：静态 Token + X-Header 被拒绝（生产禁止 X-Header 直信任）', async () => {
@@ -149,7 +177,7 @@ describe('X-Actor/X-Role 内部模式', () => {
       body: { projectId: 'wan3', environment: 'test', trigger: 'manual' },
     });
     expect(res.status).toBe(401);
-    expect((res.data as { error: string }).error).toBe('unauthorized');
+    expect((res.data as { error: string }).error).toBe('AUTH_FAILED');
   });
 
   it('production：合法 JWT 仍可访问', async () => {

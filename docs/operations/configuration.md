@@ -6,13 +6,15 @@
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `PLATFORM_ENVIRONMENT` | development | 运行模式 development/test/staging/production |
+| `PLATFORM_MODE` | development | 安全运行模式 development/test/staging/production（安全策略主配置） |
+| `PLATFORM_ENVIRONMENT` | development | 部署/版本环境标签；未配置 PLATFORM_MODE 时兼容作为运行模式 |
 | `PLATFORM_STORAGE` | sqlite | 存储后端 memory/json/sqlite/postgres |
 | `PLATFORM_DATA_DIR` | `<TESTFLOW_OUTPUT_DIR>/platform` | sqlite/json 持久化目录 |
 | `JWT_SECRET` | （缺省开发默认值） | JWT 签名密钥；production 缺失 preflight BLOCK |
 | `PLATFORM_SEED_USERS` | true | 是否种子默认用户（production 关闭） |
 | `PLATFORM_ALLOW_DEFAULT_CREDENTIALS` | true | 是否允许默认口令（production 必须 false） |
-| `DATABASE_URL` | postgres://postgres:postgres@localhost:5432/postgres | PostgreSQL 连接串 |
+| `DATABASE_URL` | 无（必须显式配置） | PostgreSQL 连接串；无默认账号/数据库，production/staging 禁止 postgres/postgres |
+| `REDIS_URL` | 无（production/staging 必须显式配置） | 分布式 API 限流；生产类模式禁止回退进程内 Map，启动前执行 connect + PING |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | （空→Mock） | 真实 LLM；未配置走 Mock/离线确定性回退 |
 | `LLM_FALLBACK_MODEL` | （空） | 主模型不可用时的降级模型 |
 | `FEISHU_WEBHOOK_URL` / `FEISHU_MENTION` | （空） | 飞书通知（真实发送需 webhook） |
@@ -43,5 +45,7 @@
 ## 5. 常见配置场景
 
 - 本机离线试运行：`PLATFORM_STORAGE=sqlite` + 不配 LLM（Mock 确定性回退）
-- staging 真实试运行：`PLATFORM_ENVIRONMENT=staging` + 配 LLM_API_KEY/BASE_URL/MODEL + 飞书 webhook
-- 切换 PostgreSQL：`PLATFORM_STORAGE=postgres` + `DATABASE_URL`，启动自动应用 schema 迁移
+- staging 真实试运行：`PLATFORM_MODE=staging` + `REDIS_URL` + 配 LLM_API_KEY/BASE_URL/MODEL + 飞书 webhook
+- 切换 PostgreSQL：`PLATFORM_STORAGE=postgres` + 显式 `DATABASE_URL`。启动严格执行 Connection → Migration → Ready；任一步失败都会退出且不会监听端口
+
+开发/测试模式使用有界 TTL/LRU 限流器（默认最多 10,000 个 IP、闲置 5 分钟淘汰）；production/staging 使用 Redis Lua 原子计数，使多实例共享配额。Redis 不可用时生产类服务启动失败，不会降级为单机 Map。

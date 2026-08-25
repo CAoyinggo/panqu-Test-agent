@@ -1,12 +1,13 @@
 // 用例注册表：集中登记用例定义（TS 脚本或 JSON 均可注册），支持按名查询与枚举
 import type { TaskDef } from '../core/types.js';
+import { redactSensitiveText } from '../core/redact.js';
 
 const caseMap = new Map<string, TaskDef>();
 
 /** 注册一个用例（name 冲突时覆盖并告警） */
 export function registerCase(name: string, def: TaskDef): void {
   if (caseMap.has(name)) {
-    console.warn(`[cases] 用例已存在，覆盖注册：${name}`);
+    console.warn(`[cases] 用例已存在，覆盖注册：${redactSensitiveText(name)}`);
   }
   caseMap.set(name, def);
 }

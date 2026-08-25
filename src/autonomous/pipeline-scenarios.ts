@@ -75,11 +75,19 @@ export const PIPELINE_SCENARIOS: PipelineScenario[] = [
     name: 'Scenario 1：普通变更 → Impact → Portfolio → Regression → PASS',
     build: () => ({
       change: { type: 'code', target: 'wan3/video-editor' },
-      cases: caseSet100('video-editor'),
+      // 普通变更的候选集必须包含实际受影响且已执行的 P0/P1 证据；
+      // 仅执行 P2 后以 p0=0/p1=0 发布属于空证据假通过。
+      cases: caseSet100('video-editor').map((item, index) => (
+        index === 0 || index === 30
+          ? { ...item, changeTags: [...(item.changeTags ?? []), 'video-editor'] }
+          : item
+      )),
       feature: 'wan3/video-editor',
       environment: 'test',
       outcomes: {},
       signals: { coverage: 0.95 },
+      // Release PASS 需要实际跑到 P1；默认决策深度/时长只够执行 P0，不能用空 P1 证据放行。
+      budget: { maxDecisionDepth: 200, maxAutonomousDuration: 6_000_000 },
     }),
     expect: { releaseDecision: 'PASS', exitCode: 0 },
   },

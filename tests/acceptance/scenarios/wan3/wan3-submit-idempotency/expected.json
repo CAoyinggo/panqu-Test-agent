@@ -1,0 +1,21 @@
+{
+  "scenarioId": "SCN-wan3-submit-idempotency",
+  "mode": "BLOCKED",
+  "patterns": ["IDEMPOTENCY", "BILLING", "PROVIDER_FAILURE"],
+  "operations": [
+    {"id": "STEP-001", "intent": "first-submit-with-authoritative-idempotency-identity", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-002", "intent": "replay-identical-submit", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-003", "intent": "count-business-tasks", "observer": null, "bindingRequired": true},
+    {"id": "STEP-004", "intent": "count-provider-calls", "observer": null, "bindingRequired": true},
+    {"id": "STEP-005", "intent": "count-billing-records", "observer": null, "bindingRequired": true}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "oracle": "published idempotency semantics exist", "resolution": "REQUIRED"},
+    {"id": "AS-002", "ac": "AC-002", "oracle": "both submissions resolve to the same business task", "resolution": "REQUIRED"},
+    {"id": "AS-003", "ac": "AC-002", "oracle": "business task count equals one", "resolution": "REQUIRED"},
+    {"id": "AS-004", "ac": "AC-003", "oracle": "Provider call count equals one", "resolution": "REQUIRED"},
+    {"id": "AS-005", "ac": "AC-003", "oracle": "business charge count equals one", "resolution": "REQUIRED"}
+  ],
+  "requiredEvidenceKinds": ["RESPONSE", "STATE_BEFORE", "STATE_AFTER", "PROVIDER_CALL", "BILLING_RECORD"],
+  "blockedCodes": ["MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+}

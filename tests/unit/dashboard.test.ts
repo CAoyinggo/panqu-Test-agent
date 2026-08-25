@@ -15,6 +15,7 @@ import type { RiskAssessment } from '../../src/agents/risk/risk-schema.js';
 import type { DataPlan } from '../../src/agents/data/data-schema.js';
 import type { ExecutionOutcome } from '../../src/agents/execution/execution-schema.js';
 import type { AnalysisReport } from '../../src/agents/analysis/analysis-schema.js';
+import type { PolicyGateResult } from '../../src/agents/policy/policy-gate.js';
 
 /** 构造最小可用的 AgentPipelineResult */
 function makeResult(over: Partial<AgentPipelineResult> = {}): AgentPipelineResult {
@@ -43,13 +44,24 @@ function makeResult(over: Partial<AgentPipelineResult> = {}): AgentPipelineResul
     executed: true,
   };
   return {
-    taskId: 't-dash',
+    runId: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    taskId: 'task-dash0000000',
+    requirementsHash: 'a'.repeat(64),
+    createdAt: '2026-08-22T00:00:00.000Z',
     requirement,
     testCases: [
       { id: 'tc-01', feature: 'wan3', name: 'a', priority: 'P0', tags: [], steps: [], assertions: [{ target: 'response', path: 'a', operator: 'equals', expected: 'x', severity: 'P0' }] },
       { id: 'tc-02', feature: 'wan3', name: 'b', priority: 'P1', tags: [], steps: [], assertions: [] },
     ],
     risk: {} as RiskAssessment,
+    executionPlan: { order: ['tc-01', 'tc-02'], concurrency: 1, enableRetry: true, reason: 'fixture' },
+    policies: {
+      risk: { overall: 'low', recommendedSkip: false, highRiskCount: 0 },
+      budget: {}, model: {}, prompt: [],
+      data: { needsSetup: false, factoryName: 'default', setupActionCount: 0, teardownActionCount: 0 },
+      approval: { evidencePresent: false },
+    },
+    policyGate: {} as PolicyGateResult,
     dataPlan: {} as DataPlan,
     dataContext: {},
     outcome,
@@ -85,8 +97,9 @@ function makeResult(over: Partial<AgentPipelineResult> = {}): AgentPipelineResul
       gaps: [],
       recommendedCases: [],
     },
-    budgetStatus: { agentCalls: 6, llmCalls: 8, toolCalls: 10, tokensUsed: 1200, durationMs: 1234, exceeded: [], exceededAny: false },
+    budgetStatus: { agentCalls: 6, llmCalls: 8, toolCalls: 10, casesUsed: 4, tokensUsed: 1200, durationMs: 1234, exceeded: [], exceededAny: false },
     ...over,
+    dataPreparation: over.dataPreparation ?? { status: 'NOT_REQUIRED', context: {} },
   };
 }
 
@@ -135,7 +148,7 @@ describe('saveAgentDashboard 持久化', () => {
       const loaded = loadLatestDashboard();
       expect(loaded).not.toBeNull();
       expect(loaded!.feature).toBe('wan3');
-      expect(loaded!.taskId).toBe('t-dash');
+      expect(loaded!.taskId).toBe('task-dash0000000');
     } finally {
       if (prev === undefined) delete process.env.TESTFLOW_OUTPUT_DIR;
       else process.env.TESTFLOW_OUTPUT_DIR = prev;

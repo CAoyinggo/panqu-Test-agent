@@ -145,11 +145,11 @@ describe('静态托管 + SPA fallback（webDir）', () => {
     expect(spa.contentType).toContain('text/html');
   });
 
-  it('webDir 存在但未构建：GET / 返回 dashboard_not_built 404', async () => {
+  it('webDir 存在但未构建：GET / 返回 NOT_FOUND 404', async () => {
     const ts = await makeServer({ webDir: makeWebDir(false) });
     const root = await ts.request('GET', '/');
     expect(root.status).toBe(404);
-    expect((root.data as { error: string }).error).toBe('dashboard_not_built');
+    expect((root.data as { error: string }).error).toBe('NOT_FOUND');
   });
 });
 

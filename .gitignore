@@ -25,6 +25,10 @@ security-reports/
 .stryker-tmp/
 reports/mutation/
 
+# Developer Acceptance 本地配置与运行产物（可能包含环境元数据或脱敏证据）
+/acceptance.config.json
+/reports/
+
 # Playwright E2E artifacts (Phase 41)
 test-results/
 playwright-report/

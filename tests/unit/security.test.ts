@@ -2,7 +2,7 @@
 // 覆盖：模式解析 / 生产安全判断 / 不安全密钥识别 / 生产密钥强制 / 默认口令策略 /
 //       静态身份来源开关 / Preflight 安全检查项（securityChecks）级别与内容。
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   resolvePlatformMode,
   isProductionLike,
@@ -10,6 +10,7 @@ import {
   requireSecureJwtSecret,
   resolveAllowDefaultCredentials,
   allowHeaderIdentity,
+  allowStaticToken,
   securityChecks,
   DEV_FALLBACK_JWT_SECRET,
 } from '../../src/platform/security/index.js';
@@ -22,14 +23,28 @@ describe('resolvePlatformMode：运行模式解析', () => {
     expect(resolvePlatformMode('Staging')).toBe('staging');
   });
 
-  it('未知模式回退 development（不允许静默进入未知状态）', () => {
-    expect(resolvePlatformMode('bogus')).toBe('development');
+  it('未知显式模式 → 抛错拒绝启动（禁止「未知值 → development」静默降级）', () => {
+    expect(() => resolvePlatformMode('bogus')).toThrow(/未知 PLATFORM_MODE/);
+    expect(() => resolvePlatformMode('producation')).toThrow(/未知 PLATFORM_MODE/);
+    expect(() => resolvePlatformMode('stagingg')).toThrow(/未知 PLATFORM_MODE/);
   });
 
   it('前导/尾随空白与混合大小写被规范化（trim + toLowerCase，Phase 32）', () => {
     expect(resolvePlatformMode('  production  ')).toBe('production');
     expect(resolvePlatformMode('  PROD  ')).toBe('production');
     expect(resolvePlatformMode(' Staging ')).toBe('staging');
+  });
+
+  it('PLATFORM_MODE 优先，缺省时兼容 PLATFORM_ENVIRONMENT，避免生产模板降级为 development', () => {
+    try {
+      vi.stubEnv('PLATFORM_ENVIRONMENT', 'production');
+      vi.stubEnv('PLATFORM_MODE', '');
+      expect(resolvePlatformMode()).toBe('production');
+      vi.stubEnv('PLATFORM_MODE', 'test');
+      expect(resolvePlatformMode()).toBe('test');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -69,24 +84,29 @@ describe('requireSecureJwtSecret：生产安全模式密钥强制（fail fast）
 });
 
 describe('resolveAllowDefaultCredentials：默认种子口令策略', () => {
-  it('production 强制禁用（显式 true 亦被覆盖）', () => {
+  it('production/staging 强制禁用（显式 true 亦被覆盖）', () => {
     expect(resolveAllowDefaultCredentials('production')).toBe(false);
     expect(resolveAllowDefaultCredentials('production', true)).toBe(false);
+    expect(resolveAllowDefaultCredentials('staging')).toBe(false);
+    expect(resolveAllowDefaultCredentials('staging', true)).toBe(false);
   });
 
-  it('非生产模式：显式值优先，缺省 true', () => {
+  it('非生产类模式：显式值优先，缺省 true', () => {
     expect(resolveAllowDefaultCredentials('development')).toBe(true);
-    expect(resolveAllowDefaultCredentials('staging', false)).toBe(false);
     expect(resolveAllowDefaultCredentials('test', false)).toBe(false);
   });
 });
 
-describe('allowHeaderIdentity：静态身份来源', () => {
-  it('生产模式禁止 X-Actor/X-Role 身份伪造；其余模式允许', () => {
+describe('allowHeaderIdentity / allowStaticToken：静态身份来源', () => {
+  it('staging/production 一律禁止 X-Actor/X-Role 与静态 Token（含 dev-token）；仅 development/test 允许', () => {
     expect(allowHeaderIdentity('production')).toBe(false);
-    expect(allowHeaderIdentity('staging')).toBe(true);
+    expect(allowHeaderIdentity('staging')).toBe(false);
     expect(allowHeaderIdentity('development')).toBe(true);
     expect(allowHeaderIdentity('test')).toBe(true);
+    expect(allowStaticToken('production')).toBe(false);
+    expect(allowStaticToken('staging')).toBe(false);
+    expect(allowStaticToken('development')).toBe(true);
+    expect(allowStaticToken('test')).toBe(true);
   });
 });
 
@@ -119,18 +139,20 @@ describe('securityChecks：Preflight 安全检查项', () => {
     expect(identity?.level).toBe('PASS');
   });
 
-  it('staging 按生产安全约束：缺密钥 → BLOCK；静态身份 WARN（演练仍可用）', () => {
+  it('staging 与 production 同策略：缺密钥 → BLOCK；静态身份 PASS（已关闭，强制 JWT）', () => {
     const missing = securityChecks('staging', { jwtSecret: undefined });
     expect(missing.find((i) => i.name === 'JWT 密钥')?.level).toBe('BLOCK');
     const ok = securityChecks('staging', { jwtSecret: 'strong', allowDefaultCredentials: false });
-    expect(ok.find((i) => i.name === '静态身份来源')?.level).toBe('WARN');
+    expect(ok.find((i) => i.name === '静态身份来源')?.level).toBe('PASS');
   });
 
-  it('静态身份来源 detail：production 关闭伪造，其余提示可用（Phase 32）', () => {
+  it('静态身份来源 detail：staging/production 关闭伪造（强制 JWT），development 提示可用', () => {
     const prod = securityChecks('production', { jwtSecret: 'strong', allowDefaultCredentials: false });
     const prodId = prod.find((i) => i.name === '静态身份来源')!;
     expect(prodId.level).toBe('PASS');
-    expect(prodId.detail).toContain('身份伪造已关闭');
+    expect(prodId.detail).toContain('已关闭');
+    const staging = securityChecks('staging', { jwtSecret: 'strong', allowDefaultCredentials: false });
+    expect(staging.find((i) => i.name === '静态身份来源')!.detail).toContain('已关闭');
     const dev = securityChecks('development', { jwtSecret: undefined });
     const devId = dev.find((i) => i.name === '静态身份来源')!;
     expect(devId.detail).toContain('静态身份可用');

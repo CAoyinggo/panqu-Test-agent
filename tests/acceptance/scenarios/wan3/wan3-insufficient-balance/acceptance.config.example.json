@@ -1,0 +1,16 @@
+{
+  "scenarioId": "SCN-wan3-insufficient-balance",
+  "environment": "unconfigured",
+  "realExecution": false,
+  "policy": {
+    "decision": "BLOCKED",
+    "allowSideEffects": false,
+    "allowBilling": false,
+    "allowProviderCalls": false,
+    "blockedCodes": ["MISSING_TEST_DATA", "MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+  },
+  "processorAllowlist": [],
+  "prepareHookAllowlist": [],
+  "cleanupHookAllowlist": [],
+  "evidenceKindAllowlist": []
+}

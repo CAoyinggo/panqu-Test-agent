@@ -6,6 +6,7 @@
 import type { Repository } from '../storage/repository.js';
 import { generateId } from '../../core/id.js';
 import { isJobTerminal, type EnqueueJobInput, type JobStatus, type TestJob } from './test-job.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export interface SchedulerOptions {
   now?: () => string;
@@ -14,11 +15,17 @@ export interface SchedulerOptions {
 export class Scheduler {
   /** 全局暂停（26.4）：Storage/DB 异常时暂停领取，Run/Job 不丢失，恢复后继续 */
   private paused = false;
+  private abortHandler?: (jobId: string, reason: string) => void;
 
   constructor(
     private readonly jobs: Repository<TestJob>,
     private readonly opts: SchedulerOptions = {},
   ) {}
+
+  /** 由 WorkerPool 注册；取消/暂停/超时先落终态，再中止实际 Executor。 */
+  setAbortHandler(handler: (jobId: string, reason: string) => void): void {
+    this.abortHandler = handler;
+  }
 
   private nowIso(): string {
     return this.opts.now ? this.opts.now() : new Date().toISOString();
@@ -51,7 +58,7 @@ export class Scheduler {
     }
     const dup = await this.jobs.query({ runId: input.runId });
     if (dup.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING' || j.status === 'RETRY')) {
-      throw new Error(`Run ${input.runId} 已有在执行中的 Job，禁止重复入队`);
+      throw new CodedError(ErrorCode.CONFLICT, `Run ${input.runId} 已有在执行中的 Job，禁止重复入队`);
     }
     // 29.3：碰撞安全 ID（高吞吐入队下 Date.now+Math.random 会碰撞）
     const jobId = input.jobId ?? generateId('job');
@@ -74,6 +81,34 @@ export class Scheduler {
     };
     await this.jobs.create(job);
     return { job, created: true };
+  }
+
+  /**
+   * 记录被执行前 Policy Gate 阻断的调度审计项。
+   * 该 Job 从未进入 QUEUED/RUNNING，因此 Worker 永远无法领取。
+   */
+  async recordBlocked(input: EnqueueJobInput, error: string): Promise<TestJob> {
+    const jobId = input.jobId ?? generateId('job');
+    const job: TestJob = {
+      id: jobId,
+      jobId,
+      runId: input.runId,
+      priority: input.priority ?? 5,
+      projectId: input.projectId,
+      environment: input.environment,
+      payload: input.payload,
+      requiredCapability: input.requiredCapability,
+      retryCount: 0,
+      maxRetries: 0,
+      status: 'CANCELLED',
+      idempotencyKey: input.idempotencyKey,
+      timeoutMs: input.timeoutMs,
+      error,
+      createdAt: this.nowIso(),
+      updatedAt: this.nowIso(),
+    };
+    await this.jobs.create(job);
+    return job;
   }
 
   /**
@@ -109,7 +144,7 @@ export class Scheduler {
   /** 失败：可重试且未达上限 → RETRY 重新入队；否则 FAILED */
   async fail(jobId: string, error?: string): Promise<TestJob> {
     const job = await this.jobs.get(jobId);
-    if (!job) throw new Error(`Job 不存在：${jobId}`);
+    if (!job) throw new CodedError(ErrorCode.NOT_FOUND, `Job 不存在：${jobId}`);
     if (job.retryCount < job.maxRetries) {
       return this.jobs.update(jobId, {
         status: 'RETRY',
@@ -135,21 +170,25 @@ export class Scheduler {
   }
 
   async cancel(jobId: string): Promise<TestJob> {
-    return this.jobs.update(jobId, { status: 'CANCELLED', updatedAt: this.nowIso() });
+    const cancelled = await this.jobs.update(jobId, { status: 'CANCELLED', updatedAt: this.nowIso() });
+    this.abortHandler?.(jobId, 'Job 已取消');
+    return cancelled;
   }
 
   async pause(jobId: string): Promise<TestJob> {
     const job = await this.jobs.get(jobId);
-    if (!job) throw new Error(`Job 不存在：${jobId}`);
+    if (!job) throw new CodedError(ErrorCode.NOT_FOUND, `Job 不存在：${jobId}`);
     if (job.status === 'RUNNING') {
-      return this.jobs.update(jobId, { status: 'QUEUED', claimedBy: undefined, updatedAt: this.nowIso() });
+      const paused = await this.jobs.update(jobId, { status: 'QUEUED', claimedBy: undefined, updatedAt: this.nowIso() });
+      this.abortHandler?.(jobId, 'Job 已暂停');
+      return paused;
     }
     return job;
   }
 
   async resume(jobId: string): Promise<TestJob> {
     const job = await this.jobs.get(jobId);
-    if (!job) throw new Error(`Job 不存在：${jobId}`);
+    if (!job) throw new CodedError(ErrorCode.NOT_FOUND, `Job 不存在：${jobId}`);
     if (job.status === 'QUEUED') {
       return this.jobs.update(jobId, { status: 'QUEUED', updatedAt: this.nowIso() });
     }
@@ -165,6 +204,7 @@ export class Scheduler {
       const created = Date.parse(j.createdAt);
       if (Number.isFinite(created) && nowMs - created > j.timeoutMs) {
         timedOut.push(await this.fail(j.jobId, 'Job 执行超时'));
+        this.abortHandler?.(j.jobId, 'Job 执行超时');
       }
     }
     return timedOut;

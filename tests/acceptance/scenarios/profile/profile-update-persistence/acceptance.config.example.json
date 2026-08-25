@@ -1,0 +1,15 @@
+{
+  "scenarioId": "SCN-profile-update-persistence",
+  "environment": "local",
+  "realExecution": false,
+  "localFixture": {
+    "contractId": "controlled-profile-v1",
+    "baseUrl": "http://127.0.0.1:43110",
+    "allowedOrigins": ["http://127.0.0.1:43110"],
+    "credentialRefs": ["LOCAL_FIXTURE_USER_A_TOKEN_REF"]
+  },
+  "processorAllowlist": ["api"],
+  "prepareHookAllowlist": ["prepare-profile-persistence"],
+  "cleanupHookAllowlist": ["cleanup-profile-persistence"],
+  "evidenceKindAllowlist": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER"]
+}

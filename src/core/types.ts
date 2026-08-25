@@ -82,6 +82,14 @@ export interface TaskDef {
   assert?: AssertionConfig;
   /** 业务适配器选择（如 'wan3'，不设则仅运行通用断言） */
   adapter?: 'wan3' | 'default';
+  /** Phase 1：本次执行参数所依赖的 canonical Contract。 */
+  contractDependencies?: import('../contracts/types.js').ContractDependency[];
+  /** Loader 从 Legacy Migration Index 注入；Agent 生成的 TaskDef 不使用此字段。 */
+  legacyContract?: {
+    asset: string;
+    status: import('../contracts/types.js').LegacyAssetStatus;
+    reasons: string[];
+  };
   /** 断言失败后的行为：stop=中断（默认），continue=继续执行后续断言 */
   onFail?: 'stop' | 'continue';
   [key: string]: unknown;
@@ -136,6 +144,8 @@ export interface CheckResult {
   name: string;
   pass: boolean;
   detail: string;
+  /** 只有 BUSINESS 断言能够参与 PASS；其余类型仅用于诊断、清理或展示。 */
+  kind?: import('./execution-evidence.js').AssertionKind;
   level?: 'P0' | 'P1' | 'P2';
   // 扩展字段（通用断言引擎使用，向后兼容）
   assertionType?: 'response' | 'submit' | 'billing' | 'headers' | 'env' | 'metrics' | 'custom';

@@ -7,6 +7,7 @@
 export type TaskKind =
   | 'requirement'
   | 'test-design'
+  | 'data'
   | 'test-selection'
   | 'coverage'
   | 'risk'
@@ -32,6 +33,17 @@ export interface RouteConfig {
   temperature?: number;
   /** 最大输出 token */
   maxTokens?: number;
+  /** 最大输入 token；Runtime 在调用 Provider 前 fail-fast，避免上下文溢出与无效计费。 */
+  maxInputTokens?: number;
+}
+
+/**
+ * 成本/质量策略层输出给 ModelRouter 的最小契约。
+ * 保持结构化接口，避免 Router 反向依赖 cost governance 模块。
+ */
+export interface ModelPolicyDecisionLike {
+  selectedModel: string;
+  fallbackModel?: string;
 }
 
 /** 档位 → 具体模型映射 */
@@ -45,8 +57,9 @@ const DEFAULT_TIERS: ModelTierMap = { high: 'gpt-4o', medium: 'gpt-4o-mini', sma
 
 /** 默认路由：任务书第二十节建议 */
 const DEFAULT_ROUTES: Record<TaskKind, RouteConfig> = {
-  requirement: { model: 'high', fallbackModel: 'medium', timeoutMs: 30000, temperature: 0, maxTokens: 2000 },
-  'test-design': { model: 'medium', fallbackModel: 'small', timeoutMs: 30000, temperature: 0.3, maxTokens: 3000 },
+  requirement: { model: 'high', fallbackModel: 'medium', timeoutMs: 30000, temperature: 0, maxTokens: 2000, maxInputTokens: 100_000 },
+  'test-design': { model: 'medium', fallbackModel: 'small', timeoutMs: 30000, temperature: 0.3, maxTokens: 3000, maxInputTokens: 100_000 },
+  data: { model: 'medium', fallbackModel: 'small', timeoutMs: 30000, temperature: 0, maxTokens: 3000, maxInputTokens: 100_000 },
   'test-selection': { model: 'small', timeoutMs: 15000, temperature: 0 },
   coverage: { model: 'small', timeoutMs: 15000, temperature: 0 },
   risk: { model: 'small', fallbackModel: 'small', timeoutMs: 10000, temperature: 0 },
@@ -121,6 +134,20 @@ export class ModelRouter {
   /** 覆盖某任务的路由配置 */
   configure(kind: TaskKind, config: Partial<RouteConfig>): void {
     this.routes[kind] = { ...this.routes[kind], ...config };
+  }
+
+  /**
+   * 将 Model Policy 的选择结果应用到真实 LLM 路由。
+   * timeout / temperature / maxTokens 等任务参数继续沿用现有路由配置。
+   */
+  applyPolicyDecision(kind: TaskKind, decision: ModelPolicyDecisionLike): RouteConfig {
+    const selectedModel = decision.selectedModel.trim();
+    if (!selectedModel) throw new Error('模型策略未返回 selectedModel');
+    this.configure(kind, {
+      model: selectedModel,
+      fallbackModel: decision.fallbackModel?.trim() || undefined,
+    });
+    return this.route(kind);
   }
 
   /** 覆盖档位映射 */

@@ -1,0 +1,15 @@
+{
+  "scenarioId": "SCN-wan3-submit-idempotency",
+  "environment": "unconfigured",
+  "realExecution": false,
+  "policy": {
+    "decision": "BLOCKED",
+    "allowSideEffects": false,
+    "allowBilling": false,
+    "blockedCodes": ["MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+  },
+  "processorAllowlist": [],
+  "prepareHookAllowlist": [],
+  "cleanupHookAllowlist": [],
+  "evidenceKindAllowlist": []
+}

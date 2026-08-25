@@ -26,10 +26,28 @@ export interface ApiOpts {
   timeout?: number;
   /** 是否可重试覆盖（GET 默认 true，POST 默认 false） */
   retryable?: boolean;
+  /** 请求级取消信号（与实例级 signal 取或：任一触发即中止） */
+  signal?: AbortSignal;
 }
 
 /** HTTP 请求记录回调类型（debug verbose/full 模式使用） */
 export type HttpRecorder = (record: HttpRecord) => void;
+
+/** 合并多个取消信号（任一触发即中止，保留触发方的 reason 语义） */
+function anySignal(signals: Array<AbortSignal | undefined | null>): AbortSignal | undefined {
+  const live = signals.filter((s): s is AbortSignal => !!s);
+  if (live.length === 0) return undefined;
+  if (live.length === 1) return live[0];
+  const controller = new AbortController();
+  for (const s of live) {
+    const forward = () => {
+      if (!controller.signal.aborted) controller.abort(s.reason);
+    };
+    if (s.aborted) forward();
+    else s.addEventListener('abort', forward, { once: true });
+  }
+  return controller.signal;
+}
 
 export class Http {
   baseUrl: string;
@@ -38,10 +56,21 @@ export class Http {
   recorder?: HttpRecorder;
   /** 当前步骤名（用于记录关联） */
   currentStep: string = 'unknown';
+  /**
+   * 实例级取消信号（用例超时/取消贯穿链路：Engine → Pipeline → Http → fetch）。
+   * Pipeline 在进入 teardown 清理阶段时可替换为新信号（宽限清理仍可发请求）。
+   */
+  signal?: AbortSignal;
 
-  constructor(baseUrl: string, cookieString: string) {
+  constructor(baseUrl: string, cookieString: string, signal?: AbortSignal) {
     this.baseUrl = baseUrl.replace(/\/$/, '') + '/';
     this.cookieString = cookieString;
+    this.signal = signal;
+  }
+
+  /** 替换实例级取消信号（Pipeline 进入清理阶段时用于解除执行期信号） */
+  setSignal(signal: AbortSignal | undefined): void {
+    this.signal = signal;
   }
 
   /** 设置请求记录器（--debug-level verbose/full 模式） */
@@ -55,8 +84,8 @@ export class Http {
   }
 
   /** 从页面 HTML 提取 CSRF token */
-  async getCsrfToken(pagePath: string): Promise<string> {
-    const res = await fetch(this.baseUrl + pagePath, { headers: { cookie: this.cookieString } });
+  async getCsrfToken(pagePath: string, signal?: AbortSignal): Promise<string> {
+    const res = await fetch(this.baseUrl + pagePath, { headers: { cookie: this.cookieString }, signal: signal ?? this.signal });
     const html = await res.text();
     const m = html.match(/__token__["']?\s*value=["']([^"']+)["']/);
     return m ? m[1] : '';
@@ -65,6 +94,7 @@ export class Http {
   /** 通用请求：path 相对路径，返回 { status, json }
    *  GET/HEAD 默认可重试 3 次；POST 等默认不重试（防重复扣费）。
    *  可通过 opts.retryable / opts.retries 覆盖。
+   *  超时/取消通过 AbortSignal 真实中止底层 fetch（不是放弃等待）。
    */
   async api(name: string, method: string, path: string, opts: ApiOpts = {}): Promise<ApiResult> {
     const methodUpper = method.toUpperCase();
@@ -74,12 +104,13 @@ export class Http {
       timeout: opts.timeout ?? 15000,
       retryable: opts.retryable ?? isQuery,
       onRetry: () => metrics.recordApiRetry(),
+      signal: anySignal([this.signal, opts.signal]),
     };
 
-    return withRetry(async () => {
+    return withRetry(async (attemptSignal) => {
       const t0 = Date.now();
       const h: Record<string, string> = { ...API_HEADERS, ...(opts.headers || {}), cookie: this.cookieString };
-      const fOpts: RequestInit = { method, headers: h };
+      const fOpts: RequestInit = { method, headers: h, signal: attemptSignal };
       let reqBodyPreview: unknown = undefined;
       if (opts.form) {
         fOpts.body = opts.form as any;

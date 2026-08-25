@@ -3,7 +3,9 @@
 import type { LLMProvider } from '../../llm/index.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { TestMemory } from '../memory/memory-store.js';
+import { AgentRuntime } from './agent-runtime.js';
 import { logger as defaultLogger } from '../../utils/logger.js';
+import { redactSensitiveText } from '../../core/redact.js';
 
 /** 日志接口（与现有 utils/logger.ts 单例结构一致） */
 export interface AgentLogger {
@@ -38,8 +40,13 @@ export interface AgentContext {
   tools: ToolRegistry;
   /** 记忆（历史执行/失败/根因） */
   memory: TestMemory;
-  /** LLM Provider（推理能力） */
+  /** LLM Provider（原始 Provider；Agent 不直接调用，统一走 runtime） */
   llm: LLMProvider;
+  /**
+   * Agent 运行时（LLM 调用唯一链路：PromptRegistry → ModelRouter → Provider → Retry/Timeout → Tracer/Budget）。
+   * 所有 Agent 的 LLM 调用必须经 context.runtime.generate(...)，禁止直连 context.llm（治理约束）。
+   */
+  runtime: AgentRuntime;
   /** 日志 */
   logger: AgentLogger;
 
@@ -56,6 +63,8 @@ export interface CreateAgentContextOptions {
   memory: TestMemory;
   llm: LLMProvider;
   logger?: AgentLogger;
+  /** 注入运行时（缺省围绕 llm + 全局 ModelRouter/PromptRegistry 构建） */
+  runtime?: AgentRuntime;
   requirement?: unknown;
   testCases?: unknown[];
   riskAssessment?: unknown;
@@ -66,6 +75,7 @@ export interface CreateAgentContextOptions {
 
 /** 便捷工厂：构建 AgentContext（未指定 logger 时使用默认 logger） */
 export function createAgentContext(opts: CreateAgentContextOptions): AgentContext {
+  const logger = redactingLogger(opts.logger ?? defaultLogger);
   return {
     taskId: opts.taskId,
     feature: opts.feature,
@@ -78,7 +88,18 @@ export function createAgentContext(opts: CreateAgentContextOptions): AgentContex
     tools: opts.tools,
     memory: opts.memory,
     llm: opts.llm,
-    logger: opts.logger ?? defaultLogger,
+    runtime: opts.runtime ?? new AgentRuntime({ llm: opts.llm, logger }),
+    logger,
     metadata: opts.metadata ?? {},
+  };
+}
+
+function redactingLogger(base: AgentLogger): AgentLogger {
+  return {
+    debug: (message) => base.debug(redactSensitiveText(message)),
+    info: (message) => base.info(redactSensitiveText(message)),
+    warn: (message) => base.warn(redactSensitiveText(message)),
+    error: (message) => base.error(redactSensitiveText(message)),
+    step: (message) => base.step(redactSensitiveText(message)),
   };
 }

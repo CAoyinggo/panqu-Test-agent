@@ -11,7 +11,7 @@ import { HealingAnalysis, buildHealingSuggestion } from './healing-schema.js';
 import { analyzeHealing } from './healing-analyzer.js';
 
 /** 系统提示词：只补充理由，禁止声称已修改代码 */
-const SYSTEM_PROMPT = `你是测试自愈专家。基于给定的 JSON Path 失效检测结果，为每条建议补充修复理由。
+export const HEALING_SYSTEM_PROMPT = `你是测试自愈专家。基于给定的 JSON Path 失效检测结果，为每条建议补充修复理由。
 重要约束：你只生成修复建议（SUGGESTED），绝不声称已修改代码或已应用补丁。
 只输出 JSON：
 {"reason":"修复理由（结合响应结构变化说明为何该新路径更可能）"}`;
@@ -67,14 +67,14 @@ export class SelfHealingAgent extends BaseAgent<SelfHealingAgentInput, HealingAn
       confidence: s.confidence,
       patch: s.patch,
     }));
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: JSON.stringify(payload, null, 2) },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'healing',
+        agent: this.name,
+        system: HEALING_SYSTEM_PROMPT,
+        user: JSON.stringify(payload, null, 2),
+        temperature: 0,
+        jsonMode: true,
+      });
     const parsed = parseLLMJson<Record<string, unknown>>(resp);
     const reason = typeof parsed?.reason === 'string' && parsed.reason.length > 0 ? parsed.reason : undefined;
 

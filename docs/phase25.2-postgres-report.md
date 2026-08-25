@@ -16,7 +16,7 @@ agent:test                 450 PASS
 
 ### 1. `src/platform/storage/postgres/pg-database.ts`
 - `createPostgresPool(opts)`：基于 node-postgres（pg）连接池；连接串取 `DATABASE_URL`
-  （默认 `postgres://postgres:postgres@localhost:5432/postgres`）
+  （必须显式配置，无 `postgres/postgres` 默认回退；production/staging 同名弱凭据也会被拒绝）
 - `ensureCollection(pool, collection)`：`CREATE TABLE IF NOT EXISTS "x" (id TEXT PRIMARY KEY, data JSONB NOT NULL)`
   幂等迁移；sanitizeIdent 防 SQL 注入
 - `withTransaction(pool, fn)`：异步事务包装（BEGIN/COMMIT/ROLLBACK）
@@ -46,7 +46,8 @@ create / get / update / delete / query / count / clear
 全部集合（runs/checkpoints/jobs/approvals/audit/idempotency）落到同一 Postgres 库。
 
 ### 5. CLI（`bin/platform-cli.ts`）
-`STORAGE_BACKEND=postgres` 支持；`DATABASE_URL` 由 `pg` 连接池读取。
+`STORAGE_BACKEND=postgres` 支持；`DATABASE_URL` 由 `pg` 连接池读取。启动通过 fail-fast
+状态机执行 Connection → Migration → Ready，迁移失败不会继续提供服务。
 
 ### 6. 依赖
 新增：`pg`（运行时）、`@types/pg`（dev）、`pg-mem`（dev，测试基础设施）。

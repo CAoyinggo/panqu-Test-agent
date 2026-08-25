@@ -1,0 +1,23 @@
+{
+  "scenarioId": "SCN-wan3-insufficient-balance",
+  "mode": "BLOCKED",
+  "patterns": ["BILLING", "NON_MUTATION", "ATOMICITY", "PROVIDER_FAILURE"],
+  "operations": [
+    {"id": "STEP-001", "intent": "observe-before-balance-and-authoritative-cost", "observer": null, "bindingRequired": true},
+    {"id": "STEP-002", "intent": "submit-insufficient-balance-request", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-003", "intent": "observe-after-balance-and-task-count", "observer": null, "bindingRequired": true},
+    {"id": "STEP-004", "intent": "observe-provider-call-count", "observer": null, "bindingRequired": true},
+    {"id": "STEP-005", "intent": "observe-billing-records", "observer": null, "bindingRequired": true}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-001", "target": "availableBalance", "operator": "LESS_THAN", "expectedFrom": "resolvedPricing.authoritativeRequiredCharge"},
+    {"id": "AS-002", "ac": "AC-002", "operation": "STEP-002", "target": "status", "operator": "EQUALS", "expectedFrom": "resolvedContract.insufficientBalanceStatus"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-003", "target": "taskCount", "operator": "COUNT_EQUALS", "expected": 0},
+    {"id": "AS-004", "ac": "AC-002", "operation": "STEP-004", "target": "providerCallCount", "operator": "COUNT_EQUALS", "expected": 0},
+    {"id": "AS-005", "ac": "AC-003", "operation": "STEP-003", "target": "availableBalance", "operator": "UNCHANGED", "expectedFrom": "STEP-001.availableBalance"},
+    {"id": "AS-006", "ac": "AC-003", "operation": "STEP-005", "target": "billingDigest", "operator": "UNCHANGED", "expectedFrom": "STEP-001.billingDigest"},
+    {"id": "AS-007", "ac": "AC-003", "operation": "STEP-005", "target": "chargeCount", "operator": "COUNT_EQUALS", "expected": 0}
+  ],
+  "requiredEvidenceKinds": ["RESPONSE", "STATE_BEFORE", "STATE_AFTER", "PROVIDER_CALL", "BILLING_RECORD"],
+  "blockedCodes": ["MISSING_TEST_DATA", "MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+}

@@ -13,7 +13,7 @@ import { makeRealRunExecutor, type RunProfile } from './real-run.js';
 import type { LLMProvider, LLMResponse, LLMRequest } from '../../llm/types.js';
 import { MockLLMProvider } from '../../llm/mock-llm.js';
 import { FallbackLLMProvider } from '../../llm/fallback-provider.js';
-import { classifyLLMError, isRetryable } from '../../llm/llm-errors.js';
+import { classifyLLMError, isRetryable, LLMError } from '../../llm/llm-errors.js';
 import type { BreakerController } from '../storage/faulty-repository.js';
 import { dispatchUntilIdle } from './real-run.js';
 
@@ -79,10 +79,15 @@ export function makeFlakyProvider(opts: {
     async generate(request: LLMRequest): Promise<LLMResponse> {
       if (failures < opts.failCount) {
         failures += 1;
-        if (opts.mode === 'timeout') throw new Error('LLM 请求超时（aborted）');
-        if (opts.mode === '429') throw new Error('LLM 请求失败（HTTP 429）：rate limit exceeded');
-        if (opts.mode === '500') throw new Error('LLM 请求失败（HTTP 500）：internal server error');
-        throw new Error('LLM 请求失败（HTTP 401）：unauthorized');
+        if (opts.mode === 'timeout') {
+          throw new LLMError('LLM 请求超时（aborted）', { kind: 'timeout', message: 'provider timeout' });
+        }
+        const status = Number(opts.mode);
+        throw new LLMError(`LLM 请求失败（HTTP ${status}）`, {
+          kind: 'http',
+          status,
+          message: `HTTP ${status}`,
+        });
       }
       return delegate.generate(request);
     },
@@ -240,7 +245,7 @@ export async function drillWorkerCrash(bundle: PlatformBundle, opts: { environme
   };
 }
 
-// ── S2b：LLM 异常下的 Run 级恢复（Provider 失败 → Job Retry → 恢复 → COMPLETED）──
+// ── S2b：LLM 异常下的 Run 级恢复（Provider 失败 → Pipeline 确定性回退 → COMPLETED）──
 export async function drillLlmRunRecovery(bundle: PlatformBundle, opts: {
   environment?: string;
   tag?: string;
@@ -264,8 +269,8 @@ export async function drillLlmRunRecovery(bundle: PlatformBundle, opts: {
     projectId: 'wan3', environment, trigger: 'manual', feature: `drill-llm-${profile}`, actor: 'drill', role: 'ADMIN',
   });
 
-  // 循环派发：每次失败（Job RETRY）→ 重试入队 → 再次派发，直至 COMPLETED/FAILED
-  // 说明：provider.generate 抛错即中断当前尝试，failCount 次失败需要 failCount+1 次尝试。
+  // Agent Pipeline 在每个 LLM 节点内 fail-close 到确定性实现；LLM 故障本身不应
+  // 让整个 Worker 重跑，从而避免已进入执行阶段后产生重复副作用。
   await bundle.pool.dispatch();
   let firstStatus = 'RUNNING';
   let retryCount = 0;
@@ -288,7 +293,10 @@ export async function drillLlmRunRecovery(bundle: PlatformBundle, opts: {
     const run = await bundle.service.getRun(runId);
     if (run?.status) status = run.status;
   }
-  const ok = firstStatus === 'RETRY' && status === 'COMPLETED' && flaky.failures >= (opts.failCount ?? 2);
+  const ok = firstStatus === 'SUCCESS'
+    && retryCount === 0
+    && status === 'COMPLETED'
+    && flaky.failures >= (opts.failCount ?? 2);
   // 场景自清理：注销本场景 Worker，避免残留健康 Worker 抢走后续演练/真实 Run 的 Job
   if (bundle.workers.get(w1)) bundle.workers.unregister(w1);
   bundle.pool.dropInFlight(w1);

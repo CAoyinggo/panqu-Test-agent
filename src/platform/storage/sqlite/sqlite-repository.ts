@@ -9,6 +9,7 @@ import {
   type Repository,
 } from '../repository.js';
 import { ensureCollection, withTransaction } from './database.js';
+import { CodedError, ErrorCode } from '../../../core/errors.js';
 
 export class SqliteRepository<T extends Entity> implements Repository<T> {
   private readonly table: string;
@@ -30,8 +31,9 @@ export class SqliteRepository<T extends Entity> implements Repository<T> {
         .prepare(`INSERT INTO "${this.table}" (id, data) VALUES (?, ?)`)
         .run(id, JSON.stringify(entity));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/UNIQUE|PRIMARY KEY/.test(msg)) throw new Error(`实体已存在：${id}`);
+      if ([19, 1555, 2067].includes((err as { errcode?: number }).errcode ?? -1)) {
+        throw new CodedError(ErrorCode.CONFLICT, `实体已存在：${id}`, { cause: err });
+      }
       throw err;
     }
     return entity;
@@ -46,7 +48,7 @@ export class SqliteRepository<T extends Entity> implements Repository<T> {
 
   async update(id: string, input: Partial<Omit<T, 'id'>>): Promise<T> {
     const cur = await this.get(id);
-    if (!cur) throw new Error(`实体不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
     const next = { ...cur, ...input, id } as T;
     this.db
       .prepare(`UPDATE "${this.table}" SET data = ? WHERE id = ?`)
@@ -56,7 +58,7 @@ export class SqliteRepository<T extends Entity> implements Repository<T> {
 
   async delete(id: string): Promise<void> {
     const result = this.db.prepare(`DELETE FROM "${this.table}" WHERE id = ?`).run(id);
-    if (result.changes === 0) throw new Error(`实体不存在：${id}`);
+    if (result.changes === 0) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
   }
 
   async query(filter?: Partial<T>, q?: { limit?: number; offset?: number }): Promise<T[]> {

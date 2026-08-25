@@ -7,6 +7,8 @@ import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
 import type { PlatformHttpServer } from '../../src/platform/api/index.js';
+import { createPlatformAgentWorkerExecutor } from '../../src/integrations/platform-agent-worker.js';
+import { computeOutcome } from '../../src/agents/execution/execution-schema.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 const TOKEN = 'api-test-token';
@@ -21,11 +23,30 @@ const opened: Api[] = [];
 async function makeApi(opts?: { registerWorker?: boolean }): Promise<{ api: Api; bundle: PlatformBundle }> {
   const bundle = createPlatformService({ seedProject: true, now: () => FIXED_ISO });
   if (opts?.registerWorker !== false) {
-    bundle.registerWorkerExecutor('api-worker', async (job: unknown) => {
-      const payload = job as { runId: string };
-      await bundle.service.startRun(payload.runId);
-      await bundle.service.completeRun(payload.runId);
-    });
+    bundle.registerWorkerExecutor('api-worker', createPlatformAgentWorkerExecutor(bundle, {
+      dataFactoryResolver: () => ({
+        async setup() { return {}; },
+        async teardown() { /* no external resource */ },
+        async generate() { return { account: { id: 'api-agent', nickname: 'qa', project_id: 1 } }; },
+      }),
+      pipelineOptions: {
+        executionApproval: { id: 'api-run-approval', status: 'APPROVED', approvedBy: 'qa-reviewer' },
+      },
+      runner: async (cases) => computeOutcome('wan3', cases.map((item) => ({
+        caseId: String(item.def.extra?.agentTestCaseId ?? item.name),
+        name: item.name,
+        feature: item.feature,
+        scene: item.def.scene,
+        processor: 'api-contract-processor',
+        processorInvoked: true,
+        requestId: `api-${String(item.def.extra?.agentTestCaseId ?? item.name)}`,
+        executed: true,
+        status: 'PASS' as const,
+        pass: true,
+        passRate: 100,
+        checks: [{ name: 'API 业务断言', pass: true, detail: 'verified', kind: 'BUSINESS' as const }],
+      })), { executed: true }),
+    }));
   }
   const server = createPlatformServer({ service: bundle.service, token: TOKEN, now: () => FIXED_ISO });
   const { port } = await server.listen();

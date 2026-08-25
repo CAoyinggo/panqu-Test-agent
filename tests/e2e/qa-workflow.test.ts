@@ -13,6 +13,7 @@ import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
 import type { PlatformHttpServer } from '../../src/platform/api/index.js';
+import { completeVerifiedRun } from '../helpers/platform-run.js';
 import type { PlatformEvent } from '../../src/platform/events/events.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
@@ -90,11 +91,7 @@ describe('S2：Suite → Test Plan → Run → COMPLETED', () => {
     const b = makeBundle();
     b.registerWorkerExecutor('w', async (job: unknown) => {
       const { runId } = job as { runId: string };
-      const run = await b.service.getRun(runId);
-      if (run?.status === 'QUEUED') {
-        await b.service.startRun(runId);
-        await b.service.completeRun(runId);
-      }
+      await completeVerifiedRun(b, runId);
     });
     const api = await startServer(b);
     const s = await api.request('POST', '/test-suites', { token: TOKEN, headers: QA, body: { projectId: 'wan3', name: 'S2 suite', caseIds: ['wan3-1080p-10s'] } });

@@ -49,6 +49,7 @@ export interface PilotKpi {
   byProfile: Record<string, number>;
   completed: number;
   failed: number;
+  blocked: number;
   completionRate: number;
   decisions: Record<'PASS' | 'REVIEW' | 'BLOCK', number>;
   totalCases: number;
@@ -121,7 +122,7 @@ async function runPilotOne(
   for (let i = 0; i < 400; i += 1) {
     const r = await bundle.service.getRun(runId);
     status = r?.status ?? '';
-    if (status === 'COMPLETED' || status === 'FAILED') break;
+    if (['COMPLETED', 'FAILED', 'BLOCKED', 'TIMEOUT', 'CANCELLED'].includes(status)) break;
     await bundle.pool.dispatch();
     await new Promise((res) => setTimeout(res, 5));
   }
@@ -178,6 +179,7 @@ export async function runPilot(bundle: PlatformBundle, opts: PilotOptions = {}):
   const decisions: PilotKpi['decisions'] = { PASS: 0, REVIEW: 0, BLOCK: 0 };
   let completed = 0;
   let failed = 0;
+  let blocked = 0;
   let totalCases = 0;
   let totalPass = 0;
   let totalFail = 0;
@@ -190,6 +192,7 @@ export async function runPilot(bundle: PlatformBundle, opts: PilotOptions = {}):
     decisions[e.decision] += 1;
     if (e.status === 'COMPLETED') completed += 1;
     if (e.status === 'FAILED') failed += 1;
+    if (e.status === 'BLOCKED') blocked += 1;
     totalCases += e.totalCases;
     totalPass += e.pass;
     totalFail += e.fail;
@@ -209,6 +212,7 @@ export async function runPilot(bundle: PlatformBundle, opts: PilotOptions = {}):
     byProfile,
     completed,
     failed,
+    blocked,
     completionRate: entries.length ? Number((completed / entries.length).toFixed(4)) : 0,
     decisions,
     totalCases,
@@ -244,7 +248,13 @@ export async function runPilot(bundle: PlatformBundle, opts: PilotOptions = {}):
   });
 
   return {
-    ok: entries.length >= 30 && entries.every((e) => e.status === 'COMPLETED') && manualQa.every((q) => q.match),
+    ok: entries.length >= 30
+      && entries.every((entry) => (
+        entry.decision === 'REVIEW'
+          ? entry.status === 'BLOCKED'
+          : entry.status === 'COMPLETED'
+      ))
+      && manualQa.every((q) => q.match),
     evidence,
     runs: entries,
     kpi,

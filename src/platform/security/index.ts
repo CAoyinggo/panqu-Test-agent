@@ -16,14 +16,27 @@ export const DEV_STATIC_TOKEN = 'dev-token';
 
 const KNOWN_MODES: readonly PlatformMode[] = ['development', 'test', 'staging', 'production'];
 
-/** 解析运行模式（默认 development；经 PLATFORM_MODE 环境变量显式设置；大小写不敏感） */
+/**
+ * 解析运行模式（未显式设置 → development；PLATFORM_MODE 优先，兼容旧 PLATFORM_ENVIRONMENT；大小写不敏感）。
+ * 安全不变量：显式设置的未知值一律启动失败（fail fast），禁止「未知值 → development」静默降级，
+ * 否则拼写错误（如 produciton）会让服务以开发回退策略（dev-token / 默认口令）跑在生产环境。
+ */
 export function resolvePlatformMode(env?: string): PlatformMode {
-  const raw = (env ?? process.env.PLATFORM_MODE ?? 'development').trim().toLowerCase();
+  const configuredMode = process.env.PLATFORM_MODE?.trim()
+    ? process.env.PLATFORM_MODE
+    : process.env.PLATFORM_ENVIRONMENT;
+  const rawEnv = env ?? configuredMode;
+  if (rawEnv === undefined) return 'development';
+  const raw = rawEnv.trim().toLowerCase();
+  if (!raw) return 'development';
   if (raw === 'prod') return 'production';
-  return (KNOWN_MODES as readonly string[]).includes(raw) ? (raw as PlatformMode) : 'development';
+  if ((KNOWN_MODES as readonly string[]).includes(raw)) return raw as PlatformMode;
+  throw new Error(
+    `[security] 未知 PLATFORM_MODE：${JSON.stringify(rawEnv)}（合法值：${KNOWN_MODES.join(' / ')}；别名 prod→production）。拒绝启动，禁止静默回退 development`,
+  );
 }
 
-/** 生产安全模式：production 与 staging 一律按生产安全约束执行（staging 为真实生产演练环境） */
+/** staging 与 production 一律按生产安全约束执行（staging 是真实生产演练环境，策略不得偏开发） */
 export function isProductionLike(mode: PlatformMode): boolean {
   return mode === 'production' || mode === 'staging';
 }
@@ -44,21 +57,26 @@ export function requireSecureJwtSecret(mode: PlatformMode, secret: string | unde
   return secret ?? DEV_FALLBACK_JWT_SECRET;
 }
 
-/** 生产模式强制禁用默认种子口令；其余模式保持显式传入值（默认 true，供开发/测试/演练） */
+/** staging/production 强制禁用默认种子口令；其余模式保持显式传入值（默认 true，供开发/测试） */
 export function resolveAllowDefaultCredentials(mode: PlatformMode, explicit?: boolean): boolean {
-  if (mode === 'production') return false;
+  if (isProductionLike(mode)) return false;
   return explicit ?? true;
 }
 
-/** 静态 Bearer Token + X-Actor/X-Role 作为身份来源是否允许（生产模式禁止，防身份伪造） */
+/** X-Actor/X-Role 静态头身份是否允许（staging/production 一律禁止，防身份伪造） */
 export function allowHeaderIdentity(mode: PlatformMode): boolean {
-  return mode !== 'production';
+  return !isProductionLike(mode);
+}
+
+/** 静态 Bearer Token（含 dev-token）是否可作为身份来源（仅 development/test；staging/production 强制 JWT） */
+export function allowStaticToken(mode: PlatformMode): boolean {
+  return !isProductionLike(mode);
 }
 
 /**
  * 静态身份来源统一解析（Phase 36，DEBT-12 已解决）：
  * 守卫 + 解析收敛到 security 模块（防新 API 入口绕过生产关闭）：
- * - production：返回 null（身份伪造已关闭，调用方不得回退静态身份）；
+ * - staging/production：返回 null（身份伪造已关闭，调用方不得回退静态身份）；
  * - 其余模式：从 X-Actor / X-Role 头解析（数组取首项；无 actor 默认 'api'，无 role 默认 'VIEWER'）。
  * 注：返回 role 为 string，调用方需按自身 Role 联合类型收窄。
  */
@@ -105,12 +123,12 @@ export function securityChecks(mode: PlatformMode, opts: { jwtSecret?: string; a
     {
       name: '默认口令',
       level: productionLike && allowDefault ? 'BLOCK' : 'PASS',
-      detail: allowDefault ? '允许默认种子口令登录（生产模式必须禁用）' : '默认种子口令已禁用（需运维显式配置用户）',
+      detail: allowDefault ? '允许默认种子口令登录（staging/production 禁止）' : '默认种子口令已禁用（需运维显式配置用户）',
     },
     {
       name: '静态身份来源',
-      level: mode === 'production' ? 'PASS' : 'WARN',
-      detail: mode === 'production' ? 'X-Actor/X-Role 身份伪造已关闭' : `X-Actor/X-Role 静态身份可用（${mode} 模式；生产模式关闭）`,
+      level: productionLike ? 'PASS' : 'WARN',
+      detail: productionLike ? 'dev-token 与 X-Actor/X-Role 静态身份已关闭（强制 JWT）' : `dev-token / X-Actor/X-Role 静态身份可用（${mode} 模式；staging/production 关闭）`,
     },
   ];
   return items;

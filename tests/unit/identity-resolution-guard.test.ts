@@ -19,8 +19,12 @@ describe('resolveStaticIdentity（Phase 36，DEBT-12）', () => {
     expect(resolveStaticIdentity('production', { 'x-actor': 'admin', 'x-role': 'ADMIN' })).toBeNull();
   });
 
-  it('development/test/staging 模式解析 X-Actor/X-Role', () => {
-    for (const m of ['development', 'test', 'staging'] as const) {
+  it('staging 同样返回 null（生产演练禁止 X-Header 静态身份，强制 JWT）', () => {
+    expect(resolveStaticIdentity('staging', { 'x-actor': 'admin', 'x-role': 'ADMIN' })).toBeNull();
+  });
+
+  it('development/test 模式解析 X-Actor/X-Role', () => {
+    for (const m of ['development', 'test'] as const) {
       expect(resolveStaticIdentity(m, { 'x-actor': 'tester', 'x-role': 'TESTER' })).toEqual({
         actor: 'tester',
         role: 'TESTER',
@@ -31,7 +35,6 @@ describe('resolveStaticIdentity（Phase 36，DEBT-12）', () => {
   it('缺省回退：无 actor 默认 api，无 role 默认 VIEWER', () => {
     expect(resolveStaticIdentity('test', {})).toEqual({ actor: 'api', role: 'VIEWER' });
     expect(resolveStaticIdentity('development', { 'x-actor': 'u' })).toEqual({ actor: 'u', role: 'VIEWER' });
-    expect(resolveStaticIdentity('staging', { 'x-role': 'ADMIN' })).toEqual({ actor: 'api', role: 'ADMIN' });
   });
 
   it('数组头取首项；空字符串回退默认值；非字符串被字符串化', () => {
@@ -100,15 +103,17 @@ describe('身份解析结构性守护（Phase 36，DEBT-12 回归防）', () => 
 });
 
 describe('身份解析集成语义（生产关闭不可绕过）', () => {
-  it('production：isProductionLike=true 且 allowHeaderIdentity=false 且 resolveStaticIdentity=null', () => {
-    expect(isProductionLike('production')).toBe(true);
-    expect(allowHeaderIdentity('production')).toBe(false);
-    expect(resolveStaticIdentity('production', { 'x-actor': 'root', 'x-role': 'OWNER' })).toBeNull();
+  it('staging/production：isProductionLike=true 且 allowHeaderIdentity=false 且 resolveStaticIdentity=null（强制 JWT）', () => {
+    for (const m of ['staging', 'production'] as const) {
+      expect(isProductionLike(m)).toBe(true);
+      expect(allowHeaderIdentity(m)).toBe(false);
+      expect(resolveStaticIdentity(m, { 'x-actor': 'root', 'x-role': 'OWNER' })).toBeNull();
+    }
   });
 
-  it('非生产模式允许静态身份（staging 为生产演练模式，安全约束强但允许 X-Header 身份）', () => {
-    for (const m of ['development', 'test', 'staging'] as const) {
-      expect(isProductionLike(m)).toBe(m === 'staging'); // 仅 staging 视为生产类
+  it('development/test 允许静态身份（开发回退仅限非生产类模式）', () => {
+    for (const m of ['development', 'test'] as const) {
+      expect(isProductionLike(m)).toBe(false);
       expect(allowHeaderIdentity(m)).toBe(true);
       expect(resolveStaticIdentity(m, { 'x-actor': 'u' })).not.toBeNull();
     }

@@ -11,6 +11,7 @@ import {
   type ApprovalRequestInput,
   type ApprovalStatus,
 } from './approval-schema.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export interface ApprovalCenterOptions {
   now?: () => string;
@@ -80,14 +81,14 @@ export class ApprovalCenter {
     decidedBy: string,
   ): Promise<ApprovalRequest> {
     const cur = await this.repo.get(approvalId);
-    if (!cur) throw new Error(`审批不存在：${approvalId}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `审批不存在：${approvalId}`);
     // 幂等：已决审批返回既有结果，不重复执行
     if (cur.status !== 'PENDING') {
       return cur;
     }
     // 27.3：审批职责分离——审批人不能审批自己发起的申请（防自提自批越权）
     if (cur.requester === decidedBy) {
-      throw new Error(`审批职责分离：审批人 ${decidedBy} 不能审批自己发起的申请`);
+      throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `审批职责分离：审批人 ${decidedBy} 不能审批自己发起的申请`);
     }
     return this.repo.update(approvalId, {
       status,

@@ -18,7 +18,7 @@ import {
 } from './defect-schema.js';
 
 /** 系统提示词：只允许生成草稿，禁止声称已提交 */
-const SYSTEM_PROMPT = `你是资深缺陷分析师。基于失败用例与根因分析，生成标准缺陷草稿。
+export const DEFECT_SYSTEM_PROMPT = `你是资深缺陷分析师。基于失败用例与根因分析，生成标准缺陷草稿。
 重要：你只生成缺陷草稿（DRAFT），不要声称已提交缺陷、不要填写提交单号。
 输出严格符合如下 JSON Schema（只输出 JSON，不要 Markdown 围栏）：
 ${JSON.stringify(DEFECT_JSON_SCHEMA, null, 2)}
@@ -149,18 +149,15 @@ export class DefectAgent extends BaseAgent<DefectAgentInput, DefectDraft[]> {
       };
     });
 
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `功能：${input.feature}，环境：${input.environment}
+    const resp = await context.runtime.generate({
+      task: 'defect',
+      agent: this.name,
+      system: DEFECT_SYSTEM_PROMPT,
+      user: `功能：${input.feature}，环境：${input.environment}
 失败用例与根因：
 ${JSON.stringify(payload, null, 2)}
 
 请为每个失败用例输出一条缺陷草稿对象。用 JSON 数组输出。`,
-        },
-      ],
       temperature: 0,
       jsonMode: true,
     });

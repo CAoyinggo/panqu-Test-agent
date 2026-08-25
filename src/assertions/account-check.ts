@@ -8,6 +8,8 @@ export function accountCheck(taskDef: TaskDef, _submit: SubmitResult, _billing: 
       name: '账号隔离',
       pass: true,
       detail: `本次使用账号 ${taskDef.account || '默认'}，project_id=${taskDef.project_id ?? '-'}，积分独立计费`,
+      // 这里只记录声明的运行上下文，没有查询资源归属，不能作为隔离证明。
+      kind: 'INFORMATIONAL',
     },
   ];
 }

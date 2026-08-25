@@ -14,13 +14,13 @@ import { Http } from '../integrations/http.js';
 import { loadConfig, parseArgs, CliArgs } from '../config/config.js';
 import { getReporters } from '../reports/factory.js';
 import { outputDir, caseOutputDir, logsDir, debugDir, caseDebugDir, writeJson } from '../utils/fs-utils.js';
-import { logger, setCiMode, setLogLevel, setLogFile, setLogContext, setCaseId } from '../utils/logger.js';
+import { closeLogFile, logger, setCiMode, setLogLevel, setLogFile } from '../utils/logger.js';
 import { loadCases, LoadedCase } from '../cases/loader.js';
 import { filterCases } from '../cases/filter.js';
 import { ResultTracker, EXIT_CODE, type ExecutionSummary } from '../utils/exit-code.js';
 import { getEnvFromEnv, applyEnvSessionOverrides, getNotifierConfig } from '../config/env-loader.js';
 import { generateTraceId, getTraceId } from '../utils/trace.js';
-import { metrics } from '../utils/metrics.js';
+import { getMetricsCollector, MetricsCollector, metrics } from '../utils/metrics.js';
 import { autoLoadScenes } from '../plugins/loader.js';
 import { FeishuNotifier } from '../integrations/notifiers/feishu.js';
 import { snapshot as envSnapshot, compare as envCompare, saveBaseline as saveEnvBaseline, loadBaseline as loadEnvBaseline } from './env-checker.js';
@@ -35,9 +35,20 @@ import { createRecordSession, createReplaySession, type RecordSession, type Repl
 import { DynamicConcurrencyController, createDefaultConcurrencyConfig } from '../utils/concurrency-controller.js';
 import { toCanonicalSceneId } from './canonical-scene.js';
 import type { CoreExecutionStatus } from './execution-status.js';
+import { ExecutionAbortError, abortForTimeout, abortReasonOf, linkAbortSignal } from './abort.js';
+import { isAbortedStatus } from './execution-status.js';
+import type { DataSession } from './data-session.js';
+import { getExecutionContext, withExecutionContext } from './execution-context.js';
+import { redactSensitiveText } from './redact.js';
+import { validateDependencies } from '../contracts/dependency-index.js';
+import { createPhase1ContractResolver } from '../contracts/seed-contracts.js';
+import type { ContractResolver } from '../contracts/resolver.js';
 
 // 场景处理器注册表（自动扫描加载，无需手动 import）
 export const SCENES: Record<string, SceneHandler> = {};
+
+/** 用例超时 abort 后，等待底层收尾的硬宽限（防不合作代码悬挂调用方；正常远快于此值） */
+const HARD_ABORT_GRACE_MS = 5_000;
 
 export function registerScene(name: string, handler: SceneHandler): void {
   SCENES[name] = handler;
@@ -54,6 +65,7 @@ export function findHandler(scene: string): SceneHandler | null {
 
 export interface EngineOptions {
   hooks?: HookRegistry;
+  contractResolver?: ContractResolver;
 }
 
 /** 单任务执行结果 */
@@ -64,13 +76,18 @@ export interface RunTaskResult {
   executed: boolean;
   status: CoreExecutionStatus;
   checks: PipelineResult['checks'];
+  processor?: string;
+  processorInvoked?: boolean;
+  requestId?: string;
 }
 
 export class Engine {
   private hooks: HookRegistry;
+  private readonly contractResolver: ContractResolver;
 
   constructor(opts: EngineOptions = {}) {
     this.hooks = opts.hooks || new HookRegistry();
+    this.contractResolver = opts.contractResolver ?? createPhase1ContractResolver();
   }
 
   /** 加载任务定义（文件或目录，支持 JSON / TS 编译产物） */
@@ -81,29 +98,51 @@ export class Engine {
   }
 
   /** 运行单个任务，返回报告文件路径列表与执行结果 */
-  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff, debugLevel?: DebugLevel): Promise<RunTaskResult> {
+  async runTask(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff, debugLevel?: DebugLevel, signal?: AbortSignal, dataSession?: DataSession): Promise<RunTaskResult> {
+    const parent = getExecutionContext();
+    const scopedMetrics = parent?.metrics ?? new MetricsCollector();
+    if (!parent?.metrics) scopedMetrics.start();
+
+    return withExecutionContext({
+      log: {
+        task: taskDef.name,
+        scene: taskDef.scene,
+        trace: parent?.log.trace || getTraceId(),
+        caseId: caseId ?? parent?.log.caseId ?? '',
+      },
+      metrics: scopedMetrics,
+    }, () => this.runTaskScoped(
+      cfg, taskDef, env, func, reporter, debug, caseId, autoSetup, envDiff, debugLevel, signal, dataSession,
+    ));
+  }
+
+  /** runTask 的已隔离实现；调用方必须先建立 execution scope。 */
+  private async runTaskScoped(cfg: AppConfig, taskDef: TaskDef, env: string, func?: string, reporter?: string | null, debug?: boolean, caseId?: string, autoSetup?: boolean, envDiff?: EnvDiff, debugLevel?: DebugLevel, signal?: AbortSignal, dataSession?: DataSession): Promise<RunTaskResult> {
+    // Loader 标记的 Legacy Asset 必须先通过 Migration + Contract Gate；此处位于
+    // Session/HTTP/Data Prepare 之前，保证 stale/unknown TaskDef 没有真实副作用。
+    const migrationAllowed = !taskDef.legacyContract || taskDef.legacyContract.status === 'ACTIVE';
+    const validation = validateDependencies(taskDef.contractDependencies ?? [], this.contractResolver);
+    if (!migrationAllowed || validation.status !== 'VALID') {
+      const reason = !migrationAllowed
+        ? `LEGACY_ASSET_${taskDef.legacyContract!.status}：${taskDef.legacyContract!.asset}；${taskDef.legacyContract!.reasons.join('；')}`
+        : `CONTRACT_GATE_${validation.status}：${validation.reasons.join('；')}`;
+      return {
+        files: [], passRate: 0, hasBlockingIssue: true, executed: false, status: 'BLOCKED',
+        checks: [{ name: 'Contract Gate', pass: false, detail: reason, kind: 'BUSINESS', level: 'P0' }],
+        processorInvoked: false,
+      };
+    }
     const handler = findHandler(taskDef.scene);
     const session = applyEnvSessionOverrides(Http.loadSession(cfg.session_cookies_path, env));
     session.env = env;
 
-    // 设置日志上下文（并发模式下 caseId 前缀隔离）
-    setLogContext({ task: taskDef.name, scene: taskDef.scene, trace: getTraceId() });
-    if (caseId) {
-      setCaseId(caseId);
-    } else {
-      setCaseId('');
-      // 串行模式：每条用例独立日志文件（原始行为）
-      const logFile = path.join(logsDir(func), 'run.log');
-      setLogFile(logFile);
-    }
-
     // debug 目录（仅 --debug 模式使用；verbose/full 级别按用例隔离到 caseId 子目录）
     const dbgDir = debug ? caseDebugDir(func, caseId) : undefined;
 
-    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff, debugLevel }, this.hooks);
+    const pipeline = new Pipeline({ cfg, session, taskDef, handler, func, debugDir: dbgDir, autoSetup, envDiff, debugLevel, signal, dataSession }, this.hooks);
     const result: PipelineResult = await pipeline.run();
 
-    const hasBlockingIssue = result.status === 'BLOCKED' || result.status === 'NOT_EXECUTED'
+    const hasBlockingIssue = result.status === 'BLOCKED' || result.status === 'NOT_EXECUTED' || isAbortedStatus(result.status)
       || result.issues.some((i) => i.level === '阻塞');
     const executionStatus: CoreExecutionStatus = hasBlockingIssue && result.status === 'PASS'
       ? 'BLOCKED'
@@ -149,13 +188,16 @@ export class Engine {
       executed: result.executed,
       status: executionStatus,
       checks: result.checks,
+      processor: result.processor,
+      processorInvoked: result.processorInvoked,
+      requestId: result.requestId,
     };
   }
 
   /**
-   * 执行单个用例的完整链路（含超时检查、日志隔离、报告生成）。
+   * 执行单个用例的完整链路（含超时中止、日志隔离、报告生成）。
    * 并发模式下由 p-limit 调度调用，串行模式下直接调用。
-   * 支持：per-case timeout、case-level retry、数据生成器占位符解析。
+   * 支持：per-case timeout（真实中止底层 HTTP）、case-level retry、数据生成器占位符解析。
    */
   private async runOneCase(
     c: LoadedCase,
@@ -168,19 +210,28 @@ export class Engine {
     concurrency: number,
     envDiff?: EnvDiff,
     debugLevel?: DebugLevel,
+    globalSignal?: AbortSignal,
   ): Promise<void> {
-    // 超时检查（全局超时）
+    const parentMetrics = getMetricsCollector();
+    const caseMetrics = new MetricsCollector();
+    caseMetrics.start();
+
+    // 即使串行时不展示 caseId，每条用例也拥有独立的日志/metrics scope。
+    const concurrencyOn = concurrency > 1;
+    const caseId = concurrencyOn
+      ? `${c.feature || 'default'}-${Date.now()}-${c.name.replace(/[\s\\/:*?"<>|]/g, '_').slice(0, 30)}`
+      : '';
+
+    return withExecutionContext({
+      log: { task: c.name, scene: c.def.scene, caseId },
+      metrics: caseMetrics,
+    }, async () => {
+    // 超时检查（全局超时；未启动的用例直接标记，不再进入流水线）
     if (Date.now() - startTime > timeoutMs) {
       logger.warn(`执行超时（${args.timeout ?? 600}s），用例 ${c.name} 标记为超时中断`);
       tracker.addTimeout(c.name, c.feature, `整体超时 ${args.timeout ?? 600}s`);
       return;
     }
-
-    // 生成 caseId（并发模式下用于日志前缀和报告隔离）
-    const concurrencyOn = concurrency > 1;
-    const caseId = concurrencyOn
-      ? `${c.feature || 'default'}-${Date.now()}-${c.name.replace(/[\s\\/:*?"<>|]/g, '_').slice(0, 30)}`
-      : '';
 
     const tag = c.feature ? `[${c.feature}]` : '';
     logger.step(`---- ${tag}加载用例：${c.name}（${path.basename(c.file)}） ----`);
@@ -197,7 +248,8 @@ export class Engine {
       logger.warn(`数据生成器解析失败（已降级使用原始数据）：${e.message}`);
     }
 
-    // 用例级超时（覆盖全局超时）
+    // 用例级超时（覆盖全局超时）：超时触发 AbortController，信号贯穿
+    // runTask → Pipeline → Http → fetch，底层请求真正停止（而非仅上层放弃等待）
     const caseTimeoutMs = args.caseTimeout ? args.caseTimeout * 1000 : null;
 
     // 用例级重试配置（从用例定义中读取，--no-retry 可全局禁用）
@@ -214,16 +266,46 @@ export class Engine {
         await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
       }
 
+      // 每次尝试独立信号：用例超时 + 全局超时/取消 级联中止
+      const caseAbort = new AbortController();
+      const unlinkGlobal = linkAbortSignal(caseAbort, globalSignal);
+      let caseTimer: NodeJS.Timeout | undefined;
+      if (caseTimeoutMs) {
+        caseTimer = setTimeout(
+          () => abortForTimeout(caseAbort, `用例超时（${caseTimeoutMs / 1000}s）：${c.name}`),
+          caseTimeoutMs,
+        );
+      }
+
       try {
-        // 用例级超时（通过 Promise.race 实现）
         const execPromise = this.runTask(
-          cfg, resolvedDef, env, args.func || c.feature || undefined, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel,
+          cfg, resolvedDef, env, args.func || c.feature || undefined, args.reporter, args.debug, caseId || undefined, args.autoSetup, envDiff, debugLevel, caseAbort.signal,
         );
 
-        const { files, passRate, hasBlockingIssue } = caseTimeoutMs
-          ? await this.raceWithTimeout(execPromise, caseTimeoutMs, c.name)
+        // 超时已触发 abort：正常情况下流水线会在信号中止后很快返回 TIMEOUT/CANCELLED 结果；
+        // 硬截止只是最后防线（防止不合作的自定义钩子/处理器悬挂调用方）。
+        const result = caseTimeoutMs
+          ? await this.awaitSettle(execPromise, caseTimeoutMs + HARD_ABORT_GRACE_MS, c.name)
           : await execPromise;
 
+        // 中止终态：底层已停止，按 TIMEOUT/CANCELLED 记账（CANCELLED 不重试；
+        // 仅 TIMEOUT 在策略允许时进入下一次尝试）
+        if (isAbortedStatus(result.status)) {
+          tracker.reports.push(...result.files);
+          const abortStatus = result.status === 'TIMEOUT' ? 'TIMEOUT' as const : 'CANCELLED' as const;
+          const abortError = new ExecutionAbortError(
+            abortStatus,
+            `${abortStatus}：${c.name}（执行被中止，底层任务已停止）`,
+          );
+          const canRetryOnTimeout = abortStatus === 'TIMEOUT' && attempt < maxRetries && this.shouldRetry(abortError, c.def);
+          if (!canRetryOnTimeout) {
+            this.recordAborted(tracker, c, abortStatus, abortError.message, Date.now() - caseStart);
+            return;
+          }
+          continue; // 超时且策略允许 → 进入下一次重试
+        }
+
+        const { files, passRate, hasBlockingIssue } = result;
         const durationMs = Date.now() - caseStart;
         tracker.addResult({
           name: c.name,
@@ -239,58 +321,99 @@ export class Engine {
         return; // 成功，退出重试循环
       } catch (e: any) {
         const durationMs = Date.now() - caseStart;
-        const isTimeout = e.message?.includes('用例超时') || e.message?.includes('timeout');
+        const reason = abortReasonOf(e);
 
-        // 判断是否应该重试
+        // CANCELLED（外部取消）：不重试，直接落账
+        if (reason === 'CANCELLED') {
+          this.recordAborted(tracker, c, 'CANCELLED', `CANCELLED：${e.message}`, durationMs);
+          return;
+        }
+        // TIMEOUT（abort 后 runTask 仍以异常冒泡，如报告写入前失败）：可按策略重试
         const shouldRetry = attempt < maxRetries && this.shouldRetry(e, c.def);
 
         if (!shouldRetry) {
-          logger.error(`用例执行失败：${c.name} - ${e.message}`);
-          tracker.addResult({
-            name: c.name,
-            feature: c.feature,
-            pass: false,
-            pending: false,
-            passRate: 0,
-            error: e.message,
-            stack: e.stack,
-            durationMs,
-            scene: c.def.scene,
-            tags: c.def.tags,
-          });
+          if (reason === 'TIMEOUT') {
+            this.recordAborted(tracker, c, 'TIMEOUT', `TIMEOUT：${e.message}`, durationMs);
+          } else {
+            logger.error(`用例执行失败：${c.name} - ${e.message}`);
+            tracker.addResult({
+              name: c.name,
+              feature: c.feature,
+              pass: false,
+              pending: false,
+              passRate: 0,
+              error: e.message,
+              stack: e.stack,
+              durationMs,
+              scene: c.def.scene,
+              tags: c.def.tags,
+            });
+          }
           return; // 不重试，退出循环
         }
 
         // 记录最后一次重试的失败信息（用于后续报告）
         if (attempt === maxRetries) {
-          tracker.addResult({
-            name: c.name,
-            feature: c.feature,
-            pass: false,
-            pending: false,
-            passRate: 0,
-            error: e.message,
-            stack: e.stack,
-            durationMs,
-            scene: c.def.scene,
-            tags: c.def.tags,
-          });
+          if (reason === 'TIMEOUT') {
+            this.recordAborted(tracker, c, 'TIMEOUT', `TIMEOUT：${e.message}`, durationMs);
+          } else {
+            tracker.addResult({
+              name: c.name,
+              feature: c.feature,
+              pass: false,
+              pending: false,
+              passRate: 0,
+              error: e.message,
+              stack: e.stack,
+              durationMs,
+              scene: c.def.scene,
+              tags: c.def.tags,
+            });
+          }
+          return;
         }
+      } finally {
+        if (caseTimer) clearTimeout(caseTimer);
+        unlinkGlobal();
       }
     }
 
-    // 清除 caseId 前缀（避免影响后续用例日志）
-    if (concurrencyOn) setCaseId('');
+    }, () => {
+      // finally cleanup：任何返回/异常/超时路径都执行一次，且只合并本用例指标。
+      parentMetrics.merge(caseMetrics);
+    });
   }
 
-  /** 用 Promise.race 实现用例级超时 */
-  private async raceWithTimeout<T>(promise: Promise<T>, ms: number, caseName: string): Promise<T> {
+  /** 中止终态落账：TIMEOUT 计入超时统计（退出码 3），CANCELLED 计为失败且不重试 */
+  private recordAborted(tracker: ResultTracker, c: LoadedCase, status: 'TIMEOUT' | 'CANCELLED', message: string, durationMs: number): void {
+    if (status === 'TIMEOUT') {
+      tracker.addTimeout(c.name, c.feature, message);
+      return;
+    }
+    tracker.addResult({
+      name: c.name,
+      feature: c.feature,
+      pass: false,
+      pending: false,
+      passRate: 0,
+      error: message,
+      durationMs,
+      scene: c.def.scene,
+      tags: c.def.tags,
+    });
+  }
+
+  /**
+   * 等待已中止的执行收尾：信号已 abort，正常会立刻结算；硬截止仅防不合作代码悬挂调用方。
+   * （区别于旧 Promise.race：底层任务已通过 AbortSignal 真实停止，这里只是等它善后。）
+   */
+  private async awaitSettle<T>(promise: Promise<T>, hardDeadlineMs: number, caseName: string): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`用例超时（${ms / 1000}s）：${caseName}`)), ms);
+    const hardPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ExecutionAbortError('TIMEOUT', `用例 ${caseName} 中止后未在宽限期内收尾（${hardDeadlineMs}ms），放弃等待（底层信号已中止）`)), hardDeadlineMs);
     });
     try {
-      return await Promise.race([promise, timeoutPromise]);
+      return await Promise.race([promise, hardPromise]);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -306,7 +429,16 @@ export class Engine {
 
     if (retryWhen === 'timeout' && (error.message?.includes('超时') || error.message?.includes('timeout'))) return true;
     if (retryWhen === 'network' && (error.message?.includes('ECONNREFUSED') || error.message?.includes('fetch'))) return true;
-    if (retryWhen === '5xx' && /5\d{2}/.test(error.message)) return true;
+    if (retryWhen === '5xx') {
+      const failureStatus = (error as Error & { failure?: { status?: unknown } }).failure?.status;
+      const directStatus = (error as Error & { status?: unknown }).status;
+      const status = typeof failureStatus === 'number'
+        ? failureStatus
+        : typeof directStatus === 'number'
+          ? directStatus
+          : undefined;
+      if (status !== undefined && status >= 500 && status <= 599) return true;
+    }
 
     return false;
   }
@@ -430,7 +562,7 @@ export class Engine {
     if (args.ci) {
       // CI 模式：打印一行摘要
       // eslint-disable-next-line no-console
-      console.log(ResultTracker.formatSummary(summary));
+      console.log(redactSensitiveText(ResultTracker.formatSummary(summary)));
     } else {
       logger.step('========== 执行完成 ==========');
       for (const f of summary.reports) logger.info('报告已生成：' + f);
@@ -444,15 +576,34 @@ export class Engine {
    * 可被 main()（正常执行）和 Watcher（watch 重跑）复用。
    */
   private async executeCases(args: CliArgs, cfg: AppConfig, env: string, cases: LoadedCase[]): Promise<ExecutionSummary> {
-    // 生成 trace-id，初始化 metrics
     const traceId = generateTraceId();
-    metrics.reset();
-    metrics.start();
+    const runMetrics = new MetricsCollector();
+    runMetrics.start();
+
+    return withExecutionContext({
+      log: { trace: traceId },
+      metrics: runMetrics,
+    }, () => this.executeCasesScoped(args, cfg, env, cases, traceId, runMetrics), () => {
+      // finally cleanup：异常路径也关闭当前 run 独占的文件 sink。
+      closeLogFile();
+    });
+  }
+
+  /** executeCases 的 run 级隔离实现。 */
+  private async executeCasesScoped(args: CliArgs, cfg: AppConfig, env: string, cases: LoadedCase[], traceId: string, runMetrics: MetricsCollector): Promise<ExecutionSummary> {
     logger.info(`Trace ID: ${traceId}`);
 
     const tracker = new ResultTracker();
     const startTime = Date.now();
     const timeoutMs = (args.timeout ?? 600) * 1000;
+
+    // ── 全局超时：真实中止所有在途用例（信号级联到每个 case → Pipeline → Http → fetch）──
+    // 旧实现仅「标记超时并停止调度」，在途请求会继续执行；现在到点即 abort，底层全部停止。
+    const globalAbort = new AbortController();
+    const globalTimer = setTimeout(
+      () => abortForTimeout(globalAbort, `整体执行超时（${args.timeout ?? 600}s）：中止全部在途用例`),
+      timeoutMs,
+    );
 
     // 计算并发数：--parallel 优先于 --concurrency
     let concurrency = args.parallel
@@ -510,11 +661,11 @@ export class Engine {
 
     if (concurrency > 1) {
       logger.info(`并发模式：concurrency=${concurrency}${dynConcurrency ? ' (动态)' : ''}（同一 feature 串行，不同 feature 并行）`);
-      // 并发模式：设置共享日志文件
-      const logFunc = args.func || cases[0]?.feature;
-      if (logFunc) {
-        setLogFile(path.join(logsDir(logFunc), 'run.log'));
-      }
+    }
+    // 整个 run 共用一个 sink；task/scene/caseId/step 由各自 ALS scope 隔离。
+    const logFunc = args.func || cases[0]?.feature;
+    if (logFunc) {
+      setLogFile(path.join(logsDir(logFunc), 'run.log'));
     }
 
     // ── 环境一致性检测 ──
@@ -552,7 +703,7 @@ export class Engine {
       }
       for (const c of cases) {
         const currentConcurrency = dynConcurrency?.getConcurrency() || concurrency;
-        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, currentConcurrency, envDiff, debugLevel);
+        await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, currentConcurrency, envDiff, debugLevel, globalAbort.signal);
         // 动态并发：记录结果并调整
         if (dynConcurrency) {
           const lastResult = tracker.getResults().at(-1);
@@ -577,7 +728,7 @@ export class Engine {
         limit(async () => {
           logger.info(`▶ 开始执行 feature=${feature}（${groupCases.length} 个用例，串行）`);
           for (const c of groupCases) {
-            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff, debugLevel);
+            await this.runOneCase(c, cfg, env, args, tracker, startTime, timeoutMs, concurrency, envDiff, debugLevel, globalAbort.signal);
           }
           logger.info(`✔ feature=${feature} 执行完毕`);
         }),
@@ -585,6 +736,9 @@ export class Engine {
 
       await Promise.all(groupTasks);
     }
+
+    // 全局执行结束：解除全局超时计时（未触发则不误伤后续上传/通知等收尾动作）
+    clearTimeout(globalTimer);
 
     // ── 停止 Mock 录制/回放 ──
     if (mockRecordSession) {
@@ -597,6 +751,7 @@ export class Engine {
     }
 
     const summary = tracker.getSummary();
+    runMetrics.setPassRate(summary.total > 0 ? (summary.passed / summary.total) * 100 : 0);
 
     // 写 metrics.json 到输出目录
     const funcName = args.func || cases[0]?.feature;

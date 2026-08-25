@@ -80,7 +80,7 @@ describe('26.3.4 Autonomous Run（P0 + AI 场景）', () => {
 
 describe('26.3.5 Release Decision 规则真实性（26.5 Gate 前置）', () => {
   it('P0 FAIL → BLOCK（exit=1）；Critical Defect → BLOCK；无 P0 fail 且 coverage 足够 → PASS', () => {
-    const base: RealCaseVerdict = { caseId: 'c', category: 'p0', priority: 'P0', business: 'b', feature: 'f', title: 't', result: 'PASS', reason: '', durationMs: 0, retries: 0 };
+    const base: RealCaseVerdict = { caseId: 'c', category: 'p0', priority: 'P0', business: 'b', feature: 'f', title: 't', result: 'PASS', reason: '', durationMs: 0, retries: 0, executed: true, processorInvoked: true, assertionCount: 1 };
     // P0 FAIL → BLOCK
     const withP0Fail = computeReleaseDecision([{ ...base, result: 'FAIL' }, { ...base, caseId: 'c2', result: 'PASS' }]);
     expect(withP0Fail.decision).toBe('BLOCK');

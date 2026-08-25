@@ -7,6 +7,7 @@ import './account-check.js';
 import './status-flow-check.js';
 import './security-check.js';
 import './chaos-check.js';
+import './operation-outcome-check.js';
 
 export * from './index.js';
 export * from './impact.js';

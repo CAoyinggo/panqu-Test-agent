@@ -35,10 +35,29 @@ export class DataPrepareTool implements AgentTool<DataPrepareInput, DataContext>
   outputSchema = { type: 'object' };
   timeoutMs = 60_000;
 
+  /**
+   * 将一次准备调用绑定到唯一的工厂实例。WeakMap 既避免跨任务共享可变状态，
+   * 也保证编排层后续 teardown 使用的正是 generate 使用过的实例。
+   */
+  private readonly boundFactories = new WeakMap<DataPrepareInput, DataFactory>();
+
   constructor(private factoryResolver: (name: string) => DataFactory = getDataFactory) {}
 
+  /** 编排层复用 generate 的同一工厂实例执行 teardown，避免全局注册表并发覆盖。 */
+  resolveFactory(name: string): DataFactory {
+    return this.factoryResolver(name);
+  }
+
+  bindFactory(input: DataPrepareInput): DataFactory {
+    const existing = this.boundFactories.get(input);
+    if (existing) return existing;
+    const factory = this.resolveFactory(input.factoryName);
+    this.boundFactories.set(input, factory);
+    return factory;
+  }
+
   async execute(input: DataPrepareInput, context: AgentContext): Promise<DataContext> {
-    const factory = this.factoryResolver(input.factoryName);
+    const factory = this.bindFactory(input);
     if (isNoop(factory)) {
       context.logger.warn(`数据工厂未注册（${input.factoryName}），返回空 DataContext；可用：${listDataFactories().join(', ') || '无'}`);
       return {};

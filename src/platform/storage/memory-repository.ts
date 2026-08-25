@@ -5,6 +5,7 @@ import {
   type Entity,
   type Repository,
 } from './repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export class InMemoryRepository<T extends Entity> implements Repository<T> {
   protected items = new Map<string, T>();
@@ -13,7 +14,7 @@ export class InMemoryRepository<T extends Entity> implements Repository<T> {
 
   async create(input: Omit<T, 'id'> & { id?: string }): Promise<T> {
     const id = input.id ?? generateEntityId(this.prefix);
-    if (this.items.has(id)) throw new Error(`实体已存在：${id}`);
+    if (this.items.has(id)) throw new CodedError(ErrorCode.CONFLICT, `实体已存在：${id}`);
     const entity = { ...(input as object), id } as T;
     this.items.set(id, entity);
     return entity;
@@ -25,14 +26,14 @@ export class InMemoryRepository<T extends Entity> implements Repository<T> {
 
   async update(id: string, input: Partial<Omit<T, 'id'>>): Promise<T> {
     const cur = this.items.get(id);
-    if (!cur) throw new Error(`实体不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
     const next = { ...cur, ...input, id } as T;
     this.items.set(id, next);
     return next;
   }
 
   async delete(id: string): Promise<void> {
-    if (!this.items.delete(id)) throw new Error(`实体不存在：${id}`);
+    if (!this.items.delete(id)) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
   }
 
   async query(filter?: Partial<T>, q?: { limit?: number; offset?: number }): Promise<T[]> {

@@ -20,6 +20,8 @@ export default defineConfig({
         'src/utils/concurrency-controller.ts',
         'src/utils/assertion-visualizer.ts',
         'src/agents/**/*.ts',
+        // API Acceptance 是真实执行入口，必须进入全局覆盖率门禁，避免只跑测试但不计受影响代码。
+        'src/acceptance/**/*.ts',
         'src/llm/**/*.ts',
         // 30.1（Phase 30）：平台层纳入覆盖率统计，与核心/智能层共用同一门禁（行/函数/语句 ≥ 80，分支 ≥ 75）
         'src/platform/**/*.ts',

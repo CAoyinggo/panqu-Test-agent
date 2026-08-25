@@ -21,7 +21,7 @@ const T2 = '2026-08-18T00:02:00.000Z'; // +120s
 const T3 = '2026-08-18T00:03:00.000Z'; // +180s
 
 function run(partial: Partial<TestRun> & { runId: string; status: TestRun['status'] }): TestRun {
-  return { projectId: 'wan3', environment: 'test', trigger: 'manual', progress: 0, createdAt: T0, ...partial };
+  return { projectId: 'wan3', environment: 'test', trigger: 'manual', progress: 0, createdAt: T0, executionMode: 'VERIFIED_AGENT', ...partial };
 }
 
 function job(partial: Partial<TestJob> & { jobId: string; status: TestJob['status'] }): TestJob {

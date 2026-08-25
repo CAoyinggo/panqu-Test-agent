@@ -24,19 +24,20 @@ import { MockLLMProvider } from '../../src/llm/index.js';
 
 const DEMO = '测试 WAN3 文生视频功能，覆盖正常、边界、异常、积分、并发和模型异常';
 
-/** mock 执行引擎：制造 3 条失败（超时 / 路径失效 / 积分扣费） */
+/** mock 执行引擎：制造 1 条超时 + 3 条失败（路径 / 计费 / 服务异常） */
 const mockRunTool: AgentTool<{ cases: LoadedCase[]; options?: unknown }, ExecutionOutcome> = {
   name: 'execution.run',
   description: 'mock 执行引擎（端到端 Demo）',
   inputSchema: {},
   outputSchema: {},
-  permission: 'safe',
+  permission: 'risky',
   async execute(input) {
     const loaded = (input?.cases ?? []) as LoadedCase[];
     const FAIL: Record<number, { error: string; detail: string; timedOut?: boolean }> = {
       1: { error: '503 服务不可用，接口超时', detail: 'HTTP 503', timedOut: true },
       2: { error: '响应结构变化：data.videos.list 字段 undefined，实际返回 data.videos.items', detail: 'path mismatch' },
       5: { error: '积分扣费异常：用户积分不足，扣费失败', detail: 'billing failed' },
+      6: { error: '模型服务返回 503', detail: 'model service unavailable' },
     };
     const results: CaseExecutionResult[] = loaded.map((c, i) => {
       const f = FAIL[i];
@@ -48,12 +49,18 @@ const mockRunTool: AgentTool<{ cases: LoadedCase[]; options?: unknown }, Executi
         name: c.name ?? caseId,
         feature: c.feature ?? 'wan3',
         priority: priority ?? 'P0',
+        processor: 'mock-wan3-processor',
+        processorInvoked: true,
+        executed: f?.timedOut !== true,
+        status: pass ? 'PASS' : (f?.timedOut ? 'TIMEOUT' : 'FAIL'),
         pass,
-        passRate: pass ? 1 : 0,
+        passRate: pass ? 100 : 0,
         error: f?.error,
         timedOut: f?.timedOut,
         durationMs: 10 + i,
-        checks: pass ? [] : [{ name: 'assert', pass: false, detail: f?.detail ?? 'failed' }],
+        checks: pass
+          ? [{ name: '业务结果断言', pass: true, detail: 'mock processor response verified', kind: 'BUSINESS' }]
+          : [{ name: 'assert', pass: false, detail: f?.detail ?? 'failed', kind: 'BUSINESS' }],
       };
     });
     const passed = results.filter((r) => r.pass).length;
@@ -94,7 +101,16 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
   it('走通全链路并产出全部阶段产物', async () => {
     const memory = new JsonMemoryStore(file);
     const tools = new ToolRegistry();
-    tools.register(createDataPrepareTool());
+    tools.register(createDataPrepareTool(() => ({
+      async setup() { return {}; },
+      async teardown() { /* fixture has no external resources */ },
+      async generate() {
+        return {
+          account: { id: 'e2e-account', nickname: 'qa', project_id: 1 },
+          assets: [{ id: 'e2e-asset', type: 'video', url: 'mock://video' }],
+        };
+      },
+    })));
     tools.register(mockRunTool);
     const context = createAgentContext({
       taskId: 'e2e-demo',
@@ -106,7 +122,14 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
     });
 
     const r = await runAgentPipeline(
-      { requirementText: DEMO, environment: 'test', options: { budget: { maxTokens: 100000 } } },
+      {
+        requirementText: DEMO,
+        environment: 'test',
+        options: {
+          budget: { maxTokens: 100000 },
+          executionApproval: { id: 'e2e-human-approval', status: 'APPROVED', approvedBy: 'e2e-reviewer' },
+        },
+      },
       context,
     );
 
@@ -124,7 +147,15 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
 
     // 6 数据准备 / 7 执行
     expect(r.dataPlan).toBeDefined();
-    expect(r.outcome.executed).toBe(true);
+    // 整轮包含一条 TIMEOUT，严格语义下不能宣称“全部完成真实执行”。
+    expect(r.outcome.executed).toBe(false);
+    expect(r.outcome.results.filter((item) => item.status === 'PASS' || item.status === 'FAIL').every((item) => (
+      item.executed === true
+      && item.processor === 'mock-wan3-processor'
+      && item.processorInvoked === true
+      && item.checks?.some((check) => check.kind === 'BUSINESS')
+    ))).toBe(true);
+    expect(r.outcome.results.find((item) => item.status === 'TIMEOUT')?.executed).toBe(false);
     expect(r.outcome.failed).toBeGreaterThanOrEqual(3);
 
     // 8 结果分析
@@ -150,11 +181,11 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
     expect(r.approvals!.length).toBeGreaterThanOrEqual(3);
     expect(r.audit!.length).toBe(r.approvals!.length);
 
-    // 13 记忆写入（执行摘要 + 逐条失败记录，可持久化检索）
+    // 13 记忆写入 fail-close：整轮含 TIMEOUT、outcome.executed=false，不持久化为已完成执行记忆。
     const all = await memory.query();
-    expect(all.length).toBeGreaterThan(0);
+    expect(all).toHaveLength(0);
     const failures = await memory.query({ type: 'failure' });
-    expect(failures.length).toBeGreaterThanOrEqual(3);
+    expect(failures).toHaveLength(0);
 
     // 14 观测 Trace（各阶段 span 齐全）
     expect(r.trace!.spans.length).toBeGreaterThanOrEqual(10);

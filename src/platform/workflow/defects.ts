@@ -4,6 +4,7 @@
 
 import type { Entity, Repository } from '../storage/repository.js';
 import { generateEntityId } from '../storage/repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** 缺陷严重度 */
 export type DefectSeverity = 'critical' | 'high' | 'medium' | 'low';
@@ -111,10 +112,10 @@ export class DefectService {
   /** 状态迁移（按状态机校验） */
   async updateStatus(id: string, status: DefectStatus, resolution?: string, now?: () => string): Promise<Defect> {
     const cur = await this.repo.get(id);
-    if (!cur) throw new Error(`缺陷不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `缺陷不存在：${id}`);
     const allowed = STATUS_TRANSITIONS[cur.status] ?? [];
     if (!allowed.includes(status)) {
-      throw new Error(`缺陷状态非法迁移：${cur.status} → ${status}`);
+      throw new CodedError(ErrorCode.CONFLICT, `缺陷状态非法迁移：${cur.status} → ${status}`);
     }
     const ts = now ? now() : new Date().toISOString();
     const closed = status === 'RESOLVED' || status === 'WONT_FIX' || status === 'CLOSED';
@@ -132,7 +133,7 @@ export class DefectService {
   /** 指派处理人 */
   async assign(id: string, assignee: string, now?: () => string): Promise<Defect> {
     const cur = await this.repo.get(id);
-    if (!cur) throw new Error(`缺陷不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `缺陷不存在：${id}`);
     const next: Defect = { ...cur, assignee, updatedAt: now ? now() : new Date().toISOString() };
     await this.repo.update(id, next);
     return next;
@@ -141,7 +142,7 @@ export class DefectService {
   /** 更新基础信息（title / severity / description / environment） */
   async update(id: string, input: { title?: string; severity?: DefectSeverity; description?: string; environment?: string; caseId?: string }, now?: () => string): Promise<Defect> {
     const cur = await this.repo.get(id);
-    if (!cur) throw new Error(`缺陷不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `缺陷不存在：${id}`);
     const next: Defect = {
       ...cur,
       title: input.title ?? cur.title,

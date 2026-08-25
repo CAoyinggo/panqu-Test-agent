@@ -1,7 +1,7 @@
 // Phase 29 性能与容量基线测量模块
 // 测量对象（任务书第 19 节 / DEBT-06）：
 //   1. Run 生命周期吞吐与延迟：10/50/100/500 Runs 批量下
-//      createRun（RBAC + 审计 + 事件 + 调度入队）→ Scheduler → Worker → startRun/completeRun
+//      createRun（RBAC + 审计 + 事件 + 调度入队）→ Scheduler → Worker → NON_EXECUTING/BLOCKED
 //   2. Scheduler 队列吞吐（enqueue → next → complete）
 //   3. Audit 写入吞吐（含脱敏）
 //   4. Telemetry 事件写入吞吐
@@ -105,12 +105,12 @@ function makeBundle(opts: PerfRunOptions): PlatformBundle {
 /** 单次批量测量：createRun 吞吐/延迟 + 全生命周期吞吐 */
 async function measureRunLifecycleOnce(batchSize: number, opts: PerfRunOptions): Promise<RunLifecycleMetric> {
   const b = makeBundle(opts);
-  // Worker 执行器：真实 Run 状态机推进（startRun → completeRun），模拟 Worker 消费
+  // 性能探针不执行 Agent Pipeline，必须显式作为 NON_EXECUTING 结束，禁止伪造 COMPLETED。
   b.registerWorkerExecutor('perf-worker', async (job: unknown) => {
     const p = job as { runId: string };
     await b.service.startRun(p.runId);
-    await b.service.completeRun(p.runId);
-    return { ok: true };
+    await b.service.blockRun(p.runId, 'NON_EXECUTING：性能基准只测调度吞吐');
+    return { ok: true, execution: 'NOT_EXECUTED' };
   });
 
   const createSamples: number[] = [];
@@ -123,7 +123,7 @@ async function measureRunLifecycleOnce(batchSize: number, opts: PerfRunOptions):
       actor: 'perf',
       role: 'QA',
       feature: `perf-${batchSize}-${i}`,
-    });
+    }, { executionMode: 'NON_EXECUTING' });
     createSamples.push(performance.now() - t0);
   }
   const createStats = latencyStats(createSamples);

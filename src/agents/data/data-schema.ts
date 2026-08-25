@@ -2,7 +2,7 @@
 // 目标：Data Agent 产出结构化 DataPlan，指导执行引擎在 --auto-setup 模式下准备/清理测试数据。
 // 与现有 DataFactory / DataContext 对齐：plan.dataContext 为 setup 后的快照（初始为空）。
 
-import type { DataContext } from '../../core/types.js';
+import type { DataContext, DataFactory } from '../../core/types.js';
 
 /** 数据需求类型 */
 export type DataNeedType = 'account' | 'balance' | 'assets' | 'tasks' | 'cleanup';
@@ -40,6 +40,24 @@ export interface DataPlan {
   dataContext: DataContext;
   source?: string;
   confidence?: number;
+}
+
+/** Data Prepare 的确定性终态；只有 READY 可满足 needsSetup=true 的执行前置条件。 */
+export type DataPrepareStatus =
+  | 'READY'
+  | 'NOT_REQUIRED'
+  | 'BLOCKED'
+  | 'FAILED'
+  | 'TIMEOUT'
+  | 'CANCELLED'
+  | 'EMPTY';
+
+export interface DataPrepareResult {
+  status: DataPrepareStatus;
+  context: DataContext;
+  /** 与 generate 使用同一实例，供编排层 teardown；禁止按全局名称重新解析导致并发串线。 */
+  factory?: DataFactory;
+  error?: string;
 }
 
 /** DataPlan JSON Schema（供 ajv 校验 LLM/规则输出） */

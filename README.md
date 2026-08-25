@@ -13,12 +13,13 @@
 
 [文档索引](docs/README.md) · [版本记录](docs/CHANGELOG.md)
 
-[断言 DSL](docs/assertion-dsl.md) · [部署指南](docs/operations/deployment.md)
+[Developer Self-Test](docs/testing/developer-self-test.md) · [断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
 ## 目录
 
 - [项目简介](#项目简介)
 - [快速开始](#快速开始)
+- [Developer Self-Test](#developer-self-test)
 - [执行链路](#执行链路)
 - [核心能力](#核心能力)
 - [系统架构](#系统架构)
@@ -48,18 +49,29 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 ### 当前验证基线
 
-以下数据来自 2026-08-21 的完整验证：
+以下数据来自 2026-08-25 的完整验证：
 
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | 通过 |
-| Vitest | 190 个测试文件通过，4 个跳过 |
-| 测试用例 | 1868 项通过，18 项跳过 |
+| Vitest | 249 个测试文件通过，4 个跳过 |
+| 测试用例 | 2421 项通过，19 项跳过 |
+| Developer Self-Test 回归 | 4 个测试文件、19 项测试通过 |
 | Web 单元 / 组件测试 | 11 个测试文件、73 项测试通过 |
 | Chromium E2E | 通过 |
 | 安全检查 | Audit、License、Semgrep、Gitleaks、Trivy 通过 |
 
 ## 快速开始
+
+### 开发需求一键验收
+
+开发团队使用 Markdown/纯文本需求执行 API 验收时，先按[开发验收使用指南](docs/developer-acceptance.md)准备 `acceptance.config.json`，随后只需：
+
+```bash
+npm run acceptance -- --requirement ./tests/acceptance/fixtures/user-profile.md
+```
+
+每次运行都会生成独立的 `reports/YYYY-MM-DD/RUN-*/report.md`、`report.html` 和完整追溯资产；失败 Case 可使用 `--run-id + --case-id` 单独重跑。
 
 ### 1. 安装与构建
 
@@ -120,7 +132,60 @@ npm run platform -- serve
 node dist/bin/run-test.js --help
 ```
 
+## Developer Self-Test
+
+开发人员可以用“需求 + 代码变更 + 环境”直接生成并执行 3—8 个风险驱动的
+P0 场景，无需先手工编写完整测试套件：
+
+```bash
+npm run self-test -- \
+  --requirement requirements/new-feature.md \
+  --changed HEAD~1..HEAD \
+  --env test
+```
+
+自测链路为：
+
+```text
+Change / Requirement
+  → Discovery Candidate
+  → Contract Registry / Resolver
+  → Operation Graph / Risk
+  → P0 Scenario Pack
+  → Execution Guard
+  → Processor + Observer
+  → Assertion + Evidence
+  → READY / PARTIAL / BLOCKED / FAILED
+```
+
+默认使用 `SAFE` 模式。`DRY_RUN` 只发现和规划，不调用 Processor；`SAFE`
+只允许只读操作和显式无副作用的拒绝探针；`LIVE` 必须同时满足审批、预算、
+项目策略、Cleanup/Rollback 与 Evidence Gate。Route、OpenAPI、Controller、
+Frontend Network 和 Runtime Discovery 只产生候选契约，只有 Resolver 返回
+`RESOLVED` 的 Operation 才能进入执行链。
+
+结论仍遵循 fail-closed：缺少 Processor、Observer、断言或 Required Evidence 时，
+场景只能是 `BLOCKED / NOT_EXECUTED`，Feature 只能是 `PARTIAL / BLOCKED`，
+不能生成 `PASS / READY`。完整参数、模式边界和证据规则见
+[Developer Self-Test 指南](docs/testing/developer-self-test.md)。
+
 ## 执行链路
+
+Agent 从自然语言需求发起真实执行时，先经过执行前门禁：
+
+```text
+Requirement
+  → Test Design
+  → Risk / Constraint Analysis
+  → Policy Gate
+      ├─ BLOCK / APPROVAL_REQUIRED → 不准备数据，不调用 Runner
+      └─ ALLOW → Data Prepare → execution.run → Result
+```
+
+Policy Gate 检查环境、真实执行/扣费限制、高风险操作、数据隔离、
+`recommendedSkip`、人工审批和项目级策略。`production + risky` 默认不执行；
+获得人工审批后方可继续。CLI 可通过 `--execution-approval=<approval-id>`
+提交外部审批凭据，`--auto-approve` 不会绕过执行前门禁。
 
 单用例通过统一流水线执行：
 
@@ -143,6 +208,8 @@ Case DSL
 - Scene 必须先转换为统一的 canonical scene ID。
 - Processor 必须显式声明支持的 Scene。
 - Runner 必须返回明确的 `executed` 状态。
+- `execution.run` 权限级别固定为 `risky`。
+- Policy Gate 未放行时，Data Prepare 与 Runner 都不得启动。
 - 没有执行证据或有效断言时禁止进入 `PASS`。
 - setup、执行、断言和 teardown 的异常都会保留在最终结果中。
 - 串行模式下保持兼容；并行模式按 feature 分组，组内串行、组间并行。
@@ -153,6 +220,10 @@ Case DSL
 
 | 能力 | 说明 | 主要位置 |
 | --- | --- | --- |
+| 契约治理 | 统一 Contract Registry、Resolver、版本/冲突/漂移门禁 | `src/contracts/` |
+| 变更发现 | Route、Controller、OpenAPI、Frontend、Runtime 候选发现 | `src/discovery/` |
+| 开发自测 | 变更分析、P0 Pack、执行门禁、证据收敛与报告 | `src/self-test/` |
+| 证据观察 | State、Database、Task、Billing、Audit、Browser Observer | `src/observers/` |
 | 场景路由 | Canonical Scene、Processor 能力声明与插件加载 | `src/core/`、`src/plugins/` |
 | 用例管理 | TypeScript / JSON 用例、递归加载、标签与场景筛选 | `src/cases/`、`tasks/` |
 | 数据工厂 | setup / teardown、隔离数据和边界值生成 | `src/core/data-factory.ts` |
@@ -203,6 +274,10 @@ Case DSL
 
 | 模块 | 职责 |
 | --- | --- |
+| `src/contracts` | 统一契约注册、解析、版本、冲突与漂移门禁 |
+| `src/discovery` | 从代码、OpenAPI、前端和运行时产生候选 Operation |
+| `src/self-test` | Developer Self-Test 编排、风险场景、门禁与结果收敛 |
+| `src/observers` | 状态、数据库、任务、计费、审计和浏览器证据采集 |
 | `src/core` | 执行引擎、流水线、状态语义、断言、环境检测 |
 | `src/cases` | 测试用例定义、注册和递归加载 |
 | `src/plugins` | Scene Processor 与插件加载 |
@@ -242,12 +317,18 @@ API、CLI 与 Scheduler 共用 `PlatformService`，避免出现多套业务逻�
 | Workflow | Test Suite、Test Plan、Run Template、Defect、Report |
 | Operations | 迁移、备份恢复、Preflight、冒烟与灾备恢复 |
 
+Agent Memory 的 JSON 后端采用 UUID 临时文件、跨实例文件锁和内容哈希 CAS，
+用于兼容本地轻量运行；单机长期运行应切换 SQLite WAL，多节点部署应迁移 PostgreSQL。
+迁移边界与操作步骤见 [Memory 存储与迁移](docs/operations/memory-storage.md)。
+
 ## 测试与质量门禁
 
 ### 常用测试命令
 
 | 命令 | 用途 |
 | --- | --- |
+| `npm run self-test -- ...` | 需求与代码变更驱动的开发自测 |
+| `npm run self-test:test` | Developer Self-Test 专项回归 |
 | `npm test` | 完整 Vitest 测试 |
 | `npm run test:coverage` | 覆盖率门禁 |
 | `npm run test:all` | 构建并校验迁移一致性 |
@@ -401,11 +482,15 @@ test-flow/
 │   ├── ai-quality/          # AI 质量闭环
 │   ├── assertions/          # 业务断言
 │   ├── cases/               # 测试用例
+│   ├── contracts/           # 契约注册、解析与漂移门禁
 │   ├── core/                # 执行引擎与状态语义
+│   ├── discovery/           # 代码、API、前端与运行时发现
 │   ├── integrations/        # 外部集成
+│   ├── observers/           # 状态与副作用证据观察器
 │   ├── platform/            # AI Test Platform
 │   ├── plugins/             # Scene Processor
 │   ├── reports/             # 报告器
+│   ├── self-test/           # Developer Self-Test 编排
 │   └── utils/               # 通用工具
 ├── tasks/                   # JSON 任务定义
 ├── tests/                   # Unit / Integration / E2E / Perf

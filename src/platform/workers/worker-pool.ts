@@ -5,15 +5,24 @@
 
 import type { Scheduler, TestJob } from '../scheduler/index.js';
 import type { WorkerRegistry, TestWorker } from './index.js';
+import type { WorkerExecutionContext } from './worker.js';
+import type { IdempotencyStore } from '../service/idempotency.js';
 
 export class WorkerPool {
   /** 在途任务（含归属 Worker）：drain 等待全部完成；崩溃 Worker 的任务可被 dropInFlight 丢弃 */
   private inFlight = new Set<{ workerId: string; task: Promise<void> }>();
+  private controllers = new Map<string, AbortController>();
+  private idempotency?: IdempotencyStore;
+  private localOnce = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly registry: WorkerRegistry,
     private readonly scheduler: Scheduler,
   ) {}
+
+  setIdempotencyStore(store: IdempotencyStore): void {
+    this.idempotency = store;
+  }
 
   /** 调度一轮：给每个健康空闲 Worker 领取并执行 Job；返回本轮回派数 */
   async dispatch(): Promise<number> {
@@ -44,17 +53,27 @@ export class WorkerPool {
   }
 
   private execute(w: TestWorker, job: TestJob): void {
+    const controller = new AbortController();
+    this.controllers.set(job.jobId, controller);
     const entry = { workerId: w.workerId, task: Promise.resolve() };
     const task = (async () => {
       try {
         const executor = this.registry.getExecutor(w.workerId);
         if (!executor) throw new Error(`Worker 无执行器：${w.workerId}`);
-        await executor(job.payload);
-        await this.scheduler.complete(job.jobId);
+        await executor(job.payload, controller.signal, this.executionContext(job));
+        // 终态守卫：取消/超时/暂停可能在 Executor 返回前发生，迟到结果不得覆盖终态。
+        const current = await this.scheduler.get(job.jobId);
+        if (!controller.signal.aborted && current?.status === 'RUNNING') {
+          await this.scheduler.complete(job.jobId);
+        }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await this.scheduler.fail(job.jobId, msg);
+        const current = await this.scheduler.get(job.jobId);
+        if (!controller.signal.aborted && current?.status === 'RUNNING') {
+          const msg = err instanceof Error ? err.message : String(err);
+          await this.scheduler.fail(job.jobId, msg);
+        }
       } finally {
+        this.controllers.delete(job.jobId);
         this.registry.release(w.workerId);
       }
     })();
@@ -64,6 +83,53 @@ export class WorkerPool {
       () => this.inFlight.delete(entry),
     );
     this.inFlight.add(entry);
+  }
+
+  private executionContext(job: TestJob): WorkerExecutionContext {
+    const baseKey = job.idempotencyKey ?? `job:${job.jobId}`;
+    return {
+      jobId: job.jobId,
+      runId: job.runId,
+      idempotencyKey: baseKey,
+      runOnce: async <T>(operation: string, execute: () => Promise<T>): Promise<T | undefined> => {
+        const key = `${baseKey}:${operation}`;
+        if (!this.idempotency) {
+          const existing = this.localOnce.get(key);
+          if (existing) return existing as Promise<T>;
+          const inFlight = execute();
+          this.localOnce.set(key, inFlight);
+          try {
+            return await inFlight;
+          } catch (error) {
+            this.localOnce.delete(key);
+            throw error;
+          }
+        }
+        const reservation = await this.idempotency.begin('worker-side-effect', key);
+        if (reservation.repeated) {
+          if (!reservation.resultId) return undefined;
+          try {
+            return JSON.parse(reservation.resultId) as T;
+          } catch {
+            return reservation.resultId as T;
+          }
+        }
+        try {
+          const result = await execute();
+          await this.idempotency.complete('worker-side-effect', key, JSON.stringify(result ?? null));
+          return result;
+        } catch (error) {
+          await this.idempotency.release('worker-side-effect', key);
+          throw error;
+        }
+      },
+    };
+  }
+
+  /** Scheduler 的取消/超时回调入口。Executor 必须遵守 signal 才能保证底层副作用停止。 */
+  abort(jobId: string, reason: string): void {
+    const controller = this.controllers.get(jobId);
+    if (controller && !controller.signal.aborted) controller.abort(new Error(reason));
   }
 
   /** 等待全部在途 Job 完成（测试 / 停机用） */
@@ -96,6 +162,8 @@ export class WorkerPool {
       const isDown = !w || this.registry.evaluateHealth(job.claimedBy) === 'down';
       if (isDown) {
         await this.scheduler.fail(job.jobId, 'Worker 下线，Job 回收重试');
+        this.abort(job.jobId, 'Worker 下线，Job 回收重试');
+        this.dropInFlight(job.claimedBy);
         recovered += 1;
       }
     }

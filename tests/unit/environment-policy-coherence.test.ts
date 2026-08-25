@@ -155,7 +155,7 @@ describe('安全模块运行模式解析与映射对齐（防别名漂移）', (
     delete process.env.PLATFORM_MODE;
   });
 
-  it('resolvePlatformMode 别名与跨层映射一致（prod→production，未知→development）', () => {
+  it('resolvePlatformMode 别名与跨层映射一致（prod→production，未知值拒绝启动）', () => {
     expect(resolvePlatformMode('prod')).toBe('production');
     expect(resolvePlatformMode('staging')).toBe('staging');
     expect(resolvePlatformMode('test')).toBe('test');

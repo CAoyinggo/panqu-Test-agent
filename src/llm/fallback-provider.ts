@@ -2,7 +2,7 @@
 // 链路：Primary → （Timeout/429/5xx/网络错误） → Fallback → （同样失败） → Deterministic Fallback。
 // 仅对可重试错误回退；配置/鉴权类错误（400/401/403 等）直接暴露，避免掩盖真实问题。
 // 确定性回退：返回预设的固定内容（如 mock 响应），保证流程可继续、行为可复现。
-import type { LLMProvider, LLMRequest, LLMResponse } from './types.js';
+import { sanitizeLLMResponse, type LLMProvider, type LLMRequest, type LLMResponse } from './types.js';
 import { classifyLLMError, isRetryable, type LLMFallbackListener } from './llm-errors.js';
 
 /** 回退 Provider 选项 */
@@ -46,7 +46,7 @@ export class FallbackLLMProvider implements LLMProvider {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const t0 = Date.now();
     try {
-      return await this.primary.generate(request);
+      return sanitizeLLMResponse(await this.primary.generate(request));
     } catch (e) {
       const failure = classifyLLMError(e);
       // 非可重试错误（配置/鉴权等）：若配置了确定性回退则兜底，否则直接抛出
@@ -62,7 +62,7 @@ export class FallbackLLMProvider implements LLMProvider {
       if (this.fallback) {
         this.onFallback?.({ from: this.primary.name, to: this.fallback.name, failure, attempt: 1 });
         try {
-          return await this.fallback.generate(request);
+          return sanitizeLLMResponse(await this.fallback.generate(request));
         } catch (e2) {
           const f2 = classifyLLMError(e2);
           if (this.deterministicFallback !== undefined) {
@@ -84,11 +84,11 @@ export class FallbackLLMProvider implements LLMProvider {
 
   /** 构造确定性回退响应 */
   private deterministicResponse(content: string, t0: number): LLMResponse {
-    return {
+    return sanitizeLLMResponse({
       content,
       usage: { inputTokens: 0, outputTokens: content.length },
       model: 'deterministic-fallback',
       latencyMs: Date.now() - t0,
-    };
+    });
   }
 }

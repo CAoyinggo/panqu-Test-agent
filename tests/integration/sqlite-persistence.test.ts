@@ -9,6 +9,7 @@ import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createSqliteDatabase } from '../../src/platform/storage/sqlite/index.js';
 import { createRepository } from '../../src/platform/storage/index.js';
+import { completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 
@@ -48,8 +49,8 @@ describe('Platform SQLite 集成', () => {
     expect(runId).toMatch(/^run-/);
     expect(await b.scheduler.pendingCount()).toBe(1);
     await b.service.startRun(runId);
-    expect((await b.service.getRun(runId))?.status).toBe('RUNNING');
-    await b.service.completeRun(runId);
+    expect((await b.service.getRun(runId))?.status).toBe('PLANNING');
+    await completeVerifiedRun(b, runId);
     expect((await b.service.getRun(runId))?.status).toBe('COMPLETED');
   });
 
@@ -64,8 +65,7 @@ describe('Platform SQLite 集成', () => {
       actor: 'qa',
       role: 'QA',
     });
-    await a.service.startRun(runId);
-    await a.service.completeRun(runId);
+    await completeVerifiedRun(a, runId);
     // 一个待审批请求（通过 ApprovalCenter 直接创建，模拟门禁）
     const approval = await a.approvals.request({
       runId,

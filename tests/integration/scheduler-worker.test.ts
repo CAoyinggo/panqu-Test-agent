@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
+import { completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 
@@ -30,8 +31,7 @@ describe('Scheduler + Worker 集成', () => {
     b.registerWorkerExecutor('w1', async (job: unknown) => {
       const payload = job as { runId: string };
       seen.push(payload.runId);
-      await b.service.startRun(payload.runId);
-      await b.service.completeRun(payload.runId);
+      await completeVerifiedRun(b, payload.runId);
     });
     const { runId } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'autonomous', actor: 'qa', role: 'QA' });
     await dispatchUntilIdle(b);
@@ -53,7 +53,7 @@ describe('Scheduler + Worker 集成', () => {
         await b.service.startRun(payload.runId);
       }
       if (calls === 1) throw new Error('first fail');
-      await b.service.completeRun(payload.runId);
+      await completeVerifiedRun(b, payload.runId);
     });
     await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'manual', actor: 'qa', role: 'QA' });
     await dispatchUntilIdle(b);
@@ -63,7 +63,7 @@ describe('Scheduler + Worker 集成', () => {
     expect(jobs[0].retryCount).toBe(1);
   });
 
-  it('环境路由：Secure Worker 领取 production，General Worker 领取 test', async () => {
+  it('环境路由：production 未审批不执行，General Worker 领取 test', async () => {
     const b = makeBundle();
     const done: string[] = [];
     b.workers.register({ workerId: 'secure', capabilities: ['secure'], environments: ['production'], maxConcurrency: 1 }, async (job: unknown) => {
@@ -75,7 +75,7 @@ describe('Scheduler + Worker 集成', () => {
     const { runId: prodRun } = await b.service.createRun({ projectId: 'wan3', environment: 'production', trigger: 'release', actor: 'qa', role: 'QA' });
     const { runId: testRun } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'manual', actor: 'qa', role: 'QA' });
     await dispatchUntilIdle(b);
-    expect(done).toContain(`secure:${prodRun}`);
+    expect(done).not.toContain(`secure:${prodRun}`);
     expect(done).toContain(`general:${testRun}`);
   });
 

@@ -24,12 +24,18 @@ const req = parseRequirement(DEMO_REQ);
 const cases = generateTestCases(req);
 const risk = analyzeRisks({ requirement: req, testCases: cases });
 
+const EXECUTED_FIXTURE = {
+  executed: true,
+  processor: 'UnitTestProcessor',
+  processorInvoked: true,
+} as const;
+
 /** 构造包含失败/超时的执行结果 */
 function makeOutcome(): ReturnType<typeof computeOutcome> {
   return computeOutcome('wan3', [
-    { caseId: 'tc-01', name: '正常提交并成功', feature: 'wan3', priority: 'P0', tags: ['smoke'], pass: true, passRate: 100, durationMs: 10, checks: [{ name: 's', pass: true, detail: 'ok', level: 'P0' }] },
-    { caseId: 'tc-02', name: '计费规则', feature: 'wan3', priority: 'P0', tags: ['business-rule'], pass: false, passRate: 50, error: '断言失败：积分扣减异常', durationMs: 20, checks: [{ name: 'billing', pass: false, detail: 'expected 10, actual 5', level: 'P0' }] },
-    { caseId: 'tc-03', name: '并发', feature: 'wan3', priority: 'P3', tags: ['concurrency'], pass: false, passRate: 0, timedOut: true, durationMs: 3000 },
+    { ...EXECUTED_FIXTURE, caseId: 'tc-01', name: '正常提交并成功', feature: 'wan3', priority: 'P0', tags: ['smoke'], status: 'PASS', pass: true, passRate: 100, durationMs: 10, checks: [{ name: 's', pass: true, detail: 'ok', level: 'P0', kind: 'BUSINESS' }] },
+    { ...EXECUTED_FIXTURE, caseId: 'tc-02', name: '计费规则', feature: 'wan3', priority: 'P0', tags: ['business-rule'], status: 'FAIL', pass: false, passRate: 0, error: '断言失败：积分扣减异常', durationMs: 20, checks: [{ name: 'billing', pass: false, detail: 'expected 10, actual 5', level: 'P0', kind: 'BUSINESS' }] },
+    { caseId: 'tc-03', name: '并发', feature: 'wan3', priority: 'P3', tags: ['concurrency'], status: 'TIMEOUT', executed: false, pass: false, passRate: 0, timedOut: true, durationMs: 3000 },
   ], { executed: true });
 }
 
@@ -65,7 +71,7 @@ describe('analysis - Schema 归一化', () => {
   });
 
   it('toMemoryWorthy 生成待记忆失败记录', () => {
-    const m = toMemoryWorthy([{ caseId: 'x', name: 'X', pass: false, passRate: 0, error: 'boom', tags: ['P0', 'wan3'], checks: [{ name: 'c', pass: false, detail: 'd', level: 'P0' }] }]);
+    const m = toMemoryWorthy([{ ...EXECUTED_FIXTURE, caseId: 'x', name: 'X', status: 'FAIL', pass: false, passRate: 0, error: 'boom', tags: ['P0', 'wan3'], checks: [{ name: 'c', pass: false, detail: 'd', level: 'P0', kind: 'BUSINESS' }] }]);
     expect(m[0].caseId).toBe('x');
     expect(m[0].category).toBe('error');
     expect(m[0].evidence).toEqual(['c: d']);
@@ -79,7 +85,7 @@ describe('analysis - Schema 归一化', () => {
         { type: 'fail', title: '失败', detail: 'd', severity: 'high', suggestion: 's' },
         { type: 'bogus', title: '', detail: '', severity: 'extreme', suggestion: '' },
       ],
-      failedCases: [{ caseId: 'a', name: 'A', pass: false, passRate: 0 }],
+      failedCases: [{ ...EXECUTED_FIXTURE, caseId: 'a', name: 'A', status: 'FAIL', pass: false, passRate: 0, checks: [{ name: 'business', pass: false, detail: 'failed', kind: 'BUSINESS' }] }],
       summary: { total: 1, passed: 0 },
     });
     expect(r.findings).toHaveLength(1);
@@ -120,7 +126,15 @@ describe('analysis - 确定性分析器', () => {
   });
 
   it('全通过 → pass 结论', () => {
-    const allPass = computeOutcome('wan3', cases.map((c) => ({ caseId: c.id, name: c.name, pass: true, passRate: 100 })));
+    const allPass = computeOutcome('wan3', cases.map((c) => ({
+      ...EXECUTED_FIXTURE,
+      caseId: c.id,
+      name: c.name,
+      status: 'PASS' as const,
+      pass: true,
+      passRate: 100,
+      checks: [{ name: 'business', pass: true, detail: 'ok', kind: 'BUSINESS' as const }],
+    })));
     const r = analyzeExecution({ requirement: req, testCases: cases, outcome: allPass });
     expect(r.summary.overall).toBe('pass');
     expect(r.findings.some((f) => f.type === 'pass')).toBe(true);

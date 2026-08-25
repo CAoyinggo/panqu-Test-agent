@@ -1,10 +1,21 @@
-// Test Case 确定性生成器：根据结构化 Requirement 生成 TestCase 列表
-// 覆盖维度：正常路径 / 业务规则 / 参数组合 / 边界值 / 异常输入 / 依赖异常 / 并发 / 数据异常
+// Test Case 确定性生成器：识别业务 → 对应 Generator（注册表分发）。
+// 覆盖维度：正常路径 / 业务规则 / 参数组合 / 边界值 / 异常输入（失败注入）/ 依赖异常 / 并发 / 数据异常。
 // 定位：LLM 不可用 / 返回非法 JSON / 校验失败时使用，保证测试设计链路始终可产出用例。
+// 硬约束：
+//   1. Unknown 业务绝不伪造 WAN3/视频用例（旧「无法识别 → wan3」危险兜底已删除）；
+//   2. 所有产出必须通过 DSL 可执行性检查（checkDslExecutable）才允许返回。
 // 优先级：P0 核心链路 → P1 参数/边界 → P2 异常 → P3 并发/数据。
 
 import type { Requirement } from '../requirement/requirement-schema.js';
 import type { TestCase, TestPriority, TestStep, AssertionDefinition } from './testcase-schema.js';
+import { filterDslExecutable } from './testcase-schema.js';
+import {
+  identifyBusiness,
+  registerBusinessGenerator,
+  resolveBusinessGenerator,
+  type BusinessProfile,
+  type BusinessTestCaseGenerator,
+} from './business.js';
 
 /** 生成器选项 */
 export interface TestCaseGeneratorOptions {
@@ -12,15 +23,8 @@ export interface TestCaseGeneratorOptions {
   maxCases?: number;
 }
 
-/** 场景默认输入（video 场景） */
-function defaultStepInput(feature: string): Record<string, unknown> {
-  const input: Record<string, unknown> = {};
-  const f = feature.toLowerCase();
-  if (f === 'wan3' || f.includes('video')) {
-    input.prompt = '一个女孩在花园里奔跑，阳光明媚，镜头缓慢跟随';
-  }
-  return input;
-}
+/** 视频类业务的默认提示词（仅 video/wan3 生成器使用，不污染其它业务） */
+const VIDEO_DEFAULT_PROMPT = '一个女孩在花园里奔跑，阳光明媚，镜头缓慢跟随';
 
 /** 构造一个基础 TestCase 骨架 */
 function baseCase(
@@ -168,33 +172,35 @@ function waitSuccessStep(): TestStep {
   return { action: 'wait', until: 'SUCCESS' };
 }
 
-/**
- * 确定性生成测试用例。
- * 覆盖策略：
- *  - P0：正常路径 + 每条业务规则
- *  - P1：参数取值组合 + 边界值
- *  - P2：异常输入 + 依赖异常
- *  - P3：并发 + 数据异常
- */
-export function generateTestCases(req: Requirement, opts: TestCaseGeneratorOptions = {}): TestCase[] {
-  const out: TestCase[] = [];
-  const maxCases = opts.maxCases ?? 50;
-  const feature = req.feature || 'wan3';
-  const baseInput = defaultStepInput(feature);
-  const submit = (input: Record<string, unknown>): TestStep[] => [submitStep({ ...baseInput, ...input }), waitSuccessStep()];
-  const seq = (n: number): string => String(n).padStart(2, '0');
+// ── 公共骨架：业务规则 / 参数组合 / 边界值 / 依赖异常 / 并发 / 数据异常 ──
+// 各业务 Generator 提供自己的 baseInput（业务默认输入）与 negative 注入集合。
 
-  // ── P0：正常路径 ──
-  out.push(baseCase(
-    req, `tc-${seq(1)}`, `${feature} 正常提交并成功`, 'P0', ['smoke', 'happy-path'],
-    submit({}),
-    [
-      { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P0' },
-      { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED'], severity: 'P0', message: '任务状态最终为 SUCCESS' },
-    ],
-    {},
-    { status: 'SUCCESS' },
-  ));
+/** 按声明输入推导业务基础输入（取每个声明参数的首个取值，未声明则空） */
+function declaredBaseInput(req: Requirement): Record<string, unknown> {
+  const input: Record<string, unknown> = {};
+  for (const item of req.requirements) {
+    const values = Array.isArray(item.values) ? item.values : [];
+    if (values.length > 0) input[item.name] = values[0];
+  }
+  return input;
+}
+
+/** 数值型声明输入（供边界值用例） */
+function numericValues(item: Requirement['requirements'][number]): number[] {
+  return (Array.isArray(item.values) ? item.values : []).map(Number).filter((n) => Number.isFinite(n));
+}
+
+/** 生成公共用例集（业务规则 + 参数组合 + 边界值 + 依赖异常 + 并发 + 数据异常） */
+function commonCases(
+  req: Requirement,
+  profile: BusinessProfile,
+  baseInput: Record<string, unknown>,
+  out: TestCase[],
+  seq: (n: number) => string,
+  opts: { dependencyCases?: boolean } = {},
+): void {
+  const feature = profile.feature;
+  const submit = (input: Record<string, unknown>): TestStep[] => [submitStep({ ...baseInput, ...input }), waitSuccessStep()];
 
   // ── P0：业务规则 ──
   for (const rule of req.businessRules) {
@@ -214,98 +220,227 @@ export function generateTestCases(req: Requirement, opts: TestCaseGeneratorOptio
   for (const item of req.requirements) {
     const values = Array.isArray(item.values) ? item.values.slice(0, 4) : [];
     for (const v of values) {
-      const input: Record<string, unknown> = {};
-      input[item.name] = v;
       out.push(baseCase(
         req, `tc-${seq(out.length + 1)}`, `${feature} 参数组合-${item.name}=${String(v)}`, 'P1', ['param', 'combination'],
-        submit(input),
+        submit({ [item.name]: v }),
         [
           { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P1' },
           { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED'], severity: 'P1' },
         ],
-        input,
+        { [item.name]: v },
       ));
     }
   }
 
-  // ── P1：边界值（时长/分辨率等数值参数） ──
+  // ── P1：边界值（数值参数取 min/max） ──
   for (const item of req.requirements) {
-    const nums = (Array.isArray(item.values) ? item.values : []).map(Number).filter((n) => Number.isFinite(n));
+    const nums = numericValues(item);
     if (!nums.length) continue;
     const min = Math.min(...nums);
     const max = Math.max(...nums);
-    if (min > 0) {
-      const input: Record<string, unknown> = {};
-      input[item.name] = min;
+    for (const [label, v] of [['最小值', min], ['最大值', max]] as const) {
+      if (label === '最小值' && min <= 0) continue;
       out.push(baseCase(
-        req, `tc-${seq(out.length + 1)}`, `${feature} 边界-${item.name}最小值=${min}`, 'P1', ['boundary'],
-        submit(input),
+        req, `tc-${seq(out.length + 1)}`, `${feature} 边界-${item.name}${label}=${v}`, 'P1', ['boundary'],
+        submit({ [item.name]: v }),
         [{ target: 'submit', path: 'taskId', operator: 'exists', severity: 'P1' }],
-        input,
-      ));
-    }
-    {
-      const input: Record<string, unknown> = {};
-      input[item.name] = max;
-      out.push(baseCase(
-        req, `tc-${seq(out.length + 1)}`, `${feature} 边界-${item.name}最大值=${max}`, 'P1', ['boundary'],
-        submit(input),
-        [{ target: 'submit', path: 'taskId', operator: 'exists', severity: 'P1' }],
-        input,
+        { [item.name]: v },
       ));
     }
   }
 
-  // ── P2：异常输入 ──
-  out.push(baseCase(
-    req, `tc-${seq(out.length + 1)}`, `${feature} 异常-空提示词`, 'P2', ['negative', 'invalid-input'],
-    [submitStep({ ...baseInput, prompt: '' })],
-    [
-      { target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: '空提示词应被拒绝并提示必填' },
-    ],
-    { prompt: '' },
-  ));
-
-  out.push(baseCase(
-    req, `tc-${seq(out.length + 1)}`, `${feature} 异常-非法分辨率`, 'P2', ['negative', 'invalid-input'],
-    [submitStep({ ...baseInput, resolution: 'INVALID_RES' })],
-    [
-      { target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: '非法分辨率应被拒绝' },
-    ],
-    { resolution: 'INVALID_RES' },
-  ));
-
-  // ── P2：依赖异常 ──
-  for (const dep of req.dependencies.slice(0, 2)) {
-    out.push(baseCase(
-      req, `tc-${seq(out.length + 1)}`, `${feature} 依赖异常-${dep}`, 'P2', ['dependency', 'degradation'],
-      submit({}),
-      [
-        { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2' },
-        { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED', 'FAILED'], severity: 'P2' },
-      ],
-    ));
+  // ── P2：依赖异常（降级观测：提交正常输入，接受成功或依赖导致的失败） ──
+  if (opts.dependencyCases !== false) {
+    for (const dep of req.dependencies.slice(0, 2)) {
+      out.push(baseCase(
+        req, `tc-${seq(out.length + 1)}`, `${feature} 依赖异常-${dep}`, 'P2', ['dependency', 'degradation'],
+        submit({}),
+        [
+          { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2' },
+          { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED', 'FAILED'], severity: 'P2', message: `依赖 ${dep} 异常时任务进入明确状态（成功或失败），不得悬挂` },
+        ],
+        { dependencyUnderTest: dep },
+      ));
+    }
   }
 
-  // ── P3：并发 ──
+  // ── P3：并发（业务声明并发规则/能力时） ──
   if (req.businessRules.some((r) => /并发/i.test(r)) || req.capabilities.some((c) => /concurrent|并发/i.test(c))) {
     out.push(baseCase(
       req, `tc-${seq(out.length + 1)}`, `${feature} 并发-同时提交多个任务`, 'P3', ['concurrency'],
       submit({}),
-      [{ target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2' }],
+      [{ target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2', message: '并发提交互不干扰且各自扣费正确' }],
       { concurrency: 5 },
     ));
   }
+}
 
-  // ── P3：数据异常 ──
-  out.push(baseCase(
-    req, `tc-${seq(out.length + 1)}`, `${feature} 数据异常-特殊字符提示词`, 'P3', ['data-anomaly'],
-    submit({ ...baseInput, prompt: `${baseInput.prompt ?? 'prompt'} @#$%^&*()_+{}[]|<>?/，。！·` }),
-    [
-      { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2' },
-    ],
-    { specialChars: true },
-  ));
+// ── Video Generator（wan3 / video：唯一有真实 Processor 的业务） ──
+class VideoTestCaseGenerator implements BusinessTestCaseGenerator {
+  readonly kind = 'video';
 
-  return out.slice(0, maxCases);
+  generate(req: Requirement, profile: BusinessProfile, opts: TestCaseGeneratorOptions = {}): TestCase[] {
+    const out: TestCase[] = [];
+    const maxCases = opts.maxCases ?? 50;
+    const feature = profile.feature;
+    const baseInput: Record<string, unknown> = { prompt: VIDEO_DEFAULT_PROMPT };
+    const submit = (input: Record<string, unknown>): TestStep[] => [submitStep({ ...baseInput, ...input }), waitSuccessStep()];
+    const seq = (n: number): string => String(n).padStart(2, '0');
+
+    // ── P0：正常路径 ──
+    out.push(baseCase(
+      req, `tc-${seq(1)}`, `${feature} 正常提交并成功`, 'P0', ['smoke', 'happy-path'],
+      submit({}),
+      [
+        { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P0' },
+        { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED'], severity: 'P0', message: '任务状态最终为 SUCCESS' },
+      ],
+      {},
+      { status: 'SUCCESS' },
+    ));
+
+    commonCases(req, profile, baseInput, out, seq);
+
+    // ── P2：失败注入（视频业务专属参数） ──
+    // 空 prompt：覆盖默认提示词提交空串，应被拒绝
+    out.push(baseCase(
+      req, `tc-${seq(out.length + 1)}`, `${feature} 失败注入-空提示词`, 'P2', ['negative', 'failure-injection'],
+      [submitStep({ ...baseInput, prompt: '' })],
+      [{ target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: '空提示词应被拒绝并提示必填' }],
+      { prompt: '' },
+    ));
+    // 非法分辨率：业务真实支持的视频档位之外取值
+    out.push(baseCase(
+      req, `tc-${seq(out.length + 1)}`, `${feature} 失败注入-非法分辨率`, 'P2', ['negative', 'failure-injection'],
+      [submitStep({ ...baseInput, resolution: 'INVALID_RES' })],
+      [{ target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: '非法分辨率应被拒绝' }],
+      { resolution: 'INVALID_RES' },
+    ));
+
+    // ── P3：数据异常（特殊字符注入） ──
+    out.push(baseCase(
+      req, `tc-${seq(out.length + 1)}`, `${feature} 数据异常-特殊字符提示词`, 'P3', ['data-anomaly', 'failure-injection'],
+      submit({ prompt: `${VIDEO_DEFAULT_PROMPT} @#$%^&*()_+{}[]|<>?/，。！·` }),
+      [{ target: 'submit', path: 'taskId', operator: 'exists', severity: 'P2', message: '特殊字符 prompt 不应崩溃，正常生成或明确拒绝' }],
+      { specialChars: true },
+    ));
+
+    return out.slice(0, maxCases);
+  }
+}
+
+// ── Generic Business Generator（user / order / payment 等已识别的非视频业务） ──
+// 不注入任何视频参数（prompt/resolution 等视频字段不得出现）；
+// 失败注入只针对需求显式声明的输入参数（空值 / 类型非法值）。
+class GenericBusinessGenerator implements BusinessTestCaseGenerator {
+  readonly kind = 'generic';
+
+  generate(req: Requirement, profile: BusinessProfile, opts: TestCaseGeneratorOptions = {}): TestCase[] {
+    const out: TestCase[] = [];
+    const maxCases = opts.maxCases ?? 50;
+    const feature = profile.feature;
+    const baseInput = declaredBaseInput(req); // 业务默认输入来自声明参数，而非视频字段
+    const seq = (n: number): string => String(n).padStart(2, '0');
+
+    // ── P0：正常路径（声明参数的组合即正常输入） ──
+    out.push(baseCase(
+      req, `tc-${seq(1)}`, `${feature} 正常提交并成功`, 'P0', ['smoke', 'happy-path'],
+      [submitStep({ ...baseInput }), waitSuccessStep()],
+      [
+        { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P0' },
+        { target: 'submit', path: 'status', operator: 'in', expected: ['SUCCESS', 'COMPLETED', 'SUBMITTED'], severity: 'P0', message: '任务状态最终为 SUCCESS' },
+      ],
+      {},
+      { status: 'SUCCESS' },
+    ));
+
+    commonCases(req, profile, baseInput, out, seq);
+
+    // ── P2：失败注入（仅针对需求声明的输入：空值 + 类型非法值） ──
+    for (const item of req.requirements.slice(0, 3)) {
+      // 空值注入
+      out.push(baseCase(
+        req, `tc-${seq(out.length + 1)}`, `${feature} 失败注入-${item.name}为空`, 'P2', ['negative', 'failure-injection'],
+        [submitStep({ ...baseInput, [item.name]: '' })],
+        [{ target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: `${item.name} 为空应被参数校验拒绝，而非服务端异常` }],
+        { [item.name]: '' },
+      ));
+      // 类型非法值注入（数值参数传字符串）
+      if (numericValues(item).length > 0) {
+        out.push(baseCase(
+          req, `tc-${seq(out.length + 1)}`, `${feature} 失败注入-${item.name}类型非法`, 'P2', ['negative', 'failure-injection'],
+          [submitStep({ ...baseInput, [item.name]: 'NOT_A_NUMBER' })],
+          [{ target: 'submit', path: 'err', operator: 'exists', severity: 'P2', message: `${item.name} 传非法类型应被拒绝` }],
+          { [item.name]: 'NOT_A_NUMBER' },
+        ));
+      }
+    }
+
+    return out.slice(0, maxCases);
+  }
+}
+
+// ── Unknown Generator：无法识别业务 → 不伪造任何用例（明确空集） ──
+class UnknownBusinessGenerator implements BusinessTestCaseGenerator {
+  readonly kind = 'unknown';
+
+  generate(_req: Requirement, profile: BusinessProfile): TestCase[] {
+    // 绝不回退 WAN3/视频模板 —— 伪造的用例一旦执行就是真实资源消耗
+    return [{
+      id: 'tc-unknown-00',
+      feature: profile.feature,
+      name: `业务未识别（${profile.feature}）：需显式声明 feature 或注册对应业务生成器`,
+      priority: 'P0',
+      tags: ['unknown-business', 'not-executable'],
+      steps: [],
+      assertions: [],
+      metadata: { source: 'deterministic-generator', business: 'unknown', executable: false },
+    }];
+  }
+}
+
+// 注册表：wan3/video → Video；已知非视频业务 → Generic；unknown → Unknown（绝不伪造）
+registerBusinessGenerator(new VideoTestCaseGenerator());
+registerBusinessGenerator({ kind: 'wan3', generate: (req, profile, opts) => new VideoTestCaseGenerator().generate({ ...req, feature: profile.feature }, { ...profile, kind: 'wan3' }, opts) });
+registerBusinessGenerator(new GenericBusinessGenerator());
+registerBusinessGenerator(new UnknownBusinessGenerator());
+for (const kind of ['user', 'order', 'payment']) {
+  const generic = new GenericBusinessGenerator();
+  registerBusinessGenerator({ kind, generate: (req, profile, opts) => generic.generate(req, { ...profile, kind }, opts) });
+}
+
+/** 生成结果（含业务画像与所用生成器，供 TestDesignAgent 标注与审计） */
+export interface GeneratedTestSuites {
+  business: BusinessProfile;
+  generatorKind: string;
+  cases: TestCase[];
+  /** 被可执行性门过滤掉的用例数 */
+  droppedInexecutable: number;
+}
+
+/**
+ * 确定性生成测试用例：识别业务 → 对应生成器 → DSL 可执行性门。
+ * Unknown 业务返回显式标注的不可执行占位（不伪造 WAN3 用例）。
+ */
+export function generateTestCasesWithBusiness(req: Requirement, opts: TestCaseGeneratorOptions = {}): GeneratedTestSuites {
+  const business = identifyBusiness(req.feature, req.capabilities);
+  const generator = resolveBusinessGenerator(business);
+
+  let dropped = 0;
+  const raw = generator.generate(req, business, opts);
+  const cases = filterDslExecutable(raw, (_tc, problems) => {
+    dropped++;
+    void problems;
+  });
+
+  if (business.kind === 'unknown') {
+    // unknown 占位用例（steps 空，会被门过滤）→ 保留原始占位以显式暴露业务未识别
+    return { business, generatorKind: generator.kind, cases: raw, droppedInexecutable: 0 };
+  }
+  return { business, generatorKind: generator.kind, cases, droppedInexecutable: dropped };
+}
+
+/** 兼容入口：仅返回用例列表（内部走业务识别分发） */
+export function generateTestCases(req: Requirement, opts: TestCaseGeneratorOptions = {}): TestCase[] {
+  return generateTestCasesWithBusiness(req, opts).cases;
 }

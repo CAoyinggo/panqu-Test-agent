@@ -1,0 +1,28 @@
+{
+  "scenarioId": "SCN-generic-multi-api-operation-binding",
+  "mode": "EXECUTABLE",
+  "patterns": ["FUNCTIONAL", "PERSISTENCE", "STATE_MACHINE", "ASYNC"],
+  "operations": [
+    {"id": "STEP-001", "method": "POST", "path": "/__fixtures/workflow/uploads", "purpose": "create-upload"},
+    {"id": "STEP-002", "method": "POST", "path": "/__fixtures/workflow/tasks", "purpose": "create-task-from-captured-upload"},
+    {"id": "STEP-003", "method": "GET", "path": "/__fixtures/workflow/tasks/${STEP-002.taskId}/status", "purpose": "observe-terminal-state"},
+    {"id": "STEP-004", "method": "GET", "path": "/__fixtures/workflow/tasks/${STEP-002.taskId}", "purpose": "verify-operation-binding"},
+    {"id": "STEP-005", "method": "GET", "path": "/__fixtures/workflow-observer/runs/${RUN_ID}", "purpose": "verify-resource-cardinality"}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-001", "target": "status", "operator": "EQUALS", "expected": 201},
+    {"id": "AS-002", "ac": "AC-001", "operation": "STEP-001", "target": "body.data.uploadId", "operator": "EXISTS"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-002", "target": "status", "operator": "EQUALS", "expected": 202},
+    {"id": "AS-004", "ac": "AC-002", "operation": "STEP-002", "target": "body.data.status", "operator": "EQUALS", "expected": "QUEUED"},
+    {"id": "AS-005", "ac": "AC-003", "operation": "STEP-003", "target": "status", "operator": "EQUALS", "expected": 200},
+    {"id": "AS-006", "ac": "AC-003", "operation": "STEP-003", "target": "body.data.status", "operator": "TRANSITIONED_TO", "expected": "COMPLETED"},
+    {"id": "AS-007", "ac": "AC-004", "operation": "STEP-004", "target": "body.data.sourceUploadId", "operator": "EQUALS", "expectedFrom": "STEP-001.uploadId"},
+    {"id": "AS-008", "ac": "AC-004", "operation": "STEP-004", "target": "body.data.resultRef", "operator": "EXISTS"},
+    {"id": "AS-009", "ac": "AC-004", "operation": "STEP-005", "target": "body.data.uploadCount", "operator": "COUNT_EQUALS", "expected": 1},
+    {"id": "AS-010", "ac": "AC-004", "operation": "STEP-005", "target": "body.data.taskCount", "operator": "COUNT_EQUALS", "expected": 1},
+    {"id": "AS-011", "ac": "AC-004", "operation": "STEP-005", "target": "body.data.resultCount", "operator": "COUNT_EQUALS", "expected": 1},
+    {"id": "AS-012", "ac": "AC-004", "operation": "STEP-005", "target": "status", "operator": "EQUALS", "expected": 200}
+  ],
+  "requiredEvidenceKinds": ["REQUEST", "RESPONSE", "STATE_AFTER", "RESOURCE"],
+  "blockedCodes": []
+}

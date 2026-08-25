@@ -4,11 +4,49 @@
 
 import { Pool, type PoolConfig } from 'pg';
 
-/** 从 DATABASE_URL 或默认配置创建连接池 */
-export function createPostgresPool(opts?: { connectionString?: string; config?: PoolConfig }): Pool {
+export interface PostgresPoolOptions {
+  /** 显式连接串；未传时只读取 DATABASE_URL，不提供任何默认账号/数据库。 */
+  connectionString?: string;
+  config?: PoolConfig;
+  /** production/staging 下额外拒绝 postgres/postgres 弱默认凭据。 */
+  productionLike?: boolean;
+}
+
+/** 校验 PostgreSQL 连接串；错误信息不得回显可能包含密码的原值。 */
+export function requirePostgresConnectionString(value?: string, productionLike = false): string {
+  const connectionString = value?.trim();
+  if (!connectionString) {
+    throw new Error('[database] PostgreSQL 启动要求显式配置 DATABASE_URL，禁止使用默认连接');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(connectionString);
+  } catch {
+    throw new Error('[database] DATABASE_URL 不是合法的 PostgreSQL URL');
+  }
+  if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') {
+    throw new Error('[database] DATABASE_URL 协议必须是 postgres:// 或 postgresql://');
+  }
+  if (productionLike) {
+    const username = decodeURIComponent(parsed.username).toLowerCase();
+    const password = decodeURIComponent(parsed.password).toLowerCase();
+    if (username === 'postgres' && password === 'postgres') {
+      throw new Error('[database] 生产环境禁止使用 postgres/postgres 默认凭据');
+    }
+  }
+  return connectionString;
+}
+
+/** 从显式参数或 DATABASE_URL 创建连接池；永不回退 postgres/postgres。 */
+export function createPostgresPool(opts: PostgresPoolOptions = {}): Pool {
+  const connectionString = requirePostgresConnectionString(
+    opts.connectionString ?? process.env.DATABASE_URL,
+    opts.productionLike,
+  );
   return new Pool({
-    connectionString: opts?.connectionString ?? process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/postgres',
-    ...opts?.config,
+    connectionString,
+    ...opts.config,
   });
 }
 

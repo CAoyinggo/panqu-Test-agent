@@ -21,7 +21,8 @@ import fs from 'node:fs';
 import { createPlatformService, createPlatformServer } from '../src/platform/index.js';
 import type { PlatformBundle } from '../src/platform/index.js';
 import type { RunTrigger, Role, TelemetryPeriod } from '../src/platform/index.js';
-import { withLLMTelemetry, runContext } from '../src/platform/index.js';
+import { withLLMTelemetry } from '../src/platform/index.js';
+import { createPlatformAgentWorkerExecutor } from '../src/integrations/platform-agent-worker.js';
 import { MockLLMProvider } from '../src/llm/mock-llm.js';
 import { createSqliteDatabase, sqliteDataFile } from '../src/platform/storage/sqlite/database.js';
 import { createPostgresPool } from '../src/platform/storage/postgres/pg-database.js';
@@ -81,6 +82,16 @@ function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
+/** PostgreSQL 运维命令统一连接生命周期，禁止命令结束后遗留 pool。 */
+async function withPostgresPool<T>(fn: (pool: ReturnType<typeof createPostgresPool>) => Promise<T>): Promise<T> {
+  const pool = createPostgresPool({ productionLike: isProductionLike(resolvePlatformMode()) });
+  try {
+    return await fn(pool);
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
 /** 队列排空：注册了 Worker 时把 Run 执行到完成 */
 async function dispatchUntilIdle(bundle: PlatformBundle, maxIters = 200): Promise<number> {
   let iters = 0;
@@ -94,34 +105,10 @@ async function dispatchUntilIdle(bundle: PlatformBundle, maxIters = 200): Promis
   return iters;
 }
 
-/** 注册演示 Worker：模拟自治流水线（start → LLM 环节 → checkpoint → complete），
- * 真实执行 + LLM 调用经遥测装饰器记录到 CostLedger / TelemetryEvent。 */
+/** 注册真实 Platform Worker：Scheduler → Agent Pipeline → Data/Execution → Outcome。 */
 function registerCliWorker(bundle: PlatformBundle): void {
-  // LLM（离线 Mock）经遥测装饰器：真实 token 用量 → CostLedger / cost / llm 事件
   const provider = withLLMTelemetry(new MockLLMProvider(), bundle.telemetry);
-  bundle.registerWorkerExecutor('cli-worker', async (job: unknown) => {
-    // 注意：executor 收到的是 job.payload（含 runId/projectId/environment/feature）
-    const j = job as { runId: string; projectId: string; environment: string; feature?: string };
-    const feature = j.feature;
-    await runContext.run({ runId: j.runId, projectId: j.projectId, feature }, async () => {
-      await bundle.service.startRun(j.runId);
-      await bundle.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
-      // 模拟自治流水线 LLM 环节（执行分析 / 修复建议），产生真实 usage → 成本
-      await provider.generate({ messages: [{ role: 'user', content: '分析本次执行结果与失败原因' }] });
-      await provider.generate({ messages: [{ role: 'user', content: '生成自愈修复建议' }] });
-      await bundle.service.saveCheckpoint({
-        runId: j.runId,
-        stage: 'autonomous-pipeline',
-        completedCases: [],
-        remainingCases: [],
-        decisionState: {},
-        budgetState: {},
-        traceId: `trace-${j.runId}`,
-      });
-      await bundle.service.completeRun(j.runId);
-      await bundle.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
-    });
-  });
+  bundle.registerWorkerExecutor('cli-worker', createPlatformAgentWorkerExecutor(bundle, { provider }));
 }
 
 async function main(): Promise<void> {
@@ -138,11 +125,15 @@ async function main(): Promise<void> {
     // 26.7：真实飞书通知（配置 FEISHU_WEBHOOK_URL 或 FEISHU_WEBHOOK 后平台事件真实投递飞书）
     feishuWebhookUrl: process.env.FEISHU_WEBHOOK_URL ?? process.env.FEISHU_WEBHOOK,
   });
-  await bundle.auth.ensureSeeded();
-  const wire = bundle.service.wireNotifications();
   const [group, sub] = args;
+  let unwire = (): void => undefined;
 
   try {
+    // 生产启动屏障：数据库连接与迁移失败会直接抛出，后续认证初始化/HTTP listen 均不会发生。
+    await bundle.start();
+    await bundle.auth.ensureSeeded();
+    unwire = bundle.service.wireNotifications();
+
     if (group === 'project') {
       if (sub === 'list') {
         console.log(JSON.stringify(bundle.service.listProjects(), null, 2));
@@ -160,10 +151,11 @@ async function main(): Promise<void> {
         const environment = flagValue(args, '--environment') ?? 'test';
         const trigger = (flagValue(args, '--trigger') ?? 'manual') as RunTrigger;
         const feature = flagValue(args, '--feature');
+        const requirementText = flagValue(args, '--requirement');
         const execute = !hasFlag(args, '--no-execute');
         registerCliWorker(bundle);
         const { runId, status } = await bundle.service.createRun({
-          projectId, environment, trigger, feature, actor: actor(), role: role(),
+          projectId, environment, trigger, feature, requirementText, actor: actor(), role: role(),
         });
         console.log(JSON.stringify({ runId, status }, null, 2));
         if (execute) {
@@ -437,7 +429,7 @@ async function main(): Promise<void> {
           results.push(await drillStorageOutage(drillBundle, { environment: env, tag: 'clis3', breaker: breakers, evidence }));
         }
         if (scenario === 'p0block' || scenario === 'all') {
-          // 真实数据目录注入 P0 FAIL → 平台必须真实 BLOCK（exit=1，Run=FAILED）
+          // 真实数据目录注入 P0 FAIL → FAILED outcome 合法完成，但 Release 必须 BLOCK（exit=1）
           const p0WorkerId = `drill-p0-${Date.now()}`;
           bundle.registerWorkerExecutor(p0WorkerId, makeRealRunExecutor(bundle, 'sanity', {
             environment: env, failCases: ['WAN3-CORE-001'], failReason: '故障注入（staging drill）：P0 核心链路回归',
@@ -449,7 +441,9 @@ async function main(): Promise<void> {
           const run = await bundle.service.getRun(runId);
           const rel = (await bundle.telemetry.eventsByRun(runId)).find((e) => e.type === 'release');
           const decision = rel?.metadata?.decision as string | undefined;
-          const ok = run?.status === 'FAILED' && decision === 'BLOCK';
+          const ok = run?.status === 'COMPLETED'
+            && run.executionRecord?.outcome.executionStatus === 'FAILED'
+            && decision === 'BLOCK';
           results.push({
             scenario: 'S-p0-block', ok,
             mttdMs: 0, mttrMs: 0, retryCount: 0,
@@ -510,7 +504,7 @@ async function main(): Promise<void> {
         } else throw new Error('用法：platform assets <list|stats|import>');
       } else throw new Error(`未知 platform 子命令：${sub}`);
     } else if (group === 'migrate') {
-      // 25.8：显式执行 / 查看 schema 迁移（工厂启动已自动应用；本命令供运维手动执行与检查）
+      // 25.8：显式执行 / 查看 schema 迁移（服务 startup gate 会自动应用；本命令供运维手动执行与检查）
       if (sub === 'sqlite') {
         const dir = flagValue(args, '--data-dir') ?? platformDataDir();
         const db = createSqliteDatabase(sqliteDataFile(dir));
@@ -518,7 +512,7 @@ async function main(): Promise<void> {
         db.close();
         console.log(JSON.stringify({ ok: true, dir, appliedNow: applied, detail: `SQLite 迁移完成（本次应用 ${applied.length} 项）` }, null, 2));
       } else if (sub === 'postgres') {
-        const applied = await applyPostgresMigrations(createPostgresPool());
+        const applied = await withPostgresPool((pool) => applyPostgresMigrations(pool));
         console.log(JSON.stringify({ ok: true, appliedNow: applied, detail: `PostgreSQL 迁移完成（本次应用 ${applied.length} 项）` }, null, 2));
       } else if (sub === 'down') {
         // 31.2（Phase 31 / DEBT-09）：schema 回滚（down）。仅允许回滚最新已应用迁移（防跳级）。
@@ -531,7 +525,7 @@ async function main(): Promise<void> {
           let pgApplied: string[] = [];
           let pgOk = true;
           try {
-            pgApplied = await listAppliedPostgres(createPostgresPool());
+            pgApplied = await withPostgresPool((pool) => listAppliedPostgres(pool));
           } catch {
             pgOk = false;
           }
@@ -552,7 +546,7 @@ async function main(): Promise<void> {
             console.log(JSON.stringify({ ok: true, reverted, detail: `SQLite 已回滚迁移 ${reverted}（集合表已删除，_migrations 记录已移除）` }, null, 2));
           }
         } else if (args[2] === 'postgres') {
-          const reverted = await revertPostgresMigration(createPostgresPool(), flagValue(args, '--id') ?? undefined);
+          const reverted = await withPostgresPool((pool) => revertPostgresMigration(pool, flagValue(args, '--id') ?? undefined));
           if (reverted === null) {
             console.log(JSON.stringify({ ok: true, reverted: null, detail: '无已应用迁移可回滚' }, null, 2));
           } else {
@@ -568,7 +562,7 @@ async function main(): Promise<void> {
         let pgApplied: string[] = [];
         let pgOk = true;
         try {
-          pgApplied = await listAppliedPostgres(createPostgresPool());
+          pgApplied = await withPostgresPool((pool) => listAppliedPostgres(pool));
         } catch {
           pgOk = false;
         }
@@ -687,7 +681,7 @@ async function main(): Promise<void> {
         const shutdown = async (): Promise<void> => {
           clearInterval(dispatchTimer);
           await server.close();
-          wire();
+          unwire();
           resolve();
         };
         process.on('SIGINT', () => void shutdown());
@@ -698,8 +692,8 @@ async function main(): Promise<void> {
       throw new Error(`未知命令组：${group}`);
     }
   } finally {
-    wire();
-    void bundle;
+    unwire();
+    await bundle.close();
   }
 }
 

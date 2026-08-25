@@ -3,9 +3,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { JsonMemoryStore } from '../../src/agents/memory/json-memory.js';
+import { createPersistentMemory, JsonMemoryStore } from '../../src/agents/memory/json-memory.js';
+import { SqliteMemoryStore } from '../../src/agents/memory/sqlite-memory.js';
 import { generateMemoryId } from '../../src/agents/memory/memory-store.js';
 import type { MemoryRecord } from '../../src/agents/memory/memory-store.js';
+import { fileVersion, withFileLock } from '../../src/utils/atomic-fs.js';
 
 let dir: string;
 let file: string;
@@ -70,7 +72,7 @@ describe('memory - save / query', () => {
 
   it('clear 清空并持久化', async () => {
     await store.save(makeRecord());
-    store.clear();
+    await store.clear();
     expect(store.count()).toBe(0);
     expect(new JsonMemoryStore(file).count()).toBe(0);
   });
@@ -79,6 +81,89 @@ describe('memory - save / query', () => {
     fs.writeFileSync(file, '{{{ 坏文件', 'utf-8');
     const s2 = new JsonMemoryStore(file);
     expect(s2.count()).toBe(0);
+  });
+});
+
+describe('memory - concurrent persistence contract', () => {
+  it('多实例并发写不丢记录，且不遗留共享 tmp/lock 文件', async () => {
+    const stores = Array.from({ length: 8 }, () => new JsonMemoryStore(file));
+    const total = 80;
+    await Promise.all(Array.from({ length: total }, (_, index) =>
+      stores[index % stores.length].save(makeRecord({
+        id: `concurrent-${index}`,
+        data: { caseId: `case-${index}` },
+      })),
+    ));
+
+    const persisted = await new JsonMemoryStore(file).query();
+    expect(persisted).toHaveLength(total);
+    expect(new Set(persisted.map((record) => record.id)).size).toBe(total);
+    expect(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp') || name.endsWith('.lock'))).toEqual([]);
+  });
+
+  it('CAS 合并外部实例的新版本，长生命周期实例也能刷新读取', async () => {
+    const first = new JsonMemoryStore(file);
+    const second = new JsonMemoryStore(file);
+    await first.save(makeRecord({ id: 'from-first' }));
+    await second.save(makeRecord({ id: 'from-second' }));
+
+    expect((await first.query()).map((record) => record.id).sort()).toEqual(['from-first', 'from-second']);
+    expect((await second.query()).map((record) => record.id).sort()).toEqual(['from-first', 'from-second']);
+  });
+
+  it('CAS 使用内容哈希，能识别相同 size/mtime 的内容变化', () => {
+    const fixed = new Date('2026-08-22T00:00:00.000Z');
+    fs.writeFileSync(file, '{"v":"aaaa"}\n');
+    fs.utimesSync(file, fixed, fixed);
+    const before = fileVersion(file);
+    fs.writeFileSync(file, '{"v":"bbbb"}\n');
+    fs.utimesSync(file, fixed, fixed);
+    expect(fileVersion(file)).not.toBe(before);
+  });
+
+  it('不会把超过 staleMs 但持有进程仍存活的锁误判为陈旧锁', async () => {
+    let secondEntered = false;
+    const first = withFileLock(file, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }, { staleMs: 5, timeoutMs: 200, retryBaseMs: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    await expect(withFileLock(file, async () => {
+      secondEntered = true;
+    }, { staleMs: 5, timeoutMs: 25, retryBaseMs: 2 })).rejects.toThrow('文件锁获取超时');
+    expect(secondEntered).toBe(false);
+    await first;
+  });
+
+  it('可接管已确认死亡的本机陈旧锁，并清理仲裁文件', async () => {
+    const lockFile = `${file}.lock`;
+    fs.writeFileSync(lockFile, JSON.stringify({
+      owner: 'dead-owner',
+      pid: 2_147_483_647,
+      hostname: os.hostname(),
+      createdAt: Date.now() - 60_000,
+    }));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockFile, old, old);
+
+    let entered = false;
+    await withFileLock(file, async () => { entered = true; }, { staleMs: 5, timeoutMs: 200, retryBaseMs: 2 });
+    expect(entered).toBe(true);
+    expect(fs.existsSync(lockFile)).toBe(false);
+    expect(fs.existsSync(`${lockFile}.reclaim`)).toBe(false);
+  });
+
+  it('属主不可验证的旧格式锁默认拒绝接管', async () => {
+    const lockFile = `${file}.lock`;
+    fs.writeFileSync(lockFile, 'legacy-owner-uuid');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockFile, old, old);
+
+    await expect(withFileLock(file, async () => {}, {
+      staleMs: 5,
+      timeoutMs: 20,
+      retryBaseMs: 2,
+    })).rejects.toThrow('文件锁获取超时');
   });
 });
 
@@ -101,5 +186,44 @@ describe('memory - getSimilarFailures', () => {
 
   it('无匹配返回空', async () => {
     expect(await store.getSimilarFailures({ caseId: 'none' })).toEqual([]);
+  });
+});
+
+describe('memory - SQLite migration target', () => {
+  it('持久化工厂按 .sqlite 扩展名选择 SQLite，JSON 保持默认', async () => {
+    const json = await createPersistentMemory({ path: path.join(dir, 'factory') });
+    expect(json).toBeInstanceOf(JsonMemoryStore);
+
+    const sqlite = await createPersistentMemory({ path: path.join(dir, 'factory.sqlite') });
+    expect(sqlite).toBeInstanceOf(SqliteMemoryStore);
+    (sqlite as SqliteMemoryStore).close();
+  });
+
+  it('保持 TestMemory 写入/查询语义并支持重新打开', async () => {
+    const sqliteFile = path.join(dir, 'memory.sqlite');
+    const first = new SqliteMemoryStore(sqliteFile);
+    await first.save(makeRecord({ id: 'sqlite-1', type: 'failure', tags: ['wan3'] }));
+    first.close();
+
+    const reopened = new SqliteMemoryStore(sqliteFile);
+    expect((await reopened.query({ type: 'failure', tags: ['wan3'] })).map((record) => record.id)).toEqual(['sqlite-1']);
+    reopened.close();
+  });
+
+  it('两个连接写入同一 WAL 数据库不会互相覆盖', async () => {
+    const sqliteFile = path.join(dir, 'memory-concurrent.sqlite');
+    const first = new SqliteMemoryStore(sqliteFile);
+    const second = new SqliteMemoryStore(sqliteFile);
+    try {
+      await Promise.all([
+        ...Array.from({ length: 20 }, (_, index) => first.save(makeRecord({ id: `a-${index}` }))),
+        ...Array.from({ length: 20 }, (_, index) => second.save(makeRecord({ id: `b-${index}` }))),
+      ]);
+      expect(first.count()).toBe(40);
+      expect(second.count()).toBe(40);
+    } finally {
+      first.close();
+      second.close();
+    }
   });
 });

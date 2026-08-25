@@ -16,7 +16,7 @@ import {
 import { selectTestCases, SelectionHistory, TestSelectionInput } from './selection-analyzer.js';
 
 /** 系统提示词（默认内置，可被 Prompt Registry 覆盖） */
-const SYSTEM_PROMPT = `你是测试选择专家。根据需求、测试用例、风险评估与历史执行情况，决定本次要执行的测试集。
+export const TEST_SELECTION_SYSTEM_PROMPT = `你是测试选择专家。根据需求、测试用例、风险评估与历史执行情况，决定本次要执行的测试集。
 输出必须严格符合如下 JSON Schema（只输出 JSON）：
 ${JSON.stringify(SELECTION_JSON_SCHEMA, null, 2)}
 
@@ -105,14 +105,14 @@ export class TestSelectionAgent extends BaseAgent<TestSelectionInput, TestSelect
       null,
       2,
     );
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'test-selection',
+        agent: this.name,
+        system: TEST_SELECTION_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp);
     if (!isSelectionLike(parsed)) {

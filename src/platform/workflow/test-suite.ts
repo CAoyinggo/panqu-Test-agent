@@ -5,6 +5,7 @@
 
 import type { Entity, Repository } from '../storage/repository.js';
 import { generateEntityId } from '../storage/repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** Suite 状态 */
 export type TestSuiteStatus = 'ACTIVE' | 'ARCHIVED';
@@ -74,7 +75,7 @@ export class TestSuiteService {
     input: { name?: string; description?: string; tags?: string[] },
   ): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     const updated: TestSuite = {
       ...suite,
       name: input.name ?? suite.name,
@@ -89,7 +90,7 @@ export class TestSuiteService {
   /** 添加 Case（去重） */
   async addCases(id: string, caseIds: string[]): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     const merged = [...new Set([...suite.caseIds, ...caseIds])];
     const updated = { ...suite, caseIds: merged, updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
@@ -99,7 +100,7 @@ export class TestSuiteService {
   /** 移除 Case */
   async removeCases(id: string, caseIds: string[]): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     const removed = new Set(caseIds);
     const updated = { ...suite, caseIds: suite.caseIds.filter((c) => !removed.has(c)), updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
@@ -109,7 +110,7 @@ export class TestSuiteService {
   /** 归档 */
   async archive(id: string): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     const updated = { ...suite, status: 'ARCHIVED' as const, updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
     return updated;
@@ -118,7 +119,7 @@ export class TestSuiteService {
   /** 恢复 */
   async restore(id: string): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     const updated = { ...suite, status: 'ACTIVE' as const, updatedAt: new Date().toISOString() };
     await this.repo.update(id, updated);
     return updated;
@@ -127,7 +128,7 @@ export class TestSuiteService {
   /** 复制：生成新 Suite（仅复制配置与引用，不复制数据） */
   async copy(id: string, by: string, opts: { name?: string; now?: () => string } = {}): Promise<TestSuite> {
     const suite = await this.repo.get(id);
-    if (!suite) throw new Error(`Test Suite 不存在：${id}`);
+    if (!suite) throw new CodedError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${id}`);
     return this.create({
       projectId: suite.projectId,
       name: opts.name ?? `${suite.name}（副本）`,

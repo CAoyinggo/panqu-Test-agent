@@ -46,4 +46,25 @@ describe('Phase 52 Cost API / RBAC / Project Scope', () => {
     const response = await fetch(`${url}/api/cost/projects/wan3`, { headers: { Authorization: `Bearer ${token}` } }); const summary = await response.json() as { totalCost: number; byRun: Record<string, number>; byModel: Record<string, number> };
     expect(response.status).toBe(200); expect(summary.totalCost).toBe(entry.cost); expect(summary.byRun['real-run']).toBe(entry.cost); expect(summary.byModel['gpt-4o-mini']).toBe(entry.cost);
   });
+
+  it('forecast 一次按日聚合成本，并按唯一 Run 计数', async () => {
+    const bundle = createPlatformService({ seedProject: true, seedUsers: true, jwtSecret: 'phase52-forecast-secret' });
+    await bundle.auth.ensureSeeded();
+    const cost = new CostGovernanceService();
+    cost.ledger.record({ projectId: 'wan3', runId: 'run-1', category: 'LLM', quantity: 1, unitCost: 1, currency: 'USD', timestamp: '2026-08-20T01:00:00Z' });
+    cost.ledger.record({ projectId: 'wan3', runId: 'run-1', category: 'WORKER', quantity: 2, unitCost: 1, currency: 'USD', timestamp: '2026-08-20T02:00:00Z' });
+    cost.ledger.record({ projectId: 'wan3', runId: 'run-2', category: 'LLM', quantity: 3, unitCost: 1, currency: 'USD', timestamp: '2026-08-20T03:00:00Z' });
+    const server = createPlatformServer({ service: bundle.service, auth: bundle.auth, mode: 'test', costGovernance: cost });
+    servers.push(server);
+    const { url } = await server.listen();
+    const login = await fetch(`${url}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin123' }) });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+
+    const response = await fetch(`${url}/api/cost/forecast?projectId=wan3`, { headers: { Authorization: `Bearer ${token}` } });
+    const body = await response.json() as { forecasts: Array<{ horizon: string; expectedRuns: number; expectedCost: number }> };
+
+    expect(response.status).toBe(200);
+    expect(body.forecasts).toHaveLength(5);
+    expect(body.forecasts[0]).toMatchObject({ horizon: '1h', expectedRuns: 2, expectedCost: 6 });
+  });
 });

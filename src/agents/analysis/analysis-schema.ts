@@ -3,7 +3,7 @@
 // 产出根因定位 + 改进建议 + 待记忆的失败记录（供 Memory 层持久化）。
 // 报告字段与现有 CheckResult/IssueItem 语义对齐，便于报告渲染复用。
 
-import type { CaseExecutionResult } from '../execution/execution-schema.js';
+import type { CaseExecutionResult, ExecutionOutcome } from '../execution/execution-schema.js';
 
 /** 分析结论类型 */
 export type FindingType = 'pass' | 'fail' | 'flaky' | 'blocked' | 'info';
@@ -69,6 +69,20 @@ export function toMemoryWorthy(failed: CaseExecutionResult[]): MemoryWorthyFailu
   }));
 }
 
+/**
+ * 由真实执行结果（Runner Outcome）确定性计算汇总。
+ * 统计唯一合法来源：total/passed/failed/timedOut 取自 Runner 自身计数，
+ * duration 取自各用例真实耗时之和 —— LLM 输出永远不得触碰这些字段
+ * （否则测试平台的结果会被模型输出污染）。
+ */
+export function summaryFromOutcome(outcome: ExecutionOutcome, durationMs?: number): AnalysisSummary {
+  const realDuration = durationMs ?? outcome.results.reduce((sum, r) => sum + (r.durationMs ?? 0), 0);
+  const summary = computeAnalysisSummary(outcome.total, outcome.passed, outcome.timedOut, realDuration);
+  // passRate 直接采用 Runner 计算值（同一公式，避免重复舍入产生漂移）
+  summary.passRate = outcome.passRate;
+  return summary;
+}
+
 /** 计算汇总 */
 export function computeAnalysisSummary(
   total: number,
@@ -78,9 +92,11 @@ export function computeAnalysisSummary(
 ): AnalysisSummary {
   const failed = total - passed - timedOut;
   const passRate = total > 0 ? Math.round((passed / total) * 1000) / 10 : 0;
-  // 任一硬失败 → fail；仅超时/待处理 → partial；全部通过 → pass
-  const overall: AnalysisSummary['overall'] = failed > 0 ? 'fail' : timedOut > 0 ? 'partial' : 'pass';
-  const exitCode = timedOut > 0 ? 3 : failed > 0 ? 1 : 0;
+  // total=0 没有任何执行证据，必须 fail-close；不能把“没有失败”解释成“通过”。
+  const noEvidence = total <= 0;
+  // 任一硬失败 → fail；仅超时/待处理 → partial；有证据且全部通过 → pass
+  const overall: AnalysisSummary['overall'] = noEvidence || failed > 0 ? 'fail' : timedOut > 0 ? 'partial' : 'pass';
+  const exitCode = noEvidence ? 1 : timedOut > 0 ? 3 : failed > 0 ? 1 : 0;
   return { total, passed, failed, timedOut, passRate, durationMs, exitCode, overall };
 }
 
@@ -92,8 +108,13 @@ export function isAnalysisLike(data: unknown): data is Record<string, unknown> {
   );
 }
 
-/** 归一化外部产出的 AnalysisReport（过滤非法结论，重算汇总） */
-export function normalizeAnalysis(data: Record<string, unknown>): AnalysisReport {
+/**
+ * 归一化外部产出的 AnalysisReport（过滤非法结论，重算汇总）。
+ * trustedSummary：由真实执行结果计算的汇总（summaryFromOutcome）——提供时**逐字采用**，
+ * data.summary（可能来自 LLM 输出）整体丢弃：统计字段（total/passed/failed/timedOut/duration/
+ * exitCode/overall）只能由 Deterministic Summary 产生，模型只能贡献 findings/aiSummary/recommendations。
+ */
+export function normalizeAnalysis(data: Record<string, unknown>, opts: { trustedSummary?: AnalysisSummary } = {}): AnalysisReport {
   const findings = (Array.isArray(data.findings) ? data.findings : [])
     .filter((f) => typeof f === 'object' && f !== null)
     .map((f) => {
@@ -113,15 +134,22 @@ export function normalizeAnalysis(data: Record<string, unknown>): AnalysisReport
 
   const failedCases = (Array.isArray(data.failedCases) ? data.failedCases : []).map((c) => c as CaseExecutionResult);
   const failed = failedCases.length;
-  const s = data.summary as { total?: number; passed?: number; timedOut?: number; durationMs?: number } | undefined;
-  const total = typeof s?.total === 'number' ? s.total : failed;
-  const passed = typeof s?.passed === 'number' ? s.passed : total - failed;
-  const timedOut = typeof s?.timedOut === 'number' ? s.timedOut : 0;
-  const durationMs = typeof s?.durationMs === 'number' ? s.durationMs : 0;
+
+  // 汇总两条路径：可信汇总（真实执行结果）逐字采用；否则按归一化输入兜底（外部数据源兼容）
+  const summary = opts.trustedSummary
+    ? opts.trustedSummary
+    : (() => {
+      const s = data.summary as { total?: number; passed?: number; timedOut?: number; durationMs?: number } | undefined;
+      const total = typeof s?.total === 'number' ? s.total : failed;
+      const passed = typeof s?.passed === 'number' ? s.passed : total - failed;
+      const timedOut = typeof s?.timedOut === 'number' ? s.timedOut : 0;
+      const durationMs = typeof s?.durationMs === 'number' ? s.durationMs : 0;
+      return computeAnalysisSummary(total, passed, timedOut, durationMs);
+    })();
 
   return {
     feature: String(data.feature ?? ''),
-    summary: computeAnalysisSummary(total, passed, timedOut, durationMs),
+    summary,
     findings,
     failedCases,
     topFailures: failedCases.slice(0, 10).map((c) => ({ caseId: c.caseId, name: c.name, error: c.error })),

@@ -5,6 +5,7 @@
 
 import type { Entity, Repository } from '../storage/repository.js';
 import { generateEntityId } from '../storage/repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export type AssetType = 'test-case' | 'suite' | 'plan';
 
@@ -112,8 +113,8 @@ export class AssetVersioningService {
   async compare(assetId: string, fromVersion: number, toVersion: number): Promise<AssetDiff> {
     const from = await this.getVersion(assetId, fromVersion);
     const to = await this.getVersion(assetId, toVersion);
-    if (!from) throw new Error(`版本不存在：${assetId} v${fromVersion}`);
-    if (!to) throw new Error(`版本不存在：${assetId} v${toVersion}`);
+    if (!from) throw new CodedError(ErrorCode.NOT_FOUND, `版本不存在：${assetId} v${fromVersion}`);
+    if (!to) throw new CodedError(ErrorCode.NOT_FOUND, `版本不存在：${assetId} v${toVersion}`);
     const fromSnap = from.snapshot;
     const toSnap = to.snapshot;
     const keys = new Set([...Object.keys(fromSnap), ...Object.keys(toSnap)]);
@@ -144,7 +145,7 @@ export class AssetVersioningService {
   /** Rollback：取指定版本快照（由调用方决定如何应用；本服务不直接改写资产） */
   async rollbackSnapshot(assetId: string, version: number): Promise<Record<string, unknown>> {
     const v = await this.getVersion(assetId, version);
-    if (!v) throw new Error(`版本不存在：${assetId} v${version}`);
+    if (!v) throw new CodedError(ErrorCode.NOT_FOUND, `版本不存在：${assetId} v${version}`);
     return { ...v.snapshot };
   }
 

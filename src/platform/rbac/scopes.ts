@@ -3,6 +3,7 @@
 // 任何一层失败即拒绝；ADMIN 视为全局（可访问全部作用域）。
 
 import type { User, UserScopes } from '../auth/user.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export type { UserScopes } from '../auth/user.js';
 export type Scopes = UserScopes;
@@ -41,14 +42,14 @@ export function canAccessBusiness(user: ScopeSubject, businessId: string): boole
 /** 断言式项目访问（Service / API 调用） */
 export function assertProjectAccess(user: ScopeSubject, projectId: string): void {
   if (!canAccessProject(user, projectId)) {
-    throw new Error(`无权访问项目 ${projectId}`);
+    throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `无权访问项目 ${projectId}`);
   }
 }
 
 /** 断言式环境访问 */
 export function assertEnvironmentAccess(user: ScopeSubject, environment: string): void {
   if (!canAccessEnvironment(user, environment)) {
-    throw new Error(`无权访问环境 ${environment}`);
+    throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `无权访问环境 ${environment}`);
   }
 }
 

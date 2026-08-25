@@ -11,6 +11,8 @@ import { ALL_COLLECTIONS } from './migrations.js';
 import type { PlatformBundle } from '../service/factory.js';
 import type { Entity } from '../storage/repository.js';
 import type { Project } from '../projects/project-schema.js';
+import type { TestRun } from '../runs/run-schema.js';
+import { evaluateRunCompletionEligibility } from '../runs/run-completion.js';
 
 /** 快照内单集合数据 */
 export interface SnapshotStore {
@@ -91,6 +93,20 @@ export async function restoreSnapshot(
 ): Promise<RestoreResult> {
   if (snapshot.version !== SNAPSHOT_VERSION) {
     throw new Error(`快照版本不兼容：${snapshot.version}（期望 ${SNAPSHOT_VERSION}）`);
+  }
+  // Restore 是一个生产写入口：在清空任何集合之前，先拒绝没有 Completion Contract
+  // 证据的伪造 COMPLETED Run，避免备份文件绕过 RunService/CompletionGuard。
+  const runStore = snapshot.stores.find((store) => store.store === 'runs');
+  for (const record of runStore?.data ?? []) {
+    const run = record as unknown as TestRun;
+    if (run.status !== 'COMPLETED') continue;
+    const eligibility = evaluateRunCompletionEligibility(run);
+    if (!eligibility.eligible || run.executionRecord?.completionGuardPassed !== true) {
+      throw new Error(
+        `快照包含不满足 Completion Contract 的 COMPLETED Run：${run.runId ?? String(record.id)}`
+        + `（${eligibility.reasons.join('；') || 'completionGuardPassed 缺失'}）`,
+      );
+    }
   }
   const noAutoRetrigger = opts.noAutoRetrigger ?? true;
   let restored = 0;

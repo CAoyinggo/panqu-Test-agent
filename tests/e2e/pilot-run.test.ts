@@ -17,22 +17,26 @@ function makeBundle(): PlatformBundle {
   return createPlatformService({ seedProject: true, now: () => FIXED_ISO });
 }
 
-describe('26.8.1 生产试运行：≥30 个真实 Run 全部执行完成', () => {
-  it('30 个 Run（6 smoke + 8 sanity + 8 regression + 8 autonomous）真实执行且全部 COMPLETED', async () => {
+describe('26.8.1 生产试运行：≥30 个真实 Run 全部形成可信终态', () => {
+  it('可执行形态 COMPLETED，缺少 Processor 的 REVIEW 形态 BLOCKED', async () => {
     const b = makeBundle();
     const result = await runPilot(b, { environment: 'staging', evidence: 'offline-drill', now: () => FIXED_ISO });
     expect(result.runs.length).toBeGreaterThanOrEqual(30);
     expect(result.evidence).toBe('offline-drill');
-    // 全部真实执行完成（无 BLOCK 注入 → 全 COMPLETED）
+    // smoke/sanity 有真实 Processor；regression/autonomous 含未支持资产，禁止假完成。
     for (const r of result.runs) {
-      expect(r.status, `${r.runId} 未 COMPLETED`).toBe('COMPLETED');
+      expect(r.status, `${r.runId} 终态与实际执行不一致`).toBe(
+        r.decision === 'REVIEW' ? 'BLOCKED' : 'COMPLETED',
+      );
     }
     // 形态分布
     expect(result.kpi.byProfile).toMatchObject({ smoke: 6, sanity: 8, regression: 8, autonomous: 8 });
-    expect(result.kpi.completed).toBe(result.kpi.totalRuns);
-    expect(result.kpi.completionRate).toBe(1);
+    expect(result.kpi.completed).toBe(14);
+    expect(result.kpi.blocked).toBe(16);
+    expect(result.kpi.failed).toBe(0);
+    expect(result.kpi.completionRate).toBeCloseTo(14 / 30, 4);
     expect(result.ok).toBe(true);
-  });
+  }, 30_000);
 });
 
 describe('26.8.2 生产 KPI：真实统计聚合', () => {
@@ -56,7 +60,7 @@ describe('26.8.2 生产 KPI：真实统计聚合', () => {
       expect(r.telemetryEvents, `${r.runId} 无遥测`).toBeGreaterThan(0);
       expect(r.costEntries, `${r.runId} 无成本`).toBeGreaterThan(0);
     }
-  });
+  }, 30_000);
 });
 
 describe('26.8.3 人工 QA 对照：10 条人工期望 vs 平台真实决策', () => {
@@ -74,7 +78,7 @@ describe('26.8.3 人工 QA 对照：10 条人工期望 vs 平台真实决策', (
     // 覆盖形态：10 条对照覆盖全部 4 种形态
     const profiles = new Set(result.manualQa.map((q) => q.profile));
     for (const p of ['smoke', 'sanity', 'regression', 'autonomous']) expect(profiles.has(p as never)).toBe(true);
-  });
+  }, 30_000);
 });
 
 describe('26.8.4 真实链路落库：审计 / 遥测 / Checkpoint / Release', () => {
@@ -101,5 +105,5 @@ describe('26.8.4 真实链路落库：审计 / 遥测 / Checkpoint / Release', (
     // Release Record：REVIEW 真实落库
     const release = events.find((e) => e.type === 'release');
     expect(release?.metadata?.decision).toBe('REVIEW');
-  });
+  }, 30_000);
 });

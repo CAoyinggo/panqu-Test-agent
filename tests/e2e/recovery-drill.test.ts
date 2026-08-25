@@ -79,21 +79,21 @@ describe('26.4.2 S2 LLM 异常恢复', () => {
     expect(m.recoverySuccessRate).toBeGreaterThan(0);
   });
 
-  it('Run 级恢复：LLM Provider 连续失败（500）→ Job RETRY → 重试 → COMPLETED；Lost Run=0', async () => {
+  it('Run 级恢复：LLM Provider 连续失败（500）→ Pipeline 确定性回退 → COMPLETED；无重复 Job 执行', async () => {
     const b = makeBundle();
     await importAssets(b);
     const m = await drillLlmRunRecovery(b, { environment: 'test', tag: 's2', profile: 'smoke', failMode: '500', failCount: 2 });
     const d = m.detail as { firstStatus: string; finalStatus: string; llmFailures: number };
     expect(m.ok).toBe(true);
-    expect(d.firstStatus).toBe('RETRY');
-    expect(m.retryCount).toBeGreaterThanOrEqual(1);
+    expect(d.firstStatus).toBe('SUCCESS');
+    expect(m.retryCount).toBe(0);
     expect(d.finalStatus).toBe('COMPLETED');
     expect(d.llmFailures).toBeGreaterThanOrEqual(2);
     expect(m.lostRuns).toBe(0);
     expect(m.lostCases).toBe(0);
   });
 
-  it('429 与 Timeout 故障同样经 Retry 恢复（多次采样）', async () => {
+  it('429 与 Timeout 故障同样经 Pipeline 确定性回退恢复（多次采样）', async () => {
     const b = makeBundle();
     await importAssets(b);
     const m429 = await drillLlmRunRecovery(b, { environment: 'test', tag: 's2a', profile: 'smoke', failMode: '429', failCount: 1 });
@@ -137,7 +137,7 @@ describe('26.4.3 S3 Storage/DB 短暂异常', () => {
 });
 
 describe('26.4.4 故障注入 → 真实 BLOCK（26.5 Release Gate 前置）', () => {
-  it('注入 P0 FAIL → decision=BLOCK、exit=1、run FAILED、release 记录 BLOCK、不能绕过 Gate', async () => {
+  it('注入 P0 FAIL → 真实 FAILED outcome 合法完成、release 记录 BLOCK、不能绕过 Gate', async () => {
     const b = makeBundle();
     await importAssets(b);
     const { runId } = await b.service.createRun({
@@ -154,7 +154,8 @@ describe('26.4.4 故障注入 → 真实 BLOCK（26.5 Release Gate 前置）', (
     expect(summary.exitCode).toBe(1);
     expect(summary.p0Fail).toBeGreaterThan(0);
     expect(summary.fail).toBeGreaterThan(0);
-    expect((await b.service.getRun(runId))?.status).toBe('FAILED');
+    expect((await b.service.getRun(runId))?.status).toBe('COMPLETED');
+    expect((await b.service.getRun(runId))?.executionRecord?.outcome.executionStatus).toBe('FAILED');
     // Release 事件真实记录 BLOCK（Gate 依据，Autonomous 无法绕过）
     const releaseEvents = (await b.telemetry.eventsByRun(runId)).filter((e) => e.type === 'release');
     expect(releaseEvents.length).toBe(1);
@@ -182,7 +183,7 @@ describe('26.4.5 恢复指标聚合', () => {
     expect(summary.successful).toBe(2);
     expect(summary.lostRuns).toBe(0);
     expect(summary.lostCases).toBe(0);
-    expect(summary.retryCount).toBeGreaterThanOrEqual(2);
+    expect(summary.retryCount).toBeGreaterThanOrEqual(1);
     expect(summary.avgMttdMs).toBeGreaterThanOrEqual(0);
     expect(summary.avgMttrMs).toBeGreaterThanOrEqual(0);
   });

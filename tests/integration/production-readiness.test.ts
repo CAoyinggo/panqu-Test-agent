@@ -17,8 +17,9 @@ import {
 import { collectSnapshot, restoreSnapshot, snapshotTotal } from '../../src/platform/ops/backup.js';
 import { runPlatformSmoke } from '../../src/platform/ops/smoke.js';
 import { runPlatformPreflight, preflightSummary } from '../../src/platform/ops/preflight.js';
-import { withLLMTelemetry, runContext } from '../../src/platform/telemetry/index.js';
+import { withLLMTelemetry } from '../../src/platform/telemetry/index.js';
 import { MockLLMProvider } from '../../src/llm/mock-llm.js';
+import { makeRealRunExecutor } from '../../src/platform/ops/real-run.js';
 
 const cleaned: string[] = [];
 
@@ -39,18 +40,10 @@ afterEach(() => {
 });
 
 /** 注册真实 Worker（与 smoke/CLI 语义一致）：Mock LLM 经遥测装饰器 → 真实成本 */
-function registerExecWorker(bundle: PlatformBundle): void {
+async function registerExecWorker(bundle: PlatformBundle): Promise<void> {
   const provider = withLLMTelemetry(new MockLLMProvider(), bundle.telemetry);
-  bundle.registerWorkerExecutor('pr-worker', async (job: unknown) => {
-    const j = job as { runId: string; projectId: string; environment: string; feature?: string };
-    await runContext.run({ runId: j.runId, projectId: j.projectId, feature: j.feature }, async () => {
-      await bundle.service.startRun(j.runId);
-      await bundle.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature: j.feature, phase: 'pipeline', result: 'success' });
-      await provider.generate({ messages: [{ role: 'user', content: '生产就绪测试：分析' }] });
-      await provider.generate({ messages: [{ role: 'user', content: '生产就绪测试：修复' }] });
-      await bundle.service.completeRun(j.runId);
-    });
-  });
+  await bundle.testAssets.importCatalog();
+  bundle.registerWorkerExecutor('pr-worker', makeRealRunExecutor(bundle, 'smoke', { provider }));
 }
 
 async function dispatchUntilIdle(bundle: PlatformBundle, maxIters = 200): Promise<void> {
@@ -89,7 +82,7 @@ describe('Phase 25.8 Production Readiness', () => {
     await bundleA.auth.ensureSeeded();
     // 26.2：导入真实 Test Case 资产，验证其纳入备份/恢复
     await bundleA.testAssets.importCatalog();
-    registerExecWorker(bundleA);
+    await registerExecWorker(bundleA);
     const { runId } = await bundleA.service.createRun({
       projectId: 'wan3', environment: 'test', trigger: 'manual', feature: 'bkp-probe', actor: 'pr-test', role: 'ADMIN',
     });

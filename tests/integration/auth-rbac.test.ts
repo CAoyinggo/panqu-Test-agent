@@ -97,11 +97,11 @@ describe('S1 登录 → JWT → API → User', () => {
     expect((info.data as { username: string }).username).toBe('qa-a');
   });
 
-  it('登录失败 → 401 invalid_credentials', async () => {
+  it('登录失败 → 401 AUTH_FAILED', async () => {
     const ts = await makeAuthServer();
     const res = await ts.request('POST', '/auth/login', { body: { username: 'qa-a', password: 'wrong' } });
     expect(res.status).toBe(401);
-    expect((res.data as { error: string }).error).toBe('invalid_credentials');
+    expect((res.data as { error: string }).error).toBe('AUTH_FAILED');
   });
 
   it('refresh 旋转令牌；旧 refresh 失效', async () => {

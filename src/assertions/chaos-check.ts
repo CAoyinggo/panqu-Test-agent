@@ -25,23 +25,34 @@ export function chaosCheck(taskDef: TaskDef, submit: SubmitResult, billingData: 
           ? '⚠ 任务失败但无错误信息'
           : `⚠ 错误信息过长（${err.length}字符），可能包含冗余内容`,
       level: 'P2',
+      kind: 'INFORMATIONAL',
     });
   }
 
   // 2. 失败任务积分回退（被动观察）
   if (isFailed) {
     const actualConsumed = billingData.actualConsumed;
-    const net = billingData.net ?? 0;
+    const net = billingData.net;
     const consumed = actualConsumed ?? net;
-    const reversed = consumed === 0;
-    checks.push({
-      name: '失败积分回退（混沌观察）',
-      pass: reversed,
-      detail: reversed
-        ? '任务失败后积分已正确回退（净消耗=0）'
-        : `⚠ 任务失败但积分未回退（净消耗=${consumed}），标记为已知卡点`,
-      level: 'P1',
-    });
+    if (consumed === undefined) {
+      checks.push({
+        name: '失败积分回退（混沌观察）',
+        pass: true,
+        detail: '缺少快照差值和账单流水，无法证明积分已回退',
+        level: 'P1',
+        kind: 'SKIPPED',
+      });
+    } else {
+      const reversed = consumed === 0;
+      checks.push({
+        name: '失败积分回退（混沌观察）',
+        pass: reversed,
+        detail: reversed
+          ? '任务失败后积分已正确回退（净消耗=0）'
+          : `⚠ 任务失败但积分未回退（净消耗=${consumed}），标记为已知卡点`,
+        level: 'P1',
+      });
+    }
   }
 
   // 3. 已知卡点标记（利用真实失败作为混沌验证点）
@@ -61,6 +72,7 @@ export function chaosCheck(taskDef: TaskDef, submit: SubmitResult, billingData: 
         ? `已知卡点：${matched.label}（错误信息匹配已知模式）`
         : `未知卡点：错误信息未匹配已知模式，建议人工分析`,
       level: 'P2',
+      kind: 'INFORMATIONAL',
     });
   }
 

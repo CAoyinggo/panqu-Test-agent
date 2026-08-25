@@ -8,6 +8,7 @@ import type { ApprovalRequest } from '../approval-center/approval-schema.js';
 import type { Environment } from '../projects/project-schema.js';
 import { evaluateAccessChain, type AccessDecision, type AccessRequest } from './access-chain.js';
 import { approvalPermissionFor, hasPermission, type Role } from './rbac.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** 访问请求（带环境对象，供审批落库） */
 export interface GateRequest extends AccessRequest {
@@ -51,10 +52,10 @@ export class PlatformGate {
   /** 审批通过：审批人必须具备该动作的审批权限 */
   async approve(approvalId: string, decidedBy: string, role: Role): Promise<ApprovalRequest> {
     const approval = await this.approvals.get(approvalId);
-    if (!approval) throw new Error(`审批不存在：${approvalId}`);
+    if (!approval) throw new CodedError(ErrorCode.NOT_FOUND, `审批不存在：${approvalId}`);
     const perm = approvalPermissionFor(approval.action);
     if (!hasPermission(role, perm)) {
-      throw new Error(`角色 ${role} 无权审批 ${approval.action}（需 ${perm}）`);
+      throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `角色 ${role} 无权审批 ${approval.action}（需 ${perm}）`);
     }
     return this.approvals.approve(approvalId, decidedBy);
   }
@@ -62,10 +63,10 @@ export class PlatformGate {
   /** 驳回 */
   async reject(approvalId: string, decidedBy: string, role: Role): Promise<ApprovalRequest> {
     const approval = await this.approvals.get(approvalId);
-    if (!approval) throw new Error(`审批不存在：${approvalId}`);
+    if (!approval) throw new CodedError(ErrorCode.NOT_FOUND, `审批不存在：${approvalId}`);
     const perm = approvalPermissionFor(approval.action);
     if (!hasPermission(role, perm)) {
-      throw new Error(`角色 ${role} 无权审批 ${approval.action}（需 ${perm}）`);
+      throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `角色 ${role} 无权审批 ${approval.action}（需 ${perm}）`);
     }
     return this.approvals.reject(approvalId, decidedBy);
   }

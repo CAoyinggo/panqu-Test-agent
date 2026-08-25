@@ -1,6 +1,8 @@
 // LLM 统一类型定义
 // 定义了 LLMProvider 接口、请求/响应结构，供各 Agent 与 Provider 实现使用。
 
+import { redactSensitiveText } from '../core/redact.js';
+
 /** 消息角色 */
 export type LLMRole = 'system' | 'user' | 'assistant';
 
@@ -21,6 +23,8 @@ export interface LLMRequest {
   jsonMode?: boolean;
   /** 取消信号（用于超时/中断） */
   signal?: AbortSignal;
+  /** 指定模型（由 ModelRouter 注入；Provider 未指定时用自身配置的默认模型） */
+  model?: string;
 }
 
 /** LLM 生成响应 */
@@ -40,6 +44,11 @@ export interface LLMProvider {
   name: string;
   /** 生成回复 */
   generate(request: LLMRequest): Promise<LLMResponse>;
+}
+
+/** Provider/Runtime 返回前统一清洗自由文本，避免模型复述 Prompt 中的凭证。 */
+export function sanitizeLLMResponse(response: LLMResponse): LLMResponse {
+  return { ...response, content: redactSensitiveText(response.content) };
 }
 
 /** 解析 LLMResponse.content 为 JSON（LLM 返回非法 JSON 时抛错） */

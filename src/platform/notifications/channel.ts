@@ -2,6 +2,8 @@
 // 至少支持：Feishu / DingTalk / Email / Webhook。
 // 为可测试性与确定性，所有通道支持注入发送函数（sender / send），默认走 HTTP fetch。
 
+import { redactSensitiveText } from '../../core/redact.js';
+
 /** 通知消息 */
 export interface NotificationMessage {
   title: string;
@@ -37,7 +39,7 @@ export function consoleChannel(name = 'console'): NotificationChannel {
     name,
     async send(message) {
       // eslint-disable-next-line no-console
-      console.log(`[${message.severity.toUpperCase()}] ${message.title} — ${message.body}`);
+      console.log(redactSensitiveText(`[${message.severity.toUpperCase()}] ${message.title} — ${message.body}`));
     },
   };
 }

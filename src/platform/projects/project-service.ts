@@ -19,6 +19,7 @@ import {
   type Project,
   type ProjectCreateInput,
 } from './project-schema.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export interface EnvironmentCheckResult {
   environment: string;
@@ -54,7 +55,7 @@ export class ProjectService {
   /** 环境动作决策：Environment.safetyPolicy 覆盖 → 单一策略源 */
   checkAction(projectId: string, envIdOrName: string, action: ToolActionLevel): EnvironmentCheckResult {
     const env = this.registry.getEnvironment(projectId, envIdOrName);
-    if (!env) throw new Error(`Project ${projectId} 下无环境 ${envIdOrName}`);
+    if (!env) throw new CodedError(ErrorCode.VALIDATION_ERROR, `Project ${projectId} 下无环境 ${envIdOrName}`);
     const decision = resolveEnvironmentDecision(env, action);
     return {
       environment: env.id,

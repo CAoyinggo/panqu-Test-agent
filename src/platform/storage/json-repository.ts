@@ -9,6 +9,7 @@ import {
   type Entity,
   type Repository,
 } from './repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export class JsonRepository<T extends Entity> implements Repository<T> {
   private cache: Map<string, T> | null = null;
@@ -47,7 +48,7 @@ export class JsonRepository<T extends Entity> implements Repository<T> {
   async create(input: Omit<T, 'id'> & { id?: string }): Promise<T> {
     const id = input.id ?? generateEntityId(this.prefix);
     const map = this.load();
-    if (map.has(id)) throw new Error(`实体已存在：${id}`);
+    if (map.has(id)) throw new CodedError(ErrorCode.CONFLICT, `实体已存在：${id}`);
     const entity = { ...(input as object), id } as T;
     map.set(id, entity);
     await this.save();
@@ -61,7 +62,7 @@ export class JsonRepository<T extends Entity> implements Repository<T> {
   async update(id: string, input: Partial<Omit<T, 'id'>>): Promise<T> {
     const map = this.load();
     const cur = map.get(id);
-    if (!cur) throw new Error(`实体不存在：${id}`);
+    if (!cur) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
     const next = { ...cur, ...input, id } as T;
     map.set(id, next);
     await this.save();
@@ -70,7 +71,7 @@ export class JsonRepository<T extends Entity> implements Repository<T> {
 
   async delete(id: string): Promise<void> {
     const map = this.load();
-    if (!map.delete(id)) throw new Error(`实体不存在：${id}`);
+    if (!map.delete(id)) throw new CodedError(ErrorCode.NOT_FOUND, `实体不存在：${id}`);
     await this.save();
   }
 

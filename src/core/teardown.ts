@@ -24,6 +24,7 @@ export function runTeardownCheck(ctx: RunContext, billingData: BillingData): Che
   checks.push({
     name: '执行后核对：任务最终状态',
     pass: true,
+    kind: 'TEARDOWN',
     detail: `任务 ${taskId} 最终状态=${status}`,
     level: 'P2',
   });
@@ -43,6 +44,7 @@ export function runTeardownCheck(ctx: RunContext, billingData: BillingData): Che
       checks.push({
         name: '执行后核对：失败任务积分回退',
         pass: false,
+        kind: 'TEARDOWN',
         detail: `任务失败但积分净消耗=${consumed}（${source}，应回退为 0），请人工确认是否需手动回退`,
         level: 'P1',
       });
@@ -50,6 +52,7 @@ export function runTeardownCheck(ctx: RunContext, billingData: BillingData): Che
       checks.push({
         name: '执行后核对：积分净消耗',
         pass: true,
+        kind: 'TEARDOWN',
         detail: `净消耗=${consumed}（${source}）${taskFailed ? '（任务失败，已回退）' : ''}`,
         level: 'P2',
       });
@@ -58,6 +61,7 @@ export function runTeardownCheck(ctx: RunContext, billingData: BillingData): Che
     checks.push({
       name: '执行后核对：积分净消耗',
       pass: true,
+      kind: 'TEARDOWN',
       detail: '计费数据未采集到，跳过核对',
       level: 'P2',
     });

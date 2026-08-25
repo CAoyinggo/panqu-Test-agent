@@ -7,6 +7,7 @@ import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
 import type { PlatformHttpServer } from '../../src/platform/api/index.js';
+import { advanceVerifiedRunToRunning, completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 const TOKEN = 'scenario-token';
@@ -64,8 +65,8 @@ afterEach(async () => {
   }
 });
 
-describe('Scenario 1：创建 Run（POST /runs → QUEUED → Scheduler → RUNNING）', () => {
-  it('API 创建 Run 入队，Worker 领取后进入 RUNNING', async () => {
+describe('Scenario 1：创建 Run（POST /runs → QUEUED → Scheduler → PLANNING）', () => {
+  it('API 创建 Run 后立即触发 Scheduler，空 Worker 成功只能进入 PLANNING', async () => {
     const b = makeBundle();
     b.registerWorkerExecutor('w1', async (job: unknown) => {
       const p = job as { runId: string };
@@ -79,10 +80,10 @@ describe('Scenario 1：创建 Run（POST /runs → QUEUED → Scheduler → RUNN
     });
     const runId = (created.data as { runId: string }).runId;
     expect((created.data as { status: string }).status).toBe('QUEUED');
-    expect(await b.scheduler.pendingCount()).toBe(1);
-    // Scheduler 领取 → RUNNING
-    await b.pool.dispatch();
-    expect((await b.service.getRun(runId))?.status).toBe('RUNNING');
+    // HTTP 主链必须真实触发 Scheduler，不依赖调用方再手工 dispatch。
+    expect(await b.scheduler.pendingCount()).toBe(0);
+    await b.pool.drain();
+    expect((await b.service.getRun(runId))?.status).toBe('PLANNING');
   });
 });
 
@@ -91,7 +92,6 @@ describe('Scenario 2：Worker 执行（Scheduler → Worker → 流水线 → CO
     const b = makeBundle();
     b.registerWorkerExecutor('w1', async (job: unknown) => {
       const p = job as { runId: string };
-      if ((await b.service.getRun(p.runId))?.status === 'QUEUED') await b.service.startRun(p.runId);
       await b.service.saveCheckpoint({
         runId: p.runId,
         stage: 'autonomous-pipeline',
@@ -101,7 +101,7 @@ describe('Scenario 2：Worker 执行（Scheduler → Worker → 流水线 → CO
         budgetState: { used: 20, total: 100 },
         traceId: `trace-${p.runId}`,
       });
-      await b.service.completeRun(p.runId);
+      await completeVerifiedRun(b, p.runId);
     });
     const { runId } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'autonomous', actor: 'qa', role: 'QA' });
     await runSupervisor(b);
@@ -149,7 +149,7 @@ describe('Scenario 4：Pause / Resume（Checkpoint 恢复，不重复执行已�
   it('RUNNING → PAUSED(checkpoint) → RESUME → COMPLETED', async () => {
     const b = makeBundle();
     const { runId } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'manual', actor: 'qa', role: 'QA' });
-    await b.service.startRun(runId);
+    await advanceVerifiedRunToRunning(b, runId);
     await b.service.saveCheckpoint({
       runId,
       stage: 'regression',
@@ -170,7 +170,7 @@ describe('Scenario 4：Pause / Resume（Checkpoint 恢复，不重复执行已�
     const ck2 = (await b.service.loadCheckpoint(runId)) as { completedCases: string[] };
     expect(ck2.completedCases).toEqual(['case-1', 'case-2']);
     // 只执行剩余 Case，然后完成
-    await b.service.completeRun(runId);
+    await completeVerifiedRun(b, runId);
     expect((await b.service.getRun(runId))?.status).toBe('COMPLETED');
   });
 });

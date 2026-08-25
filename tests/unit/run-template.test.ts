@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
+import { completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 
@@ -17,9 +18,9 @@ async function makeFinishedRun(b: PlatformBundle, status: 'COMPLETED' | 'FAILED'
   const suite = await b.service.createSuite({ projectId: 'wan3', name: '回归', caseIds: ['c1'], createdBy: 'qa' }, 'QA');
   const plan = await b.service.createPlan({ projectId: 'wan3', name: 'P', suiteIds: [suite.id], environment: 'staging', mode: 'AUTONOMOUS', budget: 10, releaseGate: true, createdBy: 'qa' }, 'QA');
   const { runId } = await b.service.runPlan(plan.id, 'qa', 'QA');
-  await b.service.startRun(runId);
-  if (status === 'COMPLETED') await b.service.completeRun(runId);
-  else await b.service.failRun(runId, 'boom');
+  if (status === 'COMPLETED') await completeVerifiedRun(b, runId);
+  else await b.service.startRun(runId);
+  if (status === 'FAILED') await b.service.failRun(runId, 'boom');
   return runId;
 }
 

@@ -21,6 +21,15 @@ import type { TestCase } from '../agents/test-design/testcase-schema.js';
 import type { ApprovalRequest, ApprovalResult } from '../agents/approval/approval-schema.js';
 import type { AuditEntry } from '../agents/approval/approval-audit.js';
 import { buildApprovalRequests } from '../agents/orchestration/agent-pipeline.js';
+import { RiskAgent } from '../agents/risk/risk-agent.js';
+import {
+  evaluateExecutionPolicy,
+  type ExecutionApproval,
+  type PolicyGateResult,
+  type ProjectExecutionPolicy,
+} from '../agents/policy/policy-gate.js';
+import type { Requirement } from '../agents/requirement/requirement-schema.js';
+import { resolveEnvironmentTier } from '../config/environment-policy.js';
 
 /**
  * 归一化各种执行结果输入为 ExecutionOutcome。
@@ -136,9 +145,23 @@ export async function analyzeFailures(
   };
 }
 
-/** 任务记录（Mode D 恢复依据），持久化于 output/tasks/<taskId>.json */
+/**
+ * 任务记录（Mode D 恢复依据），持久化于 output/tasks/<runId>.json。
+ * 标识三件套分别保存（解决「同需求并发运行冲突 / 记录覆盖」）：
+ *   runId            —— 文件名（每次运行唯一，绝不互相覆盖）；
+ *   taskId           —— 稳定任务标识（需求哈希派生，同需求跨运行一致，供聚合/检索）；
+ *   requirementsHash —— 需求内容 SHA-256；createdAt —— 运行创建时间。
+ * 兼容：旧记录（无 runId）按 <taskId>.json 读写。
+ */
 export interface TaskRecord {
+  /** 本次运行唯一标识（ULID；缺省时回退以 taskId 命名，兼容旧记录） */
+  runId?: string;
+  /** 稳定任务标识（需求哈希派生） */
   taskId: string;
+  /** 需求内容哈希（SHA-256，归一化后） */
+  requirementsHash?: string;
+  /** 运行创建时间（ISO） */
+  createdAt?: string;
   feature: string;
   requirement: string;
   environment: string;
@@ -150,15 +173,24 @@ export interface TaskRecord {
 
 export const DEFAULT_TASK_DIR = path.resolve('output', 'tasks');
 
+/** 记录文件名：优先 runId（并发安全），旧记录回退 taskId */
+function recordFileName(record: TaskRecord): string {
+  return `${record.runId ?? record.taskId}.json`;
+}
+
 export function saveTaskRecord(record: TaskRecord, dir: string = DEFAULT_TASK_DIR): string {
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${record.taskId}.json`);
+  const file = path.join(dir, recordFileName(record));
   fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf8');
   return file;
 }
 
-export function loadTaskRecord(taskId: string, dir: string = DEFAULT_TASK_DIR): TaskRecord | null {
-  const file = path.join(dir, `${taskId}.json`);
+/**
+ * 加载任务记录：按 runId（ULID，新记录）→ taskId（旧记录）两段查找。
+ * --resume 传 runId 可精确恢复某次运行；传 taskId 恢复旧格式记录。
+ */
+export function loadTaskRecord(id: string, dir: string = DEFAULT_TASK_DIR): TaskRecord | null {
+  const file = path.join(dir, `${id}.json`);
   if (!fs.existsSync(file)) return null;
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as TaskRecord;
@@ -167,12 +199,29 @@ export function loadTaskRecord(taskId: string, dir: string = DEFAULT_TASK_DIR): 
   }
 }
 
+/** 列出全部任务记录（按创建时间倒序；runId 时间有序，便于 --resume 选择） */
+export function listTaskRecords(dir: string = DEFAULT_TASK_DIR): TaskRecord[] {
+  if (!fs.existsSync(dir)) return [];
+  const records: TaskRecord[] = [];
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      records.push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as TaskRecord);
+    } catch { /* 跳过损坏记录 */ }
+  }
+  // runId（ULID）字典序即创建序：倒序 = 最新在前
+  return records.sort((a, b) => (b.runId ?? '').localeCompare(a.runId ?? ''));
+}
+
 /** 恢复任务选项 */
 export interface ResumeTaskOptions {
   maxRca?: number;
   maxDefects?: number;
   autoApprove?: boolean;
   concurrency?: number;
+  /** 仅可信审批中心可注入；autoApprove 不能代替执行审批。 */
+  executionApproval?: ExecutionApproval;
+  projectPolicy?: ProjectExecutionPolicy;
 }
 
 /** 恢复任务输出（Mode D） */
@@ -186,6 +235,7 @@ export interface ResumeTaskOutput {
   /** 获批并已应用的自愈补丁 */
   applied: Array<{ suggestion: HealingSuggestion; caseId: string; diff: string }>;
   reexecuted?: ExecutionOutcome;
+  policyGate?: PolicyGateResult;
   recoveredCount: number;
   stillFailed: CaseExecutionResult[];
   summary: string;
@@ -258,8 +308,47 @@ export async function resumeTask(
 
   // 5. 重新执行：仅当有获批并应用的自愈补丁时才回归（Approval → Execution 门禁）
   let reexecuted: ExecutionOutcome | undefined;
+  let policyGate: PolicyGateResult | undefined;
   if (applied.length > 0) {
-    if (runner) {
+    const candidates = applied
+      .map((item) => healedByCase.get(item.caseId))
+      .filter((item): item is TestCase => Boolean(item));
+
+    // Resume 不是审批旁路：production 必须基于当前补丁重新评估 Risk、重建 Plan 并再过 Gate。
+    if (resolveEnvironmentTier(env) === 'production' && candidates.length > 0) {
+      const requirement: Requirement = {
+        feature: record.feature,
+        goal: record.requirement,
+        capabilities: [],
+        inputs: [],
+        requirements: [],
+        businessRules: [],
+        dependencies: [],
+        constraints: [],
+        risks: [],
+        source: record.requirement,
+      };
+      const risk = await new RiskAgent().execute({ requirement, testCases: candidates, environment: env }, context);
+      const plan = new ExecutionAgent().planExecution(candidates, options.concurrency ?? 1, {
+        policy: { realExecution: true },
+      });
+      policyGate = evaluateExecutionPolicy({
+        requirement,
+        risk,
+        testCases: candidates,
+        environment: env,
+        executionPlan: plan,
+        approval: options.executionApproval,
+        projectPolicy: options.projectPolicy,
+      });
+      if (!policyGate.allowed) {
+        context.logger.warn(`[Resume] Policy Gate ${policyGate.verdict}：${policyGate.reasons.join('；')}`);
+      }
+    }
+
+    if (policyGate && !policyGate.allowed) {
+      reexecuted = undefined;
+    } else if (runner) {
       const results: CaseExecutionResult[] = [];
       for (const s of applied) {
         const def = healedByCase.get(s.caseId);
@@ -291,6 +380,7 @@ export async function resumeTask(
     approvalResults: built.results,
     applied,
     reexecuted,
+    ...(policyGate ? { policyGate } : {}),
     recoveredCount,
     stillFailed,
     summary: `恢复任务 ${record.taskId}：RCA ${rcas.length}，缺陷草稿 ${defects.length}，自愈建议 ${healing?.suggestions.length ?? 0}，获批并应用 ${applied.length} 条，重新执行 ${reexecuted?.total ?? 0} 条（恢复 ${recoveredCount}，仍失败 ${stillFailed.length}）`,

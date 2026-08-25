@@ -148,9 +148,11 @@ export function parseRequirement(text: string, source?: string): Requirement {
   const businessRules = matchAll(t, BUSINESS_RULE_MAP);
   const dependencies = matchAll(t, DEPENDENCY_MAP);
 
-  // feature：优先按明确功能名；兜底取能力映射或默认 wan3
+  // feature：优先按明确功能名；视频能力归 wan3；无法识别 → 'unknown'（禁止兜底 wan3，
+  // 否则非视频业务会被生成 WAN3 视频用例并可能真实提交执行）
   let feature = matchAll(t, FEATURE_MAP)[0] ?? '';
-  if (!feature) feature = capabilities.includes('text-to-video') || capabilities.includes('video') ? 'wan3' : 'wan3';
+  if (!feature && (capabilities.includes('text-to-video') || capabilities.includes('video'))) feature = 'wan3';
+  if (!feature) feature = 'unknown';
 
   // 置信度：按命中维度加权
   const hits = (capabilities.length > 0 ? 1 : 0)

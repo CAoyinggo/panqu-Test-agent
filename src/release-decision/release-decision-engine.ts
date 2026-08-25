@@ -27,9 +27,9 @@ const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 export function decideRelease(input: ReleaseDecisionInput): AutonomousReleaseDecision {
   const t: ReleaseDecisionThresholds = { ...DEFAULT_RELEASE_DECISION_THRESHOLDS, ...(input.thresholds ?? {}) };
 
-  const p0Pass = input.p0.total > 0 ? input.p0.passed === input.p0.total : true;
-  const p1Rate = input.p1.total > 0 ? input.p1.passed / input.p1.total : 1;
-  const p1Pass = p1Rate >= t.p1PassRate;
+  const p0Pass = input.p0.total > 0 && input.p0.passed === input.p0.total;
+  const p1Rate = input.p1.total > 0 ? input.p1.passed / input.p1.total : 0;
+  const p1Pass = input.p1.total > 0 && p1Rate >= t.p1PassRate;
   const coveragePass = input.coverage >= t.minCoverage;
   const criticalPass = input.criticalDefects <= 0;
   const envOk = !input.environmentAbnormal;

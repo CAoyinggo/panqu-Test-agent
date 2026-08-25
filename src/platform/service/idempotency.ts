@@ -9,7 +9,7 @@ export interface IdempotencyRecord extends Entity {
   key: string;
   kind: string;
   resultId: string;
-  status: 'DONE';
+  status: 'IN_PROGRESS' | 'DONE';
   createdAt: string;
 }
 
@@ -40,7 +40,7 @@ export class IdempotencyStore {
       key,
       kind,
       resultId: '',
-      status: 'DONE',
+      status: 'IN_PROGRESS',
       createdAt: this.nowIso(),
     });
     return { repeated: false, resultId: null };
@@ -60,7 +60,15 @@ export class IdempotencyStore {
       });
       return;
     }
-    await this.repo.update(existing[0].id, { resultId });
+    await this.repo.update(existing[0].id, { resultId, status: 'DONE' });
+  }
+
+  /** 操作在提交副作用前失败时释放占位，允许同一幂等键安全重试。 */
+  async release(kind: string, key: string): Promise<void> {
+    const existing = await this.repo.query({ kind, key });
+    for (const record of existing) {
+      if (record.status === 'IN_PROGRESS') await this.repo.delete(record.id);
+    }
   }
 
   async has(kind: string, key: string): Promise<boolean> {

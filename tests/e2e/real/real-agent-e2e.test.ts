@@ -21,7 +21,7 @@ import { MockLLMProvider } from '../../../src/llm/index.js';
 import { REAL_ENABLED, REAL_SUBMIT, getRealEnv } from './real-env.js';
 
 /** 真实冒烟执行器：每个用例提交一个最小真实 WAN 任务并查询状态（受上限约束） */
-async function realSmokeRunner(
+export async function realSmokeRunner(
   cases: LoadedCase[],
   options: { env?: string } = {},
 ): Promise<ExecutionOutcome> {
@@ -39,10 +39,13 @@ async function realSmokeRunner(
         caseId,
         name: c.name ?? caseId,
         feature: c.feature ?? 'real',
-        pass: true,
-        passRate: 100,
+        executed: false,
+        status: 'NOT_EXECUTED',
+        pass: false,
+        passRate: 0,
+        error: `REAL_E2E_MAX_CASES=${MAX}：达到真实提交上限，未执行`,
         durationMs: 0,
-        checks: [{ name: 'real-smoke-skip', pass: true, detail: `未在真实冒烟中执行（上限 ${MAX}）` }],
+        checks: [{ name: 'real-smoke-skip', pass: false, detail: `未在真实冒烟中执行（上限 ${MAX}）`, kind: 'SKIPPED' }],
       });
       continue;
     }
@@ -89,6 +92,10 @@ async function realSmokeRunner(
         caseId,
         name: c.name ?? caseId,
         feature: c.feature ?? 'real',
+        processor: 'real-wan3-api',
+        processorInvoked: true,
+        executed: true,
+        status: ok ? 'PASS' : 'FAIL',
         pass: ok,
         passRate: ok ? 100 : 0,
         error: ok ? undefined : (j.msg ?? JSON.stringify(j).slice(0, 300)),
@@ -98,6 +105,7 @@ async function realSmokeRunner(
             name: 'real-submit',
             pass: ok,
             detail: `code=${j.code} taskId=${taskId ?? 'none'} ${statusDetail} billing=${billingOk}`,
+            kind: 'BUSINESS',
           },
         ],
       });
@@ -106,16 +114,25 @@ async function realSmokeRunner(
         caseId,
         name: c.name ?? caseId,
         feature: c.feature ?? 'real',
+        processor: 'real-wan3-api',
+        processorInvoked: true,
+        executed: true,
+        status: 'FAIL',
         pass: false,
         passRate: 0,
         error: (e as Error).message,
         durationMs: Date.now() - t0,
+        checks: [{
+          name: 'real-submit',
+          pass: false,
+          detail: `真实提交失败：${(e as Error).message}`,
+          kind: 'BUSINESS',
+        }],
       });
     }
   }
 
   return computeOutcome('real', results, {
-    executed: true,
     summary: `真实冒烟完成：提交 ${Math.min(cases.length, MAX)}/${cases.length} 条`,
   });
 }
@@ -145,7 +162,11 @@ describe.skipIf(!ENABLED)('[real] Agent 全链路（真实 API）', () => {
         {
           requirementText: '测试 WAN3 文生视频，验证任务提交、状态查询与积分扣费',
           environment: 'test',
-          options: { maxRca: 5, maxDefects: 5 },
+          options: {
+            maxRca: 5,
+            maxDefects: 5,
+            executionApproval: { id: 'real-e2e-opt-in', status: 'APPROVED', approvedBy: 'real-e2e-operator' },
+          },
         },
         context,
       );

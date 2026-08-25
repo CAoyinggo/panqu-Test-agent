@@ -83,7 +83,7 @@ describe('Platform API：认证与基础', () => {
     const ts = await makeServer();
     const res = await ts.request('GET', '/health');
     expect(res.status).toBe(401);
-    expect((res.data as { error: string }).error).toBe('unauthorized');
+    expect((res.data as { error: string }).error).toBe('AUTH_FAILED');
   });
 
   it('错误 Token → 401', async () => {
@@ -113,7 +113,7 @@ describe('Platform API：限流（429）', () => {
     expect((await ts.request('GET', '/health', { token: TOKEN })).status).toBe(200);
     const third = await ts.request('GET', '/health', { token: TOKEN });
     expect(third.status).toBe(429);
-    expect((third.data as { error: string }).error).toBe('rate_limited');
+    expect((third.data as { error: string }).error).toBe('RATE_LIMITED');
   });
 });
 
@@ -146,14 +146,14 @@ describe('Platform API：Run 生命周期', () => {
     expect((res.data as { message: string }).message).toMatch(/权限/);
   });
 
-  it('不存在的 Project → 400', async () => {
+  it('不存在的 Project → 404', async () => {
     const ts = await makeServer();
     const res = await ts.request('POST', '/runs', {
       token: TOKEN,
       headers: { 'X-Actor': 'qa', 'X-Role': 'QA' },
       body: { projectId: 'nope', environment: 'test', trigger: 'manual' },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
     expect((res.data as { message: string }).message).toMatch(/Project 不存在/);
   });
 

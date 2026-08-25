@@ -1,0 +1,18 @@
+{
+  "scenarioId": "SCN-safety-false-pass-policy-block",
+  "environment": "isolated-policy-harness",
+  "realExecution": false,
+  "policy": {
+    "decision": "BLOCKED",
+    "allowPrepare": false,
+    "allowProcessors": false,
+    "allowTools": false,
+    "allowProviderCalls": false,
+    "allowBilling": false,
+    "blockedCodes": ["POLICY_BLOCKED"]
+  },
+  "processorAllowlist": [],
+  "prepareHookAllowlist": [],
+  "cleanupHookAllowlist": [],
+  "evidenceKindAllowlist": ["TRACE", "AUDIT_RECORD"]
+}

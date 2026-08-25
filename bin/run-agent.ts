@@ -10,14 +10,13 @@ import {
   createAgentContext,
   createDataPrepareTool,
   createExecutionRunTool,
-  JsonMemoryStore,
+  createPersistentMemory,
   NoopMemory,
   ToolRegistry,
   runAgentPipeline,
 } from '../src/agents/index.js';
-import type { BudgetLimits } from '../src/agents/index.js';
 import { createRuntimeLLM, describeLLMConfig } from '../src/config/llm.js';
-import type { LLMCliOverrides } from '../src/config/llm.js';
+import { parseAgentCliArgs, type AgentCliArgs as CliArgs } from '../src/cli/agent-args.js';
 import {
   normalizeExecutionOutcome,
   analyzeFailures,
@@ -30,130 +29,6 @@ import { computeCiResult } from '../src/qa/ci-result.js';
 import { saveAgentDashboard } from '../src/qa/dashboard.js';
 import fs from 'node:fs';
 
-/** CLI 参数 */
-interface CliArgs {
-  requirement: string;
-  env?: string;
-  skipExecution: boolean;
-  json: boolean;
-  memoryPath?: string;
-  help: boolean;
-  // Phase 10-18 增强开关
-  useSelection: boolean;
-  autoApprove: boolean;
-  noSelection: boolean;
-  noCoverage: boolean;
-  noRca: boolean;
-  noDefect: boolean;
-  noHealing: boolean;
-  noApproval: boolean;
-  noTrace: boolean;
-  maxRca?: number;
-  maxDefects?: number;
-  budget: BudgetLimits;
-  // Phase 20.1 真实 LLM
-  llm: LLMCliOverrides;
-  // Phase 20.6 QA 工作流（4 种模式）
-  requirementFile?: string;
-  planOnly: boolean;
-  analyzeFile?: string;
-  rca: boolean;
-  resumeId?: string;
-  taskDir?: string;
-  // Phase 20.7 CI 集成
-  ci: boolean;
-  ciStatusFile?: string;
-}
-
-/** 简易参数解析 */
-function parseArgs(argv: string[]): CliArgs {
-  const out: CliArgs = {
-    requirement: '',
-    env: undefined,
-    skipExecution: false,
-    json: false,
-    memoryPath: undefined,
-    help: false,
-    useSelection: false,
-    autoApprove: false,
-    noSelection: false,
-    noCoverage: false,
-    noRca: false,
-    noDefect: false,
-    noHealing: false,
-    noApproval: false,
-    noTrace: false,
-    maxRca: undefined,
-    maxDefects: undefined,
-    budget: {},
-    llm: {},
-    planOnly: false,
-    rca: false,
-    ci: false,
-  };
-  const num = (v: string | undefined, key: keyof BudgetLimits): void => {
-    if (v !== undefined && v !== '') {
-      const n = Number(v);
-      if (Number.isFinite(n) && n > 0) out.budget[key] = n;
-    }
-  };
-  const numLLM = (v: string, key: 'timeoutMs' | 'maxTokens'): void => {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) out.llm[key] = n;
-  };
-  const positional: string[] = [];
-  for (const a of argv) {
-    if (a === '--help' || a === '-h') out.help = true;
-    else if (a === '--skip-execution') out.skipExecution = true;
-    else if (a === '--json') out.json = true;
-    else if (a === '--plan-only') out.planOnly = true;
-    else if (a === '--rca') out.rca = true;
-    else if (a === '--ci') out.ci = true;
-    else if (a === '--requirement') out.requirementFile = argv[argv.indexOf(a) + 1] ?? undefined;
-    else if (a === '--analyze') out.analyzeFile = argv[argv.indexOf(a) + 1] ?? undefined;
-    else if (a === '--resume') out.resumeId = argv[argv.indexOf(a) + 1] ?? undefined;
-    else if (a === '--task-dir') out.taskDir = argv[argv.indexOf(a) + 1] ?? undefined;
-    else if (a === '--use-selection') out.useSelection = true;
-    else if (a === '--auto-approve') out.autoApprove = true;
-    else if (a === '--no-selection') out.noSelection = true;
-    else if (a === '--no-coverage') out.noCoverage = true;
-    else if (a === '--no-rca') out.noRca = true;
-    else if (a === '--no-defect') out.noDefect = true;
-    else if (a === '--no-healing') out.noHealing = true;
-    else if (a === '--no-approval') out.noApproval = true;
-    else if (a === '--no-trace') out.noTrace = true;
-    else if (a === '--llm-provider') out.llm.provider = argv[argv.indexOf(a) + 1] ?? 'openai-compatible';
-    else if (a === '--model') out.llm.model = argv[argv.indexOf(a) + 1] ?? '';
-    else if (a === '--fallback-model') out.llm.fallbackModel = argv[argv.indexOf(a) + 1] ?? '';
-    else if (a === '--llm-timeout') numLLM(argv[argv.indexOf(a) + 1] ?? '', 'timeoutMs');
-    else if (a === '--max-tokens') numLLM(argv[argv.indexOf(a) + 1] ?? '', 'maxTokens');
-    else if (a.startsWith('--llm-provider=')) out.llm.provider = a.slice('--llm-provider='.length);
-    else if (a.startsWith('--model=')) out.llm.model = a.slice('--model='.length);
-    else if (a.startsWith('--fallback-model=')) out.llm.fallbackModel = a.slice('--fallback-model='.length);
-    else if (a.startsWith('--llm-timeout=')) numLLM(a.slice('--llm-timeout='.length), 'timeoutMs');
-    else if (a.startsWith('--max-tokens=')) numLLM(a.slice('--max-tokens='.length), 'maxTokens');
-    else if (a.startsWith('--env=')) out.env = a.slice('--env='.length);
-    else if (a.startsWith('--memory=')) out.memoryPath = a.slice('--memory='.length);
-    else if (a.startsWith('--requirement=')) out.requirementFile = a.slice('--requirement='.length);
-    else if (a.startsWith('--analyze=')) out.analyzeFile = a.slice('--analyze='.length);
-    else if (a.startsWith('--ci-status=')) out.ciStatusFile = a.slice('--ci-status='.length);
-    else if (a.startsWith('--resume=')) out.resumeId = a.slice('--resume='.length);
-    else if (a.startsWith('--task-dir=')) out.taskDir = a.slice('--task-dir='.length);
-    else if (a.startsWith('--max-rca=')) out.maxRca = Number(a.slice('--max-rca='.length)) || undefined;
-    else if (a.startsWith('--max-defects=')) out.maxDefects = Number(a.slice('--max-defects='.length)) || undefined;
-    else if (a.startsWith('--budget-tokens=')) num(a.slice('--budget-tokens='.length), 'maxTokens');
-    else if (a.startsWith('--budget-llm=')) num(a.slice('--budget-llm='.length), 'maxLLMCalls');
-    else if (a.startsWith('--budget-agents=')) num(a.slice('--budget-agents='.length), 'maxAgentCalls');
-    else if (a.startsWith('--budget-tools=')) num(a.slice('--budget-tools='.length), 'maxToolCalls');
-    else if (a.startsWith('--budget-cases=')) num(a.slice('--budget-cases='.length), 'maxCases');
-    else if (a.startsWith('--budget-concurrency=')) num(a.slice('--budget-concurrency='.length), 'maxConcurrency');
-    else if (a.startsWith('--budget-duration=')) num(a.slice('--budget-duration='.length), 'maxDurationMs');
-    else positional.push(a);
-  }
-  out.requirement = positional.join(' ').trim();
-  return out;
-}
-
 /** 输出人类可读报告（含 Phase 10-18 增强产物摘要） */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function printReport(args: CliArgs, result: any): void {
@@ -164,6 +39,7 @@ function printReport(args: CliArgs, result: any): void {
   console.log(`LLM：${llmInfo.provider} / ${llmInfo.model}${llmInfo.fallbackModel ? `（备 ${llmInfo.fallbackModel}）` : ''}`);
   console.log(`生成用例：${result.testCases.length} 条`);
   console.log(`整体风险：${result.risk.summary.overall}（${result.risk.risks.length} 项${result.risk.summary.recommendedSkip ? '，建议人工介入' : ''}）`);
+  console.log(`执行门禁：${result.policyGate.verdict}${result.policyGate.reasons.length ? `（${result.policyGate.reasons.join('；')}）` : ''}`);
   console.log(`数据计划：needsSetup=${result.dataPlan.needsSetup}，工厂=${result.dataPlan.factoryName}，动作 ${result.dataPlan.setupActions.length + result.dataPlan.teardownActions.length} 项`);
 
   if (result.outcome.executed) {
@@ -274,7 +150,7 @@ function printResumeReport(out: ResumeTaskOutput): void {
 }
 
 async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseAgentCliArgs(process.argv.slice(2));
 
   if (args.help || (!args.requirement && !args.requirementFile && !args.analyzeFile && !args.resumeId && !args.ciStatusFile)) {
     console.log(`用法：
@@ -288,7 +164,7 @@ async function main(): Promise<number> {
   --env=<env>            执行环境（test/preonline/prod），默认 test
   --skip-execution       跳过实际执行，仅产出测试设计/风险/数据计划（离线）
   --plan-only            模式 B：只生成测试不执行（等价 skip-execution）
-  --memory=<path>        记忆持久化 JSON 路径（默认临时内存）
+  --memory=<path>        Memory 路径；.sqlite/.db 使用 SQLite，其余使用并发安全 JSON
   --task-dir=<path>      任务记录目录（默认 output/tasks）
   --json                 输出 JSON 报告
   --help                 显示帮助
@@ -296,6 +172,7 @@ async function main(): Promise<number> {
 Phase 10-18 增强：
   --use-selection        用「智能选择」选中的用例集执行（默认全量执行）
   --auto-approve         自动批准 REVIEW 级审批（默认保持 pending 待人工）
+  --execution-approval=<id> 提供人工审批 ID，允许 Policy Gate 放行需审批的真实执行
   --no-selection        关闭智能测试选择
   --no-coverage         关闭覆盖缺口分析
   --no-rca              关闭失败用例根因分析
@@ -315,10 +192,12 @@ Phase 10-18 增强：
 
 Phase 20.1 真实 LLM：
   --llm-provider=<p>    LLM Provider（mock/deepseek/glm/doubao/openai-compatible/anthropic-compatible）
-  --model=<name>        主模型名（覆盖 LLM_MODEL）
+  --model <name>        主模型名（也支持 --model=<name>；覆盖 LLM_MODEL）
   --fallback-model=<n>  回退模型名（覆盖 LLM_FALLBACK_MODEL）
   --llm-timeout=<ms>    LLM 超时毫秒（覆盖 LLM_TIMEOUT）
   --max-tokens=<n>      LLM 最大输出 token（覆盖 LLM_MAX_TOKENS）
+
+参数规则：未知参数、重复参数、缺失参数值会直接报错并以退出码 2 结束。
 
 示例：
   node dist/bin/run-agent.js "测试 WAN3 文生视频，覆盖 720P、1080P 分辨率，验证任务提交成功与积分正确扣除"
@@ -336,7 +215,7 @@ Phase 20.1 真实 LLM：
 
   // Memory：可指定持久化路径
   const memory = args.memoryPath
-    ? new JsonMemoryStore(args.memoryPath)
+    ? await createPersistentMemory({ path: args.memoryPath })
     : new NoopMemory();
 
   // ===== 模式 CI-Status：读取结果文件计算 CI 六态（--ci-status=<file>）=====
@@ -438,7 +317,18 @@ Phase 20.1 真实 LLM：
   const skipExecution = args.skipExecution || args.planOnly;
 
   // Tools：数据准备 + 执行引擎（真实执行需项目配置，--plan-only/--skip-execution 不注册执行 Tool）
-  const tools = new ToolRegistry();
+  const executionApproval = args.executionApprovalId
+    ? {
+        id: args.executionApprovalId,
+        status: 'APPROVED' as const,
+        approvedBy: process.env.USER ?? 'cli-user',
+        approvedAt: new Date().toISOString(),
+      }
+    : undefined;
+  const tools = new ToolRegistry({
+    environment: args.env ?? 'test',
+    onApproval: executionApproval ? async () => true : undefined,
+  });
   tools.register(createDataPrepareTool());
   if (!skipExecution) {
     tools.register(createExecutionRunTool());
@@ -471,6 +361,7 @@ Phase 20.1 真实 LLM：
         maxRca: args.maxRca,
         maxDefects: args.maxDefects,
         budget: Object.keys(args.budget).length ? args.budget : undefined,
+        executionApproval,
       },
     },
     context,
@@ -479,7 +370,10 @@ Phase 20.1 真实 LLM：
   // 保存任务记录（供 --resume 恢复）
   try {
     saveTaskRecord({
+      runId: result.runId,
       taskId: result.taskId,
+      requirementsHash: result.requirementsHash,
+      createdAt: result.createdAt,
       feature: result.requirement.feature,
       requirement: requirementText,
       environment: args.env ?? 'test',

@@ -50,7 +50,7 @@ describe('evaluateReleaseGate 发布门禁', () => {
     expect(result.summary).toContain('RELEASE=BLOCK');
   });
 
-  it('自定义阈值；P0/P1 无用例时视为达标', () => {
+  it('自定义阈值；P0/P1 无用例时因缺少执行证据而阻断', () => {
     const result = evaluateReleaseGate({
       p0: { total: 0, passed: 0 },
       p1: { total: 0, passed: 0 },
@@ -58,7 +58,7 @@ describe('evaluateReleaseGate 发布门禁', () => {
       criticalDefects: 0,
       thresholds: { minCoverage: 0.5, p1PassRate: 0.9 },
     });
-    expect(result.release).toBe('PASS');
+    expect(result.release).toBe('BLOCK');
   });
 });
 

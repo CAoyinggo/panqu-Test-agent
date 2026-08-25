@@ -43,7 +43,7 @@ npm run platform:smoke       # 真实运营闭环冒烟（独立数据目录）
 cp config/env/.env.staging.example .env
 ```
 
-关键项见 `docs/operations/configuration.md`。staging 推荐：`PLATFORM_STORAGE=sqlite`（或 `postgres`）、`PLATFORM_ENVIRONMENT=staging`、`JWT_SECRET` 必填。
+关键项见 `docs/operations/configuration.md`。staging 推荐：`PLATFORM_STORAGE=sqlite`（或 `postgres`）、`PLATFORM_MODE=staging`、`JWT_SECRET` 必填。
 
 ## 5. 启动
 
@@ -67,5 +67,7 @@ node dist/bin/platform-cli.js backup save /srv/panqu/backups/init.json   # 初�
 ## 7. 禁止事项
 
 - 禁止第一步直接连接真实生产业务（先 staging）。
-- 禁止把 `JWT_SECRET / DATABASE_URL / LLM_API_KEY / Webhook` 提交进 Git。
+- 禁止把 `JWT_SECRET / DATABASE_URL / REDIS_URL / LLM_API_KEY / Webhook` 提交进 Git。
 - 禁止在 production 开启默认口令 / 自动种子用户 / Autonomous 绕过 Approval。
+- 禁止依赖 PostgreSQL 默认连接；`DATABASE_URL` 必须由部署环境显式注入，连接或迁移失败时进程必须退出且不得监听服务端口。
+- production/staging 必须显式配置 `REDIS_URL`；Redis connect/PING 失败时 API 不得监听端口，也不得降级为单机 Map 限流。

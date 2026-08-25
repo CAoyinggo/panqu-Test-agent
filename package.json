@@ -11,9 +11,14 @@
     "dev:ts": "tsc -p tsconfig.json --watch",
     "migrate": "node scripts/migrate-json-to-ts.ts",
     "test": "vitest run",
+    "acceptance:test": "vitest run tests/acceptance",
+    "acceptance": "npm run build --silent && node dist/bin/run-acceptance.js",
+    "self-test": "npm run build --silent && node dist/bin/run-self-test.js",
+    "self-test:test": "vitest run tests/unit/discovery tests/unit/observers tests/unit/self-test tests/integration/developer-self-test.test.ts",
+    "test:p0": "vitest run tests/contract/execution-evidence-contract.test.ts tests/contract/execution-safety-contract.test.ts tests/contract/real-e2e-limit-contract.test.ts tests/legacy/run-completion-contract.test.ts tests/integration/platform-execution-safety-contract.test.ts tests/unit/execution-contract.test.ts tests/unit/execution-abort.test.ts tests/unit/policy-gate.test.ts tests/unit/agent-pipeline.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "agent:test": "vitest run tests/unit/agent-core.test.ts tests/unit/tool-registry.test.ts tests/unit/llm-provider.test.ts tests/unit/llm-fallback.test.ts tests/unit/config-llm.test.ts tests/unit/issue-tracker.test.ts tests/unit/healing-loop.test.ts tests/unit/qa-workflows.test.ts tests/unit/ci-result.test.ts tests/unit/environment-policy.test.ts tests/unit/dashboard.test.ts tests/unit/memory.test.ts tests/unit/orchestrator.test.ts tests/unit/requirement-agent.test.ts tests/unit/requirement-normalizer.test.ts tests/unit/prompt-registry.test.ts tests/unit/test-design-agent.test.ts tests/unit/risk-agent.test.ts tests/unit/data-agent.test.ts tests/unit/execution-agent.test.ts tests/unit/analysis-agent.test.ts tests/unit/memory-bridge.test.ts tests/unit/agent-pipeline.test.ts tests/unit/test-selection-agent.test.ts tests/unit/coverage-agent.test.ts tests/unit/root-cause-agent.test.ts tests/unit/flaky-agent.test.ts tests/unit/defect-agent.test.ts tests/unit/self-healing-agent.test.ts tests/unit/approval.test.ts tests/unit/state-machine.test.ts tests/unit/observability.test.ts tests/unit/model-router.test.ts tests/unit/memory-knowledge.test.ts",
+    "agent:test": "vitest run tests/unit/agent-core.test.ts tests/unit/run-agent-cli.test.ts tests/unit/tool-registry.test.ts tests/unit/llm-provider.test.ts tests/unit/llm-fallback.test.ts tests/unit/config-llm.test.ts tests/unit/issue-tracker.test.ts tests/unit/healing-loop.test.ts tests/unit/qa-workflows.test.ts tests/unit/ci-result.test.ts tests/unit/environment-policy.test.ts tests/unit/dashboard.test.ts tests/unit/memory.test.ts tests/unit/orchestrator.test.ts tests/unit/requirement-agent.test.ts tests/unit/requirement-normalizer.test.ts tests/unit/prompt-registry.test.ts tests/unit/test-design-agent.test.ts tests/unit/risk-agent.test.ts tests/unit/policy-gate.test.ts tests/unit/data-agent.test.ts tests/unit/execution-agent.test.ts tests/unit/analysis-agent.test.ts tests/unit/memory-bridge.test.ts tests/unit/agent-pipeline.test.ts tests/unit/test-selection-agent.test.ts tests/unit/coverage-agent.test.ts tests/unit/root-cause-agent.test.ts tests/unit/flaky-agent.test.ts tests/unit/defect-agent.test.ts tests/unit/self-healing-agent.test.ts tests/unit/approval.test.ts tests/unit/state-machine.test.ts tests/unit/observability.test.ts tests/unit/model-router.test.ts tests/unit/memory-knowledge.test.ts",
     "agent:eval": "npm run build && node dist/tests/evals/run-evals.js && vitest run tests/evals/agent-eval.test.ts",
     "agent:eval:real": "vitest run tests/evals/real",
     "agent:eval:comparison": "vitest run tests/evals/comparison",
@@ -179,7 +184,7 @@
     "agent:optimization:list": "npm run build && node dist/bin/cost-cli.js agent optimization list",
     "agent:optimization:approve": "npm run build && node dist/bin/cost-cli.js agent optimization approve",
     "agent:optimization:reject": "npm run build && node dist/bin/cost-cli.js agent optimization reject",
-    "phase52:test": "vitest run tests/unit/cost-attribution.test.ts tests/unit/cost-budget.test.ts tests/unit/cost-selection.test.ts tests/unit/model-routing.test.ts tests/unit/worker-scaling.test.ts tests/unit/capacity-planning.test.ts tests/unit/cost-anomaly.test.ts tests/unit/cost-optimization.test.ts tests/integration/cost-api.test.ts tests/integration/scaling.test.ts tests/integration/model-routing.test.ts tests/e2e/cost-dashboard.test.ts tests/e2e/cost-governance.test.ts tests/e2e/scaling.test.ts",
+    "phase52:test": "vitest run tests/unit/cost-attribution.test.ts tests/unit/cost-budget.test.ts tests/unit/cost-selection.test.ts tests/unit/model-routing.test.ts tests/unit/worker-scaling.test.ts tests/unit/capacity-planning.test.ts tests/unit/cost-anomaly.test.ts tests/unit/cost-optimization.test.ts tests/unit/rate-limiter.test.ts tests/integration/cost-api.test.ts tests/integration/scaling.test.ts tests/integration/model-routing.test.ts tests/e2e/cost-dashboard.test.ts tests/e2e/cost-governance.test.ts tests/e2e/scaling.test.ts",
     "phase52:web": "npm run build && npm run build:web && playwright test -c dist/tests/e2e/web/playwright.config.js cost.spec.ts",
     "platform:release-gate:test": "npm run build && vitest run tests/e2e/release-gate-real.test.ts",
     "platform:backup-restore:test": "npm run build && vitest run tests/e2e/backup-restore-real.test.ts",
@@ -234,6 +239,7 @@
     "ali-oss": "^6.23.0",
     "chokidar": "^3.6.0",
     "p-limit": "^7.3.1",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "redis": "^6.2.1"
   }
 }

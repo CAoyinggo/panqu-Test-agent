@@ -1,0 +1,20 @@
+{
+  "scenarioId": "SCN-wan3-billing-input-output-duration",
+  "mode": "BLOCKED",
+  "patterns": ["BOUNDARY", "BILLING", "PERSISTENCE"],
+  "operations": [
+    {"id": "STEP-001", "intent": "validate-authoritative-boundaries", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-002", "intent": "submit-correlated-work", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-003", "intent": "observe-actual-usage", "observer": null, "bindingRequired": true},
+    {"id": "STEP-004", "intent": "observe-billing-ledger", "observer": null, "bindingRequired": true}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "oracle": "one authoritative input boundary with zero conflicts", "resolution": "REQUIRED"},
+    {"id": "AS-002", "ac": "AC-002", "oracle": "boundary response equals the published contract", "resolution": "REQUIRED"},
+    {"id": "AS-003", "ac": "AC-003", "oracle": "observed usage equals the submitted and produced usage", "resolution": "REQUIRED"},
+    {"id": "AS-004", "ac": "AC-003", "oracle": "ledger amount equals authoritative formula output", "resolution": "REQUIRED"},
+    {"id": "AS-005", "ac": "AC-003", "oracle": "exactly one business charge for one correlation ID", "resolution": "REQUIRED"}
+  ],
+  "requiredEvidenceKinds": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER", "BILLING_RECORD"],
+  "blockedCodes": ["REQUIREMENT_CONFLICT", "MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+}

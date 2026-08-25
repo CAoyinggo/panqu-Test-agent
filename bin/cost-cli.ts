@@ -2,10 +2,10 @@
 // Phase 52 CLI：与 HTTP API 共用 CostGovernanceService 状态与策略语义。
 import path from 'node:path';
 import {
+  aggregateDailyCostCapacity,
   CostGovernanceService,
-  forecastCapacity,
+  forecastCapacities,
   paretoFrontier,
-  type CapacitySample,
 } from '../src/cost/governance.js';
 
 const args = process.argv.slice(2);
@@ -23,9 +23,7 @@ switch (`${area}:${command}`) {
   case 'cost:project': output({ projectId: id, ...service.summary({ projectId: id, window: (value('--window') ?? '7d') as never }) }); break;
   case 'cost:forecast': {
     const records = service.ledger.list();
-    const grouped = new Map<string, CapacitySample>();
-    for (const record of records) { const day = record.timestamp.slice(0, 10); const sample = grouped.get(day) ?? { timestamp: `${day}T00:00:00.000Z`, runs: 0, cost: 0, queuePeak: 0, workersPeak: 1 }; sample.cost += record.totalCost; sample.runs += record.runId ? 1 : 0; grouped.set(day, sample); }
-    output((['1h', '6h', '24h', '7d', '30d'] as const).map((horizon) => forecastCapacity([...grouped.values()], horizon)));
+    output(forecastCapacities(aggregateDailyCostCapacity(records)));
     break;
   }
   case 'cost:anomalies': output(service.anomalies); break;

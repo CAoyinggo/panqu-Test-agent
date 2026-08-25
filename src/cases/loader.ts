@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { TaskDef } from '../core/types.js';
+import { defaultLegacyMigrationIndex } from '../contracts/migration-index.js';
 
 /** 加载结果：含用例名、来源文件与所属功能模块 */
 export interface LoadedCase {
@@ -27,7 +28,7 @@ const DEFAULT_IGNORE = ['common', 'base', 'shared'];
 
 function loadJsonFile(file: string): LoadedCase {
   const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as TaskDef;
-  return { name: raw.name || path.basename(file), file, def: raw };
+  return { name: raw.name || path.basename(file), file, def: withLegacyContract(raw, file) };
 }
 
 async function loadModuleFile(file: string): Promise<LoadedCase> {
@@ -35,7 +36,25 @@ async function loadModuleFile(file: string): Promise<LoadedCase> {
   // 兼容 default 导出 / defineCase 命名导出 / case 命名导出
   const def: TaskDef | undefined = mod.default ?? mod.defineCase ?? mod.case;
   if (!def) throw new Error(`用例脚本缺少导出：${file}（需 default 导出）`);
-  return { name: def.name || path.basename(file), file, def };
+  return { name: def.name || path.basename(file), file, def: withLegacyContract(def, file) };
+}
+
+function withLegacyContract(def: TaskDef, file: string): TaskDef {
+  const record = defaultLegacyMigrationIndex().get(file);
+  if (!record) return {
+    ...def,
+    contractDependencies: [],
+    legacyContract: {
+      asset: path.relative(process.cwd(), file).split(path.sep).join('/'),
+      status: 'UNKNOWN',
+      reasons: ['Legacy Asset 未进入 Migration Index，禁止直接成为 Source of Truth'],
+    },
+  };
+  return {
+    ...def,
+    contractDependencies: record.contracts.map((dependency) => ({ ...dependency })),
+    legacyContract: { asset: record.asset, status: record.status, reasons: [...record.reasons] },
+  };
 }
 
 /** 递归收集目录下全部 *.json / *.js / *.ts（排除 *.d.ts 声明文件；跳过 _ 前缀文件与 ignore 子目录） */

@@ -47,6 +47,10 @@ function mockRunner() {
         scene: c.def.scene,
         priority: 'P0',
         tags: c.def.tags,
+        processor: 'mock-runner',
+        processorInvoked: true,
+        executed: true,
+        status: fail ? 'FAIL' as const : 'PASS' as const,
         pass: !fail,
         passRate: fail ? 50 : 100,
         error: fail ? '断言失败：状态为 FAILED' : undefined,
@@ -63,9 +67,11 @@ function mockRunner() {
 describe('execution - Schema 归一化', () => {
   it('computeOutcome 统计通过/失败/超时/通过率', () => {
     const o = computeOutcome('wan3', [
-      { caseId: 'a', name: 'A', pass: true, passRate: 100 },
-      { caseId: 'b', name: 'B', pass: false, passRate: 0 },
-      { caseId: 'c', name: 'C', pass: false, passRate: 0, timedOut: true },
+      { caseId: 'a', name: 'A', processor: 'mock', processorInvoked: true, executed: true, status: 'PASS', pass: true, passRate: 100,
+        checks: [{ name: 'business', pass: true, detail: 'ok', kind: 'BUSINESS' }] },
+      { caseId: 'b', name: 'B', processor: 'mock', processorInvoked: true, executed: true, status: 'FAIL', pass: false, passRate: 0,
+        checks: [{ name: 'business', pass: false, detail: 'failed', kind: 'BUSINESS' }] },
+      { caseId: 'c', name: 'C', executed: false, status: 'TIMEOUT', pass: false, passRate: 0, timedOut: true },
     ]);
     expect(o.total).toBe(3);
     expect(o.passed).toBe(1);
@@ -75,7 +81,11 @@ describe('execution - Schema 归一化', () => {
   });
 
   it('normalizeOutcome 兼容 cases 字段', () => {
-    const o = normalizeOutcome({ feature: 'wan3', cases: [{ id: 'x', name: 'X', pass: true, passRate: 100 }] });
+    const o = normalizeOutcome({ feature: 'wan3', cases: [{
+      id: 'x', name: 'X', executed: true, processor: 'mock', processorInvoked: true,
+      status: 'PASS', pass: true, passRate: 100,
+      checks: [{ name: 'business', pass: true, detail: 'ok', kind: 'BUSINESS' }],
+    }] });
     expect(o.results).toHaveLength(1);
     expect(o.results[0].caseId).toBe('x');
     expect(o.executed).toBe(true);
@@ -86,6 +96,30 @@ describe('execution - Schema 归一化', () => {
     expect(r.caseId).toBe('y');
     expect(r.pass).toBe(false);
     expect(r.passRate).toBe(0);
+  });
+
+  it('normalizeCaseExecutionResult 只有显式 executed=true 的 PASS 才保留通过', () => {
+    const missingExecutionTruth = normalizeCaseExecutionResult({
+      id: 'missing-executed', name: 'Missing executed', status: 'PASS', pass: true, passRate: 100,
+    });
+    expect(missingExecutionTruth).toMatchObject({
+      executed: false,
+      status: 'NOT_EXECUTED',
+      pass: false,
+      passRate: 0,
+    });
+
+    const explicitExecutionTruth = normalizeCaseExecutionResult({
+      id: 'executed', name: 'Executed', executed: true, processor: 'mock', processorInvoked: true,
+      status: 'PASS', pass: true, passRate: 100,
+      checks: [{ name: 'business', pass: true, detail: 'ok', kind: 'BUSINESS' }],
+    });
+    expect(explicitExecutionTruth).toMatchObject({
+      executed: true,
+      status: 'PASS',
+      pass: true,
+      passRate: 100,
+    });
   });
 });
 
@@ -112,6 +146,27 @@ describe('execution - 执行规划', () => {
 });
 
 describe('execution - ExecutionAgent 全链路', () => {
+  it('execution.run 明确标记为 risky', () => {
+    expect(createExecutionRunTool(mockRunner()).permission).toBe('risky');
+  });
+
+  it('dry-run 不调用注入的 Runner，所有用例均为 NOT_EXECUTED', async () => {
+    let runnerCalls = 0;
+    const tools = new ToolRegistry();
+    tools.register(createExecutionRunTool(async () => {
+      runnerCalls += 1;
+      return computeOutcome('wan3', [], { executed: true });
+    }));
+    const outcome = await new ExecutionAgent().execute(
+      { testCases: cases, options: { dryRun: true } },
+      makeContext(new MockLLMProvider(), tools),
+    );
+    expect(runnerCalls).toBe(0);
+    expect(outcome.executed).toBe(false);
+    expect(outcome.results).toHaveLength(cases.length);
+    expect(outcome.results.every((item) => item.status === 'NOT_EXECUTED' && item.pass === false)).toBe(true);
+  });
+
   it('经 Tool 执行并产出结构化结果', async () => {
     const tools = new ToolRegistry();
     tools.register(createExecutionRunTool(mockRunner()));

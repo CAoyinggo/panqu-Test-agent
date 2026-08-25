@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { ensureDir, readJson, writeJson } from '../../utils/fs-utils.js';
 import { ensureCollection } from '../storage/sqlite/database.js';
 import type { StorageKind } from '../storage/storage-factory.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 import {
   findEnvironment,
   validateEnvironments,
@@ -57,14 +58,14 @@ export class ProjectRegistry {
   /** 创建项目（id 唯一；默认环境必须存在；environments 缺省时使用标准五环境） */
   create(input: ProjectCreateInput): Project {
     if (this.projects.has(input.id)) {
-      throw new Error(`Project 已存在：${input.id}`);
+      throw new CodedError(ErrorCode.CONFLICT, `Project 已存在：${input.id}`);
     }
     const environments = input.environments ?? standardEnvironments();
     const envErrors = validateEnvironments(environments);
-    if (envErrors.length) throw new Error(`Project 环境非法：${envErrors.join('；')}`);
+    if (envErrors.length) throw new CodedError(ErrorCode.VALIDATION_ERROR, `Project 环境非法：${envErrors.join('；')}`);
     const defaultEnvironment = input.defaultEnvironment ?? environments[0]?.id ?? '';
     if (!findEnvironment({ id: input.id, name: input.name, businesses: [], environments, defaultEnvironment, createdAt: '', updatedAt: '' }, defaultEnvironment)) {
-      throw new Error(`默认环境不存在：${defaultEnvironment}`);
+      throw new CodedError(ErrorCode.VALIDATION_ERROR, `默认环境不存在：${defaultEnvironment}`);
     }
     const ts = this.now();
     const project: Project = {
@@ -94,7 +95,7 @@ export class ProjectRegistry {
   /** 更新项目（name / businesses / testPolicy / releasePolicy；环境经 updateEnvironments） */
   update(id: string, input: Partial<Pick<Project, 'name' | 'businesses' | 'testPolicy' | 'releasePolicy'>>): Project {
     const p = this.projects.get(id);
-    if (!p) throw new Error(`Project 不存在：${id}`);
+    if (!p) throw new CodedError(ErrorCode.NOT_FOUND, `Project 不存在：${id}`);
     const next: Project = { ...p, ...input, updatedAt: this.now() };
     this.projects.set(id, next);
     this.save();
@@ -102,16 +103,16 @@ export class ProjectRegistry {
   }
 
   delete(id: string): void {
-    if (!this.projects.delete(id)) throw new Error(`Project 不存在：${id}`);
+    if (!this.projects.delete(id)) throw new CodedError(ErrorCode.NOT_FOUND, `Project 不存在：${id}`);
     this.save();
   }
 
   /** 替换项目环境集（保持默认环境有效） */
   updateEnvironments(id: string, environments: Environment[]): Project {
     const p = this.projects.get(id);
-    if (!p) throw new Error(`Project 不存在：${id}`);
+    if (!p) throw new CodedError(ErrorCode.NOT_FOUND, `Project 不存在：${id}`);
     const envErrors = validateEnvironments(environments);
-    if (envErrors.length) throw new Error(`环境非法：${envErrors.join('；')}`);
+    if (envErrors.length) throw new CodedError(ErrorCode.VALIDATION_ERROR, `环境非法：${envErrors.join('；')}`);
     const defaultEnvironment = environments.some((e) => e.id === p.defaultEnvironment)
       ? p.defaultEnvironment
       : (environments[0]?.id ?? '');

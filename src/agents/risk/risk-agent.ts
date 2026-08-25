@@ -18,7 +18,7 @@ import {
 import { analyzeRisks } from './risk-analyzer.js';
 
 /** 系统提示词：要求 LLM 严格按 Schema 输出风险列表 */
-const SYSTEM_PROMPT = `你是资深测试风险分析师。根据测试需求与用例评估执行风险。
+export const RISK_SYSTEM_PROMPT = `你是资深测试风险分析师。根据测试需求与用例评估执行风险。
 输出必须严格符合如下 JSON Schema（risks 为数组，只输出 JSON，不要任何解释或 Markdown 围栏）：
 {"type":"object","required":["feature","risks"],"properties":{"feature":{"type":"string"},"risks":{"type":"array","items":${JSON.stringify(RISK_JSON_SCHEMA.properties.risks, null, 2)}}}}
 
@@ -80,14 +80,14 @@ ${testCases
     .map((c) => `- ${c.id} [${c.priority}] ${c.name}（tags: ${c.tags.join(',')}，断言: ${c.assertions.map((a) => a.target ?? 'submit').join(',')}）`)
     .join('\n')}`;
 
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'risk',
+        agent: this.name,
+        system: RISK_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp); // 非法 JSON 抛错 → 回退
     if (!isRiskAssessmentLike(parsed)) {

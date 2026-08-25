@@ -3,8 +3,9 @@
 // 真实数据写入 CostLedger；不改变 Provider 行为（装饰器透明透传）。
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { LLMProvider, LLMRequest, LLMResponse } from '../../llm/types.js';
+import { sanitizeLLMResponse, type LLMProvider, type LLMRequest, type LLMResponse } from '../../llm/types.js';
 import type { TelemetryService } from './telemetry-service.js';
+import { redactSensitiveText } from '../../core/redact.js';
 
 /** 当前运行上下文（LLM 调用归属） */
 export interface RunTelemetryContext {
@@ -63,9 +64,9 @@ export class TelemetryLLMProvider implements LLMProvider {
       })
       .catch((err: Error) => {
         // 遥测写入失败不影响 LLM 调用本身
-        console.warn(`[telemetry] LLM usage 记录失败：${err.message}`);
+        console.warn(`[telemetry] LLM usage 记录失败：${redactSensitiveText(err.message)}`);
       });
-    return response;
+    return sanitizeLLMResponse(response);
   }
 }
 

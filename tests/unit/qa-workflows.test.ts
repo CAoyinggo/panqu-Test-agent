@@ -50,19 +50,27 @@ const failedResult: CaseExecutionResult = {
   caseId: 'c1',
   name: '参数错误码断言',
   feature: 'wan3',
+  processor: 'UnitTestProcessor',
+  processorInvoked: true,
+  executed: true,
+  status: 'FAIL',
   pass: false,
   passRate: 0,
   error: '断言错误码失败：期望 4001，实际 4003',
-  checks: [{ name: '错误码断言', pass: false, detail: '断言错误码失败：期望 4001，实际 4003' }],
+  checks: [{ name: '错误码断言', pass: false, detail: '断言错误码失败：期望 4001，实际 4003', kind: 'BUSINESS' }],
 };
 
 const okResult: CaseExecutionResult = {
   caseId: 'c2',
   name: '任务提交',
   feature: 'wan3',
+  processor: 'UnitTestProcessor',
+  processorInvoked: true,
+  executed: true,
+  status: 'PASS',
   pass: true,
   passRate: 100,
-  checks: [{ name: '提交成功', pass: true, detail: 'ok' }],
+  checks: [{ name: '提交成功', pass: true, detail: 'ok', kind: 'BUSINESS' }],
 };
 
 const outcome: ExecutionOutcome = {
@@ -193,10 +201,23 @@ describe('resumeTask - Mode D（RCA → Healing → Approval → 应用 → 重�
           pass,
           detail: pass ? `ok: ${actual}` : `断言错误码失败：期望 ${String(a.expected)}，实际 ${actual}`,
           level: a.severity ?? 'P2',
+          kind: 'BUSINESS' as const,
         };
       });
       const pass = checks.every((c) => c.pass);
-      return { caseId: def.id, name: def.name, feature: def.feature, pass, passRate: pass ? 100 : 0, error: pass ? undefined : checks[0]?.detail, checks };
+      return {
+        caseId: def.id,
+        name: def.name,
+        feature: def.feature,
+        processor: 'UnitTestProcessor',
+        processorInvoked: true,
+        executed: true,
+        status: pass ? 'PASS' : 'FAIL',
+        pass,
+        passRate: pass ? 100 : 0,
+        error: pass ? undefined : checks[0]?.detail,
+        checks,
+      };
     };
 
     // 不自动批准：获批为 0，不应用

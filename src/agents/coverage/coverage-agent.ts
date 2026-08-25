@@ -17,7 +17,7 @@ import {
 import { computeCoverageAnalysis, CoverageInput } from './coverage-analyzer.js';
 
 /** 系统提示词（默认内置，可被 Prompt Registry 覆盖） */
-const SYSTEM_PROMPT = `你是测试覆盖分析专家。根据需求与测试用例，分析各维度覆盖率并指出覆盖缺口。
+export const COVERAGE_SYSTEM_PROMPT = `你是测试覆盖分析专家。根据需求与测试用例，分析各维度覆盖率并指出覆盖缺口。
 输出必须严格符合如下 JSON Schema（只输出 JSON）：
 ${JSON.stringify(COVERAGE_JSON_SCHEMA, null, 2)}
 
@@ -73,14 +73,14 @@ export class CoverageAgent extends BaseAgent<CoverageAgentInput, CoverageAnalysi
       null,
       2,
     );
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'coverage',
+        agent: this.name,
+        system: COVERAGE_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp);
     if (!isCoverageLike(parsed)) {

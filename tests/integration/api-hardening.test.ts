@@ -2,11 +2,12 @@
 // 覆盖：requestId/traceId 透传与响应头、统一错误契约 {error,message,status,requestId,traceId}、
 //       每 IP 限流（X-RateLimit-* 头 + 429 Retry-After）、列表可选分页（?page&pageSize → {items,pagination}）。
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
 import type { PlatformHttpServer } from '../../src/platform/api/index.js';
+import { CodedError, ErrorCode } from '../../src/core/errors.js';
 
 const FIXED_ISO = '2026-08-18T12:00:00.000Z';
 const STATIC_TOKEN = 'hardening-token';
@@ -111,7 +112,7 @@ describe('统一错误契约（25.7）', () => {
     const res = await ts.request('GET', '/api/health', { headers: { 'X-Request-Id': 'err-req' } });
     expect(res.status).toBe(401);
     const body = res.data as { error: string; message: string; status: number; requestId: string; traceId: string };
-    expect(body.error).toBe('unauthorized');
+    expect(body.error).toBe('AUTH_FAILED');
     expect(body.status).toBe(401);
     expect(body.requestId).toBe('err-req');
     expect(body.traceId).toBeTruthy();
@@ -123,8 +124,32 @@ describe('统一错误契约（25.7）', () => {
     const res = await ts.request('GET', '/api/definitely-not-a-route', { token: STATIC_TOKEN });
     expect(res.status).toBe(404);
     const body = res.data as { error: string; status: number };
-    expect(body.error).toBe('not_found');
+    expect(body.error).toBe('NOT_FOUND');
     expect(body.status).toBe(404);
+  });
+
+  it('普通异常不按错误文案猜 HTTP 状态，且不向 API 泄露内部消息', async () => {
+    const ts = await makeServer();
+    vi.spyOn(ts.bundle.service, 'listRuns').mockRejectedValueOnce(
+      new Error('无权访问；资源不存在；password=server-secret'),
+    );
+    const res = await ts.request('GET', '/api/runs', { token: STATIC_TOKEN });
+    expect(res.status).toBe(500);
+    expect(res.data).toMatchObject({ error: 'INTERNAL_ERROR', code: 'INTERNAL_ERROR', status: 500 });
+    expect(JSON.stringify(res.data)).not.toContain('server-secret');
+    expect(JSON.stringify(res.data)).not.toContain('无权访问');
+  });
+
+  it('结构化领域错误决定 HTTP 状态，公开消息仍执行自由文本脱敏', async () => {
+    const ts = await makeServer();
+    vi.spyOn(ts.bundle.service, 'listRuns').mockRejectedValueOnce(
+      new CodedError(ErrorCode.AUTH_FORBIDDEN, 'token=api-secret 无权访问'),
+    );
+    const res = await ts.request('GET', '/api/runs', { token: STATIC_TOKEN });
+    expect(res.status).toBe(403);
+    expect(res.data).toMatchObject({ error: 'AUTH_FORBIDDEN', code: 'AUTH_FORBIDDEN', status: 403 });
+    expect(JSON.stringify(res.data)).not.toContain('api-secret');
+    expect((res.data as { message: string }).message).toContain('token=***');
   });
 });
 
@@ -140,10 +165,10 @@ describe('限流（25.7）', () => {
     await ts.request('GET', '/api/health', { token: STATIC_TOKEN });
     const r4 = await ts.request('GET', '/api/health', { token: STATIC_TOKEN });
     expect(r4.status).toBe(429);
-    expect(r4.headers['retry-after']).toBe('1');
+    expect(r4.headers['retry-after']).toBe('60');
     expect(r4.headers['x-ratelimit-remaining']).toBe('0');
     const body = r4.data as { error: string; status: number; retryAfterSeconds?: number };
-    expect(body.error).toBe('rate_limited');
+    expect(body.error).toBe('RATE_LIMITED');
     expect(body.status).toBe(429);
   });
 });

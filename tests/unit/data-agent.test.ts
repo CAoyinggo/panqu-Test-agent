@@ -242,6 +242,13 @@ describe('data - DataPrepareTool（经 Tool 准备数据）', () => {
     expect(data).toEqual({});
   });
 
+  it('prepareDataResult 对缺失 Tool 返回 BLOCKED', async () => {
+    const agent = new DataAgent();
+    const plan = analyzeDataPlan({ requirement: req, testCases: cases });
+    const result = await agent.prepareDataResult(plan, makeContext(new MockLLMProvider()));
+    expect(result).toMatchObject({ status: 'BLOCKED', context: {} });
+  });
+
   it('needsSetup=false 时 prepareData 直接返回空', async () => {
     const agent = new DataAgent();
     const plan = normalizeDataPlan({ feature: 'wan3', factoryName: 'wan3', needsSetup: false });

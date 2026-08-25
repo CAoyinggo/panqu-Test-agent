@@ -1,7 +1,7 @@
 // MockLLMProvider：离线 Agent 测试用 LLM Provider
 // 不依赖任何真实 AI API，单元测试默认使用本 Provider（保证 `npm test` 离线可跑）。
 // 支持：脚本化响应 / 默认响应 / 失败模式（非法 JSON / 空响应 / 抛错 / 超时）/ 调用记录 / 延迟模拟。
-import type { LLMProvider, LLMRequest, LLMResponse } from './types.js';
+import { sanitizeLLMResponse, type LLMProvider, type LLMRequest, type LLMResponse } from './types.js';
 
 /** 脚本化响应：可以是固定字符串，也可以是按请求动态生成的函数 */
 export type MockResponseSource = string | ((request: LLMRequest) => string | Promise<string>);
@@ -50,13 +50,26 @@ export class MockLLMProvider implements LLMProvider {
     this.calls.push(JSON.parse(JSON.stringify(request)));
   }
 
+  /** 可中止的等待：调用方 signal 触发即以 reason 拒绝（模拟真实 Provider 的取消语义） */
+  private abortableWait(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => resolve(), ms);
+      const onAbort = () => {
+        clearTimeout(t);
+        reject(signal!.reason instanceof Error ? signal!.reason : new Error('MockLLM 请求已中止'));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const t0 = Date.now();
     this.record(request);
 
-    // 延迟模拟
+    // 延迟模拟（signal 可中止）
     if (this.delayMs > 0) {
-      await new Promise((r) => setTimeout(r, this.delayMs));
+      await this.abortableWait(this.delayMs, request.signal);
     }
 
     // 失败模式
@@ -64,14 +77,14 @@ export class MockLLMProvider implements LLMProvider {
       const f = this.failureMode;
       switch (f.type) {
         case 'invalid-json':
-          return { content: '这不是 JSON {{', latencyMs: Date.now() - t0 };
+          return sanitizeLLMResponse({ content: '这不是 JSON {{', latencyMs: Date.now() - t0 });
         case 'empty':
-          return { content: '', latencyMs: Date.now() - t0 };
+          return sanitizeLLMResponse({ content: '', latencyMs: Date.now() - t0 });
         case 'error':
           throw new Error(f.message ?? 'MockLLM 模拟错误');
         case 'timeout': {
-          await new Promise((r) => setTimeout(r, f.timeoutMs ?? 5000));
-          return { content: 'timeout', latencyMs: Date.now() - t0 };
+          await this.abortableWait(f.timeoutMs ?? 5000, request.signal);
+          return sanitizeLLMResponse({ content: 'timeout', latencyMs: Date.now() - t0 });
         }
       }
     }
@@ -85,12 +98,12 @@ export class MockLLMProvider implements LLMProvider {
       content = this.defaultResponse;
     }
 
-    return {
+    return sanitizeLLMResponse({
       content,
       usage: { inputTokens: request.messages.reduce((s, m) => s + m.content.length, 0), outputTokens: content.length },
       model: 'mock',
       latencyMs: Date.now() - t0,
-    };
+    });
   }
 
   // ── 测试辅助 ──

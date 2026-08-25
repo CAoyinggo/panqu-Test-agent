@@ -1,0 +1,15 @@
+{
+  "scenarioId": "SCN-generic-multi-api-operation-binding",
+  "environment": "local",
+  "realExecution": false,
+  "localFixture": {
+    "contractId": "controlled-workflow-v1",
+    "baseUrl": "http://127.0.0.1:43120",
+    "allowedOrigins": ["http://127.0.0.1:43120"],
+    "credentialRefs": ["LOCAL_FIXTURE_WORKFLOW_USER_TOKEN_REF"]
+  },
+  "processorAllowlist": ["api"],
+  "prepareHookAllowlist": ["prepare-controlled-workflow"],
+  "cleanupHookAllowlist": ["cleanup-controlled-workflow"],
+  "evidenceKindAllowlist": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER", "RESOURCE"]
+}

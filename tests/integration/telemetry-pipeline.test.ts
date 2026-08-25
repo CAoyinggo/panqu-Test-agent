@@ -11,6 +11,7 @@ import { MockLLMProvider } from '../../src/llm/mock-llm.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T12:00:00.000Z';
 
@@ -36,12 +37,11 @@ function registerTelemetryWorker(bundle: PlatformBundle): void {
     const j = job as { runId: string; projectId: string; environment: string; feature?: string };
     const feature = j.feature;
     await runContext.run({ runId: j.runId, projectId: j.projectId, feature }, async () => {
-      await bundle.service.startRun(j.runId);
       await bundle.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
       // 两次 LLM 调用（分析 / 修复建议）→ 真实 usage → CostLedger
       await provider.generate({ messages: [{ role: 'user', content: '分析本次执行结果与失败原因' }] });
       await provider.generate({ messages: [{ role: 'user', content: '生成自愈修复建议' }] });
-      await bundle.service.completeRun(j.runId);
+      await completeVerifiedRun(bundle, j.runId);
       await bundle.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
     });
   });

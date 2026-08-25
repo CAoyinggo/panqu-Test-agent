@@ -1,6 +1,7 @@
 // Worker Registry（Phase 24.4）：注册 / 注销 / 心跳 / 健康 / 优雅停机
 
 import type { WorkerEntry, WorkerExecutor, WorkerHealth, WorkerRegistration, TestWorker } from './worker.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 export interface WorkerRegistryOptions {
   /** 心跳超时判定 DOWN 的阈值（毫秒，默认 30s） */
@@ -22,7 +23,7 @@ export class WorkerRegistry {
   }
 
   register(reg: WorkerRegistration, execute: WorkerExecutor): TestWorker {
-    if (this.entries.has(reg.workerId)) throw new Error(`Worker 已注册：${reg.workerId}`);
+    if (this.entries.has(reg.workerId)) throw new CodedError(ErrorCode.CONFLICT, `Worker 已注册：${reg.workerId}`);
     const worker: TestWorker = {
       ...reg,
       health: 'healthy',
@@ -35,7 +36,7 @@ export class WorkerRegistry {
   }
 
   unregister(workerId: string): void {
-    if (!this.entries.delete(workerId)) throw new Error(`Worker 不存在：${workerId}`);
+    if (!this.entries.delete(workerId)) throw new CodedError(ErrorCode.NOT_FOUND, `Worker 不存在：${workerId}`);
   }
 
   get(workerId: string): TestWorker | null {
@@ -49,7 +50,7 @@ export class WorkerRegistry {
   /** 心跳：刷新时间并恢复 healthy */
   heartbeat(workerId: string): TestWorker {
     const e = this.entries.get(workerId);
-    if (!e) throw new Error(`Worker 不存在：${workerId}`);
+    if (!e) throw new CodedError(ErrorCode.NOT_FOUND, `Worker 不存在：${workerId}`);
     e.worker.lastHeartbeatAt = this.now();
     e.worker.health = e.worker.health === 'down' ? 'healthy' : e.worker.health;
     return e.worker;
@@ -58,7 +59,7 @@ export class WorkerRegistry {
   /** 主动标记 DOWN（崩溃 / 关机） */
   markDown(workerId: string, error?: string): TestWorker {
     const e = this.entries.get(workerId);
-    if (!e) throw new Error(`Worker 不存在：${workerId}`);
+    if (!e) throw new CodedError(ErrorCode.NOT_FOUND, `Worker 不存在：${workerId}`);
     e.worker.health = 'down';
     e.worker.lastError = error;
     return e.worker;

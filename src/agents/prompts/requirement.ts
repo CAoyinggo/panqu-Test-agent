@@ -8,7 +8,7 @@ const SYSTEM_PROMPT_V1 = `你是测试需求解析器。将用户的自然语言
 ${JSON.stringify(REQUIREMENT_JSON_SCHEMA, null, 2)}
 
 规则：
-- feature 为功能模块名（如 wan3 / user / order / payment），无法判断时用 wan3
+- feature 为功能模块名（如 wan3 / user / order / payment），无法判断时必须输出 "unknown"（禁止猜测为 wan3）
 - goal 为一句话测试目标（如 验证文生视频完整链路）
 - requirements 为参数取值数组，例如 {"name":"resolution","values":["720P","1080P"]}
 - capabilities 用英文标签（如 text-to-video / image-to-video）

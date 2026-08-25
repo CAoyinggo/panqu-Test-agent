@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import type { PlatformBundle } from '../../src/platform/service/index.js';
+import { advanceVerifiedRunToRunning, completeVerifiedRun } from '../helpers/platform-run.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 
@@ -14,7 +15,7 @@ function makeBundle(): PlatformBundle {
 }
 
 describe('Run 生命周期（Service Layer）', () => {
-  it('create → QUEUED 并入队；start → RUNNING；complete → COMPLETED', async () => {
+  it('create → QUEUED → PLANNING → GATED → RUNNING → EVIDENCE_READY → COMPLETED', async () => {
     const b = makeBundle();
     const { runId } = await b.service.createRun({
       projectId: 'wan3',
@@ -28,8 +29,8 @@ describe('Run 生命周期（Service Layer）', () => {
     expect((await b.service.getRun(runId))?.status).toBe('QUEUED');
     expect(await b.scheduler.pendingCount()).toBe(1);
     await b.service.startRun(runId);
-    expect((await b.service.getRun(runId))?.status).toBe('RUNNING');
-    await b.service.completeRun(runId);
+    expect((await b.service.getRun(runId))?.status).toBe('PLANNING');
+    await completeVerifiedRun(b, runId);
     expect((await b.service.getRun(runId))?.status).toBe('COMPLETED');
   });
 
@@ -42,7 +43,7 @@ describe('Run 生命周期（Service Layer）', () => {
       actor: 'qa',
       role: 'QA',
     });
-    await b.service.startRun(runId);
+    await advanceVerifiedRunToRunning(b, runId);
     // 执行中完成 c1，剩余 c2/c3
     await b.service.saveCheckpoint({
       runId,
@@ -60,9 +61,10 @@ describe('Run 生命周期（Service Layer）', () => {
     expect(ck.remainingCases).toEqual(['c2', 'c3']);
     // Resume：从 checkpoint 恢复（completed 保持，不重新生成）
     await b.service.resumeRun(runId, 'qa', 'QA');
+    expect((await b.service.getRun(runId))?.status).toBe('PLANNING');
     const ck2 = await b.service.loadCheckpoint(runId) as { completedCases: string[] };
     expect(ck2.completedCases).toEqual(['c1']);
-    await b.service.completeRun(runId);
+    await completeVerifiedRun(b, runId);
     expect((await b.service.getRun(runId))?.status).toBe('COMPLETED');
   });
 
@@ -134,8 +136,7 @@ describe('Run 生命周期（Service Layer）', () => {
       order.push(e.type);
     });
     const { runId } = await b.service.createRun({ projectId: 'wan3', environment: 'test', trigger: 'manual', actor: 'qa', role: 'QA' });
-    await b.service.startRun(runId);
-    await b.service.completeRun(runId);
+    await completeVerifiedRun(b, runId);
     expect(order).toEqual(['RunCreated', 'RunStarted', 'RunCompleted']);
   });
 

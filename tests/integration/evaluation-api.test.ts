@@ -137,6 +137,6 @@ describe('Phase 45：评测 API GET /api/eval/report', () => {
     const res = await ts.request('GET', '/api/eval/report/UNKNOWN', { token });
     expect(res.status).toBe(404);
     // 统一错误契约含 error 码
-    expect((res.data as { error?: string }).error).toBe('error');
+    expect((res.data as { error?: string }).error).toBe('NOT_FOUND');
   });
 });

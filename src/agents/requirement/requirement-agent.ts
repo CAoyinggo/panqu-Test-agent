@@ -21,7 +21,7 @@ const SYSTEM_PROMPT = `你是测试需求解析器。将用户的自然语言测
 ${JSON.stringify(REQUIREMENT_JSON_SCHEMA, null, 2)}
 
 规则：
-- feature 为功能模块名（如 wan3 / user / order / payment），无法判断时用 wan3
+- feature 为功能模块名（如 wan3 / user / order / payment），无法判断时必须输出 "unknown"（禁止猜测为 wan3）
 - goal 为一句话测试目标（如 验证文生视频完整链路）
 - requirements 为参数取值数组，例如 {"name":"resolution","values":["720P","1080P"]}
 - capabilities 用英文标签（如 text-to-video / image-to-video）
@@ -57,6 +57,9 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
   async execute(input: RequirementAgentInput | string, context: AgentContext): Promise<Requirement> {
     const text = typeof input === 'string' ? input : input.text;
     const hintFeature = typeof input === 'string' ? undefined : input.hintFeature;
+    // context.feature / 显式 hint 来自可信调用面，LLM 不得把业务域改写成无关 feature。
+    const trustedFeature = hintFeature
+      ?? (context.feature && context.feature !== 'default' && context.feature !== 'unknown' ? context.feature : undefined);
     const format = typeof input === 'string' ? 'text' : (input.format ?? 'text');
     const version = typeof input === 'string' ? undefined : input.version;
     if (!text || !text.trim()) {
@@ -71,7 +74,7 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
 
     // 1. 尝试 LLM 解析（含 Mock，失败则回退）
     try {
-      const llmResult = await this.parseWithLLM(parseText, hintFeature, context);
+      const llmResult = await this.parseWithLLM(parseText, trustedFeature, context);
       context.logger.info(`需求解析完成（LLM，feature=${llmResult.feature}，confidence=${llmResult.confidence ?? '-'}）`);
       return withVersion(llmResult, version, text);
     } catch (e) {
@@ -80,6 +83,11 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
 
     // 2. 规则解析兜底（确定性，永不走 LLM）
     const ruleResult = parseRequirement(parseText, text);
+    // 原文没有足够关键词时，使用可信调用上下文补齐业务域；绝不覆盖原文明确识别出的其他 feature。
+    if (ruleResult.feature === 'unknown' && trustedFeature) {
+      ruleResult.feature = trustedFeature;
+      ruleResult.goal = `验证 ${trustedFeature} 完整链路`;
+    }
     context.logger.info(`需求解析完成（规则，feature=${ruleResult.feature}，confidence=${ruleResult.confidence ?? '-'}）`);
     return withVersion(ruleResult, version, text);
   }
@@ -87,11 +95,11 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
   /** LLM 解析：构造提示 → 解析 JSON → 归一化 + ajv 校验 */
   private async parseWithLLM(text: string, hintFeature: string | undefined, context: AgentContext): Promise<Requirement> {
     const userContent = (hintFeature ? `功能模块提示：${hintFeature}\n\n` : '') + `测试需求：${text}`;
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: resolveSystemPrompt() },
-        { role: 'user', content: userContent },
-      ],
+    const resp = await context.runtime.generate({
+      task: 'requirement',
+      agent: this.name,
+      system: resolveSystemPrompt(),
+      user: userContent,
       temperature: 0,
       jsonMode: true,
     });
@@ -102,9 +110,30 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
     }
     // ajv 校验（不通过抛错 → 回退），通过则归一化
     const validated = await validateRequirement(parsed);
+    assertRequirementGrounded(validated, parseRequirement(text, text), hintFeature);
     validated.source = text;
     validated.confidence = Math.max(validated.confidence ?? 0, 0.9);
     return validated;
+  }
+}
+
+/**
+ * LLM Schema 合法只证明“形状正确”，不能证明业务正确。
+ * 使用可信 hint + 确定性关键词基线约束 feature/capability，语义漂移时抛错走规则回退。
+ */
+function assertRequirementGrounded(
+  candidate: Requirement,
+  deterministic: Requirement,
+  trustedFeature?: string,
+): void {
+  const expectedFeature = trustedFeature ?? (deterministic.feature !== 'unknown' ? deterministic.feature : undefined);
+  if (expectedFeature && candidate.feature !== expectedFeature) {
+    throw new Error(`LLM 需求语义不一致：feature=${candidate.feature}，原始需求=${expectedFeature}`);
+  }
+  // 两侧都声明能力时至少应有一个交集；允许 LLM 使用更具体的能力集合，也允许只给 feature 的最小合法输出。
+  if (deterministic.capabilities.length > 0 && candidate.capabilities.length > 0
+    && !deterministic.capabilities.some((item) => candidate.capabilities.includes(item))) {
+    throw new Error(`LLM 需求语义不一致：能力 ${candidate.capabilities.join('、')} 与原始需求无交集`);
   }
 }
 

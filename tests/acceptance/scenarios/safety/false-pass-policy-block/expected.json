@@ -1,0 +1,19 @@
+{
+  "scenarioId": "SCN-safety-false-pass-policy-block",
+  "mode": "BLOCKED",
+  "patterns": ["NON_MUTATION", "AUDIT", "SECURITY"],
+  "operations": [
+    {"id": "STEP-001", "intent": "evaluate-unexecuted-candidate-before-dispatch", "channel": "DATA", "realExecutionAllowed": false},
+    {"id": "STEP-002", "intent": "observe-policy-decision-and-zero-downstream-calls", "channel": "DATA", "realExecutionAllowed": false}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "target": "decision", "operator": "EQUALS", "expected": "BLOCKED"},
+    {"id": "AS-002", "ac": "AC-001", "target": "blockedReason.code", "operator": "EQUALS", "expected": "POLICY_BLOCKED"},
+    {"id": "AS-003", "ac": "AC-002", "target": "result.status", "operator": "NOT_EQUALS", "expected": "PASS"},
+    {"id": "AS-004", "ac": "AC-002", "target": "result.executed", "operator": "EQUALS", "expected": false},
+    {"id": "AS-005", "ac": "AC-003", "target": "downstreamCallCount", "operator": "COUNT_EQUALS", "expected": 0},
+    {"id": "AS-006", "ac": "AC-003", "target": "policyDecisionCount", "operator": "COUNT_EQUALS", "expected": 1}
+  ],
+  "requiredEvidenceKinds": ["TRACE", "AUDIT_RECORD"],
+  "blockedCodes": ["POLICY_BLOCKED"]
+}

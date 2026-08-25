@@ -13,7 +13,7 @@ export class VideoSceneHandler implements SceneHandler {
   supportedScenes = ['video'] as const satisfies readonly CanonicalSceneId[];
 
   supports(scene: CanonicalSceneId): boolean {
-    return this.supportedScenes.includes(scene);
+    return scene === 'video';
   }
 
   async submit(ctx: RunContext): Promise<{ taskId: number | null; submit: Partial<SubmitResult> }> {

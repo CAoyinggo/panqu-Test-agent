@@ -1,0 +1,16 @@
+{
+  "scenarioId": "SCN-wan3-provider-failure-refund",
+  "environment": "unconfigured",
+  "realExecution": false,
+  "policy": {
+    "decision": "BLOCKED",
+    "allowSideEffects": false,
+    "allowBilling": false,
+    "allowProviderCalls": false,
+    "blockedCodes": ["MISSING_API_CONTRACT", "MISSING_DEPENDENCY", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+  },
+  "processorAllowlist": [],
+  "prepareHookAllowlist": [],
+  "cleanupHookAllowlist": [],
+  "evidenceKindAllowlist": []
+}

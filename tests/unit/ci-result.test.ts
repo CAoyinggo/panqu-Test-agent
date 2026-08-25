@@ -8,13 +8,27 @@ import type { CaseExecutionResult } from '../../src/agents/execution/execution-s
 
 /** 便捷构造单条用例结果 */
 function res(caseId: string, pass: boolean, over: Partial<CaseExecutionResult> = {}): CaseExecutionResult {
+  const checks = over.checks?.map((check) => ({
+    ...check,
+    kind: check.kind ?? 'BUSINESS' as const,
+  })) ?? [{
+    name: `${caseId} 业务断言`,
+    pass,
+    detail: pass ? 'fixture business assertion passed' : 'fixture business assertion failed',
+    kind: 'BUSINESS' as const,
+  }];
   return {
     caseId,
     name: caseId,
     feature: 'wan3',
+    processor: 'ci-result-fixture-processor',
+    processorInvoked: true,
+    executed: true,
+    status: pass ? 'PASS' : 'FAIL',
     pass,
     passRate: pass ? 100 : 0,
     ...over,
+    checks,
   };
 }
 
@@ -152,10 +166,11 @@ describe('computeCiResult 选项覆盖', () => {
     expect(ci.counts.flaky).toBe(0);
   });
 
-  it('空结果集 → PASS', () => {
+  it('空结果集 → BLOCKED（没有执行证据不得 PASS）', () => {
     const ci = computeCiResult(computeOutcome('wan3', []));
-    expect(ci.verdict).toBe('PASS');
+    expect(ci.verdict).toBe('BLOCKED');
     expect(ci.total).toBe(0);
+    expect(ci.blockReasons.some((reason) => reason.includes('NO_EXECUTABLE_EVIDENCE'))).toBe(true);
   });
 
   it('summary 包含六态与计数', () => {

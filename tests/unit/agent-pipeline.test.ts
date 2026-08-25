@@ -1,4 +1,4 @@
-// 单元测试：Agent Pipeline（统一串联：Requirement → TestDesign → Risk → Data → Execution → Memory → Analysis）
+// 单元测试：Agent Pipeline（Requirement → Policies → ExecutionPlan → Gate → Execution → DeterministicOutcome → Report）
 import { describe, it, expect } from 'vitest';
 import {
   runAgentPipeline,
@@ -9,7 +9,10 @@ import {
   NoopMemory,
   ToolRegistry,
   computeOutcome,
+  executionPlanFingerprint,
 } from '../../src/agents/index.js';
+import { deterministicExecutionOutcome } from '../../src/agents/orchestration/agent-pipeline.js';
+import type { ExecutionOutcome, ExecutionPlan } from '../../src/agents/execution/execution-schema.js';
 import { MockLLMProvider } from '../../src/llm/index.js';
 import type { AgentContext } from '../../src/agents/core/agent-context.js';
 import fs from 'node:fs';
@@ -20,9 +23,16 @@ const DEMO =
   '测试 WAN3 文生视频，覆盖 720P、1080P 分辨率，支持 5 秒和 10 秒视频，' +
   '验证模型服务与积分服务，确认任务提交成功、状态成功及积分正确扣除，并验证并发执行正常。';
 
+const APPROVED_EXECUTION = {
+  id: 'approval-unit-test',
+  status: 'APPROVED' as const,
+  approvedBy: 'unit-test-reviewer',
+};
+
 /** mock 执行器：tc-02 失败，其余通过 */
-function mockRunner() {
+function mockRunner(onRun?: () => void) {
   return async (loaded: Array<{ name: string; feature?: string; def: { extra?: Record<string, unknown>; scene?: string; tags?: string[] } }>) => {
+    onRun?.();
     const results = loaded.map((c) => {
       const caseId = String(c.def.extra?.agentTestCaseId ?? c.name);
       return {
@@ -32,6 +42,10 @@ function mockRunner() {
         scene: c.def.scene,
         priority: 'P0',
         tags: c.def.tags,
+        processor: 'mock-runner',
+        processorInvoked: true,
+        executed: true,
+        status: caseId === 'tc-02' ? 'FAIL' as const : 'PASS' as const,
         pass: caseId !== 'tc-02',
         passRate: caseId === 'tc-02' ? 0 : 100,
         error: caseId === 'tc-02' ? '断言失败' : undefined,
@@ -43,16 +57,24 @@ function mockRunner() {
   };
 }
 
-function makeContext(options?: { skipExecTool?: boolean; memory?: JsonMemoryStore }): { ctx: AgentContext; memory: JsonMemoryStore } {
+function makeContext(options?: { skipExecTool?: boolean; memory?: JsonMemoryStore; approve?: boolean }): {
+  ctx: AgentContext;
+  memory: JsonMemoryStore;
+  calls: { dataPrepare: number; runner: number };
+} {
   const memory = options?.memory ?? new JsonMemoryStore(path.join(os.tmpdir(), `agent-pipe-${Date.now()}-${Math.random().toString(36).slice(2)}.json`));
+  const calls = { dataPrepare: 0, runner: 0 };
   const tools = new ToolRegistry();
-  tools.register(createDataPrepareTool(() => ({
-    setup: async () => ({}),
-    teardown: async () => {},
-    generate: async () => ({ account: { id: 'acct-1', nickname: 'n', project_id: 1 }, taskIds: ['t1'] }),
-  })));
+  tools.register(createDataPrepareTool(() => {
+    calls.dataPrepare += 1;
+    return {
+      setup: async () => ({}),
+      teardown: async () => {},
+      generate: async () => ({ account: { id: 'acct-1', nickname: 'n', project_id: 1 }, taskIds: ['t1'] }),
+    };
+  }));
   if (!options?.skipExecTool) {
-    tools.register(createExecutionRunTool(mockRunner() as never));
+    tools.register(createExecutionRunTool(mockRunner(() => { calls.runner += 1; }) as never));
   }
   const ctx = createAgentContext({
     taskId: 'pipe-1',
@@ -61,8 +83,9 @@ function makeContext(options?: { skipExecTool?: boolean; memory?: JsonMemoryStor
     tools,
     memory,
     llm: new MockLLMProvider(),
+    metadata: options?.approve === false ? {} : { executionApproval: APPROVED_EXECUTION },
   });
-  return { ctx, memory };
+  return { ctx, memory, calls };
 }
 
 describe('agent-pipeline - 完整链路', () => {
@@ -73,6 +96,7 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.requirement.feature).toBe('wan3');
     expect(r.testCases.length).toBeGreaterThan(0);
     expect(r.risk.risks.length).toBeGreaterThan(0);
+    expect(r.policyGate.verdict).toBe('ALLOW');
     expect(r.dataPlan.needsSetup).toBe(true);
     expect(r.dataContext.account?.id).toBe('acct-1'); // 经 data.prepare 准备
     expect(r.outcome.executed).toBe(true);
@@ -83,6 +107,7 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.stages.requirement).toBe(true);
     expect(r.stages.testDesign).toBe(true);
     expect(r.stages.risk).toBe(true);
+    expect(r.stages.policyGate).toBe(true);
     expect(r.stages.data).toBe(true);
     expect(r.stages.execution).toBe(true);
     expect(r.stages.analysis).toBe(true);
@@ -105,7 +130,8 @@ describe('agent-pipeline - 完整链路', () => {
       ctx,
     );
     expect(r.outcome.executed).toBe(false);
-    expect(r.outcome.results).toHaveLength(0);
+    expect(r.outcome.results).toHaveLength(r.testCases.length);
+    expect(r.outcome.results.every((item) => item.status === 'NOT_EXECUTED' && item.pass === false)).toBe(true);
     expect(r.stages.execution).toBe(false);
     expect(r.report.summary.total).toBe(r.testCases.length); // 分析基于计划
   });
@@ -116,6 +142,68 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.outcome.executed).toBe(false);
     expect(r.stages.execution).toBe(false);
     expect(r.report).toBeDefined();
+  });
+
+  it('Policy Gate 未获批准时在数据准备和 Runner 之前阻断', async () => {
+    const { ctx, calls } = makeContext({ approve: false });
+    const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
+
+    expect(r.policyGate.allowed).toBe(false);
+    expect(r.policyGate.verdict).toBe('APPROVAL_REQUIRED');
+    expect(r.stages.data).toBe(true); // 纯 Data Plan 在 Gate 前生成
+    expect(r.stages.dataPrepare).toBe(false);
+    expect(calls.dataPrepare).toBe(0);
+    expect(calls.runner).toBe(0);
+    expect(r.outcome.executed).toBe(false);
+    expect(r.outcome.results).toHaveLength(r.testCases.length);
+    expect(r.outcome.results.every((item) => item.status === 'BLOCKED' && item.pass === false)).toBe(true);
+    expect(r.outcome.passed).toBe(0);
+  });
+
+  it('Policy Gate 人工审批成功后才允许 Data Prepare 和 Runner 各执行一次', async () => {
+    const { ctx, calls } = makeContext();
+    const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
+
+    expect(r.policyGate).toMatchObject({ allowed: true, verdict: 'ALLOW' });
+    expect(r.stages.dataPrepare).toBe(true);
+    expect(calls.dataPrepare).toBe(1);
+    expect(calls.runner).toBe(1);
+    expect(r.outcome.executed).toBe(true);
+  });
+
+  it('Orchestrator 六类策略汇总后，Gate 与 Runner 消费同一份 Execution Plan', async () => {
+    const { ctx } = makeContext();
+    const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
+    const fingerprint = executionPlanFingerprint(r.executionPlan);
+
+    expect(r.stages.executionPlan).toBe(true);
+    expect(r.stages.policyGate).toBe(true);
+    expect(r.stages.deterministicOutcome).toBe(true);
+    expect(r.policyGate.executionPlanFingerprint).toBe(fingerprint);
+    expect(executionPlanFingerprint(r.outcome.plan!)).toBe(fingerprint);
+    expect(r.policies.risk.overall).toBe(r.risk.summary.overall);
+    expect(r.policies.budget).toBeDefined();
+    expect(r.policies.model.requirement?.model).toBeTruthy();
+    expect(r.policies.prompt.some((item) => item.task === 'requirement')).toBe(true);
+    expect(r.policies.data.factoryName).toBe(r.dataPlan.factoryName);
+    expect(r.policies.approval).toMatchObject({ status: 'APPROVED', evidencePresent: true });
+  });
+
+  it('dry-run 只产出计划状态，不准备数据也不调用 Runner', async () => {
+    const { ctx, calls } = makeContext({ approve: false });
+    const r = await runAgentPipeline(
+      { requirementText: DEMO, environment: 'production', options: { dryRun: true } },
+      ctx,
+    );
+
+    expect(r.policyGate.verdict).toBe('ALLOW');
+    expect(r.policyGate.realExecution).toBe(false);
+    expect(r.stages.data).toBe(true);
+    expect(r.stages.dataPrepare).toBe(false);
+    expect(calls.dataPrepare).toBe(0);
+    expect(calls.runner).toBe(0);
+    expect(r.outcome.executed).toBe(false);
+    expect(r.outcome.results.every((item) => item.status === 'NOT_EXECUTED' && item.pass === false)).toBe(true);
   });
 
   it('历史失败记忆补充风险项', async () => {
@@ -132,6 +220,28 @@ describe('agent-pipeline - 完整链路', () => {
     }
     const r = await runAgentPipeline({ requirementText: DEMO }, ctx);
     expect(r.risk.risks.some((x) => x.category === 'compatibility' && x.title.includes('tc-09'))).toBe(true);
+  });
+});
+
+describe('agent-pipeline - Deterministic Outcome', () => {
+  it('忽略 Runner 虚报 totals/PASS：无断言改为 BLOCKED，缺失用例补 NOT_EXECUTED', () => {
+    const testCases = [
+      { id: 'tc-1', feature: 'wan3', name: '虚报通过', priority: 'P0', tags: [], steps: [], assertions: [] },
+      { id: 'tc-2', feature: 'wan3', name: '未返回', priority: 'P1', tags: [], steps: [], assertions: [] },
+    ] as never;
+    const plan: ExecutionPlan = {
+      order: ['tc-1', 'tc-2'], concurrency: 1, enableRetry: true, reason: 'contract',
+    };
+    const raw: ExecutionOutcome = {
+      feature: 'wan3', total: 99, passed: 99, failed: 0, timedOut: 0, passRate: 100,
+      results: [{ caseId: 'tc-1', name: '虚报通过', executed: true, status: 'PASS', pass: true, passRate: 100, checks: [] }],
+      reports: [], executed: true,
+    };
+
+    const result = deterministicExecutionOutcome('wan3', testCases, raw, plan);
+    expect(result).toMatchObject({ total: 2, passed: 0, failed: 2, passRate: 0, executed: false });
+    expect(result.results[0]).toMatchObject({ status: 'BLOCKED', pass: false });
+    expect(result.results[1]).toMatchObject({ status: 'NOT_EXECUTED', pass: false });
   });
 });
 

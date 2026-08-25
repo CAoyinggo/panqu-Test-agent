@@ -185,7 +185,8 @@ describe('Worker 崩溃恢复（Scenario 3）', () => {
     expect(await pool.recoverOrphans()).toBe(1);
     await sched.requeueRetries();
     await pool.dispatch();
-    // 注：w1 的悬挂执行不 drain（永不 resolve）；仅验证 w2 已完成
+    // recoverOrphans 已将 w1 的悬挂任务移出跟踪；drain 只等待 w2 的重试执行。
+    await pool.drain();
     expect(done).toEqual(['r1']);
     expect((await sched.list())[0].status).toBe('SUCCESS');
   });

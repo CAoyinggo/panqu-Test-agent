@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ReportData } from '../core/types.js';
 import type { Reporter } from './index.js';
+import { effectiveAssertions } from '../core/execution-evidence.js';
 
 function escXml(s: unknown): string {
   return String(s == null ? '' : s)
@@ -19,10 +20,23 @@ export class JunitReporter implements Reporter {
     const slug = String(slugBase).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_');
     const file = path.join(outputDir, `${slug}_${Date.now()}.xml`);
 
-    const tests = data.checks.length || 1;
-    const failures = data.checks.filter((c) => !c.pass).length + data.issues.filter((i) => i.level === '阻塞').length;
+    const businessChecks = effectiveAssertions(data.checks);
+    const executionPass = data.executed === true
+      && data.executionStatus === 'PASS'
+      && businessChecks.length > 0
+      && businessChecks.every((check) => check.pass);
+    const renderedChecks = executionPass || businessChecks.some((check) => !check.pass)
+      ? businessChecks
+      : [{
+        name: data.executionStatus ?? 'NO_EFFECTIVE_ASSERTION',
+        pass: false,
+        detail: data.issues.find((issue) => issue.level === '阻塞')?.desc
+          ?? '没有可证明 PASS 的有效业务断言或执行证据',
+      }];
+    const tests = renderedChecks.length || 1;
+    const failures = renderedChecks.filter((check) => !check.pass).length;
 
-    const caseXml = (data.checks.length ? data.checks : [{ name: '执行', pass: true, detail: '无断言，视为通过' }])
+    const caseXml = renderedChecks
       .map((c) => {
         const inner = c.pass
           ? `<system-out>${escXml(c.detail)}</system-out>`

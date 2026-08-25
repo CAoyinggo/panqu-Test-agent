@@ -7,7 +7,7 @@
 //   - Flaky → FLAKY（不直接判产品失败）
 //   - Environment Error（5xx/超时/网络/429）→ WARNING（标记，不直接判产品失败）
 //   - Known Issue（open）→ KNOWN_ISSUE（按状态处理，不判失败）
-import type { ExecutionOutcome, CaseExecutionResult } from '../agents/execution/execution-schema.js';
+import { hasExecutableEvidence, type ExecutionOutcome, type CaseExecutionResult } from '../agents/execution/execution-schema.js';
 
 /** CI 六态结论 */
 export type CiVerdict = 'PASS' | 'FAIL' | 'WARNING' | 'BLOCKED' | 'KNOWN_ISSUE' | 'FLAKY';
@@ -120,13 +120,18 @@ export function computeCiResult(outcome: ExecutionOutcome, options: CiResultOpti
   const realFails = cases.filter((c) => c.status === 'fail');
   const blockReasons: string[] = [];
 
+  const hasEvidence = hasExecutableEvidence(outcome);
+  if (!hasEvidence) blockReasons.push('NO_EXECUTABLE_EVIDENCE：没有实际执行结果，禁止 PASS');
+
   // 优先级判定
   const p0Fail = realFails.filter((c) => c.priority === 'P0');
   const p1Fail = realFails.filter((c) => c.priority === 'P1');
   const lowFail = realFails.filter((c) => c.priority === undefined || c.priority === 'P2' || c.priority === 'P3');
 
   let verdict: CiVerdict;
-  if (realFails.length === 0) {
+  if (!hasEvidence) {
+    verdict = 'BLOCKED';
+  } else if (realFails.length === 0) {
     // 无真实测试失败 → 按标记分类
     if (counts.envError > 0 && counts.flaky === 0 && counts.knownIssue === 0) verdict = 'WARNING';
     else if (counts.knownIssue > 0 && counts.flaky === 0 && counts.envError === 0) verdict = 'KNOWN_ISSUE';

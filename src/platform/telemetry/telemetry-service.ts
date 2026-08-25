@@ -27,6 +27,7 @@ import type {
 import { periodStartMs } from './telemetry-types.js';
 import { MetricActivationTracker, type MetricActivationRecord, type TrackedMetric } from './activation.js';
 import type { FailureCategory } from '../../core/failure-category.js';
+import { redactSensitiveText } from '../../core/redact.js';
 
 /** 模型单价（元 / 百万 token；可覆盖） */
 export interface ModelPricing {
@@ -107,7 +108,7 @@ export class TelemetryService {
       await this.activation.mark(metric);
     } catch (err) {
       // 激活跟踪失败不阻塞遥测主流程（仅告警）
-      console.warn(`[telemetry] 指标激活标记失败 ${metric}：${(err as Error).message}`);
+      console.warn(`[telemetry] 指标激活标记失败 ${metric}：${redactSensitiveText((err as Error).message)}`);
     }
   }
 

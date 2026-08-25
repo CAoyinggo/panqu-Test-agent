@@ -20,31 +20,28 @@ import type { User } from '../auth/user.js';
 import type { TestRun } from '../runs/run-schema.js';
 import type { TelemetryPeriod } from '../telemetry/index.js';
 import { buildVersionInfo } from '../version.js';
-import { isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
+import { allowStaticToken, isProductionLike, resolvePlatformMode, resolveStaticIdentity, type PlatformMode } from '../security/index.js';
 import { createAIQualityService, AIQualityService } from '../../ai-quality/service.js';
 import { ProjectAIQualityRegistry } from '../../ai-quality/project-service.js';
 import { CONTINUOUS_EVAL_SCHEDULES } from '../../ai-quality/ops.js';
 import { EvaluationScaleService } from '../../eval/scale/operations.js';
 import {
+  aggregateDailyCostCapacity,
   CostGovernanceService,
-  forecastCapacity,
-  type CapacitySample,
+  forecastCapacities,
   type CostBudgetInput,
   type ModelPolicy,
 } from '../../cost/governance.js';
+import {
+  createRedisRateLimiter,
+  TtlLruRateLimiter,
+  type RateLimiter,
+} from './rate-limiter.js';
+import { ERROR_PUBLIC_MESSAGES, ErrorCode, HttpError, toHttpError } from '../../core/errors.js';
+import { redactSensitive, redactSensitiveText } from '../../core/redact.js';
 
 /** 平台运行模式（25.8 完整实现；27.1 起与安全策略模块共用同一枚举，避免多头定义） */
 export type PlatformRunMode = PlatformMode;
-
-/** 27.2：带状态码的业务错误（读端点 RBAC 等返回 403 Forbidden） */
-export class HttpError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 export interface ApiServerOptions {
   service: PlatformService;
@@ -56,6 +53,12 @@ export interface ApiServerOptions {
   token?: string;
   /** 每 IP 每分钟请求上限 */
   rateLimitPerMinute?: number;
+  /** development/test 进程内限流器的闲置 TTL。 */
+  rateLimitTtlMs?: number;
+  /** development/test 进程内限流 key 硬上限（LRU）。 */
+  rateLimitMaxEntries?: number;
+  /** 自定义限流后端；production/staging 只接受 kind=redis。 */
+  rateLimiter?: RateLimiter;
   host?: string;
   port?: number;
   now?: () => string;
@@ -121,16 +124,34 @@ function parseBearer(authHeader: string | undefined): string | null {
 }
 
 export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer {
-  const token = opts.token ?? process.env.PLATFORM_API_TOKEN ?? DEFAULT_TOKEN;
   const rateLimitPerMinute = opts.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT;
   const now = opts.now ?? (() => new Date().toISOString());
   const authService = opts.auth;
-  // 27.1：运行模式统一从 PLATFORM_MODE 解析（缺省 development），避免未显式配置时静默退化为非生产模式
+  // 27.1：运行模式统一从 PLATFORM_MODE 解析（未显式配置 → development；未知值在 resolvePlatformMode 内直接抛错，禁止静默降级）
   const mode: PlatformRunMode = opts.mode ?? resolvePlatformMode();
+
+  // staging/production 强制 JWT 认证：禁止无 AuthService 启动（否则会回退 dev-token 静态身份，违反生产安全约束）
+  if (isProductionLike(mode) && !authService) {
+    throw new Error(`[security] 运行模式 ${mode} 必须启用 JWT 认证服务（AuthService），禁止以静态 Token / dev-token 回退启动`);
+  }
+  // 静态 Token 仅 development/test 可用；生产类模式下即使显式配置 PLATFORM_API_TOKEN 也不作为身份来源
+  if (!allowStaticToken(mode) && (opts.token || process.env.PLATFORM_API_TOKEN)) {
+    throw new Error(`[security] 运行模式 ${mode} 禁止静态 Bearer Token（PLATFORM_API_TOKEN / dev-token），身份来源仅限 JWT`);
+  }
+  const token = opts.token ?? process.env.PLATFORM_API_TOKEN ?? DEFAULT_TOKEN;
+  const rateLimiter = opts.rateLimiter ?? (isProductionLike(mode)
+    ? createRedisRateLimiter({ url: process.env.REDIS_URL ?? '', limit: rateLimitPerMinute })
+    : new TtlLruRateLimiter({
+      limit: rateLimitPerMinute,
+      ttlMs: opts.rateLimitTtlMs,
+      maxEntries: opts.rateLimitMaxEntries,
+    }));
+  if (isProductionLike(mode) && rateLimiter.kind !== 'redis') {
+    throw new Error(`[rate-limit] 运行模式 ${mode} 必须使用 Redis 限流器，禁止回退进程内 Map`);
+  }
 
   let server: http.Server | null = null;
   let boundPort: number | undefined;
-  const hits = new Map<string, { windowStart: number; count: number }>();
 
   // ── Phase 46：AI 质量优化服务（Feedback / Error / Proposal / Version / Experiment / Knowledge）──
   // 每台服务器实例持有独立状态（或注入共享/持久化实例）；写操作一律走人工审批门禁（禁止 AI 自批）。
@@ -160,7 +181,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       ?? (c.user?.scopes?.projects?.length === 1 ? c.user.scopes.projects[0] : null)
       ?? 'wan3';
     const projectId = String(requested);
-    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(404, `Project 不存在：${projectId}`);
+    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(ErrorCode.NOT_FOUND, `Project 不存在：${projectId}`);
     if (c.user) assertProjectAccess({ roles: c.user.roles, scopes: c.user.scopes }, projectId);
     return aiQualityProjects.forProject(projectId);
   }
@@ -202,13 +223,13 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // ── 27.2：读端点 RBAC —— 运维只读（审计/遥测成本/Job/Worker）需要 OPS_READ，防 VIEWER 越权读敏感数据 ──
   function requireOpsRead(c: Ctx): void {
     if (!hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
-      throw new HttpError(403, `角色 ${c.role} 无权读取运维数据（需 OPS_READ 权限）`);
+      throw new HttpError(ErrorCode.AUTH_FORBIDDEN, `角色 ${c.role} 无权读取运维数据（需 OPS_READ 权限）`);
     }
   }
 
   function requireEvaluationRead(c: Ctx): void {
     if (!hasPermission(c.role, 'PROJECT_READ' satisfies Permission) && !hasPermission(c.role, 'OPS_READ' satisfies Permission)) {
-      throw new HttpError(403, `角色 ${c.role} 无权读取 Evaluation 规模数据`);
+      throw new HttpError(ErrorCode.AUTH_FORBIDDEN, `角色 ${c.role} 无权读取 Evaluation 规模数据`);
     }
   }
 
@@ -217,32 +238,32 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // 必须由具备 RELEASE_APPROVE 权限的角色（RELEASE_MANAGER / ADMIN）人工执行，禁止 AI 自批。
   function requireAiApprove(c: Ctx): void {
     if (!hasPermission(c.role, 'RELEASE_APPROVE' satisfies Permission)) {
-      throw new HttpError(403, `角色 ${c.role} 无权执行 AI 质量审批（需 RELEASE_APPROVE 权限，禁止 AI 自批）`);
+      throw new HttpError(ErrorCode.AUTH_FORBIDDEN, `角色 ${c.role} 无权执行 AI 质量审批（需 RELEASE_APPROVE 权限，禁止 AI 自批）`);
     }
   }
 
   function requireCostManage(c: Ctx): void {
     if (!hasPermission(c.role, 'COST_MANAGE' satisfies Permission)) {
-      throw new HttpError(403, `角色 ${c.role} 无权修改成本治理策略（仅 ADMIN/FINANCE/PROJECT_OWNER）`);
+      throw new HttpError(ErrorCode.AUTH_FORBIDDEN, `角色 ${c.role} 无权修改成本治理策略（仅 ADMIN/FINANCE/PROJECT_OWNER）`);
     }
   }
 
   function costProjectId(c: Ctx, explicit?: string): string | undefined {
     const projectId = explicit ?? queryParam(c.req.url, 'projectId') ?? (c.body.projectId ? String(c.body.projectId) : undefined);
     if (!projectId) {
-      if (!hasPermission(c.role, 'COST_READ_ALL' satisfies Permission)) throw new HttpError(403, '仅 ADMIN/FINANCE/PROJECT_OWNER 可以查看全部成本');
+      if (!hasPermission(c.role, 'COST_READ_ALL' satisfies Permission)) throw new HttpError(ErrorCode.AUTH_FORBIDDEN, '仅 ADMIN/FINANCE/PROJECT_OWNER 可以查看全部成本');
       return undefined;
     }
-    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(404, `Project 不存在：${projectId}`);
+    if (!c.service.listProjects().some((p) => p.id === projectId)) throw new HttpError(ErrorCode.NOT_FOUND, `Project 不存在：${projectId}`);
     if (c.user) assertProjectAccess({ roles: c.user.roles, scopes: c.user.scopes }, projectId);
-    if (!hasPermission(c.role, 'PROJECT_READ' satisfies Permission) && !hasPermission(c.role, 'OPS_READ' satisfies Permission)) throw new HttpError(403, `角色 ${c.role} 无权读取成本`);
+    if (!hasPermission(c.role, 'PROJECT_READ' satisfies Permission) && !hasPermission(c.role, 'OPS_READ' satisfies Permission)) throw new HttpError(ErrorCode.AUTH_FORBIDDEN, `角色 ${c.role} 无权读取成本`);
     return projectId;
   }
 
   // ── 认证路由（无需静态 Token 即可访问 login/refresh；logout/info 需有效凭证）──
   async function handleAuthRoute(req: http.IncomingMessage, res: http.ServerResponse, ids: { requestId: string; traceId: string }): Promise<void> {
     if (!authService) {
-      sendError(res, 501, 'auth_disabled', '认证服务未启用', ids);
+      sendHttpError(res, new HttpError(ErrorCode.AUTH_DISABLED), ids);
       return;
     }
     const pathname = (req.url ?? '/').split('?')[0];
@@ -252,14 +273,15 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       const username = String(body.username ?? '');
       const password = String(body.password ?? '');
       if (!username || !password) {
-        sendError(res, 400, 'missing_credentials', '缺少用户名或密码', ids);
+        sendHttpError(res, new HttpError(ErrorCode.VALIDATION_ERROR, '缺少用户名或密码'), ids);
         return;
       }
       try {
         const tokens = await authService.login(username, password);
         sendJson(res, 200, tokens);
       } catch (err) {
-        sendError(res, 401, 'invalid_credentials', (err as Error).message, ids);
+        logApiError('login', err, ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FAILED), ids);
       }
       return;
     }
@@ -268,14 +290,15 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       if (!body) return;
       const refreshToken = String(body.refreshToken ?? '');
       if (!refreshToken) {
-        sendError(res, 400, 'missing_refresh_token', '缺少 refreshToken', ids);
+        sendHttpError(res, new HttpError(ErrorCode.VALIDATION_ERROR, '缺少 refreshToken'), ids);
         return;
       }
       try {
         const tokens = await authService.refresh(refreshToken);
         sendJson(res, 200, tokens);
       } catch (err) {
-        sendError(res, 401, 'invalid_refresh_token', (err as Error).message, ids);
+        logApiError('refresh', err, ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FAILED), ids);
       }
       return;
     }
@@ -289,17 +312,18 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     if (pathname === '/auth/info') {
       const cred = parseBearer(req.headers.authorization);
       if (!cred) {
-        sendError(res, 401, 'unauthorized', '缺少 Bearer Token', ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FAILED, '缺少 Bearer Token'), ids);
         return;
       }
       try {
         sendJson(res, 200, await authService.info(cred));
       } catch (err) {
-        sendError(res, 401, 'unauthorized', (err as Error).message, ids);
+        logApiError('auth-info', err, ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FAILED), ids);
       }
       return;
     }
-    sendError(res, 404, 'not_found', `${req.method ?? 'GET'} ${pathname} 不存在`, ids);
+    sendHttpError(res, new HttpError(ErrorCode.NOT_FOUND, `${req.method ?? 'GET'} ${pathname} 不存在`), ids);
   }
 
   function isAuthRoute(method: string, pathname: string): boolean {
@@ -312,7 +336,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   // ── Run 级作用域校验（JWT 用户）──
   async function withRunScope<T>(c: Ctx, runId: string, fn: (run: TestRun) => T): Promise<T> {
     const run = await c.service.getRun(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new HttpError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (c.user) {
       assertRunAccess({ roles: c.user.roles, scopes: c.user.scopes }, run.projectId, run.environment);
     }
@@ -323,7 +347,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
   async function withApprovalScope<T>(c: Ctx, approvalId: string, fn: (approval: { runId: string; environment: string }) => T): Promise<T> {
     const approvals = await c.service.listApprovals({ approvalId });
     const approval = approvals[0];
-    if (!approval) throw new Error(`审批不存在：${approvalId}`);
+    if (!approval) throw new HttpError(ErrorCode.NOT_FOUND, `审批不存在：${approvalId}`);
     if (c.user && approval.runId) {
       const run = await c.service.getRun(approval.runId);
       if (run) assertRunAccess({ roles: c.user.roles, scopes: c.user.scopes }, run.projectId, run.environment);
@@ -362,14 +386,14 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     // ── QA Workflow（Phase 40.2）：Defect 管理（真实实体，替换此前空 stub）──
     { method: 'GET', segments: ['defects'], handler: async (c) => maybePaginate(c.req.url, await c.service.listDefects(undefined, c.user?.scopes)) },
     { method: 'POST', segments: ['defects'], handler: async (c) => c.service.createDefect({ projectId: String(c.body.projectId ?? ''), title: String(c.body.title ?? ''), severity: c.body.severity as never, environment: c.body.environment as string | undefined, runId: c.body.runId as string | undefined, caseId: c.body.caseId as string | undefined, description: c.body.description as string | undefined, evidence: c.body.evidence as unknown[] | undefined, createdBy: c.actor }, c.role, c.user?.scopes) },
-    { method: 'GET', segments: ['defects', ':id'], handler: async (c, p) => { const d = await c.service.getDefect(p.id, c.user?.scopes); if (!d) throw new HttpError(404, `缺陷不存在：${p.id}`); return d; } },
+    { method: 'GET', segments: ['defects', ':id'], handler: async (c, p) => { const d = await c.service.getDefect(p.id, c.user?.scopes); if (!d) throw new HttpError(ErrorCode.NOT_FOUND, `缺陷不存在：${p.id}`); return d; } },
     { method: 'PATCH', segments: ['defects', ':id', 'status'], handler: async (c, p) => c.service.updateDefectStatus(p.id, String(c.body.status ?? '') as never, c.body.resolution as string | undefined, c.actor, c.role, c.user?.scopes) },
     { method: 'POST', segments: ['defects', ':id', 'assign'], handler: async (c, p) => c.service.assignDefect(p.id, String(c.body.assignee ?? ''), c.actor, c.role, c.user?.scopes) },
 
     // ── QA Workflow（Phase 39）：Test Suite ──
     { method: 'POST', segments: ['test-suites'], handler: async (c) => c.service.createSuite({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
     { method: 'GET', segments: ['test-suites'], handler: async (c) => maybePaginate(c.req.url, await c.service.listSuites(undefined, c.user?.scopes)) },
-    { method: 'GET', segments: ['test-suites', ':id'], handler: async (c, p) => { const s = await c.service.getSuite(p.id, c.user?.scopes); if (!s) throw new HttpError(404, `Test Suite 不存在：${p.id}`); return s; } },
+    { method: 'GET', segments: ['test-suites', ':id'], handler: async (c, p) => { const s = await c.service.getSuite(p.id, c.user?.scopes); if (!s) throw new HttpError(ErrorCode.NOT_FOUND, `Test Suite 不存在：${p.id}`); return s; } },
     { method: 'PATCH', segments: ['test-suites', ':id'], handler: async (c, p) => c.service.updateSuite(p.id, c.body as never, c.actor, c.role) },
     { method: 'POST', segments: ['test-suites', ':id', 'archive'], handler: async (c, p) => c.service.archiveSuite(p.id, c.actor, c.role) },
     { method: 'POST', segments: ['test-suites', ':id', 'restore'], handler: async (c, p) => c.service.restoreSuite(p.id, c.actor, c.role) },
@@ -381,7 +405,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     // ── QA Workflow（Phase 39）：Test Plan ──
     { method: 'POST', segments: ['test-plans'], handler: async (c) => c.service.createPlan({ ...(c.body as Record<string, unknown>), createdBy: c.actor } as never, c.role) },
     { method: 'GET', segments: ['test-plans'], handler: async (c) => maybePaginate(c.req.url, await c.service.listPlans(undefined, c.user?.scopes)) },
-    { method: 'GET', segments: ['test-plans', ':id'], handler: async (c, p) => { const plan = await c.service.getPlan(p.id, c.user?.scopes); if (!plan) throw new HttpError(404, `Test Plan 不存在：${p.id}`); return plan; } },
+    { method: 'GET', segments: ['test-plans', ':id'], handler: async (c, p) => { const plan = await c.service.getPlan(p.id, c.user?.scopes); if (!plan) throw new HttpError(ErrorCode.NOT_FOUND, `Test Plan 不存在：${p.id}`); return plan; } },
     { method: 'PATCH', segments: ['test-plans', ':id'], handler: async (c, p) => c.service.updatePlan(p.id, c.body as never, c.actor, c.role) },
     { method: 'POST', segments: ['test-plans', ':id', 'run'], handler: async (c, p) => c.service.runPlan(p.id, c.actor, c.role, c.user?.scopes) },
     { method: 'GET', segments: ['test-plans', ':id', 'cases'], handler: async (c, p) => c.service.planCases(p.id, c.user?.scopes) },
@@ -437,7 +461,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['eval', 'report', ':domain'], handler: async (c, p) => {
       const domain = (p.domain ?? '').toUpperCase();
       const domains = ['REQUIREMENT', 'TEST_DESIGN', 'RISK', 'SELECTION', 'RCA', 'DEFECT', 'HEALING', 'RELEASE'];
-      if (!domains.includes(domain)) throw new HttpError(404, `未知评测领域：${domain}`);
+      if (!domains.includes(domain)) throw new HttpError(ErrorCode.NOT_FOUND, `未知评测领域：${domain}`);
       const report = aiQualityFor(c).evaluationReport([domain as never]);
       return { projectId: evaluationProjectId(c), ...report, domains: report.domains.filter((d) => d.domain === domain), overall: report.domains.find((d) => d.domain === domain)?.score ?? 0 };
     } },
@@ -459,7 +483,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         fb = aiQualityFor(c).feedback.verify(p.id, String(c.body.by ?? c.actor), c.body.note ? String(c.body.note) : undefined);
       } catch (err) {
-        throw new HttpError(400, (err as Error).message);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, (err as Error).message, { cause: err });
       }
       aiQualityFor(c).audit.record({ proposalId: 'n/a', actor: c.actor, action: 'CREATED', decision: `人工核验反馈 ${p.id}`, metrics: { verified: 1 } });
       return fb;
@@ -478,7 +502,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         approved = aiQualityFor(c).proposals.approve(p.id, c.actor);
       } catch (err) {
-        throw new HttpError(400, (err as Error).message);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, (err as Error).message, { cause: err });
       }
       aiQualityFor(c).audit.record({
         proposalId: p.id, actor: c.actor, action: 'APPROVED',
@@ -496,7 +520,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         rejected = aiQualityFor(c).proposals.reject(p.id, c.actor, String(c.body.reason ?? '人工拒绝'));
       } catch (err) {
-        throw new HttpError(400, (err as Error).message);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, (err as Error).message, { cause: err });
       }
       aiQualityFor(c).audit.record({ proposalId: p.id, actor: c.actor, action: 'REJECTED', decision: rejected.rejectedReason ?? '人工拒绝' });
       return rejected;
@@ -505,7 +529,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     { method: 'GET', segments: ['prompts'], handler: async (c) => maybePaginate(c.req.url, aiQualityFor(c).prompts.list(queryParam(c.req.url, 'key') ?? undefined)) },
     { method: 'GET', segments: ['prompts', ':id', 'versions'], handler: async (c, p) => {
       const v = aiQualityFor(c).prompts.get(p.id);
-      if (!v) throw new HttpError(404, `Prompt 版本不存在：${p.id}`);
+      if (!v) throw new HttpError(ErrorCode.NOT_FOUND, `Prompt 版本不存在：${p.id}`);
       return aiQualityFor(c).prompts.list(v.promptKey); // 同 key 的全部版本（v1 → v2 → ...）
     } },
     { method: 'GET', segments: ['models'], handler: async (c) => aiQualityFor(c).models.list() },
@@ -519,10 +543,10 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       const type = String(c.body.type ?? 'SHADOW').toUpperCase();
       const proposalId = String(c.body.proposalId ?? '');
       const candidateRef = String(c.body.candidateRef ?? '');
-      if (!proposalId || !candidateRef) throw new HttpError(400, 'experiments 需要 proposalId 与 candidateRef');
+      if (!proposalId || !candidateRef) throw new HttpError(ErrorCode.VALIDATION_ERROR, 'experiments 需要 proposalId 与 candidateRef');
       if (type === 'CANARY') return aiQualityFor(c).experiments.createCanary({ proposalId, candidateRef });
       if (type === 'SHADOW') return aiQualityFor(c).experiments.createShadow({ proposalId, candidateRef });
-      throw new HttpError(400, `未知实验类型：${type}（SHADOW / CANARY）`);
+      throw new HttpError(ErrorCode.VALIDATION_ERROR, `未知实验类型：${type}（SHADOW / CANARY）`);
     } },
     // 43.26 API：GET /knowledge/review（候选 + 生产知识 + 质量指标）
     { method: 'GET', segments: ['knowledge', 'review'], handler: async (c) => ({
@@ -562,14 +586,14 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     } },
     { method: 'GET', segments: ['ai-quality', 'continuous-evals', ':id'], handler: async (c, p) => {
       const run = aiQualityFor(c).continuousEval.get(p.id);
-      if (!run) throw new HttpError(404, `Continuous Evaluation 运行不存在：${p.id}`);
+      if (!run) throw new HttpError(ErrorCode.NOT_FOUND, `Continuous Evaluation 运行不存在：${p.id}`);
       return run;
     } },
     { method: 'POST', segments: ['ai-quality', 'continuous-evals', 'run'], handler: async (c) => {
       requireAiApprove(c);
       const schedule = String(c.body.schedule ?? 'NIGHTLY').toUpperCase();
       if (!(['NIGHTLY', 'WEEKLY', 'RELEASE'] as string[]).includes(schedule)) {
-        throw new HttpError(400, `未知 schedule：${schedule}（NIGHTLY / WEEKLY / RELEASE）`);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, `未知 schedule：${schedule}（NIGHTLY / WEEKLY / RELEASE）`);
       }
       const run = aiQualityFor(c).runContinuousEval({
         schedule: schedule as never,
@@ -609,7 +633,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         cand = aiQualityFor(c).reviewBenchmarkCandidate(p.id, 'APPROVED', c.actor);
       } catch (err) {
-        throw new HttpError(400, (err as Error).message);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, (err as Error).message, { cause: err });
       }
       return cand;
     } },
@@ -619,7 +643,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         cand = aiQualityFor(c).reviewBenchmarkCandidate(p.id, 'REJECTED', c.actor, c.body.reason ? String(c.body.reason) : undefined);
       } catch (err) {
-        throw new HttpError(400, (err as Error).message);
+        throw new HttpError(ErrorCode.VALIDATION_ERROR, (err as Error).message, { cause: err });
       }
       return cand;
     } },
@@ -699,14 +723,14 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       try {
         return { projectId, ...evaluationScale.benchmarkIntegrity(projectId, decodeURIComponent(p.id)) };
       } catch (err) {
-        throw new HttpError(/不存在/.test((err as Error).message) ? 404 : 409, (err as Error).message);
+        throw toHttpError(err, ErrorCode.CONFLICT);
       }
     } },
     { method: 'POST', segments: ['data', 'archive'], handler: async (c) => {
       requireAiApprove(c);
       const projectId = evaluationProjectId(c);
       const before = c.body.before ? new Date(String(c.body.before)) : undefined;
-      if (before && Number.isNaN(before.getTime())) throw new HttpError(400, 'before 必须是合法 ISO 时间');
+      if (before && Number.isNaN(before.getTime())) throw new HttpError(ErrorCode.VALIDATION_ERROR, 'before 必须是合法 ISO 时间');
       const artifact = evaluationScale.archive(projectId, c.actor, before);
       persistEvaluationScale();
       return { projectId, archived: artifact.records.length, checksum: artifact.checksum, stats: evaluationScale.forProject(projectId).lifecycle.stats() };
@@ -719,14 +743,14 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
         persistEvaluationScale();
         return { projectId, ...restored, stats: evaluationScale.forProject(projectId).lifecycle.stats() };
       } catch (err) {
-        throw new HttpError(409, (err as Error).message);
+        throw new HttpError(ErrorCode.CONFLICT, (err as Error).message, { cause: err });
       }
     } },
     { method: 'GET', segments: ['metrics', 'aggregated'], handler: async (c) => {
       requireEvaluationRead(c);
       const projectId = evaluationProjectId(c);
       const dimension = queryParam(c.req.url, 'dimension') ?? 'project';
-      if (!['hourly', 'daily', 'project', 'model', 'benchmark'].includes(dimension)) throw new HttpError(400, `未知 aggregation dimension：${dimension}`);
+      if (!['hourly', 'daily', 'project', 'model', 'benchmark'].includes(dimension)) throw new HttpError(ErrorCode.VALIDATION_ERROR, `未知 aggregation dimension：${dimension}`);
       return { projectId, dimension, metrics: evaluationScale.aggregate(projectId, dimension as never, queryParam(c.req.url, 'key') ?? undefined) };
     } },
     { method: 'GET', segments: ['metrics', 'drift'], handler: async (c) => {
@@ -761,23 +785,21 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       await syncTelemetryCosts();
       const projectId = costProjectId(c);
       const records = costGovernance.ledger.list({ projectId });
-      const daily = new Map<string, CapacitySample>();
-      for (const record of records) { const day = record.timestamp.slice(0, 10); const sample = daily.get(day) ?? { timestamp: `${day}T00:00:00.000Z`, runs: 0, cost: 0, queuePeak: 0, workersPeak: 1 }; sample.cost += record.totalCost; sample.runs = new Set(records.filter((r) => r.timestamp.startsWith(day)).map((r) => r.runId).filter(Boolean)).size; daily.set(day, sample); }
-      return { projectId, forecasts: (['1h', '6h', '24h', '7d', '30d'] as const).map((horizon) => forecastCapacity([...daily.values()], horizon)) };
+      return { projectId, forecasts: forecastCapacities(aggregateDailyCostCapacity(records)) };
     } },
     { method: 'GET', segments: ['cost', 'anomalies'], handler: async (c) => { const projectId = costProjectId(c); return { projectId, anomalies: costGovernance.anomalies.filter((a) => !projectId || a.projectId === projectId) }; } },
     { method: 'GET', segments: ['budgets'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.budgets.list(projectId); } },
     { method: 'POST', segments: ['budgets'], handler: async (c) => { requireCostManage(c); const projectId = costProjectId(c); const value = costGovernance.setBudget({ ...(c.body as unknown as CostBudgetInput), projectId }, c.actor); persistCostGovernance(); return value; } },
-    { method: 'PATCH', segments: ['budgets', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.budgets.get(p.id); if (!existing) throw new HttpError(404, `预算不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchBudget(p.id, c.body as Partial<CostBudgetInput>, c.actor); persistCostGovernance(); return value; } },
+    { method: 'PATCH', segments: ['budgets', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.budgets.get(p.id); if (!existing) throw new HttpError(ErrorCode.NOT_FOUND, `预算不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchBudget(p.id, c.body as Partial<CostBudgetInput>, c.actor); persistCostGovernance(); return value; } },
     { method: 'GET', segments: ['workers', 'capacity'], handler: async (c) => { requireOpsRead(c); return { ...costGovernance.scaling(), limits: { minWorkers: 1, maxWorkers: 20, maxConcurrentJobs: 4 } }; } },
     { method: 'GET', segments: ['workers', 'scaling'], handler: async (c) => { requireOpsRead(c); return costGovernance.scaling(); } },
     { method: 'POST', segments: ['workers', 'scaling'], handler: async (c) => { requireCostManage(c); const decision = costGovernance.scale(c.body as never, { minWorkers: Number(c.body.minWorkers ?? 1), maxWorkers: Number(c.body.maxWorkers ?? 20), jobsPerWorker: Number(c.body.jobsPerWorker ?? 20), scaleUpQueueAgeMs: Number(c.body.scaleUpQueueAgeMs ?? 30_000), cooldownMs: Number(c.body.cooldownMs ?? 60_000), maxEstimatedCost: c.body.maxEstimatedCost === undefined ? undefined : Number(c.body.maxEstimatedCost) }, c.actor); persistCostGovernance(); return decision; } },
     { method: 'GET', segments: ['model-policies'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.policies.list(projectId); } },
     { method: 'POST', segments: ['model-policies'], handler: async (c) => { requireCostManage(c); const projectId = costProjectId(c); const value = costGovernance.setPolicy({ ...(c.body as unknown as Omit<ModelPolicy, 'id' | 'updatedAt'>), projectId }, c.actor); persistCostGovernance(); return value; } },
-    { method: 'PATCH', segments: ['model-policies', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.policies.get(p.id); if (!existing) throw new HttpError(404, `模型策略不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchPolicy(p.id, c.body as Partial<Omit<ModelPolicy, 'id'>>, c.actor); persistCostGovernance(); return value; } },
+    { method: 'PATCH', segments: ['model-policies', ':id'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.policies.get(p.id); if (!existing) throw new HttpError(ErrorCode.NOT_FOUND, `模型策略不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.patchPolicy(p.id, c.body as Partial<Omit<ModelPolicy, 'id'>>, c.actor); persistCostGovernance(); return value; } },
     { method: 'GET', segments: ['optimizations'], handler: async (c) => { const projectId = costProjectId(c); return costGovernance.listOptimizations(projectId); } },
-    { method: 'POST', segments: ['optimizations', ':id', 'approve'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(404, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'APPROVED', c.actor); persistCostGovernance(); return value; } },
-    { method: 'POST', segments: ['optimizations', ':id', 'reject'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(404, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'REJECTED', c.actor); persistCostGovernance(); return value; } },
+    { method: 'POST', segments: ['optimizations', ':id', 'approve'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(ErrorCode.NOT_FOUND, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'APPROVED', c.actor); persistCostGovernance(); return value; } },
+    { method: 'POST', segments: ['optimizations', ':id', 'reject'], handler: async (c, p) => { requireCostManage(c); const existing = costGovernance.getOptimization(p.id); if (!existing) throw new HttpError(ErrorCode.NOT_FOUND, `优化建议不存在：${p.id}`); costProjectId(c, existing.projectId); const value = costGovernance.decideOptimization(p.id, 'REJECTED', c.actor); persistCostGovernance(); return value; } },
     { method: 'GET', segments: ['cost', 'audit'], handler: async (c) => { requireOpsRead(c); const projectId = costProjectId(c); return { projectId, audit: costGovernance.listAudit(projectId) }; } },
   ];
 
@@ -811,12 +833,13 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
   async function createRunHandler(c: Ctx): Promise<unknown> {
     const idempotencyKey = c.req.headers['idempotency-key'] ? String(c.req.headers['idempotency-key']) : undefined;
-    return c.service.createRun({
+    const created = await c.service.createRun({
       projectId: String(c.body.projectId ?? ''),
       environment: String(c.body.environment ?? ''),
       trigger: (c.body.trigger as never) ?? 'manual',
       businessId: c.body.businessId ? String(c.body.businessId) : undefined,
       feature: c.body.feature ? String(c.body.feature) : undefined,
+      requirementText: c.body.requirementText ? String(c.body.requirementText) : undefined,
       change: c.body.change as never,
       actor: c.actor,
       role: c.role,
@@ -831,6 +854,8 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       releaseGate: typeof c.body.releaseGate === 'boolean' ? c.body.releaseGate : undefined,
       assetVersion: c.body.assetVersion as Record<string, number> | undefined,
     });
+    if (created.status === 'QUEUED') await c.service.dispatchJobs();
+    return created;
   }
 
   async function listRunsHandler(c: Ctx): Promise<unknown> {
@@ -863,23 +888,6 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       if (ok) return { route: r, params };
     }
     return null;
-  }
-
-  /** 25.7：每 IP 每分钟限流；返回配额信息（剩余 / 重置时间）供响应头 */
-  function rateLimitInfo(ip: string): { limited: boolean; remaining: number; resetAt: string; limit: number } {
-    const nowMs = Date.parse(now());
-    const hit = hits.get(ip);
-    if (!hit || nowMs - hit.windowStart >= 60_000) {
-      hits.set(ip, { windowStart: nowMs, count: 1 });
-      return { limited: false, remaining: rateLimitPerMinute - 1, resetAt: new Date(nowMs + 60_000).toISOString(), limit: rateLimitPerMinute };
-    }
-    hit.count += 1;
-    return {
-      limited: hit.count > rateLimitPerMinute,
-      remaining: Math.max(0, rateLimitPerMinute - hit.count),
-      resetAt: new Date(hit.windowStart + 60_000).toISOString(),
-      limit: rateLimitPerMinute,
-    };
   }
 
   /** 25.7：每请求元数据（追踪 + 限流），挂到 res 以贯穿所有响应 */
@@ -924,7 +932,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       res.end(content);
       return true;
     }
-    sendError(res, 404, 'dashboard_not_built', 'Web Dashboard 未构建（运行 npm run build:web 后重试）', { requestId: 'static', traceId: 'static' });
+    sendHttpError(res, new HttpError(ErrorCode.NOT_FOUND, 'Web Dashboard 未构建（运行 npm run build:web 后重试）'), { requestId: 'static', traceId: 'static' });
     return true;
   }
 
@@ -965,7 +973,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       // 文件不存在时：带扩展名的视为真实静态资源缺失 → 404；无扩展名（SPA 客户端路由）→ 回退，
       // 由 SPA fallback 返回 index.html（避免将 /assets/WAN3-CORE-001 误判为静态文件 404）。
       if (path.extname(pathname).length > 0) {
-        sendError(res, 404, 'not_found', `${pathname} 不存在`, { requestId: 'static', traceId: 'static' });
+        sendHttpError(res, new HttpError(ErrorCode.NOT_FOUND, `${pathname} 不存在`), { requestId: 'static', traceId: 'static' });
       }
       return false;
     }
@@ -999,7 +1007,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     try {
       const ok = await opts.service.verifyShare(runId, shareToken);
       if (!ok) {
-        sendError(res, 403, 'share_invalid', '分享链接无效或已失效', ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FORBIDDEN, '分享链接无效或已失效'), ids);
         return true;
       }
       if (isExport) {
@@ -1016,9 +1024,9 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
       }
       return true;
     } catch (err) {
-      const e = err as Error;
-      const isForbidden = /无权|缺少权限|禁止|越权/.test(e.message);
-      sendError(res, /不存在/.test(e.message) ? 404 : isForbidden ? 403 : 500, 'error', e.message, ids);
+      const httpError = toHttpError(err);
+      logApiError('public-share', err, ids);
+      sendHttpError(res, httpError, ids);
       return true;
     }
   }
@@ -1034,38 +1042,59 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     return u;
   }
 
-  function sendError(
+  function sendHttpError(
     res: http.ServerResponse,
-    status: number,
-    code: string,
-    message: string,
+    error: HttpError,
     ids: { requestId: string; traceId: string },
     extraHeaders: Record<string, string> = {},
   ): void {
     const meta = (res as MetaResponse)._meta;
+    const message = error.expose
+      ? redactSensitiveText(error.message)
+      : ERROR_PUBLIC_MESSAGES[error.code];
     sendJson(
       res,
-      status,
+      error.status,
       {
-        error: code,
+        error: error.code,
+        code: error.code,
         message,
-        status,
+        status: error.status,
         requestId: meta?.requestId ?? ids.requestId,
         traceId: meta?.traceId ?? ids.traceId,
+        ...(error.expose && error.details !== undefined
+          ? { details: redactSensitive(error.details) }
+          : {}),
       },
       extraHeaders,
+    );
+  }
+
+  function logApiError(scope: string, error: unknown, ids: { requestId: string; traceId: string }): void {
+    const raw = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `[api:${scope}] requestId=${ids.requestId} traceId=${ids.traceId} ${redactSensitiveText(raw)}\n`,
     );
   }
 
   function readBody(req: http.IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
       let data = '';
+      let settled = false;
       req.on('data', (chunk) => {
+        if (settled) return;
         data += chunk;
-        if (data.length > 1_000_000) reject(new Error('请求体过大'));
+        if (data.length > 1_000_000) {
+          settled = true;
+          reject(new HttpError(ErrorCode.REQUEST_TOO_LARGE));
+        }
       });
-      req.on('end', () => resolve(data));
-      req.on('error', reject);
+      req.on('end', () => {
+        if (!settled) resolve(data);
+      });
+      req.on('error', (error) => {
+        if (!settled) reject(error);
+      });
     });
   }
 
@@ -1075,7 +1104,7 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
     try {
       return JSON.parse(raw) as Record<string, unknown>;
     } catch {
-      sendError(res, 400, 'invalid_json', '请求体不是合法 JSON', { requestId: 'unknown', traceId: 'unknown' });
+      sendHttpError(res, new HttpError(ErrorCode.INVALID_JSON), { requestId: 'unknown', traceId: 'unknown' });
       return null;
     }
   }
@@ -1124,19 +1153,27 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
       const principal = await resolvePrincipal(req.headers.authorization, req);
       if (!principal) {
-        sendError(res, 401, 'unauthorized', '缺少或无效的 Bearer Token', ids);
+        sendHttpError(res, new HttpError(ErrorCode.AUTH_FAILED, '缺少或无效的 Bearer Token'), ids);
         return;
       }
       // 25.7：限流（配额信息注入所有响应头；超限返回 429 + Retry-After）
-      const rl = rateLimitInfo(ip);
+      let rl;
+      try {
+        rl = await rateLimiter.consume(ip, Date.parse(now()));
+      } catch (error) {
+        logApiError('rate-limit', error, ids);
+        sendHttpError(res, new HttpError(ErrorCode.SERVICE_UNAVAILABLE, '限流服务暂时不可用'), ids);
+        return;
+      }
       (res as MetaResponse)._meta!.rateLimit = rl;
       if (rl.limited) {
-        sendError(res, 429, 'rate_limited', '请求过于频繁', ids, { 'Retry-After': '1' });
+        const retryAfterSeconds = Math.max(1, Math.ceil((Date.parse(rl.resetAt) - Date.parse(now())) / 1000));
+        sendHttpError(res, new HttpError(ErrorCode.RATE_LIMITED), ids, { 'Retry-After': String(retryAfterSeconds) });
         return;
       }
       const m = match(stripApiPrefix(url), method);
       if (!m) {
-        sendError(res, 404, 'not_found', `${method} ${pathname} 不存在`, ids);
+        sendHttpError(res, new HttpError(ErrorCode.NOT_FOUND, `${method} ${pathname} 不存在`), ids);
         return;
       }
       let body: Record<string, unknown> = {};
@@ -1164,13 +1201,9 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
         else legacyAiQuality.persistToFile(opts.aiQualityStateFile);
       }
     } catch (err) {
-      const e = err as Error;
-      // 27.2：HttpError 携带显式状态码（如读端点 RBAC 的 403 Forbidden）；
-      // Phase 39：权限/作用域拒绝（RBAC 不足 / 项目环境越权）语义化为 403 Forbidden；
-      // 其余按业务错误语义映射为 400，未识别异常 500。
-      const isForbidden = /无权|缺少权限|禁止|越权/.test(e.message);
-      const status = e instanceof HttpError ? e.status : isForbidden ? 403 : /权限|缺少|不存在|非法|重复|已存在/.test(e.message) ? 400 : 500;
-      sendError(res, status, 'error', e.message, ids);
+      const httpError = toHttpError(err);
+      logApiError('request', err, ids);
+      sendHttpError(res, httpError, ids);
     } finally {
       // 运维指标：记录 API 延迟
       opts.service.recordApiLatency(Date.now() - start);
@@ -1179,21 +1212,38 @@ export function createPlatformServer(opts: ApiServerOptions): PlatformHttpServer
 
   return {
     async listen() {
-      await new Promise<void>((resolve, reject) => {
-        server!.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', () => {
-          const a = server!.address() as { port: number } | null;
-          boundPort = a?.port;
-          resolve();
+      try {
+        // Fail-fast 启动屏障：DB Connection → Migration 全部成功后才允许绑定端口。
+        await opts.service.start();
+        const startup = opts.service.startupStatus();
+        if (!startup.ready) {
+          throw new Error(`[startup] 服务未就绪（${startup.storage}:${startup.state}）`);
+        }
+        // production/staging 在绑定端口前完成 Redis connect + PING；失败则保持 Not Ready。
+        await rateLimiter.start();
+        await new Promise<void>((resolve, reject) => {
+          server!.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', () => {
+            const a = server!.address() as { port: number } | null;
+            boundPort = a?.port;
+            resolve();
+          });
+          server!.once('error', reject);
         });
-        server!.on('error', reject);
-      });
-      return { port: boundPort!, url: `http://127.0.0.1:${boundPort}` };
+        return { port: boundPort!, url: `http://127.0.0.1:${boundPort}` };
+      } catch (error) {
+        // 连接、迁移、Redis 限流器或监听任一步失败都不提供服务，并释放资源。
+        await rateLimiter.close().catch(() => undefined);
+        await opts.service.shutdown();
+        throw error;
+      }
     },
     async close() {
       if (server) {
         await new Promise<void>((resolve) => server!.close(() => resolve()));
         server = null;
       }
+      await rateLimiter.close();
+      await opts.service.shutdown();
     },
     address() {
       return boundPort;

@@ -1,10 +1,13 @@
 // Agent Orchestrator：统一调度 Agent 阶段
 // 支持：阶段跳过（已有产物）、人工审批（AUTO/REVIEW/MANUAL）、阶段重试、部分阶段失败降级、产物串联。
 // 典型流程：Requirement → TestDesign → Risk → Data → Execution → Analysis → Memory
+// 阶段执行（重试 + 真 abort 超时 + Tracer/Budget）统一委托 AgentRuntime —— 与主 Pipeline
+// 共用同一执行机制（单一治理点：Prompt/Model/Retry/Trace 不再分叉）。
 import type { AgentContext } from '../core/agent-context.js';
 import { AgentRunState, StageStatus } from '../core/agent-state.js';
 import type { AgentRegistry } from '../core/agent-registry.js';
 import type { TestAgent } from '../core/agent.js';
+import { AgentRuntime } from '../core/agent-runtime.js';
 
 /** 审批模式 */
 export type ApprovalMode = 'AUTO' | 'REVIEW' | 'MANUAL';
@@ -49,8 +52,10 @@ export interface OrchestratorOptions {
   maxStageRetries?: number;
   /** 阶段失败后是否中止后续阶段（默认 false = 继续后续阶段） */
   abortOnStageFailure?: boolean;
-  /** 单阶段执行超时（毫秒，默认 60s） */
+  /** 单阶段执行超时（毫秒，默认 60s；触发即向阶段函数发送 AbortSignal） */
   stageTimeoutMs?: number;
+  /** 注入运行时（缺省围绕 context.llm 构建；与 Pipeline 共用同一实例以统一治理） */
+  runtime?: AgentRuntime;
 }
 
 /** Orchestrator 运行结果 */
@@ -70,6 +75,8 @@ export class AgentOrchestrator {
   private maxStageRetries: number;
   private abortOnStageFailure: boolean;
   private stageTimeoutMs: number;
+  /** 阶段执行运行时（与主 Pipeline 共用的执行机制：重试 + 真 abort 超时 + Tracer/Budget） */
+  readonly runtime: AgentRuntime;
 
   constructor(options: OrchestratorOptions) {
     this.registry = options.registry;
@@ -77,6 +84,13 @@ export class AgentOrchestrator {
     this.maxStageRetries = options.maxStageRetries ?? 0;
     this.abortOnStageFailure = options.abortOnStageFailure ?? false;
     this.stageTimeoutMs = options.stageTimeoutMs ?? 60_000;
+    // 缺省运行时：仅提供阶段执行（runStage）能力；LLM 调用需注入带 Provider 的 Runtime
+    this.runtime = options.runtime
+      ?? new AgentRuntime({
+        llm: { name: 'orchestrator-unconfigured', generate: async () => { throw new Error('Orchestrator Runtime 未配置 LLM Provider（请注入 runtime）'); } },
+        defaultStageTimeoutMs: this.stageTimeoutMs,
+        defaultStageRetries: this.maxStageRetries,
+      });
   }
 
   /** 执行计划 */
@@ -139,14 +153,18 @@ export class AgentOrchestrator {
       for (let attempt = 0; attempt <= this.maxStageRetries; attempt++) {
         if (attempt > 0) context.logger.info(`  🔄 阶段 ${stage.name} 重试 ${attempt}/${this.maxStageRetries}`);
         state.setStatus(stage.name, 'running');
-        try {
-          result = await this.runWithTimeout(agent, input, context, stage.name);
+        // 阶段执行统一走 AgentRuntime（与主 Pipeline 同一机制：超时 + 重试 + Tracer/Budget）
+        const r = await this.runtime.runStage(
+          { agent: stage.name, stage: stage.name, essential: true, timeoutMs: this.stageTimeoutMs, retries: 0 },
+          () => Promise.resolve(agent.execute(input as never, context)),
+        );
+        if (r.ok) {
+          result = r.value;
           lastError = undefined;
           break;
-        } catch (e) {
-          lastError = (e as Error).message;
-          context.logger.warn(`  阶段 ${stage.name} 执行失败：${lastError}`);
         }
+        lastError = r.error;
+        context.logger.warn(`  阶段 ${stage.name} 执行失败：${lastError}`);
       }
 
       if (lastError) {
@@ -176,23 +194,5 @@ export class AgentOrchestrator {
     if (stage.input) return stage.input(context, outputs);
     const keys = Object.keys(outputs);
     return keys.length ? outputs[keys[keys.length - 1]] : undefined;
-  }
-
-  /** 带超时的 Agent 执行 */
-  private async runWithTimeout<TInput, TOutput>(
-    agent: TestAgent<TInput, TOutput>,
-    input: TInput,
-    context: AgentContext,
-    stageName: string,
-  ): Promise<TOutput> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`阶段超时（${this.stageTimeoutMs}ms）：${stageName}`)), this.stageTimeoutMs);
-    });
-    try {
-      return await Promise.race([agent.execute(input, context), timeoutPromise]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 }

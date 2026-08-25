@@ -392,20 +392,92 @@ export function adaptiveScale(input: ScalingInput, policy: ScalingPolicy, lastSc
 }
 
 export type ForecastHorizon = '1h' | '6h' | '24h' | '7d' | '30d';
+export const FORECAST_HORIZONS: readonly ForecastHorizon[] = ['1h', '6h', '24h', '7d', '30d'];
 export interface CapacitySample { timestamp: string; runs: number; cost: number; queuePeak: number; workersPeak: number; }
 export interface CapacityForecast { horizon: ForecastHorizon; expectedRuns: number; expectedCost: number; expectedQueue: number; expectedWorkerCount: number; method: 'HISTORICAL_AVERAGE_TREND_PEAK'; trace: string[]; }
-export function forecastCapacity(samples: CapacitySample[], horizon: ForecastHorizon, jobsPerWorker = 20): CapacityForecast {
-  if (!samples.length) return { horizon, expectedRuns: 0, expectedCost: 0, expectedQueue: 0, expectedWorkerCount: 1, method: 'HISTORICAL_AVERAGE_TREND_PEAK', trace: ['无历史样本，使用安全下限'] };
+export interface CapacityForecastAggregate {
+  sampleCount: number;
+  totalRuns: number;
+  totalCost: number;
+  peakQueue: number;
+  first: Pick<CapacitySample, 'timestamp' | 'runs' | 'cost'> | null;
+  last: Pick<CapacitySample, 'timestamp' | 'runs' | 'cost'> | null;
+}
+
+/**
+ * 单次扫描构建所有 horizon 共用的预测输入，避免每个 horizon 重复排序、reduce 和 peak 扫描。
+ * first/last 按时间戳选取，因此调用方无需预排序。
+ */
+export function aggregateCapacitySamples(samples: Iterable<CapacitySample>): CapacityForecastAggregate {
+  const aggregate: CapacityForecastAggregate = {
+    sampleCount: 0,
+    totalRuns: 0,
+    totalCost: 0,
+    peakQueue: Number.NEGATIVE_INFINITY,
+    first: null,
+    last: null,
+  };
+  for (const sample of samples) {
+    const point = { timestamp: sample.timestamp, runs: sample.runs, cost: sample.cost };
+    aggregate.sampleCount += 1;
+    aggregate.totalRuns += sample.runs;
+    aggregate.totalCost += sample.cost;
+    aggregate.peakQueue = Math.max(aggregate.peakQueue, sample.queuePeak);
+    if (!aggregate.first || point.timestamp < aggregate.first.timestamp) aggregate.first = point;
+    if (!aggregate.last || point.timestamp >= aggregate.last.timestamp) aggregate.last = point;
+  }
+  if (aggregate.sampleCount === 0) aggregate.peakQueue = 0;
+  return aggregate;
+}
+
+export function forecastCapacityFromAggregate(
+  aggregate: CapacityForecastAggregate,
+  horizon: ForecastHorizon,
+  jobsPerWorker = 20,
+): CapacityForecast {
+  if (aggregate.sampleCount === 0 || !aggregate.first || !aggregate.last) {
+    return { horizon, expectedRuns: 0, expectedCost: 0, expectedQueue: 0, expectedWorkerCount: 1, method: 'HISTORICAL_AVERAGE_TREND_PEAK', trace: ['无历史样本，使用安全下限'] };
+  }
   const hours = { '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720 }[horizon];
-  const ordered = [...samples].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const averageRuns = ordered.reduce((s, v) => s + v.runs, 0) / ordered.length;
-  const averageCost = ordered.reduce((s, v) => s + v.cost, 0) / ordered.length;
-  const trendRuns = ordered.length > 1 ? (ordered.at(-1)!.runs - ordered[0].runs) / (ordered.length - 1) : 0;
-  const trendCost = ordered.length > 1 ? (ordered.at(-1)!.cost - ordered[0].cost) / (ordered.length - 1) : 0;
+  const averageRuns = aggregate.totalRuns / aggregate.sampleCount;
+  const averageCost = aggregate.totalCost / aggregate.sampleCount;
+  const trendRuns = aggregate.sampleCount > 1 ? (aggregate.last.runs - aggregate.first.runs) / (aggregate.sampleCount - 1) : 0;
+  const trendCost = aggregate.sampleCount > 1 ? (aggregate.last.cost - aggregate.first.cost) / (aggregate.sampleCount - 1) : 0;
   const expectedRuns = round6(Math.max(0, (averageRuns + trendRuns * Math.min(hours, 24) / 2) * hours));
   const expectedCost = round6(Math.max(0, (averageCost + trendCost * Math.min(hours, 24) / 2) * hours));
-  const expectedQueue = Math.max(Math.max(...ordered.map((v) => v.queuePeak)), Math.ceil(expectedRuns / Math.max(1, hours)));
-  return { horizon, expectedRuns, expectedCost, expectedQueue, expectedWorkerCount: Math.max(1, Math.ceil(expectedQueue / Math.max(1, jobsPerWorker))), method: 'HISTORICAL_AVERAGE_TREND_PEAK', trace: [`averageRuns=${round6(averageRuns)}`, `trendRuns=${round6(trendRuns)}`, `peakQueue=${Math.max(...ordered.map((v) => v.queuePeak))}`] };
+  const expectedQueue = Math.max(aggregate.peakQueue, Math.ceil(expectedRuns / Math.max(1, hours)));
+  return { horizon, expectedRuns, expectedCost, expectedQueue, expectedWorkerCount: Math.max(1, Math.ceil(expectedQueue / Math.max(1, jobsPerWorker))), method: 'HISTORICAL_AVERAGE_TREND_PEAK', trace: [`averageRuns=${round6(averageRuns)}`, `trendRuns=${round6(trendRuns)}`, `peakQueue=${aggregate.peakQueue}`] };
+}
+
+/** 单 horizon 兼容入口；多 horizon 调用应使用 forecastCapacities。 */
+export function forecastCapacity(samples: CapacitySample[], horizon: ForecastHorizon, jobsPerWorker = 20): CapacityForecast {
+  return forecastCapacityFromAggregate(aggregateCapacitySamples(samples), horizon, jobsPerWorker);
+}
+
+/** O(n + h)：样本只聚合一次，随后复用于全部 horizon。 */
+export function forecastCapacities(
+  samples: Iterable<CapacitySample>,
+  horizons: readonly ForecastHorizon[] = FORECAST_HORIZONS,
+  jobsPerWorker = 20,
+): CapacityForecast[] {
+  const aggregate = aggregateCapacitySamples(samples);
+  return horizons.map((horizon) => forecastCapacityFromAggregate(aggregate, horizon, jobsPerWorker));
+}
+
+/** O(n)：Cost Attribution 一次遍历聚合为每日成本与唯一 Run 数。 */
+export function aggregateDailyCostCapacity(records: Iterable<CostAttribution>): CapacitySample[] {
+  const daily = new Map<string, { sample: CapacitySample; runIds: Set<string> }>();
+  for (const record of records) {
+    const day = record.timestamp.slice(0, 10);
+    const entry = daily.get(day) ?? {
+      sample: { timestamp: `${day}T00:00:00.000Z`, runs: 0, cost: 0, queuePeak: 0, workersPeak: 1 },
+      runIds: new Set<string>(),
+    };
+    entry.sample.cost += record.totalCost;
+    if (record.runId) entry.runIds.add(record.runId);
+    daily.set(day, entry);
+  }
+  return [...daily.values()].map(({ sample, runIds }) => ({ ...sample, runs: runIds.size }));
 }
 
 export interface CostAnomaly { id: string; projectId?: string; type: 'COST_ANOMALY'; current: number; baseline: number; ratio: number; severity: 'WARNING' | 'CRITICAL'; message: string; channels: ['DASHBOARD', 'AUDIT', 'FEISHU']; timestamp: string; }

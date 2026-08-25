@@ -1,0 +1,24 @@
+{
+  "scenarioId": "SCN-profile-mass-assignment",
+  "mode": "EXECUTABLE",
+  "patterns": ["AUTHORIZATION", "NON_MUTATION", "ATOMICITY"],
+  "operations": [
+    {"id": "STEP-001", "method": "GET", "path": "/__fixtures/profile-observer/users/${PROFILE_USER_ID}", "purpose": "capture-before-state"},
+    {"id": "STEP-002", "method": "PUT", "path": "/__fixtures/profile/users/${PROFILE_USER_ID}", "purpose": "submit-protected-fields"},
+    {"id": "STEP-003", "method": "GET", "path": "/__fixtures/profile-observer/users/${PROFILE_USER_ID}", "purpose": "capture-after-state"}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-002", "target": "status", "operator": "EQUALS", "expected": 422},
+    {"id": "AS-002", "ac": "AC-001", "operation": "STEP-002", "target": "body.error.code", "operator": "EQUALS", "expected": "PROFILE_FIELD_NOT_WRITABLE"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.revision", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeRevision"},
+    {"id": "AS-004", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.canonicalDigest", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeDigest"},
+    {"id": "AS-005", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.profile.displayName", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeDisplayName"},
+    {"id": "AS-006", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.profile.role", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeRole"},
+    {"id": "AS-007", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.profile.tenantId", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeTenantId"},
+    {"id": "AS-008", "ac": "AC-002", "operation": "STEP-003", "target": "body.data.profile.projectId", "operator": "UNCHANGED", "expectedFrom": "STEP-001.beforeProjectId"},
+    {"id": "AS-009", "ac": "AC-002", "operation": "STEP-001", "target": "status", "operator": "EQUALS", "expected": 200},
+    {"id": "AS-010", "ac": "AC-002", "operation": "STEP-003", "target": "status", "operator": "EQUALS", "expected": 200}
+  ],
+  "requiredEvidenceKinds": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER"],
+  "blockedCodes": []
+}

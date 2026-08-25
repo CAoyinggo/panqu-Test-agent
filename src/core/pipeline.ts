@@ -12,13 +12,17 @@ import { runDefaultAssertions } from '../assertions/all.js';
 import { runGenericAssertions, type AssertionContext } from './assertion-engine.js';
 import { runAdapterAssertions } from '../assertions/adapters/wan3-adapter.js';
 import { runTeardownCheck } from './teardown.js';
-import { resolveDataFactory, isNoop } from './data-factory.js';
+import { DataSession } from './data-session.js';
 import { logger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
 import { writeJson } from '../utils/fs-utils.js';
 import path from 'node:path';
 import { toCanonicalSceneId } from './canonical-scene.js';
-import { evaluateCoreExecution, type CoreExecutionStatus } from './execution-status.js';
+import { evaluateCoreExecution, isAbortedStatus, type CoreExecutionStatus } from './execution-status.js';
+import { ExecutionAbortError, isExecutionAbortError, linkAbortSignal, throwIfAborted } from './abort.js';
+
+/** 中止后清理（teardown）阶段的宽限时长：清理仍可发请求，但不得无限占用 */
+const CLEANUP_GRACE_MS = 15_000;
 
 export interface PipelineOptions {
   cfg: AppConfig;
@@ -34,6 +38,14 @@ export interface PipelineOptions {
   envDiff?: EnvDiff;
   /** Debug 级别（--debug-level，basic/verbose/full） */
   debugLevel?: DebugLevel;
+  /** 取消信号（用例超时 / 全局超时 / Tool 取消贯穿至此；触发即中止全部业务 HTTP） */
+  signal?: AbortSignal;
+  /**
+   * 外部数据会话（Data Agent / 编排层准备）：生命周期归调用方所有 ——
+   * Pipeline 只消费 session.context（不重复 setup、不 teardown）；
+   * 与 autoSetup 互斥使用：提供外部会话时忽略 autoSetup 的内部数据准备。
+   */
+  dataSession?: DataSession;
 }
 
 export interface PipelineResult {
@@ -49,6 +61,11 @@ export interface PipelineResult {
   executed: boolean;
   /** Fail-closed 执行状态。 */
   status: CoreExecutionStatus;
+  /** 实际匹配到的 Processor 名称及调用证据。 */
+  processor?: string;
+  processorInvoked: boolean;
+  /** 外部提交请求/任务标识（若 Processor 返回）。 */
+  requestId?: string;
   assetInfo: any;
   semiAuto: boolean;
   taskId: number | null;
@@ -147,6 +164,13 @@ export class Pipeline {
     const env = session.env;
     const ctx = this.buildCtx();
 
+    // ── 取消信号贯穿：外部 signal（用例/全局超时、Tool 取消）→ 执行期 controller → Http ──
+    // 超时/取消触发后：业务 HTTP 立即中止（fetch AbortSignal），流水线在步骤检查点快速退出，
+    // 随后 teardown 清理在宽限信号下执行（清理仍可发请求，但有 15s 上限）。
+    const execAbort = new AbortController();
+    const unlinkExternal = linkAbortSignal(execAbort, this.opts.signal);
+    const execSignal = execAbort.signal;
+
     // 初始化默认值（异常时也能出报告）
     let billingData: BillingData = {};
     let checks: CheckResult[] = [];
@@ -160,20 +184,20 @@ export class Pipeline {
     logger.step(`========== 开始执行：${taskDef.name}（${env} 环境） ==========`);
     logger.info(`场景类型：${taskDef.scene} → ${handler ? `已接入（${handler.name}）` : '未接入（半自动执行）'}`);
 
-    // ── 数据工厂 setup（--auto-setup 模式） ──
+    // ── 数据会话（DataContext 生命周期统一：DataSession 所有）──
+    // 外部会话：编排层（Data Agent / runner）已 setup，此处只消费 —— 不重复准备、不负责 teardown；
+    // 内部会话：autoSetup 且无外部会话时由 Pipeline 创建并在收尾阶段 teardown（必达）。
     let dataContext: DataContext | undefined;
-    if (this.opts.autoSetup) {
-      const { factory, name } = resolveDataFactory(taskDef);
-      if (!isNoop(factory)) {
-        logger.info(`数据工厂 setup（${name}）...`);
-        try {
-          dataContext = await factory.setup(ctx);
-          ctx.data = dataContext;
-          logger.info(`  数据准备完成：${dataContext.taskIds?.length ?? 0} 个任务，${dataContext.assets?.length ?? 0} 个素材`);
-        } catch (e: any) {
-          logger.warn(`数据工厂 setup 失败（已降级继续执行）：${e.message}`);
-        }
+    const internalSession = !this.opts.dataSession && this.opts.autoSetup
+      ? DataSession.forTaskDef(taskDef)
+      : null;
+    if (this.opts.dataSession) {
+      if (!this.opts.dataSession.isReady) {
+        throw new Error(`外部数据会话未就绪（state=${this.opts.dataSession.currentState}）：编排层必须先 setup 再执行`);
       }
+      dataContext = this.opts.dataSession.context ?? {};
+      ctx.data = dataContext;
+      logger.info(`使用外部数据会话：${this.opts.dataSession.name}（任务=${dataContext.taskIds?.length ?? 0}，素材=${dataContext.assets?.length ?? 0}；不重复准备）`);
     }
 
     // ── 环境一致性断言（若有 envDiff） ──
@@ -181,6 +205,15 @@ export class Pipeline {
       const { assertEnvConsistency } = await import('./env-checker.js');
       const envChecks = assertEnvConsistency(this.opts.envDiff);
       checks.push(...envChecks);
+    }
+
+    // 内部会话 setup（autoSetup 且无外部会话）：block 策略失败会抛 DataSessionSetupError
+    // 阻断执行（会话内部已先清理部分产出）；continue 策略降级为空上下文继续。
+    if (internalSession) {
+      throwIfAborted(execSignal, '数据会话 setup 前'); // 已中止则不得再创建数据
+      logger.info(`数据会话 setup（${internalSession.name}）...`);
+      dataContext = await internalSession.setup(ctx);
+      ctx.data = dataContext;
     }
 
     try {
@@ -213,7 +246,7 @@ export class Pipeline {
       this.saveDebug('03-impact.json', impact);
 
       // 4. HTTP + 计费
-      const http = new Http(baseUrl, session.cookie_string);
+      const http = new Http(baseUrl, session.cookie_string, execSignal);
       this.setupHttpRecorder(http);
       http.setStep('4-pre-submit');
       const billing = new Billing(http, cfg.environments[env].billing_url!);
@@ -257,6 +290,7 @@ export class Pipeline {
       // 提交任务
       if (!taskId) {
         if (handler) {
+          throwIfAborted(execSignal, '提交任务前'); // 中止后禁止新业务写入（提交=扣费入口）
           processorInvoked = true;
           await this.hooks.run('beforeStep', ctx);
           logger.step('[5/10] 提交任务...');
@@ -283,6 +317,7 @@ export class Pipeline {
 
       // 详情 + 状态
       if (taskId && handler) {
+        throwIfAborted(execSignal, '查询任务详情前');
         await this.hooks.run('beforeStep', ctx);
         logger.step('[6/10] 查询任务详情（落库核对）...');
         http.setStep('6-detail');
@@ -325,6 +360,7 @@ export class Pipeline {
       }
 
       // 计费核验（非关键接口，失败降级为 warning 不阻塞）
+      throwIfAborted(execSignal, '计费核验前');
       logger.step('[8/10] 计费核验...');
       http.setStep('8-billing');
       try {
@@ -387,11 +423,26 @@ export class Pipeline {
       await this.hooks.run('afterScene', ctx);
     } catch (e: any) {
       mainError = e;
-      logger.error(`执行异常：${e.message}`);
+      if (isExecutionAbortError(e)) {
+        // 中止不是普通异常：底层 HTTP 已停止，最终状态将由 evaluateCoreExecution 判为 TIMEOUT/CANCELLED
+        logger.error(`执行中止（${e.reason}）：${e.message}`);
+      } else {
+        logger.error(`执行异常：${e.message}`);
+      }
       // full 模式：保存完整堆栈
       if (this.opts.debugLevel === 'full' && e.stack) {
         this.saveDebug('error-stacktrace.json', { message: e.message, stack: e.stack, name: e.name });
       }
+    }
+
+    // ── 中止后清理：teardown / 数据工厂清理改用宽限信号（15s 上限）──
+    // 业务执行已被中止，但清理（核对/回收数据）仍需进行；清理期间的新请求有独立时间预算。
+    let cleanupGraceTimer: NodeJS.Timeout | undefined;
+    if (execSignal.aborted && ctx.http instanceof Http) {
+      const cleanupSignal = new AbortController();
+      cleanupGraceTimer = setTimeout(() => cleanupSignal.abort(new ExecutionAbortError('TIMEOUT', '清理宽限期耗尽（15s）')), CLEANUP_GRACE_MS);
+      ctx.http.setSignal(cleanupSignal.signal);
+      logger.warn('执行已中止：业务请求已全部停止，进入清理阶段（宽限 15s）');
     }
 
     // ── teardown（无论成功失败都执行） ──
@@ -402,18 +453,10 @@ export class Pipeline {
     this.saveDebug('10-teardown.json', { teardownChecks, submit: ctx.submit, billingData });
     this.snapshotCtx('10-teardown', ctx);
 
-    // ── 数据工厂 teardown（--auto-setup 模式，无论成功失败都执行） ──
-    if (this.opts.autoSetup && dataContext) {
-      const { factory, name } = resolveDataFactory(taskDef);
-      if (!isNoop(factory)) {
-        logger.info(`数据工厂 teardown（${name}）...`);
-        try {
-          await factory.teardown(ctx, dataContext);
-          logger.info('  数据清理完成');
-        } catch (e: any) {
-          logger.warn(`数据工厂 teardown 失败（不影响报告）：${e.message}`);
-        }
-      }
+    // ── 数据会话 teardown（内部会话；无论成功/失败/中止必须执行，幂等不抛错）──
+    // 外部会话不在此清理：生命周期归编排层（编排层 try/finally 负责）。
+    if (internalSession) {
+      await internalSession.teardown(ctx);
     }
 
     // ── 汇总报告数据 ──
@@ -437,6 +480,8 @@ export class Pipeline {
       issues.push({ level: '阻塞', title: 'NOT_EXECUTED', desc: execution.reason ?? '场景未接入 Processor，禁止进入 PASS' });
     } else if (execution.status === 'BLOCKED') {
       issues.push({ level: '阻塞', title: 'BLOCKED', desc: execution.reason ?? '执行未完成，禁止进入 PASS' });
+    } else if (isAbortedStatus(execution.status)) {
+      issues.push({ level: '阻塞', title: execution.status, desc: execution.reason ?? '执行被中止（超时/取消），底层任务已停止' });
     }
     if (billingData.modelTrend && !billingData.modelTrend.found) {
       issues.push({ level: '数据异常', title: '模型趋势中未统计到本次模型', desc: '需确认计费统计是否覆盖当前模型' });
@@ -455,6 +500,10 @@ export class Pipeline {
     await this.hooks.run('afterAll', ctx);
     await this.hooks.run('beforeReport', ctx);
 
+    // 释放信号监听与清理宽限计时器
+    if (cleanupGraceTimer) clearTimeout(cleanupGraceTimer);
+    unlinkExternal();
+
     return {
       submit: ctx.submit,
       billingData,
@@ -466,6 +515,11 @@ export class Pipeline {
       passRate,
       executed: execution.executed,
       status: execution.status,
+      processor: handler?.name,
+      processorInvoked,
+      requestId: ctx.submit.requestId !== undefined
+        ? String(ctx.submit.requestId)
+        : ctx.taskId !== null ? String(ctx.taskId) : undefined,
       assetInfo,
       semiAuto,
       taskId: ctx.taskId,

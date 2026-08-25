@@ -19,7 +19,7 @@ import { collectFullEvidence, EvidenceCollection, HistoricalSimilarFailure } fro
 import { classifyFailure } from './failure-classifier.js';
 
 /** 系统提示词：要求 LLM 严格基于证据链推断，禁止猜测 */
-const SYSTEM_PROMPT = `你是资深测试根因分析专家。你只能基于给定的「证据链」推断失败根因，
+export const ROOT_CAUSE_SYSTEM_PROMPT = `你是资深测试根因分析专家。你只能基于给定的「证据链」推断失败根因，
 禁止编造证据中不存在的服务、日志或数据。必须区分「AI 推断」与「低置信度猜测」。
 输出严格符合如下 JSON Schema（只输出 JSON，不要 Markdown 围栏）：
 ${JSON.stringify(ROOT_CAUSE_JSON_SCHEMA, null, 2)}
@@ -116,14 +116,14 @@ ${evidence.facts.join('\n') || '（无）'}
 历史相似失败：${evidence.historical.length > 0 ? evidence.historical.slice(0, 3).map((h) => `#${h.caseId ?? h.id} ${h.message ?? ''}`).join('；') : '（无）'}
 ${evidence.hasHistoricalSimilar ? '提示：存在历史同类问题，请结合历史结论推断。' : ''}`;
 
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'rca',
+        agent: this.name,
+        system: ROOT_CAUSE_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp);
     if (!isRootCauseLike(parsed)) {

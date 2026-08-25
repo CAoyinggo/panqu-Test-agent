@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0.0",
+  "generatedAt": "2026-08-24T00:00:00.000Z",
+  "assets": [
+    { "asset": "tasks/wan3-wensheng.json", "type": "TaskDef", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }, { "contractId": "api.videohub.submit", "version": "v1" }], "reasons": ["type=6 differs from observed type=10", "task_type=105 differs from observed qnck_to_video", "workflow_type=qntk differs from observed qnck"] },
+    { "asset": "tasks/wan3-tusheng.json", "type": "TaskDef", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }, { "contractId": "api.videohub.submit", "version": "v1" }], "reasons": ["Historical Wan3 execution values differ from current observation"] },
+    { "asset": "tasks/wan3-quanneng.json", "type": "TaskDef", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }, { "contractId": "api.videohub.submit", "version": "v1" }], "reasons": ["Historical Wan3 execution values differ from current observation"] },
+    { "asset": "tasks/wan3-shouwei.json", "type": "TaskDef", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }, { "contractId": "api.videohub.submit", "version": "v1" }], "reasons": ["Historical type/task/workflow values have not been confirmed against the current implementation"] },
+    { "asset": "tasks/_template.json", "type": "Template", "status": "LEGACY", "contracts": [], "reasons": ["Documentation template is not an executable source of truth"] },
+
+    { "asset": "src/cases/wan3/wensheng.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["type=6/task_type=105/workflow_type=qntk are historical"] },
+    { "asset": "src/cases/wan3/tusheng.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["Historical Wan3 parameters"] },
+    { "asset": "src/cases/wan3/quanneng.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["Historical Wan3 parameters"] },
+    { "asset": "src/cases/wan3/shouwei.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["Historical Wan3 parameters require rediscovery"] },
+    { "asset": "src/cases/wan3/idempotent.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["task_type=101/workflow_type=qntk are historical"] },
+    { "asset": "src/cases/wan3/int-02-missing-cueword.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }], "reasons": ["Historical execution binding"] },
+    { "asset": "src/cases/wan3/int-03-invalid-task-type.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }], "reasons": ["Negative vector is tied to an unverified historical task_type contract"] },
+    { "asset": "src/cases/wan3/int-04-empty-model-id.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }], "reasons": ["Historical execution binding"] },
+    { "asset": "src/cases/wan3/int-05-extra-long-cueword.ts", "type": "TypeScript Case", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }], "reasons": ["Boundary value and historical execution binding require current contract"] },
+
+    { "asset": "src/platform/test-assets/wan3-catalog.ts", "type": "Catalog", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "enum.wan3.workflow", "version": "v1" }], "reasons": ["Catalog contains qntk and historical task_type values"] },
+    { "asset": "src/plugins/scenes/video.ts", "type": "Hardcoded Generator", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }, { "contractId": "api.videohub.submit", "version": "v1" }], "reasons": ["Handler defaults row[type] to 6 and uses environment URL without a resolved API Contract"] },
+    { "asset": "src/agents/test-design/testcase-generator.ts", "type": "Hardcoded Generator", "status": "STALE", "contracts": [{ "contractId": "model.wan3", "version": "v1" }], "reasons": ["Video generator contains static prompt/status/invalid-resolution knowledge"] },
+    { "asset": "src/agents/requirement/requirement-parser.ts", "type": "Hardcoded Generator", "status": "LEGACY", "contracts": [{ "contractId": "model.wan3", "version": "v2" }], "reasons": ["Keyword classification may identify a subject but cannot supply execution parameters"] }
+  ]
+}

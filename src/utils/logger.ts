@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir } from './fs-utils.js';
+import { getExecutionContext, type ExecutionLogContext } from '../core/execution-context.js';
+import { redactSensitiveText } from '../core/redact.js';
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = (typeof LEVELS)[number];
@@ -18,11 +20,13 @@ let currentLevel: LogLevel = 'info';
 let noColor = false;
 let ciMode = false;
 
-// 文件日志状态
-let logStream: fs.WriteStream | null = null;
-let logContext: { task?: string; scene?: string; trace?: string } = {};
-let currentStep = '';
-let currentCaseId = '';
+// 无 execution scope 时仅用于 CLI 启动/配置阶段的兼容上下文。
+// 实际用例执行始终使用 AsyncLocalStorage 中的隔离副本。
+const fallbackLogContext: ExecutionLogContext = {};
+
+function currentLogContext(): ExecutionLogContext {
+  return getExecutionContext()?.log ?? fallbackLogContext;
+}
 
 export function setLogLevel(level: LogLevel): void {
   currentLevel = level;
@@ -41,22 +45,31 @@ export function setCiMode(enabled: boolean): void {
 
 /** 设置日志文件路径（开启 JSON 行落盘） */
 export function setLogFile(filePath: string): void {
-  if (logStream) {
-    logStream.end();
-    logStream = null;
+  const context = currentLogContext();
+  if (context.sink) {
+    context.sink.end();
+    context.sink = undefined;
   }
   ensureDir(path.dirname(filePath));
-  logStream = fs.createWriteStream(filePath, { flags: 'a' });
+  context.sink = fs.createWriteStream(filePath, { flags: 'a' });
+}
+
+/** 关闭当前 execution scope 拥有的日志文件资源（幂等）。 */
+export function closeLogFile(): void {
+  const context = currentLogContext();
+  if (!context.sink) return;
+  context.sink.end();
+  context.sink = undefined;
 }
 
 /** 设置日志上下文（task/scene/trace） */
 export function setLogContext(ctx: { task?: string; scene?: string; trace?: string }): void {
-  logContext = ctx;
+  Object.assign(currentLogContext(), ctx);
 }
 
 /** 设置当前用例 ID（并发模式下日志前缀隔离） */
 export function setCaseId(caseId: string): void {
-  currentCaseId = caseId || '';
+  currentLogContext().caseId = caseId || '';
 }
 
 function shouldLog(level: LogLevel): boolean {
@@ -65,32 +78,35 @@ function shouldLog(level: LogLevel): boolean {
 
 /** 写入 JSON 行到文件 */
 function writeJsonLine(level: string, msg: string): void {
-  if (!logStream) return;
+  const context = currentLogContext();
+  if (!context.sink) return;
   const entry = {
     ts: new Date().toISOString(),
     level,
-    step: currentStep,
-    task: logContext.task || '',
-    scene: logContext.scene || '',
-    trace: logContext.trace || '',
-    caseId: currentCaseId || '',
-    msg,
+    step: redactSensitiveText(context.step || ''),
+    task: redactSensitiveText(context.task || ''),
+    scene: redactSensitiveText(context.scene || ''),
+    trace: redactSensitiveText(context.trace || ''),
+    caseId: redactSensitiveText(context.caseId || ''),
+    msg: redactSensitiveText(msg),
   };
-  logStream.write(JSON.stringify(entry) + '\n');
+  context.sink.write(JSON.stringify(entry) + '\n');
 }
 
 function write(level: LogLevel, msg: string): void {
   if (!shouldLog(level)) return;
+  const safeMessage = redactSensitiveText(msg);
+  const context = currentLogContext();
   const prefix = `[${level.toUpperCase()}]`;
-  const caseTag = currentCaseId ? `[${currentCaseId}] ` : '';
+  const caseTag = context.caseId ? `[${context.caseId}] ` : '';
   if (noColor) {
     // eslint-disable-next-line no-console
-    console.log(`${prefix} ${caseTag}${msg}`);
+    console.log(`${prefix} ${caseTag}${safeMessage}`);
   } else {
     // eslint-disable-next-line no-console
-    console.log(level === 'error' ? COLORS.error + prefix + RESET + ' ' + caseTag + msg : COLORS[level] + prefix + RESET + ' ' + caseTag + msg);
+    console.log(level === 'error' ? COLORS.error + prefix + RESET + ' ' + caseTag + safeMessage : COLORS[level] + prefix + RESET + ' ' + caseTag + safeMessage);
   }
-  writeJsonLine(level, msg);
+  writeJsonLine(level, safeMessage);
 }
 
 export const logger = {
@@ -98,13 +114,16 @@ export const logger = {
   info: (msg: string) => write('info', msg),
   warn: (msg: string) => write('warn', msg),
   error: (msg: string) => write('error', msg),
-  // 步骤标题（无前缀）。CI 模式下抑制 ==== / ---- 分隔线
+  // 步骤标题。并发 scope 下附带 caseId；CI 模式下抑制 ==== / ---- 分隔线
   step: (msg: string) => {
     if (!shouldLog('info')) return;
     if (ciMode && /^(={4,}|-{4,})/.test(msg)) return;
-    currentStep = msg;
+    const context = currentLogContext();
+    const safeMessage = redactSensitiveText(msg);
+    context.step = safeMessage;
+    const caseTag = context.caseId ? `[${context.caseId}] ` : '';
     // eslint-disable-next-line no-console
-    console.log('\n' + msg);
-    writeJsonLine('info', msg);
+    console.log(`\n${caseTag}${safeMessage}`);
+    writeJsonLine('info', safeMessage);
   },
 };

@@ -9,7 +9,7 @@ import type { ExecutionOutcome } from '../execution/execution-schema.js';
 import {
   AnalysisReport,
   AnalysisFinding,
-  computeAnalysisSummary,
+  summaryFromOutcome,
   toMemoryWorthy,
 } from './analysis-schema.js';
 
@@ -41,8 +41,8 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
   const recommendations: string[] = [];
   const failed = outcome.results.filter((r) => !r.pass);
 
-  // ── 整体汇总 ──
-  const summary = computeAnalysisSummary(outcome.total, outcome.passed, outcome.timedOut, 0);
+  // ── 整体汇总（真实执行结果确定性计算，含各用例真实耗时之和） ──
+  const summary = summaryFromOutcome(outcome);
 
   // ── 失败用例 → 结论 ──
   for (const c of failed) {

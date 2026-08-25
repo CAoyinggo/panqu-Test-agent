@@ -3,6 +3,7 @@
 
 import type { Entity, Repository } from '../storage/repository.js';
 import { generateEntityId } from '../storage/repository.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** 运行模式 */
 export type TestPlanMode = 'MANUAL' | 'REGRESSION' | 'AUTONOMOUS';
@@ -83,7 +84,7 @@ export class TestPlanService {
     },
   ): Promise<TestPlan> {
     const plan = await this.repo.get(id);
-    if (!plan) throw new Error(`Test Plan 不存在：${id}`);
+    if (!plan) throw new CodedError(ErrorCode.NOT_FOUND, `Test Plan 不存在：${id}`);
     const updated: TestPlan = {
       ...plan,
       name: input.name ?? plan.name,

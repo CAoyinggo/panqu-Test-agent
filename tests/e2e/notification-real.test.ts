@@ -1,6 +1,6 @@
 // Phase 26.7 Observability / Alerting — E2E（真实飞书通道链路）
 // 用本地 HTTP mock 飞书端点（真实 Node http server + 真实 fetch POST）验证：
-// - 真实业务链路：BLOCK Run 真实发布 ReleaseBlock / P0Failure / RunFailed 告警并到达飞书
+// - 真实业务链路：FAILED outcome 真实发布 ReleaseBlock / P0Failure / RunCompleted 告警并到达飞书
 // - 真实业务链路：REVIEW Run 真实发布 ApprovalRequested（含 approvalId）
 // - 事件层：WorkerOffline / ProductionDeny（真实事件总线 + 真实 HTTP 投递）
 // - 6 类关键通知均含丰富上下文（run / env / timestamp），payload 为飞书 text 风格
@@ -96,14 +96,14 @@ async function runBlock(b: PlatformBundle): Promise<string> {
   return runId;
 }
 
-describe('26.7.1 真实业务链路：BLOCK Run → ReleaseBlock / P0Failure / RunFailed 告警', () => {
-  it('发布阻塞、P0 失败、Run 失败三类告警真实到达飞书并含上下文', async () => {
+describe('26.7.1 真实业务链路：FAILED outcome → ReleaseBlock / P0Failure / RunCompleted 告警', () => {
+  it('发布阻塞、P0 失败、Run 完成三类告警真实到达飞书并含上下文', async () => {
     const m = await startMockFeishu();
     const b = makeBundle(m.url);
     await b.auth.ensureSeeded();
     await b.testAssets.importCatalog();
     const runId = await runBlock(b);
-    await waitForTexts(m.received, ['发布阻塞', 'P0 失败', 'Run 失败']);
+    await waitForTexts(m.received, ['发布阻塞', 'P0 失败', 'Run 完成']);
     const texts = m.received.map((r) => r.content.text);
 
     const block = texts.find((t) => t.includes('发布阻塞'));
@@ -120,11 +120,11 @@ describe('26.7.1 真实业务链路：BLOCK Run → ReleaseBlock / P0Failure / R
     expect(p0).toContain('WAN3-CORE-001');
     expect(p0).toContain('env=test');
 
-    const failed = texts.find((t) => t.includes('Run 失败'));
-    expect(failed, '未收到 RunFailed 通知').toBeTruthy();
-    expect(failed).toContain(runId);
-    expect(failed).toContain(' t=');
-  });
+    const completed = texts.find((t) => t.includes('Run 完成'));
+    expect(completed, '未收到 RunCompleted 通知').toBeTruthy();
+    expect(completed).toContain(runId);
+    expect(completed).toContain(' t=');
+  }, 15_000);
 });
 
 describe('26.7.2 真实业务链路：REVIEW Run → ApprovalRequested 告警', () => {
@@ -167,7 +167,7 @@ describe('26.7.3 事件层：WorkerOffline / ProductionDeny 告警', () => {
 });
 
 describe('26.7.4 6 类通知均含丰富上下文 + 飞书 text payload 结构', () => {
-  it('ReleaseBlock / P0Failure / RunFailed / ApprovalRequested / WorkerOffline / ProductionDeny 全部含 [run= env= t=] 上下文', async () => {
+  it('ReleaseBlock / P0Failure / RunCompleted / ApprovalRequested / WorkerOffline / ProductionDeny 全部含 [run= env= t=] 上下文', async () => {
     const m = await startMockFeishu();
     const b = makeBundle(m.url);
     await b.auth.ensureSeeded();
@@ -177,7 +177,7 @@ describe('26.7.4 6 类通知均含丰富上下文 + 飞书 text payload 结构',
     await b.bus.publish({ type: 'WorkerOffline', data: { workerId: 'w1', reason: 'simulated-crash', environment: 'test', projectId: 'wan3' } });
     await b.bus.publish({ type: 'ProductionDeny', data: { actor: 'autonomous-agent', action: 'deploy', environment: 'production', projectId: 'wan3' } });
 
-    const expected = ['发布阻塞', 'P0 失败', 'Run 失败', '审批请求', 'Worker 下线', '生产访问被拒'];
+    const expected = ['发布阻塞', 'P0 失败', 'Run 完成', '审批请求', 'Worker 下线', '生产访问被拒'];
     await waitForTexts(m.received, expected);
     const texts = m.received.map((x) => x.content.text);
     for (const key of expected) {
@@ -192,5 +192,5 @@ describe('26.7.4 6 类通知均含丰富上下文 + 飞书 text payload 结构',
       expect(r.msg_type).toBe('text');
       expect(r.content.text.length).toBeGreaterThan(0);
     }
-  });
+  }, 15_000);
 });

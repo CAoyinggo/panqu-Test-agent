@@ -27,6 +27,8 @@ export interface BudgetStatus {
   llmCalls: number;
   agentCalls: number;
   toolCalls: number;
+  /** 已执行用例数（实时） */
+  casesUsed: number;
   durationMs: number;
   /** 已超限的预算项 */
   exceeded: string[];
@@ -40,9 +42,15 @@ export class AgentBudget {
   private llmCalls = 0;
   private agentCalls = 0;
   private toolCalls = 0;
+  private casesUsed = 0;
   private readonly startedAt = Date.now();
 
-  constructor(private readonly limits: BudgetLimits = {}) {}
+  /** 预算上限（公开只读：UsageMeter / Runner 读取 maxCases / maxConcurrency 参与执行） */
+  readonly limits: BudgetLimits;
+
+  constructor(limits: BudgetLimits = {}) {
+    this.limits = limits;
+  }
 
   /** 统计一次 Agent 调用 */
   addAgentCall(): void {
@@ -60,11 +68,20 @@ export class AgentBudget {
     this.toolCalls++;
   }
 
-  /** 从 Trace 导入用量（阶段结束后汇总） */
+  /** 统计一条已执行用例（实时；maxCases 依据） */
+  addCase(): void {
+    this.casesUsed++;
+  }
+
+  /**
+   * 从 Trace 导入用量（兼容保留：仅补齐未实时计量的旧调用方）。
+   * 实时计费链路（UsageMeter）下不再需要 —— 计数在每次 LLM/Tool/Case 发生时已扣减，
+   * 禁止在流程结束时覆盖（否则会丢弃实时数据）。
+   */
   importTrace(trace: AgentTrace): void {
-    this.llmCalls = trace.llmCallTotal;
-    this.toolCalls = trace.toolCallTotal;
-    this.tokensUsed = trace.totalTokens;
+    this.llmCalls = Math.max(this.llmCalls, trace.llmCallTotal);
+    this.toolCalls = Math.max(this.toolCalls, trace.toolCallTotal);
+    this.tokensUsed = Math.max(this.tokensUsed, trace.totalTokens);
   }
 
   /** 当前状态 */
@@ -74,6 +91,7 @@ export class AgentBudget {
     const durationMs = now - this.startedAt;
 
     if (this.limits.maxTokens !== undefined && this.tokensUsed >= this.limits.maxTokens) exceeded.push('maxTokens');
+    if (this.limits.maxCases !== undefined && this.casesUsed >= this.limits.maxCases) exceeded.push('maxCases');
     if (this.limits.maxLLMCalls !== undefined && this.llmCalls >= this.limits.maxLLMCalls) exceeded.push('maxLLMCalls');
     if (this.limits.maxAgentCalls !== undefined && this.agentCalls >= this.limits.maxAgentCalls) exceeded.push('maxAgentCalls');
     if (this.limits.maxToolCalls !== undefined && this.toolCalls >= this.limits.maxToolCalls) exceeded.push('maxToolCalls');
@@ -84,6 +102,7 @@ export class AgentBudget {
       llmCalls: this.llmCalls,
       agentCalls: this.agentCalls,
       toolCalls: this.toolCalls,
+      casesUsed: this.casesUsed,
       durationMs,
       exceeded,
       exceededAny: exceeded.length > 0,

@@ -22,8 +22,20 @@ export interface TestWorker extends WorkerRegistration {
   lastError?: string;
 }
 
-/** Worker 执行器：接收 Job，返回执行结果 */
-export type WorkerExecutor = (job: unknown) => Promise<unknown>;
+/** Worker 侧副作用上下文：重试必须复用同一幂等键。 */
+export interface WorkerExecutionContext {
+  jobId: string;
+  runId: string;
+  idempotencyKey: string;
+  runOnce<T>(operation: string, execute: () => Promise<T>): Promise<T | undefined>;
+}
+
+/** Worker 执行器：AbortSignal 必须继续贯穿到 Agent/Tool/HTTP。 */
+export type WorkerExecutor = (
+  job: unknown,
+  signal?: AbortSignal,
+  context?: WorkerExecutionContext,
+) => Promise<unknown>;
 
 /** 内部条目：Worker 元数据 + 执行器 */
 export interface WorkerEntry {

@@ -6,6 +6,8 @@
 //   - 审计日志中的输入统一经 redactSensitive 脱敏，敏感字段（token/password/secret 等）不落明文。
 import type { AgentContext } from '../core/agent-context.js';
 import { AgentTool, ToolResult, okToolResult, failToolResult, redactSensitive } from './tool.js';
+import { ExecutionAbortError, abortReasonOf, isExecutionAbortError } from '../../core/abort.js';
+import type { UsageMeter } from '../observability/usage-meter.js';
 
 /** 审计条目 */
 export interface ToolAuditEntry {
@@ -14,6 +16,8 @@ export interface ToolAuditEntry {
   ok: boolean;
   durationMs: number;
   error?: string;
+  /** 终态分类（TIMEOUT / CANCELLED / OK） */
+  status?: 'OK' | 'TIMEOUT' | 'CANCELLED';
   /** 权限拦截原因（被 DENY 时） */
   reason?: string;
 }
@@ -23,6 +27,8 @@ export interface ToolRegistryOptions {
   defaultTimeoutMs?: number;
   /** 审计日志回调（每次调用记录 name/脱敏 input 摘要/耗时/结果） */
   onAudit?: (entry: ToolAuditEntry) => void;
+  /** 用量计量器（Tool Decorator：调用前 STOP 检查、调用后实时扣减次数/成本） */
+  meter?: UsageMeter;
   /** 当前环境（test/preonline/prod），缺省取 context.environment */
   environment?: string;
   /** 权限策略：strict（默认，生产危险操作拒绝） / permissive（生产危险操作仅告警放行） */
@@ -39,6 +45,7 @@ export class ToolRegistry {
   private environment?: string;
   private permissionPolicy: 'strict' | 'permissive';
   private onApproval?: ToolRegistryOptions['onApproval'];
+  private meter?: UsageMeter;
 
   constructor(options: ToolRegistryOptions = {}) {
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
@@ -46,6 +53,12 @@ export class ToolRegistry {
     this.environment = options.environment;
     this.permissionPolicy = options.permissionPolicy ?? 'strict';
     this.onApproval = options.onApproval;
+    this.meter = options.meter;
+  }
+
+  /** 注入/更新用量计量器（Pipeline 运行时注入带预算的实例；已有则覆盖） */
+  setMeter(meter: UsageMeter | undefined): void {
+    this.meter = meter;
   }
 
   /** 注册 Tool（同名覆盖） */
@@ -126,48 +139,102 @@ export class ToolRegistry {
   }
 
   /**
-   * 安全调用 Tool：权限检查 → 查找 → 超时保护 → 错误捕获 → 审计（输入脱敏）。
+   * 安全调用 Tool：权限检查 → 查找 → 超时保护（真实中止）→ 错误捕获 → 审计（输入脱敏）。
    * 无论 Tool 内部抛错、超时或被权限拦截，都返回结构化的 ToolResult（不向调用方抛异常）。
+   *
+   * 超时/取消语义（v2）：超时触发 AbortController 并把 signal 传入 tool.execute ——
+   * Tool 把信号贯穿到底层（Engine → Pipeline → HTTP fetch），底层任务真实停止，
+   * 而非仅上层放弃等待。终态通过 ToolResult.status 明确为 TIMEOUT / CANCELLED。
    */
   async call<TInput = unknown, TOutput = unknown>(
     name: string,
     input: TInput,
     context: AgentContext,
+    callOpts: { signal?: AbortSignal } = {},
   ): Promise<ToolResult<TOutput>> {
     const startedAt = Date.now();
     const tool = this.tools.get(name);
     if (!tool) {
       const error = `Tool 未注册：${name}（可用：${this.list().join(', ') || '无'}）`;
-      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: 0, error });
+      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: 0, status: 'OK', error });
       return failToolResult(error, startedAt);
     }
 
     // 权限执行（安全边界）
     const permit = await this.enforcePermission(tool, context);
     if (!permit.allowed) {
-      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: 0, reason: permit.reason });
+      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: 0, status: 'OK', reason: permit.reason });
       context.logger.warn(`[安全] Tool 被拦截：${name} - ${permit.reason}`);
       return failToolResult(permit.reason, startedAt);
     }
 
+    // ── Tool Decorator（实时计费）：调用前 STOP 检查（超限不再执行任何 Tool）──
+    if (this.meter) {
+      try {
+        this.meter.beforeTool();
+      } catch (e) {
+        const error = (e as Error).message;
+        this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: 0, status: 'OK', reason: error });
+        context.logger.warn(`[预算] Tool 调用被 STOP：${name} - ${error}`);
+        return failToolResult(error, startedAt);
+      }
+    }
+
     const timeoutMs = tool.timeoutMs ?? this.defaultTimeoutMs;
 
-    let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Tool 超时（${timeoutMs}ms）：${name}`)), timeoutMs);
+    // 取消信号：Tool 超时 + 外部取消（callOpts.signal）级联到 tool.execute
+    const abort = new AbortController();
+    const unlinkExternal = callOpts.signal
+      ? linkToolSignal(abort, callOpts.signal)
+      : () => undefined;
+
+    // 终止竞争：超时（TIMEOUT）或外部取消（CANCELLED）任一触发即结算，
+    // 同时把 AbortSignal 传入 tool.execute —— Tool 将信号贯穿到底层，真实停止。
+    const abortPromise = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => {
+        const err = new ExecutionAbortError('TIMEOUT', `Tool 超时（${timeoutMs}ms）：${name}（已向底层发送中止信号）`);
+        abort.abort(err);
+        reject(err);
+      }, timeoutMs);
+      abort.signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        const reason = abort.signal.reason;
+        reject(isExecutionAbortError(reason)
+          ? reason
+          : new ExecutionAbortError('CANCELLED', `Tool 调用被取消：${name}`));
+      }, { once: true });
     });
 
     try {
-      const result = await Promise.race([tool.execute(input, context), timeoutPromise]);
-      this.audit?.({ name, input: redactSensitive(input), ok: true, durationMs: Date.now() - startedAt });
+      const result = await Promise.race([tool.execute(input, context, abort.signal), abortPromise]);
+      this.meter?.afterTool(); // 实时扣减 Tool 次数 → 超限即 STOP 后续调用
+      this.audit?.({ name, input: redactSensitive(input), ok: true, durationMs: Date.now() - startedAt, status: 'OK' });
       return okToolResult(result as TOutput, startedAt);
     } catch (e) {
-      const error = (e as Error).message;
-      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: Date.now() - startedAt, error });
-      context.logger.warn(`Tool 调用失败：${name} - ${error}`);
-      return failToolResult(error, startedAt);
+      this.meter?.afterTool(); // 失败调用同样计量
+      const reason = abortReasonOf(e);
+      const status = reason ?? 'OK';
+      const error = reason
+        ? `${reason}：${(e as Error).message}`
+        : (e as Error).message;
+      this.audit?.({ name, input: redactSensitive(input), ok: false, durationMs: Date.now() - startedAt, status, error });
+      context.logger.warn(reason ? `Tool 调用被中止：${name} - ${error}` : `Tool 调用失败：${name} - ${error}`);
+      return failToolResult(error, startedAt, status);
     } finally {
-      if (timer) clearTimeout(timer);
+      unlinkExternal();
     }
   }
+}
+
+/** 外部取消信号级联到 Tool 调用的 abort controller */
+function linkToolSignal(child: AbortController, parent: AbortSignal): () => void {
+  const forward = () => {
+    if (!child.signal.aborted) child.abort(parent.reason);
+  };
+  if (parent.aborted) {
+    forward();
+    return () => undefined;
+  }
+  parent.addEventListener('abort', forward, { once: true });
+  return () => parent.removeEventListener('abort', forward);
 }

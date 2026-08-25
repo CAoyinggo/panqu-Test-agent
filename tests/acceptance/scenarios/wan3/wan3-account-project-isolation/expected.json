@@ -1,0 +1,25 @@
+{
+  "scenarioId": "SCN-wan3-account-project-isolation",
+  "mode": "BLOCKED",
+  "patterns": ["AUTHORIZATION", "TENANT_ISOLATION", "PROJECT_ISOLATION", "NON_MUTATION", "BILLING"],
+  "operations": [
+    {"id": "STEP-001", "intent": "observe-target-before-state", "observer": null, "bindingRequired": true},
+    {"id": "STEP-002", "intent": "attempt-cross-account-project-operation", "method": null, "path": null, "bindingRequired": true},
+    {"id": "STEP-003", "intent": "observe-target-after-state-and-task-count", "observer": null, "bindingRequired": true},
+    {"id": "STEP-004", "intent": "observe-provider-call-count", "observer": null, "bindingRequired": true},
+    {"id": "STEP-005", "intent": "observe-billing-record-count", "observer": null, "bindingRequired": true}
+  ],
+  "assertions": [
+    {"id": "AS-001", "ac": "AC-001", "operation": "STEP-002", "target": "status", "operator": "EQUALS", "expectedFrom": "resolvedContract.crossScopeDenyStatus"},
+    {"id": "AS-002", "ac": "AC-001", "operation": "STEP-002", "target": "body.resource", "operator": "NOT_EXISTS"},
+    {"id": "AS-003", "ac": "AC-002", "operation": "STEP-003", "target": "target.canonicalDigest", "operator": "UNCHANGED", "expectedFrom": "STEP-001.targetCanonicalDigest"},
+    {"id": "AS-004", "ac": "AC-002", "operation": "STEP-003", "target": "target.owner", "operator": "UNCHANGED", "expectedFrom": "STEP-001.targetOwner"},
+    {"id": "AS-005", "ac": "AC-002", "operation": "STEP-003", "target": "target.tenant", "operator": "UNCHANGED", "expectedFrom": "STEP-001.targetTenant"},
+    {"id": "AS-006", "ac": "AC-002", "operation": "STEP-003", "target": "target.project", "operator": "UNCHANGED", "expectedFrom": "STEP-001.targetProject"},
+    {"id": "AS-007", "ac": "AC-003", "operation": "STEP-003", "target": "createdTaskCount", "operator": "COUNT_EQUALS", "expected": 0},
+    {"id": "AS-008", "ac": "AC-003", "operation": "STEP-004", "target": "providerCallCount", "operator": "COUNT_EQUALS", "expected": 0},
+    {"id": "AS-009", "ac": "AC-003", "operation": "STEP-005", "target": "chargeCount", "operator": "COUNT_EQUALS", "expected": 0}
+  ],
+  "requiredEvidenceKinds": ["REQUEST", "RESPONSE", "STATE_BEFORE", "STATE_AFTER", "RESOURCE", "PROVIDER_CALL", "BILLING_RECORD"],
+  "blockedCodes": ["MISSING_TEST_DATA", "MISSING_API_CONTRACT", "MISSING_STATE_OBSERVER", "MISSING_SIDE_EFFECT_OBSERVER"]
+}

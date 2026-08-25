@@ -5,7 +5,7 @@
 import type { ProjectService } from '../projects/project-service.js';
 import type { Project } from '../projects/project-schema.js';
 import type { RunService } from '../runs/run-service.js';
-import type { TestRun, CreateRunInput, RunTrigger } from '../runs/run-schema.js';
+import type { TestRun, CreateRunInput, RunTrigger, PlatformRunExecutionRecord, RunExecutionMode } from '../runs/run-schema.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { TestJob } from '../scheduler/test-job.js';
 import type { WorkerRegistry } from '../workers/worker-registry.js';
@@ -31,6 +31,8 @@ import {
   type MetricsTelemetryInput,
 } from '../operations/metrics.js';
 import type { TelemetryService, TelemetryPeriod, TelemetryEvent } from '../telemetry/index.js';
+import { createReadyStartup, type PlatformStartup, type PlatformStartupStatus } from './startup.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** 变更描述（驱动 autonomous 流水线） */
 export interface RunChange {
@@ -47,6 +49,8 @@ export interface CreateRunRequest {
   trigger: RunTrigger;
   businessId?: string;
   feature?: string;
+  /** 真实 Agent Pipeline 的需求正文；缺省由 feature/change 构造最小需求。 */
+  requirementText?: string;
   change?: RunChange;
   actor: string;
   role: Role;
@@ -62,6 +66,8 @@ export interface CreateRunRequest {
   releaseGate?: boolean;
   assetVersion?: Record<string, number>;
 }
+
+export type CreateRunStatus = 'QUEUED' | 'BLOCKED';
 
 export interface PlatformServiceDeps {
   projects: ProjectService;
@@ -88,7 +94,28 @@ export class PlatformService {
   private apiLatencySamples: number[] = [];
   private gateLatencySamples: number[] = [];
 
-  constructor(public readonly deps: PlatformServiceDeps) {}
+  constructor(
+    public readonly deps: PlatformServiceDeps,
+    private readonly startup: PlatformStartup = createReadyStartup(),
+  ) {}
+
+  /**
+   * 服务启动屏障。HTTP Server 必须 await 此方法后才允许绑定端口。
+   * PostgreSQL 下内部严格执行 Connection → Migration → READY。
+   */
+  async start(): Promise<void> {
+    await this.startup.start();
+  }
+
+  /** 当前启动/就绪状态（供 readiness 与运维检查使用）。 */
+  startupStatus(): PlatformStartupStatus {
+    return this.startup.status();
+  }
+
+  /** 释放数据库等启动期资源（幂等）。 */
+  async shutdown(): Promise<void> {
+    await this.startup.close();
+  }
 
   /** 记录 API 请求延迟（HTTP Server 调用） */
   recordApiLatency(ms: number): void {
@@ -139,7 +166,7 @@ export class PlatformService {
 
   private assertPermission(role: Role, permission: Permission): void {
     if (!hasPermission(role, permission)) {
-      throw new Error(`角色 ${role} 缺少权限 ${permission}`);
+      throw new CodedError(ErrorCode.AUTH_FORBIDDEN, `角色 ${role} 缺少权限 ${permission}`);
     }
   }
 
@@ -160,8 +187,11 @@ export class PlatformService {
   }
 
   // ── Runs ──
-  /** 创建 Run：RBAC → 项目/环境作用域 → 校验项目/环境 → 幂等去重 → 调度入队 → 事件 → 审计 */
-  async createRun(req: CreateRunRequest): Promise<{ runId: string; status: 'QUEUED' }> {
+  /** 创建 Run：RBAC → 项目/环境作用域 → Policy Gate → 幂等去重 → 调度入队 → 事件 → 审计 */
+  async createRun(
+    req: CreateRunRequest,
+    internalOptions: { executionMode?: RunExecutionMode } = {},
+  ): Promise<{ runId: string; status: CreateRunStatus }> {
     this.assertPermission(req.role, 'TEST_RUN');
     // 25.3 项目隔离：JWT 用户作用域校验（QA-A 不可访问 project-b）
     if (req.scopes) {
@@ -172,10 +202,30 @@ export class PlatformService {
       const idem = await this.deps.idempotency.begin('run', req.idempotencyKey);
       if (idem.repeated) {
         const run = await this.deps.runs.get(idem.resultId ?? '');
-        if (run) return { runId: run.runId, status: run.status as 'QUEUED' };
+        if (run) return { runId: run.runId, status: run.status === 'QUEUED' ? 'QUEUED' : 'BLOCKED' };
       }
     }
     const runId = generatePlatformRunId('run');
+    const environment = this.deps.projects.getEnvironment(req.projectId, req.environment);
+    if (!this.deps.projects.getProject(req.projectId)) {
+      throw new CodedError(ErrorCode.NOT_FOUND, `Project 不存在：${req.projectId}`);
+    }
+    if (!environment || !environment.enabled) {
+      throw new CodedError(ErrorCode.VALIDATION_ERROR, `Project ${req.projectId} 下无可用环境 ${req.environment}`);
+    }
+
+    // 创建 Run 本身不产生业务副作用；真正入队前先执行平台 Policy Gate。
+    // production 的真实 Run 一律按 risky 处理，默认要求人工审批。
+    const gateOutcome = await this.deps.gate.execute({
+      actor: req.actor,
+      role: req.role,
+      permission: 'TEST_RUN',
+      action: environment.type === 'production' ? 'risky' : 'safe',
+      environment,
+      runId,
+      reason: `${req.trigger} run @ ${environment.type}`,
+      evidence: [{ projectId: req.projectId, feature: req.feature, trigger: req.trigger, change: req.change }],
+    });
     const input: CreateRunInput = {
       runId,
       projectId: req.projectId,
@@ -190,8 +240,44 @@ export class PlatformService {
       budget: req.budget,
       releaseGate: req.releaseGate,
       assetVersion: req.assetVersion,
+      executionMode: internalOptions.executionMode ?? 'VERIFIED_AGENT',
     };
     const run = await this.deps.runs.create(input);
+    if (gateOutcome.verdict !== 'ALLOWED') {
+      const reason = `POLICY_BLOCKED：${gateOutcome.decision.reason}`;
+      // 仅记录一个终态审计 Job，不进入可领取队列，保证 Worker/Tool/Data Prepare 零调用。
+      await this.deps.scheduler.recordBlocked({
+        runId,
+        projectId: req.projectId,
+        environment: req.environment,
+        priority: 1,
+        requiredCapability: 'general',
+        idempotencyKey: req.idempotencyKey ? `blocked-job:${req.idempotencyKey}` : undefined,
+        payload: { runId, policyBlocked: true, reason, trigger: req.trigger },
+      }, reason);
+      if (req.idempotencyKey) await this.deps.idempotency.complete('run', req.idempotencyKey, runId);
+      if (gateOutcome.verdict === 'APPROVAL_REQUIRED') {
+        await this.emit('ApprovalRequested', {
+          approvalId: gateOutcome.approval.approvalId,
+          environment: req.environment,
+          projectId: req.projectId,
+          reason,
+        }, { runId, approvalId: gateOutcome.approval.approvalId });
+      }
+      await this.audit({
+        actor: req.actor,
+        role: req.role,
+        action: 'run.create',
+        resource: runId,
+        environment: req.environment,
+        result: gateOutcome.verdict === 'DENIED' ? 'denied' : 'pending',
+        approvalId: gateOutcome.verdict === 'APPROVAL_REQUIRED' ? gateOutcome.approval.approvalId : undefined,
+        detail: { trigger: req.trigger, reason },
+        traceId: runId,
+      });
+      void run;
+      return { runId, status: 'BLOCKED' };
+    }
     // 调度入队（同一 Run 不重复执行由 Scheduler 保证）
     await this.deps.scheduler.enqueue({
       runId,
@@ -209,6 +295,7 @@ export class PlatformService {
         change: req.change ?? { type: 'none', target: req.feature ?? req.projectId },
         businessId: req.businessId,
         feature: req.feature,
+        requirementText: req.requirementText,
       },
     });
     if (req.idempotencyKey) await this.deps.idempotency.complete('run', req.idempotencyKey, runId);
@@ -224,9 +311,19 @@ export class PlatformService {
     return run;
   }
 
+  async markRunGated(runId: string): Promise<TestRun> {
+    return this.deps.runs.markGated(runId);
+  }
+
+  async beginRunExecution(runId: string): Promise<TestRun> {
+    return this.deps.runs.beginExecution(runId);
+  }
+
   async pauseRun(runId: string, actor: string, role: Role): Promise<TestRun> {
     this.assertPermission(role, 'TEST_RUN');
     const run = await this.deps.runs.pause(runId);
+    const jobs = await this.deps.scheduler.list({ runId });
+    await Promise.all(jobs.filter((job) => job.status === 'RUNNING').map((job) => this.deps.scheduler.pause(job.jobId)));
     await this.emit('RunPaused', { progress: run.progress }, { runId });
     await this.audit({ actor, role, action: 'run.pause', resource: runId, environment: run.environment, result: 'success', traceId: runId });
     return run;
@@ -235,6 +332,9 @@ export class PlatformService {
   async resumeRun(runId: string, actor: string, role: Role): Promise<TestRun> {
     this.assertPermission(role, 'TEST_RUN');
     const run = await this.deps.runs.resume(runId);
+    const jobs = await this.deps.scheduler.list({ runId });
+    await Promise.all(jobs.filter((job) => job.status === 'QUEUED').map((job) => this.deps.scheduler.resume(job.jobId)));
+    await this.deps.pool.dispatch();
     await this.emit('RunResumed', { progress: run.progress }, { runId });
     await this.audit({ actor, role, action: 'run.resume', resource: runId, environment: run.environment, result: 'success', traceId: runId });
     return run;
@@ -243,6 +343,10 @@ export class PlatformService {
   async cancelRun(runId: string, actor: string, role: Role): Promise<TestRun> {
     this.assertPermission(role, 'TEST_CANCEL');
     const run = await this.deps.runs.cancel(runId);
+    const jobs = await this.deps.scheduler.list({ runId });
+    await Promise.all(jobs
+      .filter((job) => job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'RETRY')
+      .map((job) => this.deps.scheduler.cancel(job.jobId)));
     await this.emit('RunFailed', { reason: 'cancelled' }, { runId });
     await this.audit({ actor, role, action: 'run.cancel', resource: runId, environment: run.environment, result: 'success', traceId: runId });
     return run;
@@ -266,7 +370,11 @@ export class PlatformService {
 
   async completeRun(runId: string, progress = 100): Promise<TestRun> {
     const run = await this.deps.runs.complete(runId, progress);
-    await this.emit('RunCompleted', { progress: run.progress }, { runId });
+    await this.emit('RunCompleted', {
+      progress: run.progress,
+      environment: run.environment,
+      projectId: run.projectId,
+    }, { runId });
     return run;
   }
 
@@ -275,6 +383,27 @@ export class PlatformService {
     // 26.7：RunFailed 通知含丰富上下文（environment / projectId）
     await this.emit('RunFailed', { reason, environment: run.environment, projectId: run.projectId }, { runId });
     return run;
+  }
+
+  async blockRun(runId: string, reason?: string): Promise<TestRun> {
+    const run = await this.deps.runs.block(runId);
+    await this.emit('RunFailed', { reason: reason ?? 'blocked', environment: run.environment, projectId: run.projectId }, { runId });
+    return run;
+  }
+
+  async timeoutRun(runId: string, reason?: string): Promise<TestRun> {
+    const run = await this.deps.runs.timeout(runId);
+    await this.emit('RunFailed', { reason: reason ?? 'timeout', environment: run.environment, projectId: run.projectId }, { runId });
+    return run;
+  }
+
+  async recordRunExecution(runId: string, record: PlatformRunExecutionRecord): Promise<TestRun> {
+    return this.deps.runs.recordExecution(runId, record);
+  }
+
+  /** HTTP/API 调度入口；只触发当前可领取任务，不等待长任务完成。 */
+  async dispatchJobs(): Promise<number> {
+    return this.deps.pool.dispatch();
   }
 
   async getRun(runId: string): Promise<TestRun | null> {
@@ -337,6 +466,31 @@ export class PlatformService {
 
   async approveApproval(approvalId: string, actor: string, role: Role): Promise<ApprovalRequest> {
     const approval = await this.deps.gate.approve(approvalId, actor, role);
+    // 审批完成后才创建可领取 Job；createRun 阶段的 blocked Job 只是终态审计记录。
+    if (approval.runId && approval.runId !== 'n/a') {
+      const run = await this.deps.runs.get(approval.runId);
+      if (run?.status === 'QUEUED') {
+        const jobs = await this.deps.scheduler.list({ runId: run.runId });
+        const hasActiveJob = jobs.some((job) => job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'RETRY');
+        if (!hasActiveJob) await this.deps.scheduler.enqueue({
+          runId: run.runId,
+          projectId: run.projectId,
+          environment: run.environment,
+          priority: 1,
+          requiredCapability: 'general',
+          maxRetries: 2,
+          idempotencyKey: `approved-job:${approval.approvalId}`,
+          payload: {
+            runId: run.runId,
+            projectId: run.projectId,
+            environment: run.environment,
+            trigger: run.trigger,
+            feature: run.feature,
+            approvalId: approval.approvalId,
+          },
+        });
+      }
+    }
     await this.emit('ApprovalCompleted', { status: 'APPROVED', decidedBy: actor, environment: approval.environment }, { runId: approval.runId, approvalId });
     await this.audit({ actor, role, action: 'approval', resource: approvalId, environment: approval.environment, result: 'success', approvalId, traceId: approval.runId });
     return approval;
@@ -564,7 +718,7 @@ export class PlatformService {
   /** 解析 Plan → 去重 Case 列表（API/CLI 预览用） */
   async planCases(planId: string, scopes?: Scopes): Promise<{ planId: string; caseIds: string[] }> {
     const plan = await this.deps.workflow.plans.get(planId);
-    if (!plan) throw new Error(`Test Plan 不存在：${planId}`);
+    if (!plan) throw new CodedError(ErrorCode.NOT_FOUND, `Test Plan 不存在：${planId}`);
     if (scopes) assertRunAccess({ roles: ['VIEWER'], scopes }, plan.projectId, plan.environment);
     const caseIds = await this.deps.workflow.suites.resolveCaseIds(plan.suiteIds);
     return { planId, caseIds };
@@ -574,7 +728,7 @@ export class PlatformService {
   async runPlan(planId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
     this.assertPermission(role, 'TEST_RUN');
     const plan = await this.deps.workflow.plans.get(planId);
-    if (!plan) throw new Error(`Test Plan 不存在：${planId}`);
+    if (!plan) throw new CodedError(ErrorCode.NOT_FOUND, `Test Plan 不存在：${planId}`);
     const caseIds = await this.deps.workflow.suites.resolveCaseIds(plan.suiteIds);
     const assetVersion: Record<string, number> = {};
     for (const cid of caseIds) assetVersion[cid] = await this.deps.workflow.versions.latestVersion(cid);
@@ -627,7 +781,7 @@ export class PlatformService {
   async saveTemplateFromRun(runId: string, name: string, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').RunTemplate> {
     this.assertPermission(role, 'ASSET_WRITE');
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const t = await this.deps.workflow.templates.saveFromRun(
       { projectId: run.projectId, environment: run.environment, suiteIds: run.suiteIds ?? [], mode: (run.mode as import('../workflow/index.js').TestPlanMode) ?? 'MANUAL', budget: run.budget, releaseGate: run.releaseGate },
@@ -669,7 +823,7 @@ export class PlatformService {
   async rerunRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
     this.assertPermission(role, 'TEST_RETRY');
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const created = await this.createRun({
       projectId: run.projectId,
@@ -692,7 +846,7 @@ export class PlatformService {
   async cloneRun(runId: string, overrides: { environment?: string; budget?: number; releaseGate?: boolean }, actor: string, role: Role, scopes?: Scopes): Promise<{ runId: string; status: string }> {
     this.assertPermission(role, 'TEST_RETRY');
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const created = await this.createRun({
       projectId: run.projectId,
@@ -756,7 +910,7 @@ export class PlatformService {
   // ── Collaboration（39.5）──
   async addRunComment(runId: string, body: string, actor: string, role: Role, scopes?: Scopes): Promise<{ comment: import('../workflow/index.js').CommentEntry; mentions: string[] }> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const { item, mentions } = await this.deps.workflow.collaboration.addComment({ resourceType: 'run', resourceId: runId, projectId: run.projectId, author: actor, body });
     const preview = body.length > 60 ? `${body.slice(0, 60)}…` : body;
@@ -771,14 +925,14 @@ export class PlatformService {
 
   async listRunComments(runId: string, scopes?: Scopes, role: Role = 'VIEWER'): Promise<import('../workflow/index.js').CommentEntry[]> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     return this.deps.workflow.collaboration.comments('run', runId);
   }
 
   async assignRun(runId: string, assignees: string[], actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').CollaborationItem> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const item = await this.deps.workflow.collaboration.assign({ resourceType: 'run', resourceId: runId, projectId: run.projectId, assignees });
     await this.audit({ actor, role, action: 'collaboration.assign', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { assignees }, traceId: runId });
@@ -820,7 +974,7 @@ export class PlatformService {
   async updateDefectStatus(id: string, status: import('../workflow/index.js').DefectStatus, resolution: string | undefined, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').Defect> {
     this.assertPermission(role, 'ASSET_WRITE');
     const d = await this.deps.workflow.defects.get(id);
-    if (!d) throw new Error(`缺陷不存在：${id}`);
+    if (!d) throw new CodedError(ErrorCode.NOT_FOUND, `缺陷不存在：${id}`);
     if (scopes) assertProjectAccess({ roles: [role], scopes }, d.projectId);
     const updated = await this.deps.workflow.defects.updateStatus(id, status, resolution);
     await this.audit({ actor, role, action: 'defect', resource: `defect:${id}`, environment: d.environment, result: 'success', detail: { action: 'updateStatus', from: d.status, to: status }, traceId: d.runId });
@@ -830,7 +984,7 @@ export class PlatformService {
   async assignDefect(id: string, assignee: string, actor: string, role: Role, scopes?: Scopes): Promise<import('../workflow/index.js').Defect> {
     this.assertPermission(role, 'ASSET_WRITE');
     const d = await this.deps.workflow.defects.get(id);
-    if (!d) throw new Error(`缺陷不存在：${id}`);
+    if (!d) throw new CodedError(ErrorCode.NOT_FOUND, `缺陷不存在：${id}`);
     if (scopes) assertProjectAccess({ roles: [role], scopes }, d.projectId);
     const updated = await this.deps.workflow.defects.assign(id, assignee);
     await this.audit({ actor, role, action: 'defect', resource: `defect:${id}`, environment: d.environment, result: 'success', detail: { action: 'assign', assignee }, traceId: d.runId });
@@ -840,13 +994,13 @@ export class PlatformService {
   // ── Report / Share（39.6）──
   async runReport(runId: string): Promise<import('../workflow/index.js').RunReportSummary> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     return this.deps.workflow.reports.buildSummary(run);
   }
 
   async shareRun(runId: string, actor: string, role: Role, scopes?: Scopes): Promise<{ token: string; url: string; share: import('../workflow/index.js').RunShare }> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     if (scopes) assertRunAccess({ roles: [role], scopes }, run.projectId, run.environment);
     const share = await this.deps.workflow.reports.share(run, actor);
     await this.audit({ actor, role, action: 'configuration', resource: `run:${runId}`, environment: run.environment, result: 'success', detail: { action: 'share' }, traceId: runId });
@@ -860,13 +1014,13 @@ export class PlatformService {
 
   async exportReportJson(runId: string): Promise<string> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     return this.deps.workflow.reports.exportJson(run);
   }
 
   async exportReportHtml(runId: string): Promise<string> {
     const run = await this.deps.runs.get(runId);
-    if (!run) throw new Error(`Run 不存在：${runId}`);
+    if (!run) throw new CodedError(ErrorCode.NOT_FOUND, `Run 不存在：${runId}`);
     return this.deps.workflow.reports.exportHtml(run);
   }
 
@@ -896,11 +1050,27 @@ export class PlatformService {
   /** 平台健康检查（26.4 升级）：逐项探针容错 → HEALTHY / DEGRADED / DOWN；报告调度暂停状态 */
   async health(): Promise<{ ok: boolean; status: 'HEALTHY' | 'DEGRADED' | 'DOWN'; checks: Array<{ name: string; ok: boolean; detail: string }> }> {
     type Check = { name: string; ok: boolean; detail: string };
+    const startup = this.startup.status();
+    if (!startup.ready) {
+      return {
+        ok: false,
+        status: 'DOWN',
+        checks: [{
+          name: 'startup',
+          ok: false,
+          detail: `${startup.storage}:${startup.state}${startup.error ? `（${startup.error}）` : ''}`,
+        }],
+      };
+    }
     const probe = async (fn: () => Promise<string> | string): Promise<string> => {
       const detail = await fn();
       return detail;
     };
-    const checks: Check[] = [];
+    const checks: Check[] = [{
+      name: 'startup',
+      ok: true,
+      detail: `${startup.storage}:${startup.state}${startup.appliedMigrations.length ? `（本次迁移 ${startup.appliedMigrations.join(', ')}）` : ''}`,
+    }];
 
     const names: Array<{ name: string; run: () => Promise<string> | string }> = [
       { name: 'projects', run: () => `${this.deps.projects.listProjects().length} 个` },
@@ -935,7 +1105,12 @@ export class PlatformService {
     }
 
     const failed = checks.filter((c) => !c.ok);
-    const status: 'HEALTHY' | 'DEGRADED' | 'DOWN' = failed.length === 0 ? 'HEALTHY' : failed.length === checks.length ? 'DOWN' : 'DEGRADED';
+    const failedProbes = checks.slice(1).filter((c) => !c.ok);
+    const status: 'HEALTHY' | 'DEGRADED' | 'DOWN' = failed.length === 0
+      ? 'HEALTHY'
+      : failedProbes.length === checks.length - 1
+        ? 'DOWN'
+        : 'DEGRADED';
     return { ok: failed.length === 0, status, checks };
   }
 }

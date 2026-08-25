@@ -8,6 +8,7 @@ import { signJwt, verifyJwt, type JwtPayload } from './jwt.js';
 import { toPublicUser, type User } from './user.js';
 import type { AuditLog } from '../audit/audit-log.js';
 import { DEV_FALLBACK_JWT_SECRET, isKnownInsecureJwtSecret } from '../security/index.js';
+import { CodedError, ErrorCode } from '../../core/errors.js';
 
 /** 默认种子用户用户名（生产环境 allowDefaultCredentials=false 时禁止登录） */
 const DEFAULT_USERNAMES = new Set(DEFAULT_SEED_USERS.map((u) => u.username));
@@ -81,11 +82,11 @@ export class AuthService {
   /** 登录：用户名 + 密码 → access + refresh token */
   async login(username: string, password: string): Promise<AuthTokens> {
     if (this.opts.allowDefaultCredentials === false && DEFAULT_USERNAMES.has(username)) {
-      throw new Error('默认账号在生产环境已禁用，请使用运维配置的用户');
+      throw new CodedError(ErrorCode.AUTH_FAILED, '默认账号在生产环境已禁用，请使用运维配置的用户', { expose: false });
     }
     const user = await this.users.getByUsername(username);
-    if (!user || user.status !== 'ACTIVE') throw new Error('用户名或密码错误');
-    if (!(await verifyPassword(password, user.passwordHash))) throw new Error('用户名或密码错误');
+    if (!user || user.status !== 'ACTIVE') throw new CodedError(ErrorCode.AUTH_FAILED, '用户名或密码错误', { expose: false });
+    if (!(await verifyPassword(password, user.passwordHash))) throw new CodedError(ErrorCode.AUTH_FAILED, '用户名或密码错误', { expose: false });
     const scopes = user.scopes;
     const accessToken = signJwt(
       {
@@ -136,11 +137,16 @@ export class AuthService {
 
   /** 刷新：校验 refresh token → 旋转签发新 access + refresh */
   async refresh(refreshToken: string): Promise<AuthTokens> {
-    const payload = verifyJwt(refreshToken, this.secret, { allowType: 'refresh', nowSeconds: () => this.nowSec() });
+    let payload: JwtPayload;
+    try {
+      payload = verifyJwt(refreshToken, this.secret, { allowType: 'refresh', nowSeconds: () => this.nowSec() });
+    } catch (cause) {
+      throw new CodedError(ErrorCode.AUTH_FAILED, 'refresh token 无效', { cause, expose: false });
+    }
     const record = this.refreshStore.get(payload.jti);
-    if (!record || record.userId !== payload.sub) throw new Error('refresh token 已失效');
+    if (!record || record.userId !== payload.sub) throw new CodedError(ErrorCode.AUTH_FAILED, 'refresh token 已失效', { expose: false });
     const user = await this.users.getById(payload.sub);
-    if (!user || user.status !== 'ACTIVE') throw new Error('用户不可用');
+    if (!user || user.status !== 'ACTIVE') throw new CodedError(ErrorCode.AUTH_FAILED, '用户不可用', { expose: false });
     // 旋转：旧 refresh 吊销，签发新对
     this.refreshStore.delete(payload.jti);
     const scopes = user.scopes;
@@ -175,10 +181,15 @@ export class AuthService {
 
   /** 校验 access token → 用户（API 中间件用） */
   async verify(token: string): Promise<{ user: User; payload: JwtPayload }> {
-    const payload = verifyJwt(token, this.secret, { allowType: 'access', nowSeconds: () => this.nowSec() });
-    if (this.revokedAccess.has(payload.jti)) throw new Error('token 已注销');
+    let payload: JwtPayload;
+    try {
+      payload = verifyJwt(token, this.secret, { allowType: 'access', nowSeconds: () => this.nowSec() });
+    } catch (cause) {
+      throw new CodedError(ErrorCode.AUTH_FAILED, 'access token 无效', { cause, expose: false });
+    }
+    if (this.revokedAccess.has(payload.jti)) throw new CodedError(ErrorCode.AUTH_FAILED, 'token 已注销', { expose: false });
     const user = await this.users.getById(payload.sub);
-    if (!user || user.status !== 'ACTIVE') throw new Error('用户不可用');
+    if (!user || user.status !== 'ACTIVE') throw new CodedError(ErrorCode.AUTH_FAILED, '用户不可用', { expose: false });
     return { user: toPublicUser(user), payload };
   }
 

@@ -7,8 +7,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createPlatformService, type PlatformBundle } from '../service/factory.js';
-import { withLLMTelemetry, runContext } from '../telemetry/index.js';
+import { withLLMTelemetry } from '../telemetry/index.js';
 import { MockLLMProvider } from '../../llm/mock-llm.js';
+import { redactSensitive, redactSensitiveText } from '../../core/redact.js';
+import { makeRealRunExecutor } from './real-run.js';
 
 export interface SmokeCheck {
   name: string;
@@ -58,21 +60,8 @@ export async function runPlatformSmoke(opts: { dataDir?: string } = {}): Promise
 
     // 注册真实 Worker：Mock LLM 经遥测装饰器 → 真实 token 用量 → CostLedger / TelemetryEvent
     const provider = withLLMTelemetry(new MockLLMProvider(), bundle.telemetry);
-    bundle.registerWorkerExecutor('smoke-worker', async (job: unknown) => {
-      const j = job as { runId: string; projectId: string; environment: string; feature?: string };
-      const feature = j.feature;
-      await runContext.run({ runId: j.runId, projectId: j.projectId, feature }, async () => {
-        await bundle!.service.startRun(j.runId);
-        await bundle!.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
-        await provider.generate({ messages: [{ role: 'user', content: '冒烟：执行分析' }] });
-        await provider.generate({ messages: [{ role: 'user', content: '冒烟：修复建议' }] });
-        await bundle!.service.saveCheckpoint({
-          runId: j.runId, stage: 'smoke', completedCases: [], remainingCases: [], decisionState: {}, budgetState: {}, traceId: `trace-${j.runId}`,
-        });
-        await bundle!.service.completeRun(j.runId);
-        await bundle!.telemetry.recordExecution({ runId: j.runId, projectId: j.projectId, feature, phase: 'pipeline', result: 'success' });
-      });
-    });
+    await bundle.testAssets.importCatalog();
+    bundle.registerWorkerExecutor('smoke-worker', makeRealRunExecutor(bundle, 'smoke', { provider }));
     ok('Worker 注册', 'smoke-worker（general / test,staging,dev）', true);
 
     // 确保项目存在（幂等）
@@ -120,11 +109,11 @@ const isMain = !!process.argv[1] && import.meta.url.endsWith(path.basename(proce
 if (isMain) {
   runPlatformSmoke()
     .then((r) => {
-      console.log(JSON.stringify(r, null, 2));
+      console.log(JSON.stringify(redactSensitive(r), null, 2));
       process.exit(r.ok ? 0 : 1);
     })
     .catch((e: Error) => {
-      console.error('冒烟失败：', e.message);
+      console.error('冒烟失败：', redactSensitiveText(e.message));
       process.exit(1);
     });
 }

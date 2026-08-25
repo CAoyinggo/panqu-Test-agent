@@ -47,6 +47,22 @@ describe('DSL → Canonical Scene → Processor → Runner → Result 契约', (
     expect(result).toMatchObject({ executed: true, status: 'PASS', pass: true, passRate: 100 });
   });
 
+  it('unsupported scene 无法转成 canonical ID，也不能误路由到已注册 Processor', () => {
+    const tc = normalizeTestCase({
+      id: 'tc-audio-1', feature: 'audio', name: 'unsupported audio scene', priority: 'P0', tags: ['P0'],
+      steps: [{ action: 'submit', scene: 'audio', input: { prompt: 'hello' } }],
+      assertions: [{ target: 'submit', path: 'taskId', operator: 'exists' }],
+    });
+    const def = toTaskDef(tc);
+    expect(def.scene).toBe('audio');
+    expect(toCanonicalSceneId(def.scene)).toBeNull();
+
+    registerScene('video', new VideoSceneHandler());
+    expect(findHandler(def.scene)).toBeNull();
+    expect(evaluateCoreExecution({ hasProcessor: false, processorInvoked: false, checks: [] }))
+      .toMatchObject({ executed: false, status: 'NOT_EXECUTED', passRate: 0 });
+  });
+
   it('Processor 不存在时统一 NOT_EXECUTED，绝不 PASS', () => {
     expect(findHandler('video')).toBeNull();
     const core = evaluateCoreExecution({ hasProcessor: false, processorInvoked: false, checks: [] });
@@ -79,5 +95,20 @@ describe('DSL → Canonical Scene → Processor → Runner → Result 契约', (
       files: [], checks: [], executed: true, status: 'BLOCKED', passRate: 0, hasBlockingIssue: true,
     }, 1);
     expect(result).toMatchObject({ executed: true, status: 'BLOCKED', pass: false, passRate: 0 });
+  });
+
+  it('Processor 执行被阻断或抛错时统一 BLOCKED，绝不进入 PASS', () => {
+    const core = evaluateCoreExecution({
+      hasProcessor: true,
+      processorInvoked: true,
+      error: new Error('Processor 被执行策略阻断'),
+      checks: [passingCheck],
+    });
+    expect(core).toMatchObject({ executed: false, status: 'BLOCKED', passRate: 0 });
+
+    const result = caseResultFromEngine(toLoadedCase(videoCase()), {
+      files: [], checks: [passingCheck], executed: false, status: 'BLOCKED', passRate: 0, hasBlockingIssue: true,
+    }, 1);
+    expect(result).toMatchObject({ executed: false, status: 'BLOCKED', pass: false, passRate: 0 });
   });
 });

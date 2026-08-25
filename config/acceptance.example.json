@@ -1,0 +1,26 @@
+{
+  "project": "user-service",
+  "environment": "local",
+  "mode": "execute",
+  "output": "./reports",
+  "baseUrl": "http://127.0.0.1:3000",
+  "timeoutMs": 5000,
+  "maxCases": 500,
+  "deadlineMs": 900000,
+  "operationPolicies": {
+    "PUT /api/users/{id}": {
+      "effect": "WRITE",
+      "reason": "仅修改专用测试租户中的验收数据"
+    }
+  },
+  "actorHeaders": {
+    "user-a": { "Authorization": "Bearer ${ACCEPTANCE_USER_A_TOKEN}" },
+    "user-b": { "Authorization": "Bearer ${ACCEPTANCE_USER_B_TOKEN}" },
+    "admin": { "Authorization": "Bearer ${ACCEPTANCE_ADMIN_TOKEN}" },
+    "tenant-b-user": { "Authorization": "Bearer ${ACCEPTANCE_TENANT_B_TOKEN}" }
+  },
+  "dataLifecycle": {
+    "prepare": { "method": "POST", "path": "/test-support/prepare" },
+    "cleanup": { "method": "POST", "path": "/test-support/cleanup" }
+  }
+}

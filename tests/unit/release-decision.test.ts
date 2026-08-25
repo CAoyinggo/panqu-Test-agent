@@ -108,9 +108,9 @@ describe('Release Decision 必须有证据（任务书十五）', () => {
 });
 
 describe('边界 / 空数据 / 历史不足', () => {
-  it('空数据：无 P0 / 无 P1 运行 → 视为通过 → PASS', () => {
+  it('空数据：无 P0 / 无 P1 运行 → 缺少证据 → BLOCK', () => {
     const r = decideRelease({ p0: { total: 0, passed: 0 }, p1: { total: 0, passed: 0 }, coverage: 1, criticalDefects: 0 });
-    expect(r.decision).toBe('PASS');
+    expect(r.decision).toBe('BLOCK');
   });
 
   it('历史数据不足：无历史失败率/失败预测 → 视为 0 → 不误报', () => {

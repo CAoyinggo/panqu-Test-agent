@@ -15,6 +15,8 @@ export interface ToolResult<TOutput = unknown> {
   startedAt: number;
   completedAt: number;
   durationMs: number;
+  /** 终态分类：OK / TIMEOUT（时间预算耗尽）/ CANCELLED（外部取消）；缺省视为 OK/普通失败 */
+  status?: 'OK' | 'TIMEOUT' | 'CANCELLED';
 }
 
 /** Tool 权限等级（安全边界）：决定生产环境的放行策略 */
@@ -36,16 +38,19 @@ export interface AgentTool<TInput = unknown, TOutput = unknown> {
   permission?: ToolPermission;
   /** 生产环境是否一律禁止（显式声明覆盖权限推导） */
   deniedInProduction?: boolean;
-  /** 执行 */
-  execute(input: TInput, context: AgentContext): Promise<TOutput>;
+  /**
+   * 执行。第三个参数为取消信号：Tool 必须把 signal 贯穿到底层操作
+   * （Engine → Pipeline → HTTP fetch），超时/取消时底层任务真实停止。
+   */
+  execute(input: TInput, context: AgentContext, signal?: AbortSignal): Promise<TOutput>;
 }
 
 /** 便捷：创建成功结果 */
 export function okToolResult<T>(data: T, startedAt: number): ToolResult<T> {
-  return { ok: true, data, startedAt, completedAt: Date.now(), durationMs: Date.now() - startedAt };
+  return { ok: true, data, startedAt, completedAt: Date.now(), durationMs: Date.now() - startedAt, status: 'OK' };
 }
 
 /** 便捷：创建失败结果 */
-export function failToolResult(error: string, startedAt: number): ToolResult<never> {
-  return { ok: false, error, startedAt, completedAt: Date.now(), durationMs: Date.now() - startedAt };
+export function failToolResult(error: string, startedAt: number, status: 'OK' | 'TIMEOUT' | 'CANCELLED' = 'OK'): ToolResult<never> {
+  return { ok: false, error, startedAt, completedAt: Date.now(), durationMs: Date.now() - startedAt, status };
 }

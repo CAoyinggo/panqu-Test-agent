@@ -7,6 +7,7 @@
 - [版本变更记录](CHANGELOG.md)
 - [断言 DSL](assertion-dsl.md)
 - [环境策略边界](environment-policy-boundaries.md)
+- [Memory 存储与迁移](operations/memory-storage.md)
 - [运维与部署](operations/)
 - [产品工作流](product/)
 - [AI 质量治理](ai-quality/)

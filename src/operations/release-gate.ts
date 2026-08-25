@@ -45,9 +45,9 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult 
   const p1Threshold = input.thresholds?.p1PassRate ?? 0.98;
   const minCoverage = input.thresholds?.minCoverage ?? 0.9;
 
-  const p0Pass = input.p0.total > 0 ? input.p0.passed === input.p0.total : true;
-  const p1Rate = input.p1.total > 0 ? input.p1.passed / input.p1.total : 1;
-  const p1Pass = p1Rate >= p1Threshold;
+  const p0Pass = input.p0.total > 0 && input.p0.passed === input.p0.total;
+  const p1Rate = input.p1.total > 0 ? input.p1.passed / input.p1.total : 0;
+  const p1Pass = input.p1.total > 0 && p1Rate >= p1Threshold;
   const coveragePass = input.coverage >= minCoverage;
   const criticalPass = input.criticalDefects === 0;
 

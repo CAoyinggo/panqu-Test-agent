@@ -1,58 +1,68 @@
-# 盼趣AI 功能测试执行流程 SOP（可执行版）
+# 开发验收测试执行流程 SOP
 
-> 版本：v2.1 | 更新：2026-08-16 | 维护：AI测试智能体
-> **适用范围：所有 AI 功能测试任务强制执行**（任意业务场景，如 user、order、payment 等）
-> 配套：`../dist/bin/run-test.js` 一键执行脚本（编译后 CLI，插件式，按 scene 分发）+ `docs/` 各模板 + `../tasks/` 任务定义
-> **多业务、即插即用通用框架**：本 SOP 适用于任意业务功能模块，`wan3`（视频生成）仅为当前已接入的示例业务，其余业务（如 user、order、payment）接入方式见第 11 节「新模块接入指引」。
+> 版本：v3.0 | 更新：2026-08-23 | 维护：AI 测试智能体
+> **适用范围：需求驱动的开发验收测试**，不绑定特定产品、模型或业务。
+> 规范资产：[通用 Scenario 模板](../tests/acceptance/templates/scenario.md) + [Pattern Library](../tests/acceptance/patterns/) + [测试用例模板说明](02-测试用例模板.md)。
+> 历史 `tasks/*.json`、旧 `run-test` 场景处理器和 TypeScript 内嵌 Markdown 仅为 **LEGACY** 兼容资产；保留它们不代表已经迁移到 canonical Scenario 主链。
 
 ---
 
 ## ⚠ 强制要求
 
-1. **本流程适用于所有功能测试任务**，无例外。每个新任务必须先走「启动检查清单」门槛，再由脚本执行。
-2. 流程顺序不可跳过：`启动清单 → 需求输入 → 编写用例 → 代码核对 → 数据隔离分析 → 数据需求清单 → 脚本执行 → 输出报告`。
-3. 任务定义统一使用通用 JSON 格式（`tasks/<任务名>.json`），按 `scene` 字段分发到对应执行逻辑。
-4. 启动清单未经你确认，不进入用例编写与执行阶段。
-5. **素材来源**：任务需要上传的文件（图片/音频/视频）一律从测试素材库 `/Users/mac/agents/Test-panqu/`（`photo/`、`audio/`、`video/`）取用；需要长文本（剧本/故事）时从 `Test-panqu/txt/` 取用对应文件内容。素材引用在任务定义中用相对路径（`test-assets/photo/xx.png` 或 `photo/xx.png`），脚本自动解析为完整路径。
-6. **输出位置（强制）**：所有交付物按 `output/<YYYY-MM-DD>/<功能名>/` 存放（如 `2026-08-15/{功能名}测试用例交付包/`）；`--func <功能名>` 指定功能名。
+1. **设计完成不等于执行完成**。测试设计、质量评分、生成报告均不能证明被测操作已经执行。
+2. 流程顺序不可跳过：`启动清单 → 需求/冲突解析 → Pattern 与 Scenario 设计 → Scenario Gate → Policy Gate → Prepare → Execution → Assertion/Evidence → Outcome → Cleanup/Report`。
+3. 新场景以 canonical Scenario 为唯一设计和执行契约；`tasks/<任务名>.json` 只允许走显式标记的 LEGACY 兼容入口，不能被宣称为已迁移。
+4. **Scenario Gate 与 Policy Gate 必须在 Prepare 和任何真实副作用之前**。Gate 未通过时不得创建数据、调用业务 Processor、调用外部 Provider 或扣费。
+5. 设计阶段只允许 `EXECUTABLE`、`DESIGNED_ONLY`、`BLOCKED`；运行结果只允许 `PASS`、`FAIL`、`BLOCKED`、`NOT_EXECUTED`、`TIMEOUT`、`CANCELLED`。
+6. `PASS` 的必要且充分执行条件为：`executed=true`、`processorInvoked=true`、至少一个有效断言且全部通过、所有 required evidence 完整并验证成功。无 Processor、Processor 未调用、零断言或缺证据一律不得 `PASS`。
+7. 启动清单未经确认，不进入真实执行阶段；歧义、未知策略或依赖缺失一律 fail-close。
+8. **素材来源**：上传文件优先从受控测试素材库 `/Users/mac/agents/Test-panqu/` 取用；Scenario 只保存数据引用，并记录 owner、tenant、project、敏感性和 cleanup hook。
+9. **输出位置（强制）**：所有交付物按 `output/<YYYY-MM-DD>/<功能名>/` 存放；输出目录或 HTML 生成成功不等于测试 `PASS`。
 
 ---
 
-## 0. 流程总览（8 步）
+## 0. 流程总览
 
 ```
-[0 启动清单] → [1 需求输入] → [2 编写用例] → [3 代码核对] → [4 数据隔离分析] → [5 数据需求清单] → [6 脚本执行] → [7 输出报告]
+[0 启动清单] → [1 需求/冲突解析] → [2 Pattern + Scenario 设计]
+→ [3 Scenario Gate] → [4 Policy Gate] → [5 Prepare]
+→ [6 Processor/Tool 执行] → [7 Assertion + Evidence]
+→ [8 确定性 Outcome] → [9 Cleanup + Report]
 ```
 
 | 步骤 | 动作 | 负责人 | 产出物 | 检查点 |
 |---|---|---|---|---|
-| 0 | 新任务启动（启动检查清单） | 我+你 | `启动检查清单`（场景/数据/参数/关注点） | **你确认后才进入下一步** |
-| 1 | 需求输入 | 你 | 需求说明 | 需求完整可执行 |
-| 2 | 编写测试用例 | 我 | `tasks/<任务名>.json` + 用例清单 | 覆盖功能/接口/计费/隔离 |
-| 3 | 代码核对 | 我 | 用例更新说明 | 代码与用例一致 |
-| 4 | 数据隔离分析 | 我 | 影响清单（表/模块） | 影响范围确认 |
-| 5 | 数据需求清单 | 我+你 | 数据需求清单（标记可复用/需提供） | 你确认数据齐备 |
-| 6 | 脚本执行 | 脚本 | 接口响应 + 执行结果 | 一键跑通 |
-| 7 | 输出报告 | 脚本+我 | HTML 可视化报告 | 报告交付 |
+| 0 | 新任务启动 | 测试负责人+需求方 | 启动清单 | 环境、风险、数据与执行意图明确 |
+| 1 | 需求/冲突解析 | Parser+评审人 | Requirement IR / Fact Ledger | AC 可判定；互斥事实先消歧 |
+| 2 | Pattern 与 Scenario 设计 | Test Design | canonical Scenario | AC、Operation、Assertion、Evidence 可追溯 |
+| 3 | Scenario Gate | Gate | 可执行性决定 + typed Blocked Reason | Processor、绑定、断言、证据、hook 完整 |
+| 4 | Policy Gate | Policy+审批人 | 允许/拒绝决定 | 环境、权限、真实副作用、计费与审批合规 |
+| 5 | Prepare | allowlist hook | 隔离测试数据 + before-state | 使用同一 execution context，且可清理 |
+| 6 | 实际执行 | Runner+Processor/Tool | OperationResult | 每个 Step 实际调用、可取消、可追踪 |
+| 7 | 断言与证据 | Assertion/Evidence Provider | 断言计数 + Evidence Envelope | 响应、状态、副作用分别有 oracle |
+| 8 | 确定性结果 | Outcome | 六态 ScenarioResult | 未执行或证据不足不能 `PASS` |
+| 9 | Cleanup 与报告 | Runner+Reporter | 清理结果 + 报告 | Cleanup 用 finally；报告忠实呈现执行事实 |
 
 ---
 
 ## 1. 新任务启动（所有任务强制门槛）
 
-每个新任务开始前，必须先完成启动检查。模板见 `02-模板合集.md` 第三节。
+每个新任务开始前，必须先完成启动检查。表单见[新任务启动检查清单模板](04-新任务启动检查清单模板.md)，Scenario 字段见[通用 Scenario 模板](../tests/acceptance/templates/scenario.md)。
 
 我按模板输出启动清单，包含：
 
 | 清单项 | 说明 |
 |---|---|
 | 任务名 | 本次任务标识 |
-| 场景类型 | {业务场景} / 其他 |
-| 所需数据 | 登录态（可复用）、素材路径（需提供）、提示词（需提供）、参数（需提供） |
-| 测试参数 | 分辨率 / 时长 / 比例 / 模型 / 计费规则 |
+| 场景类型 | 业务域、业务意图、Channel（API/UI/DATA/QUEUE/PROVIDER） |
+| Actor/Scope | 角色、用户、tenant、project、目标资源及 owner |
+| 所需数据 | 凭据引用、fixture/素材引用、before-state、可清理性 |
+| 测试参数 | API 契约、业务参数、边界、状态与计费规则 |
 | 关注点 | 本次重点验证的内容 |
-| 脚本覆盖 | 本次任务由脚本自动执行哪些环节，哪些标记人工 |
+| 风险与策略 | 环境、副作用、Provider、扣费、权限与审批要求 |
+| 执行能力 | 可用 Processor、Evidence Provider、Prepare/Cleanup hook；缺失项标记 `DESIGNED_ONLY/BLOCKED` |
 
-**规则**：启动清单由你逐项确认后，才进入步骤 2 编写用例。
+**规则**：启动清单逐项确认后才进入需求解析；是否允许真实执行仍须由后续 Scenario Gate 和 Policy Gate 独立决定。
 
 ---
 
@@ -61,40 +71,63 @@
 你按固定格式提供本次测试需求，含以下字段（缺省项标注"无"）：
 
 ```
-任务名：
-场景类型：{业务场景} / 其他
-提示词（如适用）：
-参考素材路径（如适用）：
-参数：分辨率 / 时长 / 比例 / 模型 / 计费规则
-关注点：本次想重点验证什么
+任务名/来源：
+业务意图：
+Acceptance Criteria：
+Actor / Role：
+Tenant / Project / Resource Owner：
+API 或其他 Operation 契约：
+前置状态与测试数据：
+预期响应 / 状态 / 副作用：
+权限、隔离、计费、Provider 等风险约束：
+执行环境与是否允许真实副作用：
 ```
 
-**约定**：你提供需求后，我先确认理解，再进入步骤 3。
+**约定**：输入先进入 Requirement Parser / Fact Ledger。缺失字段可形成 warning；互斥 Method/Path、权限、状态、计费或副作用事实必须标记冲突并阻断，不能由 LLM 猜测一个版本继续执行。
 
 ---
 
-## 3. 编写测试用例
+## 3. Pattern 驱动的 Scenario 设计
 
-### 3.1 用例分类（四类）
+### 3.1 Pattern 不是固定四分类
 
-| 分类 | 说明 | 执行方式 |
-|---|---|---|
-| 功能用例 | 核心功能链路（提交→生成→结果） | API 自动 + 浏览器人工 |
-| 接口用例 | 参数校验、返回结构、错误处理 | API 自动 |
-| 计费用例 | 积分计算、扣费/回退、账单统计 | API 自动 |
-| 数据隔离用例 | 跨表/跨模块影响、多账号多项目隔离 | API 自动 + 人工确认 |
+测试资源按需求结构化事实和风险选择，而不是平均分给“功能/接口/计费/隔离”四类。Pattern Registry 覆盖：
 
-### 3.2 用例规范
+`FUNCTIONAL`、`API_CONTRACT`、`PERSISTENCE`、`NON_MUTATION`、`IDEMPOTENCY`、`AUTHORIZATION`、`TENANT_ISOLATION`、`PROJECT_ISOLATION`、`ATOMICITY`、`STATE_MACHINE`、`ASYNC`、`BILLING`、`PROVIDER_FAILURE`、`CALLBACK`、`BOUNDARY`、`AUDIT`、`SECURITY`。
 
-每条用例必须包含：
-- **编号**：`{MODULE}-{CATEGORY}-{序号}`（如 `WAN3-FUN-01`；`{MODULE}` 为业务缩写，`{CATEGORY}` 为用例分类）
-- **优先级**：P0（阻塞）/ P1（重要）/ P2（一般）
-- **前置条件**：需要哪些数据/状态
-- **步骤**：可执行的具体操作
-- **预期结果**：明确可判定的断言
-- **执行方式**：`API`（自动）/ `浏览器`（人工）/ `SQL`（查库）
+Pattern 的来源和 required proof obligation 以 [Pattern Library](../tests/acceptance/patterns/) 与 Registry 为准。选择 Pattern 后，必须补齐对应的 Actor/Scope、前后状态、响应、副作用、断言和证据；只填写 Pattern 名称不算覆盖。
 
-模板见 `02-模板合集.md` 第一节。
+### 3.2 canonical Scenario 规范
+
+复制 [`tests/acceptance/templates/scenario.md`](../tests/acceptance/templates/scenario.md) 到：
+
+```text
+tests/acceptance/scenarios/<domain>/<scenario-id>/requirement.md
+```
+
+每条 Scenario 至少包含：
+
+- 唯一 Scenario ID、需求来源、明确 AC 和优先级；
+- Patterns，以及每个 Pattern 对应的 proof obligation；
+- Actor、Role、Authentication Reference、Tenant、Project、Resource Owner；
+- Preconditions、Test Data、Risk、Dependencies；
+- 一个或多个原子 Operation，每个都有 Step ID、Channel、Processor、AC 和 Evidence 引用；
+- 结构化 Assertion：`channel + target + operator + expected/expectedFrom`；
+- required Evidence、Prepare/Cleanup hook、Execution Mode、typed Blocked Reason。
+
+API Operation 必须精确绑定 `Method + Path`。多 API 场景通过 `Capture` 将前一步输出显式传给后一步；不得依赖接口顺序、相似描述或隐式全局变量完成绑定。
+
+### 3.3 设计态限制
+
+Scenario 作者只能声明：
+
+| 设计态 | 用法 |
+| --- | --- |
+| `EXECUTABLE` | 设计契约完整，仍需在本次运行通过 Gate/Policy |
+| `DESIGNED_ONLY` | 设计完成，但 Processor、环境或 evidence capability 尚未具备 |
+| `BLOCKED` | 已知冲突、策略或依赖明确阻断，并附 typed Blocked Reason |
+
+不得在 Markdown 中预填 `PASS` / `FAIL`，也不得把“可生成报告”“可人工操作”或“质量评分达标”写成执行结论。更完整的状态、断言和证据规范见[测试用例模板说明](02-测试用例模板.md)。
 
 ---
 
@@ -106,7 +139,9 @@
 2. **参数结构核对**：确认提交参数命名（示例：`row[extra][cueword]`）、任务类型常量（示例：`Ai.php` 中 `WANXIANG3_TYPE_UNIVERSAL=105`；**此处需根据实际业务调整**）。
 3. **计费规则核对**：从计费配置确认单价、分辨率档位、比例档位。
 4. **状态流转核对**：从消费端代码确认任务状态机与错误处理。
-5. **用例更新**：若代码实现与用例预期不一致，更新用例并记录差异。
+5. **Processor 核对**：确认每个 Operation 的 Channel、Method/Path 或 Tool binding 被对应 Processor 显式支持；注册表中有同名 Processor 不等于已执行。
+6. **观察能力核对**：确认响应、after-state、Non-Mutation、账单、事件或审计证据有独立 Evidence Provider。
+7. **用例更新**：若代码实现与需求预期不一致，记录差异并回到 Requirement/AC 消歧；不得静默修改 oracle 去适配实现。
 
 ---
 
@@ -125,70 +160,138 @@
 | 对其他账号影响 | 是否会串账号/串项目 | 需确认 project_id 隔离、用户级积分隔离 |
 | 对其他环境影响 | 是否影响 test/preonline 其他环境 | 环境配置隔离 |
 
-### 5.2 影响核验清单（脚本自动执行）
+### 5.2 影响核验清单
 
-脚本执行后自动核验以下"对其他地方的影响"：
+以下项目只有在对应 Operation、Processor、Assertion 和 Evidence Provider 已接通时才能标记“自动核验”；否则应在 Scenario Gate 阶段标记 `DESIGNED_ONLY/BLOCKED`，运行时标记 `NOT_EXECUTED`，不能仅凭报告骨架判定：
+
 - **积分扣费/回退**：提交扣费、失败回退，净消耗是否正确
 - **账单统计**：`summary` / `modelTrend` / `modelTop` / `records` 是否正确反映本次消耗
 - **任务状态**：状态流转是否符合预期（待处理→处理中→完成/失败）
 - **数据正确性**：落库字段（model_id、任务类型、参数）是否正确
+- **拒绝路径无变更**：保存 before-state，并证明 after-state、实体数、账单和外部调用均未发生禁止变化
+- **跨范围无污染**：分别核对 Actor、Resource Owner、Tenant 与 Project，不只验证响应错误码
 
 ---
 
 ## 6. 数据需求清单
 
-脚本执行前，生成**数据需求清单**，标记每项数据来源：
+执行前生成**数据需求清单**，标记每项数据来源：
 
 | 数据项 | 来源 | 说明 |
 |---|---|---|
-| 登录态（auth cookie + JWT） | 可复用：`test-Configuration/session-cookies.json` | 两环境：test / preonline |
-| 项目 ID | 随登录态 | 各业务项目 ID 不同，按实际填写（test/preonline） |
-| 素材路径 | **可复用：测试素材库 `/Users/mac/agents/Test-panqu/`** | 图片在 `photo/`、音频在 `audio/`、视频在 `video/`；脚本自动扫描并解析相对路径 |
-| 长文本（剧本/故事） | **可复用：`Test-panqu/txt/`** | 剧本/故事生成类场景，读取对应 txt 文件内容 |
-| 提示词 | 你提供（需求输入） | 必填 |
-| 测试参数 | 你提供（需求输入） | 分辨率/时长/比例/模型 |
-| CSRF token | 脚本自动获取 | 提交时需要 |
-| 数据库访问 | 可选 | 需深度查库时提供 |
+| Actor / Authentication | 运行时 credential reference | Scenario 不保存 Cookie、Token 或密码明文 |
+| Tenant / Project / Resource Owner | 需求与受控配置 | 权限/隔离场景必须明确，不得从登录态隐式猜测 |
+| API / Tool 输入 | Requirement / fixture / prepare output | 明确类型、边界、敏感性和 AC 来源 |
+| 素材或长文本 | 受控 fixture/素材库引用 | Processor 确认支持后才加载，不在 Markdown 嵌入 Secret |
+| Before-state | 独立状态探针 | Persistence、Non-Mutation、Atomicity、Billing 等 Pattern 使用 |
+| 动态资源 ID | Prepare 或前序 Operation Capture | 通过同一 execution context 传递 |
+| Cleanup 信息 | allowlist cleanup hook | 标记 owner、run ID、删除/恢复验证方式 |
+| Evidence access | DB/API/Queue/Provider/Audit Probe | 权限最小化，只开放 Pattern 所需观察范围 |
 
-**约定**：清单中标记"可复用"的数据脚本自动加载；标记"需你提供"的数据，我列出后由你确认/补充。**上传素材默认从测试素材库取用**，只有当素材库中没有所需文件时才向你索取。
+除上表外，Scenario Test Data 必须记录：Actor、Tenant、Project、Resource Owner、数据来源、是否可变、是否敏感和 cleanup hook。认证信息只保留 credential reference，真实 Secret 由运行时安全配置解析。
+
+Prepare 创建的数据、Operation 使用的数据与 Cleanup 删除的数据必须来自同一个 execution context，并以 run ID 关联。Prepare/Cleanup 只允许引用 allowlist handler；禁止从 Markdown 执行任意脚本。Cleanup 必须采用 `finally` 语义，失败时单独报告，不能覆盖原始执行结果。
+
+**约定**：可复用数据仍须通过本次 Gate；缺少 owner、scope、Processor 支持或 cleanup 能力时不得自动加载。素材库只是数据来源，不构成真实执行许可。
 
 ---
 
 ## 7. 脚本执行
 
-### 7.1 一键执行
+### 7.1 当前 Requirement 驱动入口
 
 ```bash
 cd /Users/mac/agents/test-flow
-node dist/bin/run-test.js --task tasks/<任务名>.json          # 默认 test 环境
-node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline  # 切换环境
+npm run acceptance -- --requirement <需求.md> --config acceptance.config.json
 ```
 
-### 7.2 执行内容
+该入口完成 Requirement 解析、测试设计、用例选择、安全检查、执行和归档。`--mode=dry-run` 只形成设计结果，不得报告实际执行 `PASS`；`--mode=execute` 还必须显式配置 project、environment、output、base URL、Actor credential mapping、Operation Policy 和 Data Lifecycle。production 默认禁止执行。
 
-脚本自动完成：
-1. 加载登录态与任务定义
-2. 获取 CSRF token
-3. 提交任务（或复用已有任务 ID）
-4. 查询任务状态
-5. 计费核验（summary/modelTrend/modelTop/records）
-6. 数据隔离核验（积分扣费/回退、落库字段）
-7. 生成 HTML 报告到 `/Users/mac/agents/output/<日期>/<功能名>/`（按当前日期 + 功能名自动创建目录）
+canonical Scenario 资产由 `scenario-asset-loader` 加载，并进入 `Requirement → Pattern Selection → Scenario Gate → Runner → Evidence Report` 链。现阶段不要假设所有历史 CLI/任务文件已经改走该链；入口是否接通本身也是验收项。
 
-### 7.3 场景分发（插件式）
+### 7.2 执行前 Gate（必须早于 Prepare）
 
-任务定义中的 `scene` 字段决定执行逻辑。引擎内置**场景处理器注册表**（`src/plugins/scenes/`），按 `scene` 匹配对应处理器：
+Runner 的固定顺序是：
 
-| 处理器 | 支持场景 | 位置 |
-|---|---|---|
-| video | 文生视频 / 图生视频 / 全能参考 / 首尾帧 | `src/plugins/scenes/video.ts` |
-| （待接入） | 剧本分镜 / 账单 / 其他 AI 能力 | `src/plugins/scenes/<name>.ts` |
+```text
+Parse / Conflict Check
+→ Pattern Proof Validation
+→ Scenario Gate
+→ Policy Gate / Approval
+→ Prepare
+→ Operations
+→ Assertions / Evidence
+→ Outcome
+→ Cleanup (finally)
+→ Report
+```
 
-**半自动模式**：场景未接入处理器时，脚本仍执行通用骨架（登录态/素材/影响分析/计费/报告），并将提交/状态标记为「待人工」，不影响出报告。新模块接入方法见第 11 节。
+Scenario Gate 至少验证：
 
-### 7.4 浏览器用例
+- 至少一个 AC、Operation 和有效 Assertion，且 AC 可追溯到 Operation + Assertion；
+- 每个 Operation 有唯一 Step ID、明确 Channel、可用 Processor、AC 与 Evidence 引用；
+- API Operation 有唯一 `Method + Path`，多 API 绑定不存在歧义；
+- required evidence 有来源，Pattern 要求的 state/non-mutation/side-effect 观察能力完整；
+- Actor、Authentication、Tenant、Project、Resource Owner 满足权限/隔离场景要求；
+- required Prepare/Cleanup hook 在 allowlist 中，依赖和环境可用。
 
-脚本对标记为 `浏览器` 的用例输出"待人工实测"清单（含操作步骤），由你在页面手动验证后反馈结果。
+Policy Gate 再检查环境、真实执行许可、真实扣费、高风险操作、数据隔离、人工审批、`recommendedSkip` 和项目策略。任何 Gate 拒绝都必须在 Prepare 前返回 `BLOCKED` 和 typed Blocked Reason。
+
+### 7.3 Operation / Processor 执行语义
+
+多 Operation 场景按显式依赖顺序执行。每个 Operation 必须产生独立 OperationResult，至少记录：`executed`、`processorInvoked`、Processor 名称、开始/结束时间、证据和阻断原因。前一步 `Capture` 的输出通过本次 execution context 传给后一步。
+
+Processor 必须显式声明支持对应 Channel/Operation。以下情况 fail-close：
+
+| 情况 | 结果 |
+| --- | --- |
+| 设计时找不到 Processor / binding / evidence capability | `BLOCKED` 或 `DESIGNED_ONLY`，且不得 Prepare |
+| Gate 发现本次运行没有匹配 Processor | `BLOCKED`，且不得 Prepare |
+| Processor 存在但未实际调用、被旁路或未完成被测动作 | `NOT_EXECUTED` |
+| 已执行且断言失败 | `FAIL` |
+| 执行超时并取消底层任务 | `TIMEOUT` |
+| 用户或系统显式取消 | `CANCELLED` |
+
+禁止“半自动通用骨架仍出成功结果”。通用登录、素材扫描、影响分析或 HTML 报告成功都不能把未执行 Operation 提升为 `PASS`。
+
+### 7.4 Assertion、Evidence 与确定性结果
+
+Runner 在所有必需 Operation 完成后，对响应、状态和副作用执行结构化断言，并收集与 run/operation/assertion/AC 关联的 Evidence Envelope。
+
+只有同时满足下式才能返回 `PASS`：
+
+```text
+executed=true
+AND processorInvoked=true
+AND assertions>=1
+AND passedAssertions=assertions
+AND failedAssertions=0
+AND 所有 required evidence 存在且 verified=true
+```
+
+仅有 HTTP 2xx、自然语言预期、截图、日志、空断言、空失败列表或 `total=0` 均不能证明 `PASS`。写场景必须有独立 after-state；拒绝/失败场景必须通过 before/after 与副作用计数证明 Non-Mutation。
+
+### 7.5 Prepare / Cleanup
+
+Prepare 只能在两个 Gate 均允许后执行。它创建的资源必须属于 Scenario 声明的 Actor/Tenant/Project，并将资源 ID 写入同一 execution context。Cleanup 逆序执行且置于 `finally`；即使 Operation 失败、超时或取消，也应尽力清理。Cleanup 失败单独记录为运维/环境风险，不能覆盖已经确定的业务断言结果，更不能把结果改为 `PASS`。
+
+### 7.6 UI 与人工场景
+
+没有真实 UI Processor 与可验证证据时，浏览器步骤只能处于 `DESIGNED_ONLY`；运行实例若没有执行则为 `NOT_EXECUTED`。人工操作记录只有在明确绑定本次 run、完成全部断言并提交 required evidence 后，才可由受控入口形成运行结果。“待人工”不是第七种状态。
+
+### 7.7 LEGACY 入口
+
+以下命令仅用于尚未迁移的历史资产：
+
+```bash
+node dist/bin/run-test.js --task tasks/<任务名>.json --env=<环境>
+```
+
+该入口必须在报告和日志中标明 `LEGACY`。历史 `scene` 分发、`tasks/*.json` 或内嵌 Markdown 不得被当作 canonical Scenario 迁移完成的证据，也不得绕过上述 `PASS` 谓词。
+
+### 7.8 受控执行内容
+
+在能力存在且 Gate 允许的前提下，Runner 可以执行登录/认证解析、隔离数据准备、业务 Operation、状态查询、计费/隔离核验、证据采集和报告输出。每一项是否自动完成取决于已注册的 Processor、hook 和 Evidence Provider，文档不得用“脚本自动完成”掩盖能力缺口。
 
 ---
 
@@ -196,34 +299,43 @@ node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline  # 切�
 
 脚本生成 **HTML 可视化报告**，包含：
 - 任务信息与环境
-- 用例执行结果（PASS / FAIL / 待人工）
-- 接口响应摘要
+- Scenario 设计态和运行六态（`PASS / FAIL / BLOCKED / NOT_EXECUTED / TIMEOUT / CANCELLED`）
+- `executed`、`processorInvoked`、Processor 与 OperationResult 明细
+- 断言总数/通过数/失败数，以及每条断言对应的 AC
+- required evidence 完整性、验证状态和证据来源
+- typed Blocked Reason（code/stage/message/details/recoverable）
+- 接口响应、before/after state 与副作用摘要
 - 数据影响清单（表/模块）
 - 计费核验结果
-- 问题卡点（需你确认的问题）
-- 浏览器人工待办
+- Cleanup 结果和残留风险
+- 需要补能力或人工审批的卡点
 
-报告输出到 `/Users/mac/agents/output/<YYYY-MM-DD>/<功能名>/`（脚本按当前日期 + `--func` 指定功能名自动创建，如 `2026-08-15/{功能名}测试用例交付包/`），按 `{任务名}_{时间戳}.html` 命名。
+报告根目录由 Acceptance 配置或 `--output` 显式指定；推荐按 `/Users/mac/agents/output/<YYYY-MM-DD>/<功能名>/` 归档。LEGACY `--func` 命名约定不得被当作 canonical CLI 能力。
+
+Reporter 只能忠实呈现 Result，不能把空结果、部分结果、质量分数或“报告已生成”转换成业务成功。Scenario 的质量评分用于发现设计缺口，不能参与将未执行场景提升为 `PASS`。
 
 ---
 
 ## 9. 问题卡点处理
 
-执行中发现的问题分为三类，报告中标记并给出建议：
+执行中发现的问题分层记录，不能全部归为产品失败：
 
 | 类型 | 说明 | 处理 |
 |---|---|---|
-| 阻塞问题 | 链路走不通（如模型接入点不存在） | 需你/管理员确认环境配置 |
-| 数据异常 | 计费/落库与预期不符 | 需你确认是否 Bug |
-| 待人工验证 | 浏览器操作无法自动覆盖 | 你手动验证后反馈 |
+| `BLOCKED` | Gate/Policy/审批/依赖在执行前拒绝 | 修复可恢复条件后重新评估，不创建产品失败结论 |
+| `NOT_EXECUTED` | Processor 未匹配、未调用或执行入口旁路 | 修复 binding/Processor/Runner，禁止 `PASS` |
+| `TIMEOUT` | 底层操作被 deadline 取消 | 验证真实 Abort、无后续写入/扣费后再重试 |
+| `CANCELLED` | 用户或系统显式取消 | 保留取消来源与 Cleanup 证据 |
+| `FAIL` | 已真实执行且确定性断言失败 | 结合证据判断产品、数据、环境或 Provider 原因 |
+| 设计缺口 | Scenario 缺 AC、断言、证据或 scope | 回到需求/设计层补齐，不伪装成运行结果 |
 
 ---
 
-## 10. 附：已接入场景参考
+## 10. 附：LEGACY 场景参考
 
-> 以下为**当前已接入的视频类场景参考（历史/现状记录）**，仅供参考，**不代表模板业务绑定**。接入其他业务（user、order、payment 等）按第 11 节「新模块接入指引」，将下列接口/参数替换为对应业务实现。
+> 以下是旧 `run-test` 链的历史/现状记录，仅用于维护兼容入口，**不代表 canonical Scenario 已迁移或通过验收**。要进入新链，仍须建立 Operation binding、Pattern proof obligations、Scenario Gate、Processor/Evidence 和确定性结果契约。
 
-### 10.1 视频类（已接入脚本）
+### 10.1 视频类（LEGACY Processor）
 
 - **Wan 3.0**：model_id=84，任务类型 105=全能参考 / 106=首尾帧
 - **提交接口**：`POST /aivideo/videonew/add`（form-data + CSRF，`row[type]=6`，`row[selmodelsId]=84`）
@@ -232,7 +344,7 @@ node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline  # 切�
 - **账单接口**：`GET /billing/personal?section=summary|modelTrend|modelTop|records&range=7days`
 - **已发现卡点**：test 环境 Wan3.0 接入点 `wan3.0-video` 在阿里云百炼未开通/无权限 → 任务失败并自动回退积分
 
-### 10.2 待接入场景
+### 10.2 LEGACY 待接入场景
 
 - 剧本分镜（`episode/getModelConfigs` 已验证，生成链路待接入）
 - 账单/计费调整（`billing/personal` 各 section 已验证）
@@ -240,70 +352,77 @@ node dist/bin/run-test.js --task tasks/<任务名>.json --env=preonline  # 切�
 
 ---
 
-## 11. 新模块接入指引
+## 11. 新能力接入指引
 
-> 适用范围：需要把一个新的功能模块（{业务场景}、其他 AI 能力等）接入 test-flow 框架，实现脚本自动执行。已有模块扩展场景（如新增一个模型）只需新建任务定义，无需本节。
+> 新能力默认接入 canonical Scenario 链。只有维护既有 `tasks/*.json` 时才修改 LEGACY SceneHandler；不得以 LEGACY 可运行代替新链验收。
 
-### 11.1 接入前判断
+### 11.1 先盘点执行与观察能力
 
-- **已有处理器可复用**（如新任务仍是视频生成类）：只需新建 `tasks/<任务名>.json` 任务定义（`scene` 填已有场景），在注册表中 `video` 处理器即可匹配，无需改代码。
-- **新接口/新逻辑**（如{业务场景}走不同提交接口）：需按 11.2-11.4 新增处理器。
+对每个 Operation 明确：
 
-### 11.2 新增场景处理器
+- Channel：`API / UI / DATA / QUEUE / PROVIDER`；
+- 唯一 binding：Processor 名称，以及 API 的 `Method + Path`；
+- Processor 是否显式 `supports(operation)` 且支持 Abort；
+- 能产生哪些 Evidence Kind；
+- 是否还需要 DB、资源、队列、账单、审计或 Provider Probe；
+- Prepare/Cleanup hook 名称是否进入 allowlist；
+- 环境、审批、扣费和数据隔离策略是否允许真实执行。
 
-在 `src/plugins/scenes/` 新建 `<name>.ts`，实现 `SceneHandler` 接口（见 `src/core/scene-handler.ts`）：
+缺任一关键能力时，Scenario 标为 `DESIGNED_ONLY` 或 `BLOCKED`，不得先跑通用骨架再补判断。
+
+### 11.2 建立 Scenario 资产
+
+1. 复制[通用 Scenario 模板](../tests/acceptance/templates/scenario.md)到 `tests/acceptance/scenarios/<domain>/<scenario-id>/requirement.md`。
+2. 从 Requirement Fact Ledger 选择 Pattern，并落实每个 required proof obligation。
+3. 为多 API 流程逐项填写 Step ID、Processor、Method、Path、Request、Capture、AC 和 Evidence。
+4. 分别定义 Expected Response、Expected State 与 Expected Side Effects；拒绝/失败场景加入 `NON_MUTATION`。
+5. 声明 Actor/Scope、测试数据 owner、Prepare/Cleanup、风险、依赖和设计态。
+6. 作为 Scenario Pack 交付时必须提供 `expected.json` 保存稳定预期；`server-scenario.ts` 不得由 Markdown Loader 动态执行，必须走显式 allowlist/构建流程。
+
+### 11.3 实现并注册 canonical ScenarioProcessor
+
+`ScenarioProcessor` 必须具备：
 
 ```ts
-import type { RunContext, SubmitResult, BillingData } from '../../core/types.js';
-import type { SceneHandler } from '../../core/scene-handler.js';
-
-export class XxxSceneHandler implements SceneHandler {
-  name = 'xxx';   // 处理器标识
-  scenes = ['剧本分镜', '账单调整', '...'];  // 支持的 scene 值（用于 match 匹配）
-
-  match(scene: string): boolean {
-    return this.scenes.some((s) => (scene || '').includes(s));
-  }
-
-  async submit(ctx: RunContext): Promise<{ taskId: number | null; submit: Partial<SubmitResult> }> { /* 提交任务 */ }
-  async detail(ctx: RunContext): Promise<void> { /* 查询详情（落库核对） */ }
-  async status(ctx: RunContext): Promise<void> { /* 查询状态 */ }
-  analyzeBilling(billingData: BillingData, session: any): BillingData { /* 计费分析 */ }
+interface ScenarioProcessor {
+  name: string;
+  supportsAbort: true;
+  supportedEvidenceKinds: readonly ScenarioEvidenceKind[];
+  supports(operation: ScenarioOperation): boolean;
+  execute(
+    operation: ScenarioOperation,
+    context: ScenarioProcessorContext,
+  ): Promise<ScenarioProcessorExecution>;
 }
 ```
 
-`ctx` 约定（引擎传入）：`{ http, session, taskDef, assets, CFG, env, responses, submit, taskId }`。
-- `http.api(name, method, path, { form })`：发起带登录态的请求，返回 `{ status, json }`。
-- `ctx.responses.push(...)`：记录接口响应供报告展示。
-- `assets`：素材库对象（`resolve(relPath)` 解析路径、上传用 `uploadAsset`）。
-- 新接口若需要新环境配置，在 `src/config/environments.json` 的对应环境补 `submit_url/status_url/detail_url` 等字段。
+实现要求：
 
-### 11.3 注册处理器
+- `supports()` 明确检查 Channel 和 Operation 契约，未知输入返回 false；
+- `execute()` 使用传入的 `AbortSignal`，真实执行后才返回 `executed=true`；
+- 返回证据必须绑定 scenarioId、operationId、AC、来源与时间，并经过脱敏；
+- 响应成功不能代替状态/副作用证据，无法观察时返回阻断而不是空证据；
+- 重试需幂等，超时/取消后不得继续写入、扣费或回写成功。
 
-在 `src/core/engine.ts` 顶部的场景处理器注册表中注册：
+API 原子操作可复用 `createAcceptanceHttpScenarioProcessor()`；状态、账单、队列或审计证据仍应根据 Pattern 增加独立观察能力。
 
-```ts
-import { XxxSceneHandler } from '../plugins/scenes/xxx.js';
+### 11.4 注册 Hook 与 Evidence Provider
 
-export const SCENES: Record<string, SceneHandler> = {
-  video: new VideoSceneHandler(),
-  xxx: new XxxSceneHandler(),
-};
-```
+Prepare/Cleanup 以 handler 名称注册到 Runner 的 allowlist Map，不接受 Markdown 内任意代码。Prepare 产物通过 `variables`/execution context 显式传递；Cleanup 逆序执行。Processor 的 `supportedEvidenceKinds` 与 `additionalEvidenceKinds` 必须真实反映能力，不能为通过 Gate 虚报。
 
-主流程无需任何改动，引擎自动按 `taskDef.scene` 匹配到新处理器。
+### 11.5 接入验收
 
-### 11.4 扩展影响分析（可选）
+至少验证：
 
-`src/integrations/isolation.ts` 的 `buildImpactList()` 按场景类型补充涉及的数据表与模块。新模块如有专属数据表/模块，在对应条件分支中追加（参考现有 `isVideo`/`图生|全能参考|首尾帧` 分支）。
+1. 正常多 Operation 场景真实调用每个 Processor，capture 传递正确，断言和 required evidence 完整后才 `PASS`。
+2. Processor 不存在、不支持或未调用时为 `BLOCKED/NOT_EXECUTED`，且 Prepare 前阻断或完成 Cleanup。
+3. 零断言、缺 required evidence、状态探针缺失、binding 歧义均不能 `PASS`。
+4. 写入场景有持久化读回；拒绝场景有 before/after Non-Mutation；计费/回调/重试有精确副作用次数。
+5. Timeout/Cancel 真正传播 Abort，无后续写入、扣费或成功回写。
+6. production、未知环境、未知权限或缺审批默认拒绝，且阻断发生在 Prepare 前。
 
-### 11.5 编写任务定义
+### 11.6 LEGACY SceneHandler 维护边界
 
-按 `tasks/_template.json` 创建 `tasks/<任务名>.json`，`scene` 字段填写新处理器 `scenes` 中支持的值。脚本未接入处理器时仍会以「半自动模式」执行通用骨架并出报告。
+如确需维护 `src/plugins/scenes/`，当前接口使用 canonical scene ID，并要求 `supportedScenes` 与 `supports(scene)` 双重声明。未匹配 Handler 或未完成实际提交必须保持 `executed=false` 并进入 `BLOCKED/NOT_EXECUTED`；禁止恢复“无处理器也出成功报告”的半自动语义。
 
-### 11.6 验证与归档
-
-1. 先用已有任务 ID 或最小提交验证处理器逻辑正确。
-2. 正式执行：`node dist/bin/run-test.js --task tasks/<任务名>.json --func <功能名>`。
-3. 报告输出到 `/Users/mac/agents/output/<日期>/<功能名>/`。
-4. 交付包 `README-项目说明.md` 按 `docs/05-项目说明模板.md`（v2.1 通用格式）编写，第 11/12/13/14/15 章替换为新模块实际数据。
+历史 `tasks/*.json`、旧报告和内嵌 Markdown 只能作为迁移输入。迁移完成的判据是：资产已转换为 canonical Scenario、通过 Gate、接入 Processor/Evidence/Hook，并有跨模块契约测试证明结果语义，而不是文件仍能被旧 CLI 读取。

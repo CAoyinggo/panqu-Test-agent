@@ -176,7 +176,7 @@ describe('Phase 40.2 Defect 平台化（HTTP 层）', () => {
     const resolved = await ts.request('PATCH', `/defects/${d.defectId}/status`, { token: admin, body: { status: 'RESOLVED', resolution: '已修复' } });
     expect((resolved.data as { status: string }).status).toBe('RESOLVED');
     // RESOLVED → WONT_FIX 非法迁移
-    await expectReject(ts.request('PATCH', `/defects/${d.defectId}/status`, { token: admin, body: { status: 'WONT_FIX' } }), 400);
+    await expectReject(ts.request('PATCH', `/defects/${d.defectId}/status`, { token: admin, body: { status: 'WONT_FIX' } }), 409);
 
     const assign = await ts.request('POST', `/defects/${d.defectId}/assign`, { token: admin, body: { assignee: 'dev-1' } });
     expect(assign.status).toBe(200);

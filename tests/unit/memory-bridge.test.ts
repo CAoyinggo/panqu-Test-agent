@@ -21,10 +21,16 @@ const DEMO_REQ =
 const req = parseRequirement(DEMO_REQ);
 const cases = generateTestCases(req);
 
+const EXECUTED_FIXTURE = {
+  executed: true,
+  processor: 'UnitTestProcessor',
+  processorInvoked: true,
+} as const;
+
 function makeOutcome() {
   return computeOutcome('wan3', [
-    { caseId: 'tc-01', name: '正常提交', pass: true, passRate: 100 },
-    { caseId: 'tc-02', name: '计费规则', pass: false, passRate: 0, error: '积分扣减异常', tags: ['wan3', 'P0'], checks: [{ name: 'billing', pass: false, detail: 'expected 10 actual 5', level: 'P0' }] },
+    { ...EXECUTED_FIXTURE, caseId: 'tc-01', name: '正常提交', status: 'PASS', pass: true, passRate: 100, checks: [{ name: 'business', pass: true, detail: 'ok', kind: 'BUSINESS' }] },
+    { ...EXECUTED_FIXTURE, caseId: 'tc-02', name: '计费规则', status: 'FAIL', pass: false, passRate: 0, error: '积分扣减异常', tags: ['wan3', 'P0'], checks: [{ name: 'billing', pass: false, detail: 'expected 10 actual 5', level: 'P0', kind: 'BUSINESS' }] },
   ], { executed: true });
 }
 

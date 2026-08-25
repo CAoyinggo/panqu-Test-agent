@@ -14,12 +14,13 @@ import {
   AnalysisReport,
   isAnalysisLike,
   normalizeAnalysis,
+  summaryFromOutcome,
   toMemoryWorthy,
 } from './analysis-schema.js';
 import { analyzeExecution, AnalysisAnalyzerInput } from './analysis-analyzer.js';
 
 /** 系统提示词：要求 LLM 严格按结构输出分析结论 */
-const SYSTEM_PROMPT = `你是资深测试分析师。根据测试需求、用例、执行结果与风险评估，输出结构化分析报告。
+export const ANALYSIS_SYSTEM_PROMPT = `你是资深测试分析师。根据测试需求、用例、执行结果与风险评估，输出结构化分析报告。
 只输出 JSON，不要任何解释或 Markdown 围栏。输出结构如下：
 {"feature":"功能名","aiSummary":"一句话总结","findings":[{"type":"fail|flaky|blocked|pass|info","caseId":"tc-01","title":"标题","detail":"细节","severity":"high|medium|low","suggestion":"建议"}],"recommendations":["建议1","建议2"]}
 
@@ -27,7 +28,9 @@ const SYSTEM_PROMPT = `你是资深测试分析师。根据测试需求、用例
 - 优先根因定位：失败（断言/错误）、超时、阻塞（高风险+失败）、不稳定（历史 flaky）
 - recommendations 给出可执行改进建议，不要泛泛而谈
 - aiSummary 一句话概括整体结论与关键风险
-- 不要编造执行结果中不存在的失败`;
+- 不要编造执行结果中不存在的失败
+- 禁止输出统计字段（total/passed/failed/timedOut/passRate/durationMs）——
+  结果统计由平台根据真实执行结果计算，模型输出一律忽略`;
 
 /** Analysis Agent 输入 */
 export interface AnalysisAgentInput {
@@ -80,20 +83,26 @@ ${outcome.results
 ${(risk?.risks ?? []).filter((r) => r.level === 'high').map((r) => `- ${r.title}：${r.mitigation}`).join('\n') || '（无）'}
 用例（${testCases.length} 条）：${testCases.slice(0, 10).map((c) => c.id).join(', ')}`;
 
-    const resp = await context.llm.generate({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0,
-      jsonMode: true,
-    });
+    const resp = await context.runtime.generate({
+        task: 'analysis',
+        agent: this.name,
+        system: ANALYSIS_SYSTEM_PROMPT,
+        user: userContent,
+        temperature: 0,
+        jsonMode: true,
+      });
 
     const parsed = parseLLMJson(resp); // 非法 JSON 抛错 → 回退
     if (!isAnalysisLike(parsed)) {
       throw new Error('LLM 输出缺少 feature 字段');
     }
-    const report = normalizeAnalysis({ ...parsed, ...llmOverrides(input) });
+    // 统计字段（total/passed/failed/timedOut/duration/exitCode/overall）由真实执行结果
+    // 确定性计算并逐字采用 —— LLM 输出的 summary（即使有）被整体丢弃，防结果污染。
+    // LLM 只贡献 findings / recommendations / aiSummary。
+    const report = normalizeAnalysis(
+      { ...parsed, ...llmOverrides(input) },
+      { trustedSummary: summaryFromOutcome(input.outcome) },
+    );
     report.source = requirement.source;
     return report;
   }

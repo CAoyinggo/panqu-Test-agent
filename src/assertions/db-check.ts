@@ -14,6 +14,7 @@ export function dbCheck(taskDef: TaskDef, submit: SubmitResult, _billing: Billin
       name: '落库核对',
       pass: true,
       detail: '无任务详情可核对（半自动/复用任务或未提交），跳过落库字段检查',
+      kind: 'SKIPPED',
     });
     return checks;
   }
