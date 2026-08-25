@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.27.0` |
+| 版本 | `v4.28.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -62,6 +62,24 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 | 安全检查 | Audit、License、Semgrep、Gitleaks、Trivy 通过 |
 
 ## 快速开始
+
+### 需求驱动开发自测
+
+需要从需求文档直接完成“五维设计 → SAFE 初步执行 → 问题分级 → 固定报告”时，
+使用 DevTest 入口：
+
+```bash
+npm run devtest -- \
+  --doc requirements/new-feature.md \
+  --base-url http://127.0.0.1:3000 \
+  --env local
+```
+
+DevTest 默认挂起 POST/PUT/PATCH/DELETE 写路径；只有显式传入
+`--confirm-mutations` 才具备放行资格，且仍受环境、Origin、Cleanup 等安全策略约束。
+`--dry-run` 不发起任何 HTTP 请求。
+运行产物写入 `output/devtest/<runId>/`，包含 HTML/JSON 报告、用例 CSV 和
+critical/major/minor/trivial 四级问题清单。
 
 ### 开发需求一键验收
 
@@ -327,6 +345,7 @@ Agent Memory 的 JSON 后端采用 UUID 临时文件、跨实例文件锁和内�
 
 | 命令 | 用途 |
 | --- | --- |
+| `npm run devtest -- ...` | 需求驱动的五维开发自测与问题清单 |
 | `npm run self-test -- ...` | 需求与代码变更驱动的开发自测 |
 | `npm run self-test:test` | Developer Self-Test 专项回归 |
 | `npm test` | 完整 Vitest 测试 |
