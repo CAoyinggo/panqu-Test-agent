@@ -13,7 +13,7 @@
 
 [文档索引](docs/README.md) · [版本记录](docs/CHANGELOG.md)
 
-[DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
+[DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [交接/发布检查清单](docs/testing/developer-handoff-release-checklist.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
 ## 目录
 
@@ -202,7 +202,8 @@ Frontend Network 和 Runtime Discovery 只产生候选契约，只有 Resolver �
 结论仍遵循 fail-closed：缺少 Processor、Observer、断言或 Required Evidence 时，
 场景只能是 `BLOCKED / NOT_EXECUTED`，Feature 只能是 `BLOCKED`，
 不能生成 `PASS / READY`。完整参数、模式边界和证据规则见
-[Developer Self-Test 指南](docs/testing/developer-self-test.md)。
+[Developer Self-Test 指南](docs/testing/developer-self-test.md)。报告交付与发布前还必须逐项完成
+[开发交接、发布与报告输出检查清单](docs/testing/developer-handoff-release-checklist.md)，确保章节、状态、统计、证据和发布判定一致。
 
 ## 执行链路
 

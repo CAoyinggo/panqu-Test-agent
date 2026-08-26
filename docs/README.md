@@ -6,6 +6,7 @@
 
 - **TestCase 唯一权威入口**：[DevTest TestCase V2 字段与生成规则](testing/testcase-v2-schema.md)
 - **开发自测**：[用例与报告模板](02-测试用例模板.md) + [智能体 Prompt](prompts/dev-selftest-agent.prompt.md)
+- **交接与发布**：[开发交接、发布与报告输出检查清单](testing/developer-handoff-release-checklist.md)
 - [DevTest Mode：需求驱动·开发者自助测试](devtest.md)
 - [Acceptance 测试流程 SOP](01-%E6%B5%8B%E8%AF%95%E6%B5%81%E7%A8%8BSOP.md)
 - [版本变更记录](CHANGELOG.md)
