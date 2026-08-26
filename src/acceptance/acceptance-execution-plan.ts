@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { AssertionDefinition, TestActor, TestCase, TestStep } from '../agents/test-design/testcase-schema.js';
 
-export const ACCEPTANCE_CASE_IDENTITY_POLICY = 'SEMANTIC_SHA256_V1' as const;
-export const ACCEPTANCE_EXECUTION_PLAN_VERSION = 'ACCEPTANCE_EXECUTION_PLAN_V1' as const;
+export const ACCEPTANCE_CASE_IDENTITY_POLICY = 'SEMANTIC_SHA256_V2' as const;
+export const ACCEPTANCE_EXECUTION_PLAN_VERSION = 'ACCEPTANCE_EXECUTION_PLAN_V2' as const;
 
 export interface AcceptanceExecutionPlanIdentity {
   version: typeof ACCEPTANCE_EXECUTION_PLAN_VERSION;
@@ -55,6 +55,11 @@ function actorIdentity(actor: TestActor | undefined): unknown {
 
 function stepIdentity(step: TestStep): unknown {
   return {
+    id: step.id,
+    channel: step.channel,
+    description: step.description,
+    execution: step.execution,
+    dependsOn: step.dependsOn,
     action: step.action,
     type: step.type,
     scene: step.scene,
@@ -67,6 +72,8 @@ function stepIdentity(step: TestStep): unknown {
     query: step.query,
     body: step.body,
     actor: actorIdentity(step.actor),
+    concurrencyGroup: step.concurrencyGroup,
+    capture: step.capture,
   };
 }
 
@@ -74,6 +81,7 @@ function assertionIdentity(assertion: AssertionDefinition): unknown {
   // Trace IDs and priority are intentionally excluded: they do not change the
   // request/oracle and may move when unrelated requirement text is inserted.
   return {
+    channel: assertion.channel,
     type: assertion.type,
     target: assertion.target,
     path: assertion.path,
@@ -82,11 +90,23 @@ function assertionIdentity(assertion: AssertionDefinition): unknown {
     message: assertion.message,
     description: assertion.description,
     header: assertion.header,
+    evidenceRequirementIds: assertion.evidenceRequirementIds,
   };
 }
 
 function sortedAssertions(assertions: AssertionDefinition[]): unknown[] {
   return assertions.map(assertionIdentity).sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+
+function businessScenarioIdentity(testCase: TestCase): unknown {
+  if (!testCase.businessScenario) return undefined;
+  const { factIds: _factIds, flow, risks, ...scenario } = testCase.businessScenario;
+  const { id: _flowId, ...stableFlow } = flow;
+  return {
+    ...scenario,
+    flow: stableFlow,
+    risks: risks.map(({ id: _riskId, ...risk }) => risk),
+  };
 }
 
 /**
@@ -98,16 +118,42 @@ function sortedAssertions(assertions: AssertionDefinition[]): unknown[] {
 export function acceptanceCaseSemanticIdentity(testCase: TestCase): unknown {
   const executable = testCase.executionMode === 'EXECUTABLE';
   const common = {
+    schemaVersion: testCase.schemaVersion,
     executionMode: testCase.executionMode,
+    requirementStatus: testCase.requirementStatus,
+    readiness: testCase.readiness,
     protocol: testCase.protocol,
+    priority: testCase.priority,
+    testType: testCase.testType,
+    businessScenario: businessScenarioIdentity(testCase),
     operationKey: testCase.source?.apiOperationKey,
+    contractBinding: testCase.source && {
+      apiSpecId: testCase.source.apiSpecId,
+      contractRef: testCase.source.contractRef,
+      contractVersion: testCase.source.contractVersion,
+      contractFingerprint: testCase.source.contractFingerprint,
+    },
+    contractDependencies: testCase.contractDependencies,
     actor: actorIdentity(testCase.actor),
+    data: testCase.data,
     steps: testCase.steps.map(stepIdentity),
     assertions: sortedAssertions(testCase.assertions),
-    expected: executable
-      ? { status: testCase.expected?.status, fields: testCase.expected?.fields }
-      : testCase.expected,
+    evidenceRequirements: (testCase.evidenceRequirements ?? [])
+      .map((item) => ({ id: item.id, channel: item.channel, phase: item.phase, required: item.required,
+        expectation: item.expectation ?? 'PRESENT', sourceStepId: item.sourceStepId,
+        assertionIds: item.assertionIds }))
+      .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right))),
+    expected: testCase.expected,
     negativeContractIntent: testCase.negativeContractIntent,
+    testAspects: [...(testCase.testAspects ?? [])].sort(),
+    preconditionPlan: testCase.preconditionPlan,
+    testData: testCase.testData,
+    oracle: testCase.oracle,
+    prepare: testCase.prepare,
+    cleanup: testCase.cleanup,
+    dependencies: testCase.dependencies,
+    executionContract: testCase.executionContract,
+    resolvedContractValue: testCase.metadata?.resolvedContractValue,
   };
   if (executable) return common;
   return {
@@ -130,15 +176,27 @@ export function acceptanceCaseSemanticDigest(testCase: TestCase): string {
   return sha256(acceptanceCaseSemanticIdentity(testCase));
 }
 
+/**
+ * Case ID identifies the reusable test intent. Contract versions/fingerprints
+ * belong to the authorization plan digest: changing them must stale a preview,
+ * but must not make an archived Case impossible to select for repro/rerun.
+ */
+function acceptanceCaseStableIdentity(testCase: TestCase): unknown {
+  const full = acceptanceCaseSemanticIdentity(testCase) as Record<string, unknown>;
+  const { contractBinding: _binding, contractDependencies: _dependencies,
+    resolvedContractValue: _resolved, ...stable } = full;
+  return { ...stable, apiSpecId: testCase.source?.apiSpecId };
+}
+
 export function stableAcceptanceCaseId(testCase: TestCase): string {
-  return `CASE-${acceptanceCaseSemanticDigest(testCase).slice(0, 24).toUpperCase()}`;
+  return `CASE-${sha256(acceptanceCaseStableIdentity(testCase)).slice(0, 24).toUpperCase()}`;
 }
 
 /** Assign IDs after all fail-close transforms and de-duplication have completed. */
 export function assignStableAcceptanceCaseIds(testCases: TestCase[]): TestCase[] {
   const identityById = new Map<string, string>();
   for (const testCase of testCases) {
-    const identity = canonicalJson(acceptanceCaseSemanticIdentity(testCase));
+    const identity = canonicalJson(acceptanceCaseStableIdentity(testCase));
     const id = stableAcceptanceCaseId(testCase);
     const existing = identityById.get(id);
     if (existing !== undefined && existing !== identity) {

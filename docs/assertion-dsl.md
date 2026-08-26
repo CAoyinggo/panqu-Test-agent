@@ -1,4 +1,6 @@
-# 断言 DSL 完整文档
+# Legacy 断言 DSL 兼容文档
+
+> **LEGACY 边界**：本文描述已有 `TaskDef.assert` / Assertion Engine 的操作符和兼容调用。新 DevTest TestCase 必须先按 [TestCase V2 字段与生成规则](testing/testcase-v2-schema.md) 声明 Requirement/Fact trace、Oracle 和 Evidence Requirement，再将可执行断言映射到本 DSL。本 DSL 单独通过不等于 DevTest Case PASS。
 
 ## 架构概览
 
@@ -143,10 +145,15 @@ extractPath(obj, 'status')                  // → 200
 
 ### jsonSchema 操作符
 
-`jsonSchema` 使用动态 `import('ajv')` 按需加载。未安装 ajv 时自动降级跳过（返回 pass=true）。
+`jsonSchema` 使用动态 `import('ajv')` 按需加载。AJV 未安装、加载失败、Schema 非法或编译失败时必须 **fail-close**：
+
+- 本条断言不得返回 `pass=true`；
+- Case 必须记录 `BLOCKED`/`EXECUTION_ERROR`，具体归类由运行阶段决定；
+- 报告必须保留加载/编译错误，不得冒充 schema 已验证；
+- 必须证据未产生时，Evidence Coverage 与 Verified Coverage 均不得计入。
 
 ```bash
-# 可选安装 ajv 以启用 JSON Schema 校验
+# 使用 jsonSchema 操作符的执行环境必须安装 ajv
 npm install ajv
 ```
 
@@ -166,6 +173,8 @@ interface AssertionRule {
   severity?: 'P0' | 'P1' | 'P2';   // 失败级别
 }
 ```
+
+`AssertionRule` 是 Legacy 执行器的最小操作符输入，它本身没有 Requirement/Fact/Evidence 追溯字段。TestCase V2 的 `AssertionDefinition` 必须在外层补齐稳定 `id`、`acceptanceCriteriaIds`、`factIds`、`evidenceRequirementIds` 和确定性 `oracle`；不得因 Legacy operator 返回 pass 就直接宣布 DevTest PASS。
 
 ---
 

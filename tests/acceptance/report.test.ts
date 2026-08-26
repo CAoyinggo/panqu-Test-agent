@@ -91,6 +91,7 @@ function result(test: TestCase, status: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_EXECU
         objectiveIds: test.source?.objectiveIds,
       }] : [],
       binding: executed ? { valid: true, apiSpecId: 'API-REPORT', operationKey: 'GET /echo' } : undefined,
+      evidenceItems: [],
     },
   };
 }
@@ -190,6 +191,129 @@ describe('AcceptanceReport', () => {
     expect(markdown).toContain('- Execution Status：PASS');
     expect(markdown).toContain('| 类型 | Designed | Executable | Designed Only | PASS | FAIL | BLOCKED | NOT_EXECUTED | TIMEOUT | CANCELLED |');
     expect(renderAcceptanceReportHtml(report)).toContain('<!doctype html>');
+  });
+
+  it('projects the complete TEST_CASE_V2 template into JSON and Markdown case details', () => {
+    const requirement = parseAcceptanceRequirement(fixture);
+    const design = buildAcceptanceTestDesign(requirement);
+    const points = generateTestPoints(requirement, design);
+    const base = testCase(1, 'API', points[0]);
+    const factIds = base.source?.factIds ?? [];
+    const acceptanceCriteriaIds = base.source?.acceptanceCriteriaIds ?? [];
+    const candidate: TestCase = {
+      ...base,
+      schemaVersion: 'TEST_CASE_V2',
+      testAspects: ['API_CONTRACT', 'CORE_FUNCTION', 'PRE_POST_CONDITION'],
+      requirementStatus: 'CONFIRMED',
+      businessScenario: {
+        title: '用户读取资料', goal: '用户读取自己的资料并获得成功响应', actor: 'USER',
+        action: 'READ', resource: 'PROFILE', expectedBusinessOutcome: '返回用户资料',
+        kind: 'CORE_FLOW',
+        actors: [{ id: 'user-1', role: 'USER', relation: 'SUBJECT', provenance: 'CONFIGURED' }],
+        resourceContext: { type: 'PROFILE', idRef: 'profile-1', provenance: 'EXPLICIT' },
+        ownership: { relation: 'SELF', ownerActorId: 'user-1', provenance: 'EXPLICIT' },
+        state: { status: 'NOT_APPLICABLE', provenance: 'EXPLICIT' },
+        permission: { decision: 'ALLOW', role: 'USER', action: 'READ', provenance: 'EXPLICIT' },
+        flow: {
+          id: 'FLOW-001', name: '用户读取资料', mode: 'SINGLE_OPERATION',
+          steps: [{ id: 'STEP-001', action: 'READ', resourceRef: 'profile-1', dependsOn: [] }],
+        },
+        dependencies: [], risks: [],
+        provenance: 'EXPLICIT', factIds, acceptanceCriteriaIds,
+      },
+      preconditions: ['目标 API 可访问'],
+      preconditionPlan: [{
+        id: 'PRE-001', kind: 'ENVIRONMENT', description: '目标 API 可访问', required: true,
+        checkRef: 'runtime.preflight.api', evidenceRequirementId: 'EV-REQ-001',
+      }],
+      data: { targetId: 'profile-1' },
+      testData: [{
+        id: 'DATA-001', source: 'FIXTURE', valueRef: 'fixture.profile-1', resourceType: 'PROFILE',
+        resourceOwnerId: 'user-1', mutable: false, sensitive: false,
+      }],
+      steps: [{
+        id: 'STEP-001', channel: 'API', description: 'GET /echo', execution: 'EXECUTABLE',
+        dependsOn: [], acceptanceCriteriaIds, factIds, type: 'HTTP_REQUEST', method: 'GET', url: '/echo',
+      }],
+      assertions: [{
+        id: 'AS-001', channel: 'RESPONSE', acceptanceCriteriaIds,
+        evidenceRequirementIds: ['EV-RES-001'], type: 'STATUS_CODE', expected: 200,
+        factIds, objectiveIds: base.source?.objectiveIds,
+      }],
+      expected: {
+        status: '200', description: '返回用户资料', response: { status: 200, description: '成功响应' },
+        state: { expectation: 'UNCHANGED', description: '读取不修改资料' }, sideEffects: [],
+      },
+      evidenceRequirements: [
+        {
+          id: 'EV-REQ-001', channel: 'API_REQUEST', phase: 'DURING', required: true,
+          expectation: 'PRESENT', description: '保存真实请求', factIds, sourceStepId: 'STEP-001', assertionIds: [],
+        },
+        {
+          id: 'EV-RES-001', channel: 'API_RESPONSE', phase: 'AFTER', required: true,
+          expectation: 'PRESENT', description: '保存真实响应', factIds, sourceStepId: 'STEP-001', assertionIds: ['AS-001'],
+        },
+      ],
+      oracle: {
+        mode: 'ALL', deterministic: true, status: 'READY', assertionIds: ['AS-001'],
+        evidenceRequirementIds: ['EV-REQ-001', 'EV-RES-001'],
+      },
+      prepare: [{
+        id: 'PREPARE-001', phase: 'PREPARE', handler: 'runtime.casePrepare', required: true,
+        produces: ['fixture.profile-1'],
+      }],
+      cleanup: [{ id: 'CLEANUP-001', phase: 'CLEANUP', handler: 'runtime.caseCleanup', required: true }],
+      dependencies: [{
+        id: 'DEP-ENV-API', kind: 'ENVIRONMENT', ref: 'runtime.baseUrl',
+        description: '目标 API 环境通过 Preflight', required: true, resolution: 'RUNTIME_REQUIRED',
+      }],
+      executionContract: {
+        executor: { kind: 'HTTP', ref: 'acceptance.apiProcessor', status: 'AVAILABLE', supports: ['GET /echo'] },
+        observers: [],
+        preflight: [
+          { kind: 'ENVIRONMENT', ref: 'runtime.baseUrl', required: true },
+          { kind: 'RESOURCE', ref: 'profile-1', required: true },
+        ],
+        lifecycleHooks: [
+          { phase: 'PREPARE', hookId: 'PREPARE-001', required: true, evidenceRequired: true },
+          { phase: 'CLEANUP', hookId: 'CLEANUP-001', required: true, evidenceRequired: true },
+        ],
+      },
+      readiness: { status: 'READY', reasons: [], missingCapabilities: [] },
+    };
+    const report = buildAcceptanceReport({
+      project: 'test-flow', requirement, objectives: design.objectives, scenarios: design.scenarios,
+      testPoints: points, testCases: [candidate], results: [result(candidate, 'PASS')], defects: [],
+    });
+
+    expect(report.cases[0]).toMatchObject({
+      schemaVersion: 'TEST_CASE_V2',
+      testAspects: ['API_CONTRACT', 'CORE_FUNCTION', 'PRE_POST_CONDITION'],
+      requirementStatus: 'CONFIRMED',
+      businessScenario: { title: '用户读取资料', expectedBusinessOutcome: '返回用户资料' },
+      preconditionPlan: [{ id: 'PRE-001', evidenceRequirementId: 'EV-REQ-001' }],
+      testData: [{ id: 'DATA-001', valueRef: 'fixture.profile-1' }],
+      steps: [{ id: 'STEP-001', acceptanceCriteriaIds }],
+      assertions: [{ id: 'AS-001', evidenceRequirementIds: ['EV-RES-001'] }],
+      evidenceRequirements: [
+        { id: 'EV-REQ-001', sourceStepId: 'STEP-001' },
+        { id: 'EV-RES-001', assertionIds: ['AS-001'] },
+      ],
+      oracle: { status: 'READY', assertionIds: ['AS-001'], evidenceRequirementIds: ['EV-REQ-001', 'EV-RES-001'] },
+      prepare: [{ id: 'PREPARE-001' }], cleanup: [{ id: 'CLEANUP-001' }],
+      dependencies: [{ id: 'DEP-ENV-API' }], readiness: { status: 'READY' },
+    });
+    const json = JSON.parse(renderAcceptanceReportJson(report));
+    expect(json.cases[0].expected.response.status).toBe(200);
+    const markdown = renderAcceptanceReportMarkdown(report);
+    for (const label of [
+      'Schema Version', 'Test Aspects', 'Requirement Status', 'Business Scenario',
+      'Precondition Plan', 'Test Data', 'Assertions', 'Expected Contract',
+      'Evidence Requirements', 'Oracle', 'Prepare', 'Cleanup', 'Dependencies', 'Readiness',
+    ]) expect(markdown).toContain(label);
+    for (const id of ['STEP-001', 'AS-001', 'EV-REQ-001', 'EV-RES-001', 'DEP-ENV-API']) {
+      expect(markdown).toContain(id);
+    }
   });
 
   it('preserves structural AUTH statistics while still redacting authentication secrets', () => {

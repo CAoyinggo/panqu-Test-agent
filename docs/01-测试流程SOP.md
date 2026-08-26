@@ -2,8 +2,18 @@
 
 > 版本：v3.0 | 更新：2026-08-23 | 维护：AI 测试智能体
 > **适用范围：需求驱动的开发验收测试**，不绑定特定产品、模型或业务。
-> 规范资产：[通用 Scenario 模板](../tests/acceptance/templates/scenario.md) + [Pattern Library](../tests/acceptance/patterns/) + [测试用例模板说明](02-测试用例模板.md)。
+> 规范资产：[通用 Scenario 模板](../tests/acceptance/templates/scenario.md) + [Pattern Library](../tests/acceptance/patterns/) + [TestCase V2 字段规范](testing/testcase-v2-schema.md)。
 > 历史 `tasks/*.json`、旧 `run-test` 场景处理器和 TypeScript 内嵌 Markdown 仅为 **LEGACY** 兼容资产；保留它们不代表已经迁移到 canonical Scenario 主链。
+
+开发者进行需求级初步自测时，统一入口为：
+
+```bash
+npm run devtest -- requirements/new-feature.md
+```
+
+该命令仍执行本文的 Requirement、Contract、Scenario、Policy、Assertion 和 Evidence
+门禁，只增加五维选择、SAFE 默认策略、根因问题聚合和固定报告适配。详细说明见
+[DevTest Mode](devtest.md)。
 
 ---
 
@@ -17,7 +27,7 @@
 6. `PASS` 的必要且充分执行条件为：`executed=true`、`processorInvoked=true`、至少一个有效断言且全部通过、所有 required evidence 完整并验证成功。无 Processor、Processor 未调用、零断言或缺证据一律不得 `PASS`。
 7. 启动清单未经确认，不进入真实执行阶段；歧义、未知策略或依赖缺失一律 fail-close。
 8. **素材来源**：上传文件优先从受控测试素材库 `/Users/mac/agents/Test-panqu/` 取用；Scenario 只保存数据引用，并记录 owner、tenant、project、敏感性和 cleanup hook。
-9. **输出位置（强制）**：所有交付物按 `output/<YYYY-MM-DD>/<功能名>/` 存放；输出目录或 HTML 生成成功不等于测试 `PASS`。
+9. **输出位置（强制）**：常规验收交付物按 `output/<YYYY-MM-DD>/<功能名>/` 存放；DevTest 固定写入 `devtest-results/<runId>/` 或 `--output` 指定目录。输出目录或 HTML 生成成功不等于测试 `PASS`。
 
 ---
 
@@ -91,11 +101,11 @@ API 或其他 Operation 契约：
 
 ### 3.1 Pattern 不是固定四分类
 
-测试资源按需求结构化事实和风险选择，而不是平均分给“功能/接口/计费/隔离”四类。Pattern Registry 覆盖：
+测试资源按需求结构化事实和风险选择，而不是平均分给“功能/接口/计费/隔离”四类。当前可直接复用的 Pattern Library 包含：
 
-`FUNCTIONAL`、`API_CONTRACT`、`PERSISTENCE`、`NON_MUTATION`、`IDEMPOTENCY`、`AUTHORIZATION`、`TENANT_ISOLATION`、`PROJECT_ISOLATION`、`ATOMICITY`、`STATE_MACHINE`、`ASYNC`、`BILLING`、`PROVIDER_FAILURE`、`CALLBACK`、`BOUNDARY`、`AUDIT`、`SECURITY`。
+`PERSISTENCE`、`NON_MUTATION`、`IDEMPOTENCY`、`AUTHORIZATION`、`TENANT_ISOLATION`、`ATOMICITY`、`STATE_MACHINE`、`BILLING`、`PROVIDER_FAILURE`、`CALLBACK`、`BOUNDARY`、`AUDIT`。
 
-Pattern 的来源和 required proof obligation 以 [Pattern Library](../tests/acceptance/patterns/) 与 Registry 为准。选择 Pattern 后，必须补齐对应的 Actor/Scope、前后状态、响应、副作用、断言和证据；只填写 Pattern 名称不算覆盖。
+`FUNCTIONAL`、`API`、`UI`、`PARAMETER`、`PROJECT_ISOLATION`、`ASYNC`、`SECURITY` 等仍可由 Test Type/Aspect 动态选择，但在对应 Pattern 资产实际存在前，不得声称已通过 Pattern proof obligation。Pattern 的来源和 required proof obligation 以 [Pattern Library](../tests/acceptance/patterns/) 与 Registry 实际内容为准。选择 Pattern 后，必须补齐对应的 Actor/Scope、前后状态、响应、副作用、断言和证据；只填写 Pattern 名称不算覆盖。
 
 ### 3.2 canonical Scenario 规范
 
@@ -127,7 +137,7 @@ Scenario 作者只能声明：
 | `DESIGNED_ONLY` | 设计完成，但 Processor、环境或 evidence capability 尚未具备 |
 | `BLOCKED` | 已知冲突、策略或依赖明确阻断，并附 typed Blocked Reason |
 
-不得在 Markdown 中预填 `PASS` / `FAIL`，也不得把“可生成报告”“可人工操作”或“质量评分达标”写成执行结论。更完整的状态、断言和证据规范见[测试用例模板说明](02-测试用例模板.md)。
+不得在 Markdown 中预填 `PASS` / `FAIL`，也不得把“可生成报告”“可人工操作”或“质量评分达标”写成执行结论。更完整的状态、断言和证据规范见[TestCase V2 字段规范](testing/testcase-v2-schema.md)。
 
 ---
 

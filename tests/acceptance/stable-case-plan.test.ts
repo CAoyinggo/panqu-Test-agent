@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TestCase } from '../../src/agents/test-design/testcase-schema.js';
 import { runAcceptancePipeline } from '../../src/acceptance/acceptance-pipeline.js';
 import { buildAcceptanceExecutionPlanIdentity } from '../../src/acceptance/acceptance-execution-plan.js';
-import { generateAcceptanceApiCases } from '../../src/acceptance/test-case-generator.js';
+import { deduplicateAcceptanceCases, generateAcceptanceApiCases } from '../../src/acceptance/test-case-generator.js';
 import { parseAcceptanceRequirement } from '../../src/acceptance/requirement-parser.js';
 import { buildAcceptanceTestDesign } from '../../src/acceptance/test-objective.js';
 import { generateTestPoints } from '../../src/acceptance/test-point.js';
@@ -47,6 +47,54 @@ AC-1 GET /status/200 成功返回 200`), 'GET /status/200');
 
     expect(original.id).toMatch(/^CASE-[A-F0-9]{24}$/);
     expect(withEarlierDesignOnlyFact.id).toBe(original.id);
+  });
+
+  it('treats required Evidence Plan changes as execution-plan identity changes', () => {
+    const originalCases = compile(BASE_REQUIREMENT);
+    const strengthenedCases = structuredClone(originalCases);
+    const strengthened = executableFor(strengthenedCases, 'GET /status/200');
+    strengthened.evidenceRequirements = [
+      ...(strengthened.evidenceRequirements ?? []),
+      {
+        channel: 'DATABASE_STATE', phase: 'AFTER', required: true,
+        description: '交付前必须验证持久化状态', factIds: strengthened.source?.factIds ?? [],
+      },
+    ];
+    const originalPlan = buildAcceptanceExecutionPlanIdentity({
+      markdown: BASE_REQUIREMENT,
+      allTestCases: originalCases,
+      selectedCaseIds: originalCases.map((testCase) => testCase.id),
+    });
+    const strengthenedPlan = buildAcceptanceExecutionPlanIdentity({
+      markdown: BASE_REQUIREMENT,
+      allTestCases: strengthenedCases,
+      selectedCaseIds: strengthenedCases.map((testCase) => testCase.id),
+    });
+
+    expect(strengthenedPlan.requirementDigest).toBe(originalPlan.requirementDigest);
+    expect(strengthenedPlan.planDigest).not.toBe(originalPlan.planDigest);
+    expect(strengthenedPlan.previewDigest).not.toBe(originalPlan.previewDigest);
+  });
+
+  it('unions required Evidence Plans when identical executable Cases are coalesced', () => {
+    const first = structuredClone(executableFor(compile(BASE_REQUIREMENT), 'GET /status/200'));
+    const duplicate = structuredClone(first);
+    first.evidenceRequirements = [{
+      channel: 'API_RESPONSE', phase: 'AFTER', required: true,
+      description: '保存真实 API 响应', factIds: ['FACT-API'],
+    }];
+    duplicate.evidenceRequirements = [{
+      channel: 'DATABASE_STATE', phase: 'AFTER', required: true,
+      description: '验证持久化状态', factIds: ['FACT-STATE'],
+    }];
+
+    const merged = deduplicateAcceptanceCases([first, duplicate]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].evidenceRequirements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: 'API_RESPONSE', phase: 'AFTER', factIds: ['FACT-API'] }),
+      expect.objectContaining({ channel: 'DATABASE_STATE', phase: 'AFTER', factIds: ['FACT-STATE'] }),
+    ]));
   });
 
   it('blocks changed or unbound scoped plans before Data Prepare and HTTP', async () => {

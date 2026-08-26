@@ -308,4 +308,10 @@ describe('assertion-operators - jsonSchema（JSON Schema 校验，基于 ajv）'
     const r = await run('jsonSchema', { text: 123 }, schema);
     expect(r.pass).toBe(false);
   });
+
+  it('无效 Schema 必须 fail-close，不得降级为 pass=true', async () => {
+    await expect(run('jsonSchema', { text: 'hello' }, {
+      type: 'definitely-not-a-json-schema-type',
+    })).rejects.toMatchObject({ code: 'INVALID_TESTCASE' });
+  });
 });

@@ -8,6 +8,7 @@ import { redactSensitive, redactSensitiveText } from '../core/redact.js';
 import type { ApiSpec } from './requirement-ir.js';
 import { validateApiBindingGate } from './api-binding-gate.js';
 import type { ContractResolverLike } from '../contracts/resolver.js';
+import { applyOperatorAsync, type AssertionRule } from '../core/assertion-operators.js';
 
 export interface HttpRequestEvidence {
   method: string;
@@ -26,6 +27,8 @@ export interface HttpResponseEvidence {
 }
 
 export interface AcceptanceAssertionEvidence {
+  assertionId?: string;
+  evidenceRequirementIds?: string[];
   type: string;
   path?: string;
   factIds?: string[];
@@ -65,6 +68,29 @@ export interface AcceptanceExecutionEvidence {
     operationKey?: string;
     code?: string;
     message?: string;
+  };
+  preflight?: Array<{
+    kind: string;
+    ref: string;
+    status: 'PASS' | 'BLOCKED' | 'UNKNOWN';
+    reason?: string;
+    artifactRef?: string;
+  }>;
+  evidenceItems: Array<{
+    requirementId: string;
+    channel: string;
+    sourceStepId?: string;
+    collected: boolean;
+    verified: boolean;
+    artifactRef?: string;
+    observedAt?: string;
+    missingReason?: string;
+  }>;
+  oracleResult?: {
+    verdict: 'PASS' | 'FAIL' | 'BLOCKED';
+    assertionIds: string[];
+    evidenceRequirementIds: string[];
+    reasons: string[];
   };
 }
 
@@ -106,10 +132,23 @@ export interface ApiProcessorOptions {
   executionEnabled?: boolean;
   blockedReason?: string;
   blockedClassification?: AcceptanceExecutionClassification;
+  /** DevTest 可选优化：仅只读、无共享写状态 Case 允许并发。 */
+  concurrency?: number;
+  /** P0 真实失败后不再启动后续 Case。 */
+  failFast?: boolean;
   /** Binding Gate 使用的原始 Requirement API 契约。 */
   apiSpecs?: ApiSpec[];
   /** Acceptance 入口注入；存在时 Case 必须携带可解析 Contract Ref。 */
   contractResolver?: ContractResolverLike;
+  /** Pipeline 在 Policy Gate 后显式声明 cleanup/sandbox 生命周期能力已解析。 */
+  lifecycleReady?: boolean;
+  /** RESOURCE/STATE/DEPENDENCY 预检只能由显式绑定的只读 Resolver 完成，禁止猜测 HEAD/GET。 */
+  preflightResolver?: (input: {
+    testCase: TestCase;
+    kind: 'RESOURCE' | 'STATE' | 'DEPENDENCY';
+    ref: string;
+  }) => Promise<{ status: 'PASS' | 'BLOCKED' | 'UNKNOWN'; reason?: string; artifactRef?: string }>
+    | { status: 'PASS' | 'BLOCKED' | 'UNKNOWN'; reason?: string; artifactRef?: string };
 }
 
 function caseQualityBlockReason(testCase: TestCase): string | undefined {
@@ -144,6 +183,14 @@ function resultBase(testCase: TestCase, runId?: string): Pick<AcceptanceCaseExec
       sourceType: testCase.source?.sourceType,
       testPointId: testCase.source?.testPointId,
       assertions: [],
+      evidenceItems: (testCase.evidenceRequirements ?? []).filter((requirement) => requirement.required).map((requirement) => ({
+        requirementId: requirement.id ?? 'UNIDENTIFIED_EVIDENCE_REQUIREMENT',
+        channel: requirement.channel,
+        sourceStepId: requirement.sourceStepId,
+        collected: false,
+        verified: false,
+        missingReason: '尚未采集',
+      })),
     },
   };
 }
@@ -253,7 +300,7 @@ function equalValue(actual: unknown, expected: unknown): boolean {
   return Object.is(actual, expected) || JSON.stringify(actual) === JSON.stringify(expected);
 }
 
-function evaluateAssertion(assertion: AssertionDefinition, response: HttpResponseEvidence): AcceptanceAssertionEvidence {
+async function evaluateAssertion(assertion: AssertionDefinition, response: HttpResponseEvidence): Promise<AcceptanceAssertionEvidence> {
   const type = assertion.type ?? 'UNKNOWN';
   let actual: unknown;
   let pass = false;
@@ -278,7 +325,23 @@ function evaluateAssertion(assertion: AssertionDefinition, response: HttpRespons
     actual = valueType(valueAtPath(response.body, assertion.path));
     pass = actual === assertion.expected;
   }
+  let operatorDetail: string | undefined;
+  if (assertion.operator) {
+    const rule: AssertionRule = {
+      target: type === 'RESPONSE_HEADER' ? 'headers' : 'response',
+      path: assertion.path ?? assertion.header,
+      operator: assertion.operator,
+      expected: assertion.expected,
+      message: assertion.message,
+      severity: assertion.severity,
+    };
+    const result = await applyOperatorAsync(assertion.operator, actual, assertion.expected, rule);
+    pass = result.pass;
+    operatorDetail = result.detail;
+  }
   return {
+    assertionId: assertion.id,
+    evidenceRequirementIds: assertion.evidenceRequirementIds,
     type,
     path: assertion.path ?? assertion.header,
     factIds: assertion.factIds,
@@ -288,7 +351,69 @@ function evaluateAssertion(assertion: AssertionDefinition, response: HttpRespons
     expected: assertion.expected,
     actual,
     pass,
-    detail: `${type}${assertion.path ? ` ${assertion.path}` : assertion.header ? ` ${assertion.header}` : ''}：expected=${JSON.stringify(assertion.expected)} actual=${JSON.stringify(actual)}`,
+    detail: operatorDetail ?? `${type}${assertion.path ? ` ${assertion.path}` : assertion.header ? ` ${assertion.header}` : ''}：expected=${JSON.stringify(assertion.expected)} actual=${JSON.stringify(actual)}`,
+  };
+}
+
+function materializeEvidenceItems(
+  testCase: TestCase,
+  evidence: AcceptanceExecutionEvidence,
+  assertions: readonly AcceptanceAssertionEvidence[],
+): AcceptanceExecutionEvidence['evidenceItems'] {
+  const assertionById = new Map(assertions.map((assertion) => [assertion.assertionId, assertion]));
+  const observedAt = new Date().toISOString();
+  return (testCase.evidenceRequirements ?? []).filter((requirement) => requirement.required).map((requirement) => {
+    const collected = requirement.channel === 'API_REQUEST' ? Boolean(evidence.request)
+      : requirement.channel === 'API_RESPONSE' ? Boolean(evidence.response) : false;
+    const linked = (requirement.assertionIds ?? []).map((id) => assertionById.get(id));
+    // Evidence verification proves that the declared artifact and its linked
+    // Assertion observations exist. It must not mean that the business
+    // Assertion passed: a captured response that disproves Expected is still
+    // complete, authoritative Evidence for a deterministic FAIL.
+    const verified = collected && linked.every((assertion) => assertion !== undefined);
+    return {
+      requirementId: requirement.id ?? 'UNIDENTIFIED_EVIDENCE_REQUIREMENT',
+      channel: requirement.channel,
+      sourceStepId: requirement.sourceStepId,
+      collected,
+      verified,
+      artifactRef: collected ? (requirement.channel === 'API_REQUEST'
+        ? 'execution.evidence.request' : 'execution.evidence.response') : undefined,
+      observedAt: collected ? observedAt : undefined,
+      missingReason: collected ? (verified ? undefined : '关联 Assertion 未采集') : '未注册或未采集对应 Evidence Provider',
+    };
+  });
+}
+
+function materializeOracleResult(
+  testCase: TestCase,
+  assertions: readonly AcceptanceAssertionEvidence[],
+  evidenceItems: AcceptanceExecutionEvidence['evidenceItems'],
+): NonNullable<AcceptanceExecutionEvidence['oracleResult']> {
+  const expectedAssertionIds = testCase.schemaVersion === 'TEST_CASE_V2'
+    ? testCase.oracle?.assertionIds ?? []
+    : assertions.map((assertion) => assertion.assertionId).filter((id): id is string => Boolean(id));
+  const expectedEvidenceIds = testCase.schemaVersion === 'TEST_CASE_V2'
+    ? testCase.oracle?.evidenceRequirementIds ?? [] : [];
+  const assertionById = new Map(assertions.map((assertion) => [assertion.assertionId, assertion]));
+  const evidenceById = new Map(evidenceItems.map((item) => [item.requirementId, item]));
+  const missingAssertions = expectedAssertionIds.filter((id) => !assertionById.has(id));
+  const failedAssertions = expectedAssertionIds.filter((id) => assertionById.get(id)?.pass === false);
+  const missingEvidence = expectedEvidenceIds.filter((id) => {
+    const item = evidenceById.get(id);
+    return !item?.collected || !item.verified;
+  });
+  const reasons = [
+    ...(missingAssertions.length ? [`Assertion 未采集：${missingAssertions.join(', ')}`] : []),
+    ...(failedAssertions.length ? [`Assertion 失败：${failedAssertions.join(', ')}`] : []),
+    ...(missingEvidence.length ? [`Evidence 未采集/验证：${missingEvidence.join(', ')}`] : []),
+  ];
+  return {
+    verdict: missingAssertions.length || missingEvidence.length ? 'BLOCKED'
+      : failedAssertions.length ? 'FAIL' : 'PASS',
+    assertionIds: expectedAssertionIds,
+    evidenceRequirementIds: expectedEvidenceIds,
+    reasons,
   };
 }
 
@@ -326,7 +451,7 @@ function makeLinkedSignal(options: ApiProcessorOptions): { signal: AbortSignal; 
 export class ApiProcessor {
   readonly name = 'api';
   readonly supportedScenes = ['api'] as const;
-  readonly supportedMethods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+  readonly supportedMethods = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 
   supports(scene: CanonicalSceneId): boolean {
     return scene === 'api';
@@ -348,7 +473,14 @@ export class ApiProcessor {
       return { ...base, executed: false, processor: this.name, processorInvoked: false, status: 'NOT_EXECUTED', pass: false, passRate: 0, error: `NOT_EXECUTED：${testCase.executionMode}` };
     }
     const dsl = checkDslExecutable(testCase);
-    const nonAssertionProblems = dsl.problems.filter((problem) => problem !== '缺少有效业务断言');
+    // V2 Observer readiness has a dedicated evidence-provider gate below so
+    // it is reported as a fail-closed BLOCKED result with a machine-readable
+    // cause. Do not let the generic DSL guard downgrade it to NOT_EXECUTED.
+    const dedicatedGateProblems = new Set([
+      '缺少有效业务断言',
+      'Observer 能力未就绪，禁止执行',
+    ]);
+    const nonAssertionProblems = dsl.problems.filter((problem) => !dedicatedGateProblems.has(problem));
     if (nonAssertionProblems.length) {
       return { ...base, executed: false, processor: this.name, processorInvoked: false, status: 'NOT_EXECUTED', pass: false, passRate: 0, error: `NOT_EXECUTED：${nonAssertionProblems.join('；')}` };
     }
@@ -373,6 +505,54 @@ export class ApiProcessor {
           recoverable: true,
         },
         error: 'BLOCKED：MISSING_ASSERTION：没有有效 HTTP 业务断言，禁止发起请求',
+      };
+    }
+    const externalPreflight = (testCase.executionContract?.preflight ?? [])
+      .filter((item): item is typeof item & { kind: 'RESOURCE' | 'STATE' | 'DEPENDENCY' } => item.required
+        && ['RESOURCE', 'STATE', 'DEPENDENCY'].includes(item.kind));
+    if (externalPreflight.length) {
+      const results: NonNullable<AcceptanceExecutionEvidence['preflight']> = [];
+      for (const item of externalPreflight) {
+        if (!options.preflightResolver) {
+          results.push({ kind: item.kind, ref: item.ref, status: 'UNKNOWN', reason: '未绑定显式只读 Preflight Resolver' });
+          continue;
+        }
+        try {
+          const resolved = await options.preflightResolver({ testCase, kind: item.kind, ref: item.ref });
+          results.push({ kind: item.kind, ref: item.ref, ...resolved });
+        } catch (error) {
+          results.push({ kind: item.kind, ref: item.ref, status: 'UNKNOWN', reason: (error as Error).message });
+        }
+      }
+      base.evidence.preflight = results;
+      const failed = results.filter((result) => result.status !== 'PASS');
+      if (failed.length) return {
+        ...base, executed: false, processor: this.name, processorInvoked: false,
+        status: 'BLOCKED', pass: false, passRate: 0,
+        error: `BLOCKED：RESOURCE_STATE_PREFLIGHT_UNRESOLVED：${failed.map((item) => `${item.kind}:${item.ref}:${item.reason ?? item.status}`).join('；')}`,
+      };
+    }
+    const unsupportedEvidence = (testCase.evidenceRequirements ?? []).filter((evidence) => evidence.required
+      && !['API_REQUEST', 'API_RESPONSE'].includes(evidence.channel));
+    if (testCase.schemaVersion === 'TEST_CASE_V2' && unsupportedEvidence.length) {
+      return {
+        ...base,
+        executed: false,
+        processor: this.name,
+        processorInvoked: false,
+        status: 'BLOCKED',
+        pass: false,
+        passRate: 0,
+        error: `BLOCKED：MISSING_EVIDENCE_PROVIDER：${[...new Set(unsupportedEvidence.map((item) => item.channel))].join(', ')}`,
+      };
+    }
+    const lifecycleRequired = (testCase.dependencies ?? []).some((dependency) => dependency.required
+      && dependency.kind === 'LIFECYCLE');
+    if (testCase.schemaVersion === 'TEST_CASE_V2' && lifecycleRequired && options.lifecycleReady !== true) {
+      return {
+        ...base, executed: false, processor: this.name, processorInvoked: false,
+        status: 'BLOCKED', pass: false, passRate: 0,
+        error: 'BLOCKED：LIFECYCLE_CAPABILITY_UNRESOLVED：required Cleanup/Sandbox 未通过 Policy Gate',
       };
     }
     const requestSteps = testCase.steps.filter((item): item is TestStep & { type: 'HTTP_REQUEST' } => item.type === 'HTTP_REQUEST');
@@ -461,7 +641,7 @@ export class ApiProcessor {
       actor: step.actor ?? testCase.actor,
     };
     base.evidence.request = requestEvidence;
-    const mutatingRequest = !['GET', 'HEAD'].includes(step.method);
+    const mutatingRequest = !['GET', 'HEAD', 'OPTIONS'].includes(step.method);
     base.evidence.transport = {
       requestDispatched: true,
       responseCompleted: false,
@@ -486,9 +666,29 @@ export class ApiProcessor {
         sideEffect: 'NOT_APPLICABLE',
       };
       if (linked.signal.aborted) throw linked.signal.reason ?? new Error('request aborted');
-      const assertions = testCase.assertions.filter((assertion) => assertion.type).map((assertion) => evaluateAssertion(assertion, responseEvidence));
+      const oracleAssertionIds = testCase.schemaVersion === 'TEST_CASE_V2'
+        ? new Set(testCase.oracle?.assertionIds ?? []) : undefined;
+      const assertions = await Promise.all(testCase.assertions
+        .filter((assertion) => assertion.type && (!oracleAssertionIds || Boolean(assertion.id && oracleAssertionIds.has(assertion.id))))
+        .map((assertion) => evaluateAssertion(assertion, responseEvidence)));
       if (linked.signal.aborted) throw linked.signal.reason ?? new Error('request aborted');
-      const evidence = { ...base.evidence, response: responseEvidence, assertions };
+      const partialEvidence: AcceptanceExecutionEvidence = { ...base.evidence, response: responseEvidence, assertions };
+      const evidenceItems = materializeEvidenceItems(testCase, partialEvidence, assertions);
+      const oracleResult = materializeOracleResult(testCase, assertions, evidenceItems);
+      const evidence: AcceptanceExecutionEvidence = { ...partialEvidence, evidenceItems, oracleResult };
+      if (testCase.schemaVersion === 'TEST_CASE_V2') {
+        const expectedIds = testCase.oracle?.assertionIds ?? [];
+        const observedIds = assertions.map((assertion) => assertion.assertionId).filter((id): id is string => Boolean(id));
+        const complete = expectedIds.length === observedIds.length
+          && new Set(observedIds).size === observedIds.length
+          && expectedIds.every((id) => observedIds.includes(id));
+        if (!complete) return {
+          ...base, evidence, executed: true, processor: this.name, processorInvoked: true,
+          status: 'BLOCKED', pass: false, passRate: 0, durationMs: Date.now() - started,
+          error: `BLOCKED：ORACLE_ASSERTION_EVIDENCE_INCOMPLETE：expected=${expectedIds.join(',')} observed=${observedIds.join(',')}`,
+          checks: [],
+        };
+      }
       if (!assertions.length) {
         return {
           ...base, evidence, executed: true, processor: this.name, processorInvoked: true,
@@ -498,7 +698,15 @@ export class ApiProcessor {
         };
       }
       const passed = assertions.filter((assertion) => assertion.pass).length;
-      const pass = passed === assertions.length;
+      const pass = passed === assertions.length && oracleResult.verdict === 'PASS';
+      if (oracleResult.verdict === 'BLOCKED') return {
+        ...base, evidence, executed: true, processor: this.name, processorInvoked: true,
+        assertions: assertions.length, passedAssertions: passed, failedAssertions: assertions.length - passed,
+        requestId: response.headers.get('x-request-id') ?? undefined,
+        status: 'BLOCKED', pass: false, passRate: 0, durationMs: Date.now() - started,
+        error: `BLOCKED：RUNTIME_ORACLE_EVIDENCE_INCOMPLETE：${oracleResult.reasons.join('；')}`,
+        checks: assertions.map((assertion) => ({ name: assertion.type, pass: assertion.pass, detail: assertion.detail, kind: 'BUSINESS' })),
+      };
       return {
         ...base, evidence, executed: true, processor: this.name, processorInvoked: true,
         assertions: assertions.length,
@@ -534,6 +742,46 @@ export async function runAcceptanceApiCases(
   testCases: TestCase[],
   options: ApiProcessorOptions & { processor?: ApiProcessor | null },
 ): Promise<AcceptanceRunResult> {
+  const concurrency = Math.max(1, Math.min(8, Math.floor(options.concurrency ?? 1)));
+  const isIndependentRead = (testCase: TestCase): boolean => {
+    const method = testCase.steps.find((step) => step.type === 'HTTP_REQUEST')?.method;
+    return ['GET', 'HEAD', 'OPTIONS'].includes(method ?? '') && !testCase.actor?.tenantId
+      && !['STATE', 'SIDE_EFFECT', 'DATA_ISOLATION'].includes(testCase.testType ?? '');
+  };
+  const cancelledByFailFast = (testCase: TestCase): AcceptanceCaseExecutionResult => {
+    const base = resultBase(testCase, options.runId);
+    return { ...base, classification: 'EXECUTION_BLOCKED', attribution: {
+      classification: 'EXECUTION_BLOCKED', confidence: 'HIGH', reason: 'FAIL_FAST_P0：前序 P0 Case 已真实失败', evidenceSources: ['RUNNER_STATE'],
+    }, executed: false, processorInvoked: false, status: 'CANCELLED', pass: false, passRate: 0,
+    error: 'CANCELLED：FAIL_FAST_P0' };
+  };
+  if (concurrency > 1) {
+    const results: AcceptanceCaseExecutionResult[] = [];
+    let stopped = false;
+    for (let index = 0; index < testCases.length;) {
+      if (stopped) {
+        results.push(cancelledByFailFast(testCases[index++]));
+        continue;
+      }
+      const first = testCases[index];
+      const batch: TestCase[] = [first];
+      if (isIndependentRead(first)) {
+        while (batch.length < concurrency && index + batch.length < testCases.length
+          && isIndependentRead(testCases[index + batch.length])) batch.push(testCases[index + batch.length]);
+      }
+      const batchResults = await Promise.all(batch.map(async (testCase) => (await runAcceptanceApiCases([testCase], {
+        ...options, concurrency: 1, failFast: false,
+      })).results[0]));
+      results.push(...batchResults);
+      if (options.failFast && batchResults.some((result, offset) => result.status === 'FAIL' && result.executed
+        && batch[offset].priority === 'P0')) stopped = true;
+      index += batch.length;
+    }
+    return { results, outcome: computeOutcome(testCases[0]?.feature ?? 'acceptance', results, {
+      executed: results.length > 0 && results.every((result) => result.executed === true && (result.status === 'PASS' || result.status === 'FAIL')),
+      summary: `API 开发验收：${results.length} 条（只读并发 ${concurrency}，共享状态串行）`,
+    }) };
+  }
   const processor = options.processor === undefined ? new ApiProcessor() : options.processor;
   const results: AcceptanceCaseExecutionResult[] = [];
   const deadlineController = options.deadlineMs !== undefined ? new AbortController() : undefined;
@@ -547,8 +795,13 @@ export async function runAcceptanceApiCases(
   }, Math.max(1, options.deadlineMs!)) : undefined;
   const executionSignal = deadlineController?.signal ?? options.signal;
   const executionOptions = { ...options, signal: executionSignal };
+  let failFastTriggered = false;
   try {
     for (const testCase of testCases) {
+      if (failFastTriggered) {
+        results.push(cancelledByFailFast(testCase));
+        continue;
+      }
       const qualityBlockReason = caseQualityBlockReason(testCase);
       if (qualityBlockReason) {
         const base = resultBase(testCase, options.runId);
@@ -596,7 +849,11 @@ export async function runAcceptanceApiCases(
           error: deadlineExceeded ? 'CANCELLED：RUN_DEADLINE_EXCEEDED' : 'CANCELLED：Run AbortSignal 已取消',
         });
       } else {
-        results.push(await processor.execute(testCase, executionOptions));
+        const executed = await processor.execute(testCase, executionOptions);
+        results.push(executed);
+        if (options.failFast && testCase.priority === 'P0' && executed.executed === true && executed.status === 'FAIL') {
+          failFastTriggered = true;
+        }
       }
     }
   } finally {

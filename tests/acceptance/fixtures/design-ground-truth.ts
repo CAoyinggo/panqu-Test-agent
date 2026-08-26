@@ -71,6 +71,7 @@ alice 用户只能访问自己的订单。
 alice 用户不得访问 bob 用户的订单，返回 403。`,
     sourceActor: 'alice',
     targetUserId: 'bob',
+    targetResourceId: 'bob-order',
     expectedStatus: 403,
     requiredDimensions: ['DATA_ISOLATION', 'PERMISSION'],
   },
@@ -105,6 +106,7 @@ tenant-a-reader 不得访问 tenant-b-owner 所属 tenant-B 的订单，返回 4
     sourceActor: 'tenant-a-reader',
     sourceTenant: 'tenant-A',
     targetUserId: 'bob',
+    targetResourceId: 'tenant-b-order',
     targetTenant: 'tenant-B',
     expectedStatus: 403,
   },
@@ -205,7 +207,7 @@ DELETE /orders/{id}
     factText: '保存成功后保存按钮必须进入 disabled。',
     dimension: 'UI',
     executionMode: 'DESIGNED_ONLY',
-    reasonCode: 'UI_EXECUTOR_UNAVAILABLE',
+    reasonCode: 'UI_RUNTIME_BINDING_REQUIRED',
   },
 
   hybrid: {

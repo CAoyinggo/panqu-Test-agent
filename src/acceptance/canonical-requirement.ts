@@ -220,6 +220,17 @@ function proseConstraints(statement: string): CanonicalConstraint[] {
   if (/(?:原子|atomic)/i.test(statement)) constraints.push({ kind: 'ATOMIC', expression: statement });
   if (/(?:唯一|unique)/i.test(statement)) constraints.push({ kind: 'UNIQUE', expression: statement });
   if (/(?:幂等|idempotent)/i.test(statement)) constraints.push({ kind: 'IDEMPOTENT', expression: statement });
+  if (/(?:并发|concurren(?:t|cy)|同时修改|同时提交)/i.test(statement)) {
+    constraints.push({ kind: 'CONCURRENCY', expression: statement });
+  }
+  if (/(?:前后端(?:数据)?(?:必须|应当|应该|保持|需)?一致|ui\s*(?:and|\/|-)\s*api.*consistent|frontend.*backend.*consistent)/i.test(statement)) {
+    constraints.push({ kind: 'FRONTEND_BACKEND_CONSISTENCY', expression: statement });
+  } else if (/(?:数据一致性|保持一致|必须一致|一致性|data\s+consisten)/i.test(statement)) {
+    constraints.push({ kind: 'CONSISTENCY', expression: statement });
+  }
+  if (/(?:失败恢复|失败后恢复|恢复到|回滚|rollback|failure\s+recovery|recover\s+after)/i.test(statement)) {
+    constraints.push({ kind: 'RECOVERY', expression: statement });
+  }
   if (/(?:顺序|ordering|reorder)/i.test(statement)) constraints.push({ kind: 'ORDERING', expression: statement });
   if (/(?:必填|不能为空|不可为空|mandatory|required(?!\s*[:=]\s*(?:false|no)))/i.test(statement)) {
     constraints.push({ kind: 'REQUIRED', expression: statement });
@@ -266,14 +277,19 @@ function scopes(statement: string, isolation: IsolationRule | undefined, permiss
 function sideEffects(statement: string): CanonicalSideEffect[] {
   const result: CanonicalSideEffect[] = [];
   if (/(?:库存|inventory|stock)/i.test(statement)) result.push({
-    kind: 'INVENTORY', action: /(?:扣减|扣除|decrease|deduct)/i.test(statement) ? 'DECREASE' : 'UPDATE',
+    kind: 'INVENTORY', action: /(?:不得|不能|不应|must\s+not|should\s+not).*(?:库存|inventory|stock)/i.test(statement)
+      ? 'UNCHANGED' : /(?:回滚|恢复|rollback|restore)/i.test(statement)
+        ? 'ROLLBACK' : /(?:扣减|扣除|decrease|deduct)/i.test(statement) ? 'DECREASE' : 'UPDATE',
     expression: statement, observation: 'DATA',
   });
   if (/(?:邮件|短信|消息|通知|webhook|email|sms|message|notify)/i.test(statement)) result.push({
-    kind: 'MESSAGE', action: 'SEND', expression: statement, observation: 'EVENT',
+    kind: 'MESSAGE', action: /(?:不得|不能|不应|must\s+not|should\s+not).*(?:邮件|短信|消息|通知|webhook|email|sms|message|notify)/i.test(statement)
+      ? 'UNCHANGED' : 'SEND', expression: statement, observation: 'EVENT',
   });
   if (/(?:扣费|扣款|计费|收费|扣除积分|billing|charge|payment)/i.test(statement)) result.push({
-    kind: 'BILLING', action: /(?:扣|charge)/i.test(statement) ? 'DECREASE' : 'UPDATE', expression: statement, observation: 'EXTERNAL',
+    kind: 'BILLING', action: /(?:不得|不能|不应|失败.{0,12}(?:不|免)|must\s+not|should\s+not).*(?:扣费|扣款|计费|收费|扣除积分|billing|charge|payment)/i.test(statement)
+      ? 'UNCHANGED' : /(?:退款|退回|回退|回滚|refund|rollback)/i.test(statement)
+        ? 'ROLLBACK' : /(?:扣|charge)/i.test(statement) ? 'DECREASE' : 'UPDATE', expression: statement, observation: 'EXTERNAL',
   });
   if (/(?:审计记录|audit\s+(?:record|log))/i.test(statement)) result.push({
     kind: 'AUDIT', action: 'CREATE', expression: statement, observation: 'DATA',
@@ -332,7 +348,8 @@ function conditions(statement: string): CanonicalCondition[] {
   const result: CanonicalCondition[] = [];
   const patterns: Array<[CanonicalCondition['kind'], RegExp]> = [
     ['IF', /(?:如果|若|if)\s*([^，。；;]+)/i],
-    ['WHEN', /(?:当|when)\s*([^，。；;]+)/i],
+    // 避免把“应当被阻止”中的“当”误识别成 WHEN 前置条件。
+    ['WHEN', /(?:(?<!应)当|when)\s*([^，。；;]+)/i],
     ['AFTER', /([^，。；;]*(?:后|之后|after)[^，。；;]*)/i],
     ['BEFORE', /([^，。；;]*(?:前|before)[^，。；;]*)/i],
   ];

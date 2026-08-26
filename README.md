@@ -13,7 +13,7 @@
 
 [文档索引](docs/README.md) · [版本记录](docs/CHANGELOG.md)
 
-[Developer Self-Test](docs/testing/developer-self-test.md) · [断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
+[DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
 ## 目录
 
@@ -49,17 +49,16 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 ### 当前验证基线
 
-以下数据来自 2026-08-25 的完整验证：
+以下数据来自 2026-08-26 的当前代码验证：
 
 | 检查项 | 结果 |
 | --- | --- |
-| TypeScript 构建 | 通过 |
-| Vitest | 249 个测试文件通过，4 个跳过 |
-| 测试用例 | 2421 项通过，19 项跳过 |
-| Developer Self-Test 回归 | 4 个测试文件、19 项测试通过 |
-| Web 单元 / 组件测试 | 11 个测试文件、73 项测试通过 |
-| Chromium E2E | 通过 |
-| 安全检查 | Audit、License、Semgrep、Gitleaks、Trivy 通过 |
+| TypeScript 构建 | `npm run build` 通过 |
+| 全量 Vitest | 266 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2573 项通过，19 项跳过 |
+| Acceptance 回归 | 33 个测试文件、306 项测试通过 |
+| DevTest 回归 | 15 个测试文件、111 项测试通过 |
+| Markdown 本地链接 | 191 个文档、0 个失效链接 |
 
 ## 快速开始
 
@@ -69,17 +68,35 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 使用 DevTest 入口：
 
 ```bash
-npm run devtest -- \
-  --doc requirements/new-feature.md \
-  --base-url http://127.0.0.1:3000 \
-  --env local
+# 将示例路径替换为你的 Markdown 或纯文本需求文件
+npm run devtest -- requirements/new-feature.md
+
+# 可选：计划预览、单问题复现、精准复测
+npm run devtest -- requirements/new-feature.md --plan
+npm run devtest -- requirements/new-feature.md --repro P001
+npm run devtest -- requirements/new-feature.md --rerun P001
+npm run devtest -- requirements/new-feature.md --final
+npm run devtest -- requirements/new-feature.md --final --concurrency 4 --max-runtime 120000 --budget 30
+npm run devtest -- requirements/new-feature.md --summary
+npm run devtest -- requirements/new-feature.md --deep
 ```
 
-DevTest 默认挂起 POST/PUT/PATCH/DELETE 写路径；只有显式传入
-`--confirm-mutations` 才具备放行资格，且仍受环境、Origin、Cleanup 等安全策略约束。
-`--dry-run` 不发起任何 HTTP 请求。
-运行产物写入 `output/devtest/<runId>/`，包含 HTML/JSON 报告、用例 CSV 和
-critical/major/minor/trivial 四级问题清单。
+默认 `mode=SAFE`、最多 20 条风险优先 Case，目标地址读取 `TESTFLOW_BASE_URL`
+或使用本机 `127.0.0.1:3000`。POST/PUT/PATCH/DELETE 即使是预期被拒绝的负向探针，
+也只有显式传入 `--confirm-mutations`，且目标为本机 Sandbox 或具备 Cleanup/Rollback 时
+才可能执行；DELETE、真实扣费、Provider、发布和消息副作用仍默认阻断。
+使用 `--mode dry-run` 可保证零 HTTP 请求。
+DevTest 会先建立 AC Coverage Matrix、提取业务不变量，再构建 Business Flow Graph，校验
+Response/Database/Task/Billing/Audit/Resource 状态一致性，并做 Case 去重与核心 Case 识别；
+问题按根因聚类，首次异常为 LIKELY，复现后才可 CONFIRMED。问题 ID 与生命周期跨 Baseline 保持稳定，
+修复后通过 Regression Guard 扩展验证相关 Contract/Invariant/Flow，并输出
+`FIXED / STILL_FAIL / REGRESSION / BLOCKED`。默认 fail-fast；可用 `--no-fail-fast` 调试。
+v8 使用 Requirement + Contract + Invariant + Observed State + Historical Baseline 组成确定性
+Oracle，并以历史失败、Bug 密度、代码变化、Contract Drift、回归和成本做自适应选择。日常默认
+Tier 0 + Tier 1；`--deep` 才执行 Tier 2。Flaky、环境错误与 Test Pollution 会进入独立可靠性分类，
+不会伪装成产品 Bug。
+固定产物写入 `devtest-results/<runId>/`：`report.html`、`report.json`、
+`cases.csv`、`problems.md`、`acceptance-summary.md`。完整说明见 [DevTest Mode](docs/devtest.md)。
 
 ### 开发需求一键验收
 
@@ -173,7 +190,7 @@ Change / Requirement
   → Execution Guard
   → Processor + Observer
   → Assertion + Evidence
-  → READY / PARTIAL / BLOCKED / FAILED
+  → READY / NOT_READY / BLOCKED
 ```
 
 默认使用 `SAFE` 模式。`DRY_RUN` 只发现和规划，不调用 Processor；`SAFE`
@@ -183,7 +200,7 @@ Frontend Network 和 Runtime Discovery 只产生候选契约，只有 Resolver �
 `RESOLVED` 的 Operation 才能进入执行链。
 
 结论仍遵循 fail-closed：缺少 Processor、Observer、断言或 Required Evidence 时，
-场景只能是 `BLOCKED / NOT_EXECUTED`，Feature 只能是 `PARTIAL / BLOCKED`，
+场景只能是 `BLOCKED / NOT_EXECUTED`，Feature 只能是 `BLOCKED`，
 不能生成 `PASS / READY`。完整参数、模式边界和证据规则见
 [Developer Self-Test 指南](docs/testing/developer-self-test.md)。
 
@@ -346,6 +363,7 @@ Agent Memory 的 JSON 后端采用 UUID 临时文件、跨实例文件锁和内�
 | 命令 | 用途 |
 | --- | --- |
 | `npm run devtest -- ...` | 需求驱动的五维开发自测与问题清单 |
+| `npm run devtest:test` | DevTest CLI、五维、SAFE、问题与报告专项回归 |
 | `npm run self-test -- ...` | 需求与代码变更驱动的开发自测 |
 | `npm run self-test:test` | Developer Self-Test 专项回归 |
 | `npm test` | 完整 Vitest 测试 |
@@ -519,7 +537,9 @@ test-flow/
 └── vitest.config.ts         # 默认测试配置
 ```
 
-构建产物写入 `dist/`，测试报告写入 `output/<YYYY-MM-DD>/<feature>/`，两者均不提交到 Git。
+构建产物写入 `dist/`；Test Runner 报告写入 `output/<YYYY-MM-DD>/<feature>/`，
+Acceptance 报告写入 `reports/`，DevTest 报告、Baseline 与缓存写入 `devtest-results/`。
+这些运行产物均不提交到 Git。
 
 ## 工程约定
 
@@ -528,7 +548,7 @@ test-flow/
 3. 新 Scene 必须使用 canonical scene ID，并提供 Processor 能力声明。
 4. 任意未实际执行的用例都不能产生 `PASS`。
 5. 用例必须包含有效断言；无断言结果不能视为通过。
-6. 报告统一写入 `output/<YYYY-MM-DD>/<feature>/`。
+6. 报告按入口分别写入 `output/`、`reports/` 或 `devtest-results/`，不要提交运行产物。
 7. 密钥、Cookie、数据库凭据只通过环境变量或 Secret Manager 注入。
 8. 生产危险操作必须经过 RBAC、环境策略和人工审批门禁。
 9. 新功能需补充单元测试，并按风险增加集成或 E2E 测试。
@@ -545,6 +565,6 @@ README 只保留当前架构、使用方式和工程约定。详细设计与历�
 - [AI 质量治理](docs/ai-quality/)
 - [评测体系](docs/evaluation/)
 - [成本与容量治理](docs/cost/)
-- [阶段验收报告](docs/)
+- [阶段验收报告](docs/phases/)
 
-Phase 20—52 的详细里程碑、验收数据和演练结果可在 `docs/phase*.md` 中按编号检索。
+Phase 13—52 的详细里程碑、验收数据和演练结果可在 `docs/phases/phase*.md` 中按编号检索。

@@ -24,6 +24,10 @@ export type TestStrategyKind =
   | 'VALID_INVALID_TRANSITION'
   | 'DUPLICATE'
   | 'REPEAT'
+  | 'CONCURRENT_REQUEST'
+  | 'CONSISTENCY_CHECK'
+  | 'CROSS_CHANNEL_CHECK'
+  | 'RECOVERY_CHECK'
   | 'PARTIAL_FAILURE'
   | 'REORDER'
   | 'EXPECTED_FAILURE'
@@ -80,6 +84,10 @@ export const TEST_STRATEGY_POLICY: readonly TestStrategyPolicyRule[] = [
   { id: 'ATOMIC', description: '原子规则验证部分失败与回滚', when: { constraintKinds: ['ATOMIC'] }, dimension: 'BUSINESS_RULE', strategies: ['PARTIAL_FAILURE', 'BEFORE_AFTER_STATE'] },
   { id: 'UNIQUE', description: '唯一规则验证重复实体', when: { constraintKinds: ['UNIQUE'] }, dimension: 'BUSINESS_RULE', strategies: ['DUPLICATE'] },
   { id: 'IDEMPOTENT', description: '幂等规则验证重复调用', when: { constraintKinds: ['IDEMPOTENT'] }, dimension: 'BUSINESS_RULE', strategies: ['REPEAT'] },
+  { id: 'CONCURRENCY', description: '显式并发规则验证重叠请求与最终状态', when: { constraintKinds: ['CONCURRENCY'] }, dimension: 'BUSINESS_RULE', strategies: ['CONCURRENT_REQUEST', 'BEFORE_AFTER_STATE'] },
+  { id: 'DATA_CONSISTENCY', description: '显式一致性规则验证独立观察到的业务状态', when: { constraintKinds: ['CONSISTENCY'] }, dimension: 'BUSINESS_RULE', strategies: ['CONSISTENCY_CHECK', 'BEFORE_AFTER_STATE'] },
+  { id: 'FRONTEND_BACKEND_CONSISTENCY', description: '显式前后端一致性规则需要跨通道观测', when: { constraintKinds: ['FRONTEND_BACKEND_CONSISTENCY'] }, dimension: 'BUSINESS_RULE', strategies: ['CROSS_CHANNEL_CHECK', 'BEFORE_AFTER_STATE'] },
+  { id: 'FAILURE_RECOVERY', description: '显式失败恢复/回滚规则验证前后状态', when: { constraintKinds: ['RECOVERY'] }, dimension: 'BUSINESS_RULE', strategies: ['RECOVERY_CHECK', 'PARTIAL_FAILURE', 'BEFORE_AFTER_STATE'] },
   { id: 'ORDERING', description: '顺序规则验证重排', when: { constraintKinds: ['ORDERING'] }, dimension: 'BUSINESS_RULE', strategies: ['REORDER'] },
   { id: 'BUSINESS_RULE', description: '其他显式业务规则保留目标，不扩写语义', when: { categories: ['BUSINESS_RULE'] }, dimension: 'BUSINESS_RULE', strategies: ['POSITIVE'] },
   { id: 'STATE_TRANSITION', description: '状态规则验证合法/非法流转', when: { constraintKinds: ['STATE_TRANSITION'] }, dimension: 'STATE', strategies: ['VALID_INVALID_TRANSITION'] },
@@ -116,9 +124,11 @@ export interface FactTestStrategyPlan {
   optionalDimensions: TestDimension[];
 }
 
-function sourceType(provenance: RequirementFactProvenance): TestCaseSourceType {
-  if (provenance === 'CONTRACT' || provenance === 'CONFIGURED') return 'CONTRACT';
-  if (provenance === 'INFERRED' || provenance === 'UNKNOWN') return 'HEURISTIC';
+function sourceType(fact: RequirementFact): TestCaseSourceType {
+  // “原文中出现了推断句”不等于产品明确承诺。认知属性与来源属性必须同时过门：
+  // INFERENCE/HYPOTHESIS/OPINION 只能形成设计建议，不得授权真实执行。
+  if (fact.epistemicType !== 'FACT' || fact.provenance === 'INFERRED' || fact.provenance === 'UNKNOWN') return 'HEURISTIC';
+  if (fact.provenance === 'CONTRACT' || fact.provenance === 'CONFIGURED') return 'CONTRACT';
   return 'REQUIREMENT';
 }
 
@@ -218,7 +228,7 @@ export function buildFactTestStrategy(fact: RequirementFact, apiSpecIds: string[
       priority: priority(dimension),
       risk: risk(dimension),
       executionTarget: executionTarget(dimension, apiSpecIds),
-      sourceType: sourceType(fact.provenance),
+      sourceType: sourceType(fact),
       provenance: fact.provenance,
       canonical: fact.canonical,
     };

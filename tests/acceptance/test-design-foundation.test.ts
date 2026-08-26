@@ -90,13 +90,19 @@ AC-1 ${rule} 若实际返回 200 必须判定为失败。`;
     expect(casesForFact(compiled.cases, fact.id).filter((testCase) => testCase.executionMode === 'EXECUTABLE')
       .some((testCase) => testCase.assertions.some((assertion) => assertion.type === 'STATUS_CODE' && assertion.expected === 200))).toBe(false);
 
+    let requestDispatched = false;
     const result = await new ApiProcessor().execute(permissionCase!, {
       baseUrl: 'http://acceptance.invalid',
       apiSpecs: compiled.requirement.apis,
       actorHeaders: { alice: { Authorization: 'Bearer test-only' } },
-      fetchImpl: async () => new Response('{"deleted":true}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      fetchImpl: async () => {
+        requestDispatched = true;
+        return new Response('{"deleted":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      },
     });
-    expect(result).toMatchObject({ executed: true, status: 'FAIL', pass: false });
+    expect(result).toMatchObject({ executed: false, processorInvoked: false, status: 'BLOCKED', pass: false });
+    expect(result.error).toContain('MISSING_EVIDENCE_PROVIDER');
+    expect(requestDispatched).toBe(false);
   });
 
   it('routes an explicit positive subject -> target relation instead of reusing the subject as resource id', () => {
@@ -433,7 +439,8 @@ AC-1 code minLength=1 maxLength=1 pattern=^Z$ 违反约束返回 422。`,
       .filter((testCase) => testCase.testType === 'BUSINESS_RULE');
     expect(businessCases.length).toBeGreaterThan(0);
     expect(businessCases.every((testCase) => testCase.executionMode === oracle.executionMode)).toBe(true);
-    expect(businessCases.every((testCase) => testCase.steps.length === 0)).toBe(true);
+    expect(businessCases.every((testCase) => testCase.steps.length > 0
+      && testCase.steps.every((step) => step.execution === 'PLANNED'))).toBe(true);
     expect(businessCases.every((testCase) => String(testCase.design?.reason).includes(oracle.reasonCode))).toBe(true);
     expect(businessCases.flatMap((testCase) => testCase.assertions).every((assertion) => assertion.type === 'DESIGN_EXPECTATION')).toBe(true);
   });
@@ -469,7 +476,7 @@ AC-1 code minLength=1 maxLength=1 pattern=^Z$ 违反约束返回 422。`,
     const crossUser = casesForFact(cases, fact.id).find((testCase) =>
       testCase.testType === 'DATA_ISOLATION'
       && testCase.actor?.id === oracle.sourceActor
-      && testCase.data?.targetId === oracle.targetUserId);
+      && testCase.data?.targetId === oracle.targetResourceId);
     expect(crossUser).toBeDefined();
     expect(crossUser?.assertions).toContainEqual(expect.objectContaining({
       type: 'STATUS_CODE', expected: oracle.expectedStatus, factIds: expect.arrayContaining([fact.id]),
@@ -484,7 +491,7 @@ AC-1 code minLength=1 maxLength=1 pattern=^Z$ 违反约束返回 422。`,
       testCase.testType === 'DATA_ISOLATION'
       && testCase.actor?.id === oracle.sourceActor
       && testCase.actor?.tenantId === oracle.sourceTenant
-      && testCase.data?.targetId === oracle.targetUserId);
+      && testCase.data?.targetId === oracle.targetResourceId);
 
     expect(isolationCase).toBeDefined();
     expect(requirement.actors.find((actor) => actor.userId === oracle.targetUserId)?.tenantId).toBe(oracle.targetTenant);
@@ -535,7 +542,10 @@ AC-1 code minLength=1 maxLength=1 pattern=^Z$ 违反约束返回 422。`,
     const linked = casesForFact(cases, fact.id);
     expect(linked.length).toBeGreaterThan(0);
     expect(linked.every((testCase) => testCase.executionMode === oracle.executionMode)).toBe(true);
-    expect(linked.every((testCase) => testCase.steps.length === 0 && testCase.assertions.length === 0)).toBe(true);
+    expect(linked.every((testCase) => testCase.steps.length > 0
+      && testCase.steps.every((step) => step.execution === 'PLANNED')
+      && testCase.assertions.length === 0
+      && testCase.readiness?.status === 'NEED_CONFIRMATION')).toBe(true);
     expect(requirement.apis).toHaveLength(0);
     expect(requirement.actors).toHaveLength(0);
     const serialized = JSON.stringify({ apis: requirement.apis, actors: requirement.actors, cases: linked });

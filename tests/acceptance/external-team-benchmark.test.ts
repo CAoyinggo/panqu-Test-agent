@@ -75,7 +75,8 @@ describe('Internal adversarial external-style regression', () => {
       executionMode: 'DESIGNED_ONLY',
       metadata: { reason: expect.stringContaining('AUTH_SCENARIO_UNSUPPORTED') },
     });
-    expect(expired?.steps).toHaveLength(0);
+    expect(expired?.steps.length).toBeGreaterThan(0);
+    expect(expired?.steps.every((step) => step.execution === 'PLANNED')).toBe(true);
     expect(linked.some((testCase) => testCase.executionMode === 'EXECUTABLE' && testCase.actor === undefined)).toBe(false);
   });
 
@@ -135,7 +136,8 @@ AC-1 普通用户无权限删除其他用户，应该拒绝`);
     const denyCases = testCases.filter((testCase) => testCase.source?.acceptanceCriteriaIds.includes('AC-1'));
     expect(denyCases.length).toBeGreaterThan(0);
     expect(denyCases.every((testCase) => testCase.executionMode === 'DESIGNED_ONLY')).toBe(true);
-    expect(denyCases.every((testCase) => testCase.steps.length === 0)).toBe(true);
+    expect(denyCases.every((testCase) => testCase.steps.length > 0
+      && testCase.steps.every((step) => step.execution === 'PLANNED'))).toBe(true);
     expect(denyCases.some((testCase) => testCase.assertions.some((assertion) =>
       assertion.type === 'STATUS_CODE' && assertion.expected === 200))).toBe(false);
   });
@@ -234,6 +236,7 @@ AC-1 普通用户无权限删除其他用户，应该拒绝`);
           request: { method: 'GET', url: 'http://127.0.0.1/health', headers: {}, pathParams: {}, query: {} },
           response: { status: 200, headers: {}, body: null },
           assertions: [{ type: 'STATUS_CODE', expected: 200, actual: 200, pass: true, detail: 'fixture' }],
+          evidenceItems: [],
         },
       })),
     });

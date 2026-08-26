@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.28.0] - 2026-08-26
+
+### 新增（DevTest v8 与 TestCase V2）
+
+- DevTest 从需求文件生成风险优先的五维验收计划，支持环境发现、SAFE 门禁、计划预览、定向复现、精准复测、最终验收与一页摘要。
+- 引入 AC Coverage Matrix、业务不变量、Business Flow Graph、状态一致性、Regression Guard、确定性 Oracle、自适应分层选择及 Flaky/Test Pollution 独立归类。
+- 固定输出 `report.html`、`report.json`、`cases.csv`、`problems.md` 和 `acceptance-summary.md`，并维护稳定问题 ID、生命周期、Baseline 与阶段缓存。
+- TestCase V2 统一业务场景、前置条件、测试数据、步骤、断言、Evidence、Oracle、Prepare/Cleanup、依赖和执行就绪度字段。
+
+### 变更
+
+- 阶段验收文档迁移到 `docs/phases/`，TestCase 权威说明迁移到 `docs/testing/`，并修复仓库内引用。
+- 版本 v4.27.0 → v4.28.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
 ## [4.27.0] - 2026-08-21
 
 ### 新增（成本治理、资源优化与容量自适应，Phase 52）
@@ -21,7 +35,7 @@
 
 - Phase 52 指定测试：14 文件 / 23 用例全绿；真实 Chromium Cost Dashboard：2/2。
 - S1–S10、Cost Attribution/Budget/Anomaly/Model Routing/Worker Scaling/Capacity/Forecast/Optimization/Canary/Rollback、Project Isolation/Audit 全部 PASS。
-- 五项未授权/跨项目关键安全指标均为 0；完整历史回归见 `docs/phase52-summary.md`。
+- 五项未授权/跨项目关键安全指标均为 0；完整历史回归见 `docs/phases/phase52-summary.md`。
 
 ## [4.26.0] - 2026-08-21
 
@@ -66,7 +80,7 @@
 - `npm run agent:ai:unit`：101/101；`npm run agent:ai:integration`：29/29；`npm run agent:ai:e2e`：9/9。
 - `npm run web:e2e:ai`：16/16；`npm run web:e2e:test`：103/103。
 - `npm test`：1789 通过 / 18 skip / 0 失败；Platform 单元 / 集成 / E2E：227 / 94 / 16；Agent 核心 / Eval / E2E / Autonomous E2E：450 / 8 / 2 / 26；`platform:health` 为 `HEALTHY`。
-- `phase39:test` / `phase40:test` / 最终 `web:e2e` 全绿；完整记录见 `docs/phase50-summary.md`。
+- `phase39:test` / `phase40:test` / 最终 `web:e2e` 全绿；完整记录见 `docs/phases/phase50-summary.md`。
 
 ## [4.24.0] - 2026-08-20
 
@@ -164,7 +178,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 - CLI（`bin/ai-quality-cli.ts` + package.json，43.25）：agent:ai-quality / agent:feedback:list|verify / agent:eval:errors|improve / agent:prompt:list|compare / agent:model:list|compare / agent:improvement:list|approve|reject / agent:knowledge:review / agent:canary:status|promote|rollback。
 - Web Dashboard（`web/src/pages/AIImprovement.tsx` + `web/src/App.tsx` + `web/src/api.ts`，43.18/43.22）：导航「AI 改进」页，7 Tab（待核验反馈 / 错误聚类 / 改进提案 / Prompt·Model 版本 / Shadow·Canary 实验 / 知识 Review / AI 质量）；审批类操作仅 RELEASE_MANAGER / ADMIN 可执行，非审批角色只读（按钮禁用）。
 - 测试（86 新用例）：单元 feedback-registry(10) / error-analysis(5) / improvement-proposal(12) / prompt-model-version(6) / knowledge-learning(5) / shadow-canary(6) / ai-improvement-ops(12) / ai-quality-service(12 含持久化) + 集成 ai-improvement-api(10) + E2E ai-improvement-flow(4, S1-S8) + ai-quality-dashboard(4)。
-- 文档：`docs/ai-quality/`（feedback / error-analysis / improvement / prompt-versioning / model-versioning / shadow-canary / knowledge-learning / rollback）+ `docs/phase46-summary.md`。
+- 文档：`docs/ai-quality/`（feedback / error-analysis / improvement / prompt-versioning / model-versioning / shadow-canary / knowledge-learning / rollback）+ `docs/phases/phase46-summary.md`。
 
 ### 变更
 
@@ -194,7 +208,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 - API（`src/platform/api/server.ts`）：GET `/api/eval/report`（全量报告）/ GET `/api/eval/report/:domain`（单领域，未知领域 404）；权限同只读运维数据（OPS_READ）。
 - CLI（`bin/eval-cli.ts` + package.json 脚本）：`agent:eval:all` / `agent:eval:report` / `agent:eval:compare --baseline` / `agent:eval:regression` / `agent:eval:unit` / `agent:eval:integration` / `agent:eval:e2e` / `agent:eval:test` / `phase45:test`；CLI run 默认保存报告到 `eval-reports/`（已 gitignore）。
 - 测试：`tests/unit/evaluation-contract.test.ts`（11）/ `ground-truth.test.ts`（11）/ `evaluation-regression.test.ts`（15）/ `benchmark-registry.test.ts`（11）/ `decision-replay.test.ts`（9）= 57 单元用例 + `tests/integration/evaluation-api.test.ts`（4）+ `tests/e2e/evaluation-dashboard.test.ts`（3）+ `web/src/pages/AIQuality.test.tsx`（组件测试）全绿。
-- 文档：`docs/evaluation/overview.md` / `benchmark.md` / `ground-truth.md` / `metrics.md` / `model-comparison.md` / `regression-gate.md` + `docs/phase45-summary.md`。
+- 文档：`docs/evaluation/overview.md` / `benchmark.md` / `ground-truth.md` / `metrics.md` / `model-comparison.md` / `regression-gate.md` + `docs/phases/phase45-summary.md`。
 
 ### 变更
 
@@ -223,7 +237,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 ### 测试
 
 - Web 单元 68 passed / 行覆盖 99.67%；Web E2E Chromium 全量全绿；既有全量回归保持 PASS。
-- 报告：`docs/phase44-summary.md`。
+- 报告：`docs/phases/phase44-summary.md`。
 
 ## [4.18.0] - 2026-08-20
 
@@ -242,7 +256,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 ### 测试
 
 - Web 单元/组件 59 passed / 行覆盖 95.12%；`cd web && npx vitest run --coverage`。
-- 报告：`docs/phase43-summary.md`。
+- 报告：`docs/phases/phase43-summary.md`。
 
 ## [4.17.0] - 2026-08-20
 
@@ -265,7 +279,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 - Web 单元/组件：`npm run web:test` 37 passed / 0 failed；`npm run web:test:coverage` 语句 94.96%。
 - Web E2E：`npm run web:e2e:test` Chromium 全量 74 passed / 0 failed；`WEB_E2E_BROWSERS=all` 三浏览器全量 PASS。
 - 既有 Vitest 全量回归与 `phase41:test` 链路保持 PASS（构建 + 平台回归 + Web 构建 + Chromium E2E）。
-- 报告：`docs/phase42-web-engineering-report.md`。
+- 报告：`docs/phases/phase42-web-engineering-report.md`。
 
 ## [4.16.0] - 2026-08-20
 
@@ -288,7 +302,7 @@ Regression Benchmark → Approval → Activate → Observe → Learn。核心原
 
 - 新增 14 个 Playwright 套件（`tests/e2e/web/*.spec.ts`，14 个测试文件满足「至少 10 个」要求）+ `e2e-server.ts` / `helpers.ts` / `playwright.config.ts`；验收：`npm run web:e2e:test`（构建平台 + 构建 Web + Playwright 全量，17 项关键功能 PASS）。
 - 既有 Vitest 全量回归保持 **1586 passed / 18 skipped**（141 个测试文件）；`platform:integration` / `platform:e2e` / `phase40:test` 保持 PASS。
-- 报告：`docs/phase41-web-e2e-report.md`（E2E 测试）/ `docs/phase41-frontend-quality.md`（可访问性/响应式/性能/API 治理）/ `docs/phase41-acceptance-report.md`（17 项验收）。
+- 报告：`docs/phases/phase41-web-e2e-report.md`（E2E 测试）/ `docs/phases/phase41-frontend-quality.md`（可访问性/响应式/性能/API 治理）/ `docs/phases/phase41-acceptance-report.md`（17 项验收）。
 
 ## [4.15.0] - 2026-08-19
 

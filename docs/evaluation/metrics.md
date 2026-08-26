@@ -22,7 +22,7 @@
 | 领域 | 主得分公式 | 关键子指标 |
 | --- | --- | --- |
 | 需求理解 | 加权 F1 聚合（见下） | Completeness / Precision / Recall / F1 |
-| 测试设计 | `0.35*覆盖 + 0.3*关键 + 0.2*冗余 + 0.15*可执行` | Coverage / Redundancy / Executability |
+| 测试设计 | `0.35*覆盖 + 0.3*关键 + 0.2*冗余 + 0.15*可执行` | Requirement Trace / Redundancy / Deterministic Executability |
 | 风险评估 | `0.6*F1 + 0.4*(1 - CriticalMissRate)` | Precision / Recall / F1 / P0 Miss |
 | 用例选择 | `0.4*MustRun + 0.3*Critical + 0.2*Skip + 0.1*Precision@TopK` | Recall@TopK / Critical Selection Recall / Skipped Critical |
 | 根因分析 | `exactMatch(category, expected)` | Accuracy(Top-1) / Top-3 / Unknown |
@@ -56,7 +56,23 @@ feature 用 `exactMatch`（0/1），集合字段用 F1。
 - **Redundancy Score**：实际重复对与期望重复对数的接近度。
   - 重复检测 `countDuplicatePairs`：同名 + 同优先级 + 同标签即为一对。
   - `redundancyScore = expected==actual ? 1 : max(0, 1 - |expected-actual|/max(1, expected))`。
-- **Executability Score**：全部用例可执行（至少 1 步 + 至少 1 条断言）且与 `expectedExecutable` 一致 → 1，否则 0。
+- **Executability Score**：按下述「确定性可执行谓词」逐 Case 评估，得分为满足谓词的 Case 数 / 应可执行 Case 数，并与 `expectedExecutable` 的真值逐项对比。“至少 1 步 + 至少 1 条断言”仅是必要条件，不再是充分条件。
+
+#### 确定性可执行谓词
+
+一条 Case 只有同时满足以下条件才计入 Executable：
+
+1. **Requirement trace 完整**：存在 `source.requirementId`、AC、Fact 和 Objective 引用；每个决定结果的断言回链至少一个 Fact。
+2. **Requirement 可判定**：`requirementStatus=CONFIRMED`，Expected Response/State/Side Effect 不是 `UNKNOWN`；`INFERENCE/UNKNOWN` 来源不得评为可执行产品 Oracle。
+3. **Precondition/Data 可准备与检查**：required `preconditionPlan` 具有检查方式；必需测试数据具有来源、引用和 owner/scope，不包含明文 Secret。
+4. **Step 真实可执行**：至少一个 Step，每个 required Step 有稳定 ID、可用 Channel/Processor 或唯一 Operation 绑定，依赖可解析，且不是 `PLANNED`/纯自然语言动作。
+5. **Deterministic Oracle 完整**：至少一条非 `DESIGN_EXPECTATION` 断言；每条必需断言有 target/operator/expected、Fact 与 Evidence 引用；`oracle.deterministic=true` 且 `oracle.status=READY`。
+6. **Evidence 可采集可核验**：存在 required Evidence Requirement，其 Channel、Phase、Expectation、来源 Step、Fact 和 Assertion 引用完整，且有可用 Processor/Observer。
+7. **Lifecycle/Safety 闭环**：写操作、可变数据和共享资源有可验证 Cleanup/隔离策略；required Dependency 无 `UNRESOLVED`；`readiness.status=READY` 且 `executionMode=EXECUTABLE`。
+
+如果任一条件不满足，该 Case 评为 `DESIGNED_ONLY / NEED_CONFIRMATION / BLOCKED`，并记录具体缺口；不得用默认值或 Legacy fallback 将其计为 Executable。
+
+Executability 是设计态指标，不等于已执行或已验证。运行指标必须分开计算 `GENERATED / EXECUTED / VERIFIED / EVIDENCE_COMPLETE`，禁止将 TestCase 已生成计入 Verified Coverage。
 
 另识别：Duplicate Test（重复用例）、Low-value Test（全 P3）、Missing Critical Test（关键用例缺失）。
 

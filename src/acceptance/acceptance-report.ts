@@ -96,14 +96,28 @@ export interface AcceptanceObservationGap {
 
 export interface AcceptanceCaseReportItem {
   caseId: string;
+  schemaVersion?: TestCase['schemaVersion'];
   testType: TestType;
+  testAspects: NonNullable<TestCase['testAspects']>;
   priority: TestCase['priority'];
+  requirementStatus?: TestCase['requirementStatus'];
   scenario: string;
+  businessScenario?: TestCase['businessScenario'];
   preconditions: string[];
+  preconditionPlan: NonNullable<TestCase['preconditionPlan']>;
   actor: TestCase['actor'] | null;
   input: unknown;
+  testData: NonNullable<TestCase['testData']>;
   steps: TestCase['steps'];
+  assertions: TestCase['assertions'];
+  expected?: TestCase['expected'];
   expectedResult: string;
+  evidenceRequirements: NonNullable<TestCase['evidenceRequirements']>;
+  oracle?: TestCase['oracle'];
+  prepare: NonNullable<TestCase['prepare']>;
+  cleanup: NonNullable<TestCase['cleanup']>;
+  dependencies: NonNullable<TestCase['dependencies']>;
+  readiness?: TestCase['readiness'];
   sourceFactIds: string[];
   sourceObjectiveIds: string[];
   executionMode: TestCase['executionMode'];
@@ -302,6 +316,27 @@ function reportDesignedOnly(testCase: TestCase | undefined): boolean {
   return Boolean(testCase && isDesignedOnlyCase(testCase));
 }
 
+function v2EvidenceIntegrityProblems(result: AcceptanceCaseExecutionResult, testCase: TestCase | undefined): string[] {
+  if (testCase?.schemaVersion !== 'TEST_CASE_V2') return [];
+  const problems: string[] = [];
+  const observedAssertionIds = new Set(result.evidence?.assertions?.map((item) => item.assertionId).filter(Boolean));
+  const requirements = new Map((testCase.evidenceRequirements ?? []).map((item) => [item.id, item]));
+  for (const evidenceId of testCase.oracle?.evidenceRequirementIds ?? []) {
+    const requirement = requirements.get(evidenceId);
+    if (!requirement) {
+      problems.push(`Oracle Evidence ${evidenceId} 未定义`);
+      continue;
+    }
+    const observed = requirement.channel === 'API_REQUEST' ? Boolean(result.evidence?.request)
+      : requirement.channel === 'API_RESPONSE' ? Boolean(result.evidence?.response) : false;
+    if (!observed) problems.push(`required Evidence ${evidenceId}/${requirement.channel} 未采集`);
+  }
+  for (const assertionId of testCase.oracle?.assertionIds ?? []) {
+    if (!observedAssertionIds.has(assertionId)) problems.push(`Oracle Assertion ${assertionId} 无执行证据`);
+  }
+  return problems;
+}
+
 function passIntegrityProblems(result: AcceptanceCaseExecutionResult, testCase?: TestCase): string[] {
   if (result.status !== 'PASS') return [];
   const problems: string[] = [];
@@ -315,6 +350,23 @@ function passIntegrityProblems(result: AcceptanceCaseExecutionResult, testCase?:
   if ((result.assertions ?? result.evidence?.assertions?.length ?? 0) < 1) problems.push('有效断言计数为 0');
   if (!result.evidence?.assertions?.length) problems.push('有效断言证据为空');
   else if (result.evidence.assertions.some((assertion) => assertion.pass !== true)) problems.push('存在未通过断言');
+  if (testCase?.schemaVersion === 'TEST_CASE_V2') {
+    if (testCase.requirementStatus !== 'CONFIRMED') problems.push('Requirement 未确认');
+    if (testCase.readiness?.status !== 'READY') problems.push('Readiness 未就绪');
+    if (testCase.oracle?.status !== 'READY') problems.push('Oracle 未就绪');
+    if (testCase.steps.some((step) => step.execution !== 'EXECUTABLE')) problems.push('存在 PLANNED 步骤');
+    const runtimeAssertionIds = testCase.assertions.filter((assertion) => assertion.type !== 'DESIGN_EXPECTATION')
+      .map((assertion) => assertion.id).filter((id): id is string => Boolean(id));
+    const requiredEvidenceIds = (testCase.evidenceRequirements ?? []).filter((evidence) => evidence.required)
+      .map((evidence) => evidence.id).filter((id): id is string => Boolean(id));
+    const sameIds = (left: readonly string[], right: readonly string[]): boolean => left.length === right.length
+      && new Set(left).size === left.length && left.every((id) => right.includes(id));
+    if (!testCase.oracle || !sameIds(testCase.oracle.assertionIds, runtimeAssertionIds)
+      || !sameIds(testCase.oracle.evidenceRequirementIds, requiredEvidenceIds)) {
+      problems.push('Oracle mode=ALL 未覆盖全部 Runtime Assertion/required Evidence');
+    }
+    problems.push(...v2EvidenceIntegrityProblems(result, testCase));
+  }
   return problems;
 }
 
@@ -374,7 +426,25 @@ function factReportItem(fact: RequirementFact, objectives: TestObjective[], test
 }
 
 export function redactAcceptanceArtifact(value: unknown): unknown {
-  const redacted = redactSensitive(value);
+  let redacted = redactSensitive(value);
+  const opaqueSystemValue = (item: unknown): item is string => typeof item === 'string'
+    && (/^(?:CASE|FACT|OBJ|SCN|REQ|RUN|API|TP|INV|FLOW|FLOWSTEP|P)-[A-Z0-9]+$/i.test(item)
+      || /^[a-f0-9]{64}$/i.test(item));
+  // 哈希/ULID 可能偶然包含 11 位手机号或 13-19 位卡号形状。它们是系统生成的
+  // 不透明标识，不是用户数据；若被通用文本规则改写，会破坏 Case/Execution Plan Identity。
+  const restoreOpaqueSystemValues = (source: unknown, target: unknown): unknown => {
+    if (opaqueSystemValue(source)) return source;
+    if (Array.isArray(source) && Array.isArray(target)) {
+      return target.map((item, index) => restoreOpaqueSystemValues(source[index], item));
+    }
+    if (source && target && typeof source === 'object' && typeof target === 'object') {
+      const sourceRecord = source as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(target as Record<string, unknown>)
+        .map(([key, item]) => [key, restoreOpaqueSystemValues(sourceRecord[key], item)]));
+    }
+    return target;
+  };
+  redacted = restoreOpaqueSystemValues(value, redacted);
   // `AUTH` is a sensitive field name in arbitrary payloads, but in the fixed
   // report schema it is also a test dimension/category. Restore only the
   // closed, numeric statistics shapes; never restore arbitrary auth content.
@@ -409,6 +479,7 @@ export function redactAcceptanceArtifact(value: unknown): unknown {
       }));
     }
     if (typeof item === 'string') {
+      if (opaqueSystemValue(item)) return item;
       return redactSensitiveText(item)
         .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '***@***')
         .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g, '***');
@@ -710,7 +781,8 @@ export function buildAcceptanceReport(input: {
   });
   const evidenceResults = executedResults.filter((result) => result.evidence.request
     && result.evidence.response
-    && result.evidence.assertions.length > 0);
+    && result.evidence.assertions.length > 0
+    && v2EvidenceIntegrityProblems(result, caseById.get(result.caseId)).length === 0);
   const operationCases = executableCases.filter((testCase) => testCase.protocol === 'HTTP'
     || testCase.steps.some((step) => step.type === 'HTTP_REQUEST'));
   const operationCaseIds = new Set(operationCases.map((testCase) => testCase.id));
@@ -975,6 +1047,7 @@ export function buildAcceptanceReport(input: {
         scenarioId: testCase.source?.scenarioId,
         testPointId: testCase.source?.testPointId,
         assertions: [],
+        evidenceItems: [],
       }),
     };
   });
@@ -988,20 +1061,35 @@ export function buildAcceptanceReport(input: {
       .map((step) => ({ pathParams: step.pathParams, query: step.query, body: step.body }));
     const inputDetails = {
       data: testCase.data,
+      testData: testCase.testData,
       parameter: testCase.parameterContext,
       httpRequests: httpInput.length ? httpInput : undefined,
     };
     const hasInput = Object.values(inputDetails).some((value) => value !== undefined);
     return {
       caseId: testCase.id,
+      schemaVersion: testCase.schemaVersion,
       testType: testCase.testType ?? 'FUNCTIONAL',
+      testAspects: testCase.testAspects ?? [],
       priority: testCase.priority,
+      requirementStatus: testCase.requirementStatus,
       scenario: scenarioById.get(testCase.source?.scenarioId ?? '')?.title ?? testCase.name,
+      businessScenario: testCase.businessScenario,
       preconditions: testCase.preconditions ?? [],
+      preconditionPlan: testCase.preconditionPlan ?? [],
       actor: testCase.actor ?? null,
       input: hasInput ? inputDetails : null,
+      testData: testCase.testData ?? [],
       steps: testCase.steps,
+      assertions: testCase.assertions,
+      expected: testCase.expected,
       expectedResult: expectedResult(testCase),
+      evidenceRequirements: testCase.evidenceRequirements ?? [],
+      oracle: testCase.oracle,
+      prepare: testCase.prepare ?? [],
+      cleanup: testCase.cleanup ?? [],
+      dependencies: testCase.dependencies ?? [],
+      readiness: testCase.readiness,
       sourceFactIds: testCase.source?.factIds ?? [],
       sourceObjectiveIds: testCase.source?.objectiveIds ?? [],
       executionMode: testCase.executionMode,
@@ -1183,9 +1271,13 @@ export function renderAcceptanceReportMarkdown(report: AcceptanceReport): string
   ];
   const caseSections = report.cases.map((testCase) => `### ${testCase.caseId} [${testCase.priority}] ${testCase.scenario}
 
+- Schema Version：${testCase.schemaVersion ?? 'LEGACY'}
 - Test Type：${testCase.testType}
+- Test Aspects：${testCase.testAspects.join(', ') || '未声明'}
 - Priority：${testCase.priority}
+- Requirement Status：${testCase.requirementStatus ?? 'UNSPECIFIED'}
 - Scenario：${testCase.scenario}
+- Business Scenario：${testCase.businessScenario ? safeCode(testCase.businessScenario) : '未声明'}
 - Precondition：${testCase.preconditions.join('；') || '无'}
 - Actor：${testCase.actor ? safeCode(testCase.actor) : '未指定'}
 - Input：${safeCode(testCase.input)}
@@ -1195,6 +1287,19 @@ export function renderAcceptanceReportMarkdown(report: AcceptanceReport): string
 - Execution Mode：${testCase.executionMode ?? 'UNSPECIFIED'}
 - Execution Status：${testCase.executionStatus}
 - Case Quality：${testCase.qualityStatus}${testCase.qualityIssues.length ? `（${testCase.qualityIssues.join('；')}）` : ''}
+- Readiness：${testCase.readiness ? safeCode(testCase.readiness) : '未声明'}
+
+Precondition Plan：
+
+\`\`\`json
+${safeCode(testCase.preconditionPlan)}
+\`\`\`
+
+Test Data：
+
+\`\`\`json
+${safeCode(testCase.testData)}
+\`\`\`
 
 Steps：
 
@@ -1202,7 +1307,49 @@ Steps：
 ${safeCode(testCase.steps)}
 \`\`\`
 
-Evidence：
+Assertions：
+
+\`\`\`json
+${safeCode(testCase.assertions)}
+\`\`\`
+
+Expected Contract：
+
+\`\`\`json
+${safeCode(testCase.expected)}
+\`\`\`
+
+Evidence Requirements：
+
+\`\`\`json
+${safeCode(testCase.evidenceRequirements)}
+\`\`\`
+
+Oracle：
+
+\`\`\`json
+${safeCode(testCase.oracle)}
+\`\`\`
+
+Prepare：
+
+\`\`\`json
+${safeCode(testCase.prepare)}
+\`\`\`
+
+Cleanup：
+
+\`\`\`json
+${safeCode(testCase.cleanup)}
+\`\`\`
+
+Dependencies：
+
+\`\`\`json
+${safeCode(testCase.dependencies)}
+\`\`\`
+
+Execution Evidence：
 
 \`\`\`json
 ${safeCode(testCase.evidence)}

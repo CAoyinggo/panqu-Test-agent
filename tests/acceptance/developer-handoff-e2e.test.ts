@@ -77,7 +77,9 @@ describe('Developer Handoff E2E', () => {
     const { configPath, output } = createConfig(server.baseUrl);
 
     const first = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
-    expect(first).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
+    // AC-5/AC-7 are denied writes. Without a state observer the HTTP 403
+    // cannot prove non-mutation, so the final handoff must fail closed.
+    expect(first).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
     expect(first.summary!.passed).toBeGreaterThan(0);
     expect(first.summary!.notExecuted).toBeGreaterThan(0);
     expect(first.summary!.total).toBe(
@@ -115,7 +117,7 @@ describe('Developer Handoff E2E', () => {
     })).toBe(true);
 
     const second = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
-    expect(second).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
+    expect(second).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
     expect(second.runId).not.toBe(first.runId);
     expect(second.artifacts?.runDirectory).not.toBe(first.artifacts?.runDirectory);
     expect(fs.existsSync(first.artifacts!.reportMarkdown)).toBe(true);
@@ -285,10 +287,10 @@ AC-1 POST /echo/{resourceKey} 创建成功返回 200
     expect(readJson(first.artifacts!.manifest)).toMatchObject({
       schemaVersion: 3,
       replaySafety: 'SAFE',
-      caseIdentityPolicy: 'SEMANTIC_SHA256_V1',
+      caseIdentityPolicy: 'SEMANTIC_SHA256_V2',
       executionPlan: {
-        version: 'ACCEPTANCE_EXECUTION_PLAN_V1',
-        caseIdentityPolicy: 'SEMANTIC_SHA256_V1',
+        version: 'ACCEPTANCE_EXECUTION_PLAN_V2',
+        caseIdentityPolicy: 'SEMANTIC_SHA256_V2',
         requirementDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
         planDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
         previewDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -299,7 +301,9 @@ AC-1 POST /echo/{resourceKey} 创建成功返回 200
     const firstCases = readJson<TestCase[]>(first.artifacts!.testCases);
     const createCase = caseForCriterion(firstCases, 'AC-1', 'POST /echo/{resourceKey}');
     const missingCase = caseForCriterion(firstCases, 'AC-2', 'GET /status/404');
-    expect(createCase).toMatchObject({ executionMode: 'DESIGNED_ONLY', steps: [] });
+    expect(createCase).toMatchObject({ executionMode: 'DESIGNED_ONLY' });
+    expect(createCase.steps.length).toBeGreaterThan(0);
+    expect(createCase.steps.every((step) => step.execution === 'PLANNED')).toBe(true);
     expect(missingCase.executionMode).toBe('EXECUTABLE');
     const firstExecution = readJson<{ results: Array<{ caseId: string; status: string; executed: boolean }> }>(first.artifacts!.execution);
     expect(resultForCase(firstExecution.results, createCase.id)).toMatchObject({ status: 'NOT_EXECUTED', executed: false });

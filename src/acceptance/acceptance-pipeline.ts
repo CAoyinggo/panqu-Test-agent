@@ -16,6 +16,7 @@ import {
 } from './acceptance-safety-policy.js';
 import {
   buildAcceptanceExecutionPlanIdentity,
+  assignStableAcceptanceCaseIds,
   validateAcceptanceExecutionPlanIdentity,
   type AcceptanceExecutionPlanIdentity,
 } from './acceptance-execution-plan.js';
@@ -26,6 +27,7 @@ import { preflightContracts, registerAcceptanceApiContracts, type ContractPrefli
 import { createPhase1ContractResolver } from '../contracts/seed-contracts.js';
 import { contractSource } from '../contracts/source-priority.js';
 import type { ContractResolver } from '../contracts/resolver.js';
+import type { ContractDependency } from '../contracts/types.js';
 
 export interface AcceptanceDataLifecycle {
   prepare?: () => Promise<void>;
@@ -47,6 +49,8 @@ export interface AcceptancePipelineOptions {
   maxCases?: number;
   /** HTTP Execution 阶段时限；不覆盖 Parser、自定义 Data Prepare/Cleanup 与 Artifact 写入。 */
   deadlineMs?: number;
+  concurrency?: number;
+  failFast?: boolean;
   signal?: AbortSignal;
   runId?: string;
   parentRunId?: string;
@@ -60,6 +64,8 @@ export interface AcceptancePipelineOptions {
   lifecycle?: AcceptanceDataLifecycle;
   /** Agent/Acceptance/Legacy 共用的 canonical Resolver 实现；可注入同一实例做跨入口治理。 */
   contractResolver?: ContractResolver;
+  /** 调用入口显式解析出的额外 Contract 依赖；会进入同一 Dependency/Drift Gate。 */
+  additionalContractDependencies?: ContractDependency[];
 }
 
 export const DEFAULT_ACCEPTANCE_MAX_CASES = 500;
@@ -89,6 +95,7 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   const contractPreflight: ContractPreflight = preflightContracts(contractResolver, [
     contractDependency(requirementContract),
     ...apiContractDependencies.values(),
+    ...(options.additionalContractDependencies ?? []),
   ]);
   const design = buildAcceptanceTestDesign(requirement);
   const allTestPoints = generateTestPoints(requirement, design);
@@ -100,12 +107,22 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   const allTestCases = caseQuality.testCases;
   for (const testCase of allTestCases) {
     const dependency = testCase.source?.apiSpecId ? apiContractDependencies.get(testCase.source.apiSpecId) : undefined;
-    testCase.contractDependencies = dependency ? [dependency] : [contractDependency(requirementContract)];
+    testCase.contractDependencies = [
+      dependency ?? contractDependency(requirementContract),
+      ...(options.additionalContractDependencies ?? []),
+    ].filter((item, index, all) => all.findIndex((candidate) => candidate.contractId === item.contractId
+      && candidate.version === item.version && candidate.fingerprint === item.fingerprint) === index);
     if (testCase.source && dependency) {
       testCase.source.contractRef = dependency.contractId;
       testCase.source.contractVersion = dependency.version;
       testCase.source.contractFingerprint = dependency.fingerprint;
     }
+  }
+  // Contract refs/fingerprints are execution semantics. Finalize Case IDs only
+  // after those bindings exist so Baseline/Rerun never reuse a pre-contract ID.
+  assignStableAcceptanceCaseIds(allTestCases);
+  for (let index = 0; index < caseQuality.assessments.length; index++) {
+    caseQuality.assessments[index].caseId = allTestCases[index].id;
   }
   const requestedScope = new Set((options.scope ?? []).map((item) => item.trim().toUpperCase()).filter(Boolean));
   const requestedCases = new Set(options.caseIds ?? []);
@@ -195,9 +212,12 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
       processor: options.processor,
       timeoutMs: options.timeoutMs,
       deadlineMs: options.deadlineMs ?? DEFAULT_ACCEPTANCE_DEADLINE_MS,
+      concurrency: options.concurrency,
+      failFast: options.failFast,
       signal: options.signal,
       apiSpecs: requirement.apis,
       contractResolver,
+      lifecycleReady: typeof options.lifecycle?.cleanup === 'function' || options.safetyPolicy?.allowNoCleanup === true,
       runId,
       executionEnabled: mode === 'execute',
       blockedReason: contractBlockReason ?? stalePlanReason ?? safetyBlockReason ?? requirementBlockReason ?? caseLimitReason ?? (prepareError ? `测试数据准备失败：${prepareError}` : undefined),

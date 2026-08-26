@@ -10,6 +10,7 @@ export type ApiBindingGateCode =
   | 'PATH_PARAMETER_MISSING'
   | 'QUERY_PARAMETER_MISSING'
   | 'HEADER_MISSING'
+  | 'PARAMETER_SCHEMA_INCOMPLETE'
   | 'BODY_MISMATCH';
 
 export type ApiBindingGateResult =
@@ -91,6 +92,24 @@ export function validateApiBindingGate(
   if (!matches.length) return { valid: false, apiSpecId, code: 'API_NOT_FOUND', message: `绑定的 ApiSpec ${apiSpecId} 不存在` };
   if (matches.length > 1) return { valid: false, apiSpecId, code: 'BINDING_AMBIGUOUS', message: `ApiSpec ${apiSpecId} 不唯一` };
   const api = matches[0];
+
+  const omittedUnknown = new Set([
+    ...(testCase.negativeContractIntent?.omittedPathParams ?? []),
+    ...(testCase.negativeContractIntent?.omittedQueryParams ?? []),
+    ...(testCase.negativeContractIntent?.omittedHeaders ?? []),
+    ...(testCase.negativeContractIntent?.omittedBodyFields ?? []),
+  ].map((name) => name.toLowerCase()));
+  const unresolvedRequired = [...api.pathParams, ...api.query, ...api.headers, ...api.body]
+    .filter((parameter) => parameter.required && parameter.type === 'unknown'
+      && parameter.default === undefined && !parameter.enum?.length
+      && !omittedUnknown.has(parameter.name.toLowerCase())
+      && !/^(?:authorization|cookie|set-cookie|x-api-key|api-key)$/i.test(parameter.name));
+  if (unresolvedRequired.length) return {
+    valid: false,
+    apiSpecId,
+    code: 'PARAMETER_SCHEMA_INCOMPLETE',
+    message: `必填参数缺少 type/default/enum，无法验证合法输入：${unresolvedRequired.map((item) => item.name).join(', ')}`,
+  };
 
   if (testCase.source?.apiOperationKey !== api.operationKey) {
     return {

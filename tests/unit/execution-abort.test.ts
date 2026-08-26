@@ -177,8 +177,17 @@ describe('Pipeline：超时/取消贯穿（状态明确 + 无超时后业务写�
     const s = await startTestServer();
     servers.push(s);
     const controller = new AbortController();
-    // 模拟 Engine 的用例级超时：150ms 后以 TIMEOUT 原因中止
-    setTimeout(() => controller.abort(new ExecutionAbortError('TIMEOUT', '用例超时（0.15s）：abort-acceptance')), 150);
+    // 故障注入以底层请求确实开始为锚点，避免全量并发时 CPU/调度延迟导致
+    // TIMEOUT 在 /slow 尚未建立前触发，却又断言服务端必须观察到该连接中断。
+    const abortSlowRequest = (async () => {
+      const deadline = Date.now() + 5_000;
+      while (s.state.slowStarted === 0) {
+        if (Date.now() >= deadline) throw new Error('测试前置失败：/slow 未在 5s 内开始');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      controller.abort(new ExecutionAbortError('TIMEOUT', '用例超时：abort-acceptance'));
+    })();
 
     const pipeline = new Pipeline({
       cfg: makeCfg(s.url),
@@ -189,6 +198,7 @@ describe('Pipeline：超时/取消贯穿（状态明确 + 无超时后业务写�
       signal: controller.signal,
     });
     const result: PipelineResult = await pipeline.run();
+    await abortSlowRequest;
 
     // 终态明确为 TIMEOUT（fail-closed：不 PASS / 不 FAIL / 不 BLOCKED）
     expect(result.status).toBe('TIMEOUT');

@@ -168,4 +168,4 @@ node dist/bin/eval-cli.js regression [--json]
 - [各领域指标定义](./metrics.md)
 - [版本对比与模型记录](./model-comparison.md)
 - [回归门规则](./regression-gate.md)
-- [Phase 45 完成总结](../phase45-summary.md)
+- [Phase 45 完成总结](../phases/phase45-summary.md)

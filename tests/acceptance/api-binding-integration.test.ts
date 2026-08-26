@@ -93,7 +93,10 @@ AC-1 POST /echo/{resourceKey} 创建成功返回 200`,
     });
     expect(post.report).toMatchObject({ conclusion: 'PARTIAL', summary: { passed: 1 } });
     expect(server.requests[0]).toMatchObject({ method: 'POST', body: { name: 'payload' } });
-    expect(head.report).toMatchObject({ conclusion: 'PASS', summary: { passed: 1 } });
+    // A successful HTTP assertion proves the operation contract, but the
+    // generated Requirement model still contains unverified design facts.
+    // V2 must not promote generated coverage to a fully verified PASS.
+    expect(head.report).toMatchObject({ conclusion: 'PARTIAL', summary: { passed: 1 } });
     expect(server.requests[1]).toMatchObject({ method: 'HEAD', body: undefined });
   });
 

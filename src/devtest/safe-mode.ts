@@ -30,9 +30,17 @@ export function caseHttpMethod(testCase: TestCase): string | undefined {
 }
 
 /** Method → 安全策略 Effect 的确定性映射。 */
-function effectOfMethod(method: string): AcceptanceOperationPolicy['effect'] {
-  if (READ_METHODS.has(method)) return 'READ';
-  if (method === 'DELETE') return 'DELETE';
+function effectOfApi(api: ApiSpec, requirementContext = ''): AcceptanceOperationPolicy['effect'] {
+  const identity = `${api.operationKey} ${api.id}`.toLowerCase();
+  if (/(?:billing|charge|recharge|provider|generate|render|paid)/.test(identity)) return 'BILLABLE';
+  if (/(?:publish|notification|notify|message|email|sms|webhook)/.test(identity)) return 'EXTERNAL_SIDE_EFFECT';
+  if (READ_METHODS.has(api.method)) return 'READ';
+  const context = requirementContext.toLowerCase();
+  // Requirement 已明确声明成本/外部副作用但尚不能可靠绑定到单个 Operation 时，
+  // 对所有 mutation 取更保守的 effect，不能因 Path 名字“看起来普通”而放行。
+  if (/(?:estimated\s*cost|billing|billable|charge|recharge|paid|扣费|充值|计费|高成本)/.test(context)) return 'BILLABLE';
+  if (/(?:provider|publish|notification|notify|message|email|sms|webhook|发布|真实消息|第三方生成)/.test(context)) return 'EXTERNAL_SIDE_EFFECT';
+  if (api.method === 'DELETE') return 'DELETE';
   return 'WRITE';
 }
 
@@ -40,12 +48,15 @@ function effectOfMethod(method: string): AcceptanceOperationPolicy['effect'] {
  * 由需求解析出的 ApiSpec 列表构建 operationPolicies。
  * Key 与管线使用的 Operation Identity 一致（精确 `METHOD /path`）。
  */
-export function buildOperationPolicies(apis: readonly ApiSpec[]): Record<string, AcceptanceOperationPolicy> {
+export function buildOperationPolicies(
+  apis: readonly ApiSpec[],
+  requirementContext = '',
+): Record<string, AcceptanceOperationPolicy> {
   const policies: Record<string, AcceptanceOperationPolicy> = {};
   for (const api of apis) {
     policies[api.operationKey] = {
-      effect: effectOfMethod(api.method),
-      reason: 'devtest 自动推导：由显式 Method 映射 Effect',
+      effect: effectOfApi(api, requirementContext),
+      reason: 'DevTest Execution Guard：由权威 Operation Identity 确定 Method，并对扣费/Provider/发布/消息路径 fail-closed 分类',
     };
   }
   return policies;
@@ -54,6 +65,8 @@ export function buildOperationPolicies(apis: readonly ApiSpec[]): Record<string,
 export interface SafeMutationHoldProcessorOptions {
   /** true 时写路径真实放行（对应 --confirm-mutations）。 */
   confirmMutations: boolean;
+  /** 测试注入的内层处理器；缺省走真实 ApiProcessor。 */
+  inner?: ApiProcessor;
 }
 
 /**
@@ -62,17 +75,22 @@ export interface SafeMutationHoldProcessorOptions {
  */
 export class SafeMutationHoldProcessor extends ApiProcessor {
   private readonly confirmMutations: boolean;
+  private readonly inner?: ApiProcessor;
 
   constructor(options: SafeMutationHoldProcessorOptions) {
     super();
     this.confirmMutations = options.confirmMutations;
+    this.inner = options.inner;
   }
 
   override async execute(testCase: TestCase, options: ApiProcessorOptions): Promise<AcceptanceCaseExecutionResult> {
     const method = caseHttpMethod(testCase);
+    // “预期 4xx”不是无副作用证明：产品若错误接受请求，测试本身就会写入真实数据。
+    // 所有 mutation（含 negative probe）都必须先获得 Sandbox/Cleanup + 显式确认。
     if (!this.confirmMutations && isMutatingMethod(method)) {
       return heldMutationResult(testCase, options.runId);
     }
+    if (this.inner) return this.inner.execute(testCase, options);
     return super.execute(testCase, options);
   }
 }
@@ -100,15 +118,15 @@ export function heldMutationResult(testCase: TestCase, runId?: string): Acceptan
     blockedReason: {
       code: 'SAFE_MODE_MUTATION_HOLD',
       stage: 'GATE',
-      message: 'SAFE 模式默认不执行写操作（POST/PUT/PATCH/DELETE），已列入待确认清单',
+      message: 'SAFE 模式禁止未显式确认或缺少 Sandbox/Cleanup/Rollback 的写操作，已列入待确认清单',
       recoverable: true,
     },
-    error: 'BLOCKED：SAFE_MODE_MUTATION_HOLD：SAFE 模式默认不执行写操作，确认风险后可用 --confirm-mutations 重跑',
+    error: 'BLOCKED：SAFE_MODE_MUTATION_HOLD：写操作缺少显式确认或 Sandbox/Cleanup/Rollback',
     classification: 'EXECUTION_BLOCKED',
     attribution: {
       classification: 'EXECUTION_BLOCKED',
       confidence: 'HIGH',
-      reason: 'SAFE_MODE_MUTATION_HOLD：写路径默认挂起等待人工确认',
+      reason: 'SAFE_MODE_MUTATION_HOLD：写路径未满足显式确认与 Sandbox/Cleanup/Rollback 双门禁',
       evidenceSources: ['DEVTEST_SAFE_MODE'],
     },
     evidence: {
@@ -120,6 +138,7 @@ export function heldMutationResult(testCase: TestCase, runId?: string): Acceptan
       sourceType: testCase.source?.sourceType,
       testPointId: testCase.source?.testPointId,
       assertions: [],
+      evidenceItems: [],
     },
   };
 }

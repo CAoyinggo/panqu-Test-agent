@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { applyTestCaseQualityGate } from '../../src/acceptance/test-case-quality-gate.js';
 import { generateAcceptanceApiCases } from '../../src/acceptance/test-case-generator.js';
 import { parseAcceptanceRequirement } from '../../src/acceptance/requirement-parser.js';
 import { generateTestPoints } from '../../src/acceptance/test-point.js';
@@ -100,6 +101,30 @@ AC-1 GET /orders 返回 404`);
     expect(blocked).toBeDefined();
     expect(design.objectives.some((objective) => objective.factIds.includes(blocked!.id))).toBe(false);
     expect(blocked).toMatchObject({ status: 'BLOCKED', linkedObjectiveIds: [] });
+  });
+
+  it('keeps an epistemic inference heuristic and designed-only even when its document provenance is explicit', () => {
+    const requirement = parseAcceptanceRequirement(`# 推导需求不得直接验收
+GET /orders
+该接口无需认证
+返回 200
+因此可以推断用户查询订单必须成功。`);
+    const inferredFact = requirement.factLedger.find((fact) => fact.statement.includes('因此可以推断'))!;
+    const design = buildAcceptanceTestDesign(requirement);
+    const inferredObjectives = design.objectives.filter((objective) => objective.factIds.includes(inferredFact.id));
+    const quality = applyTestCaseQualityGate({
+      requirement,
+      objectives: design.objectives,
+      testCases: generateAcceptanceApiCases(requirement, generateTestPoints(requirement, design)),
+    });
+    const inferredCases = quality.testCases.filter((testCase) => testCase.source?.factIds?.includes(inferredFact.id));
+
+    expect(inferredFact).toMatchObject({ epistemicType: 'INFERENCE', provenance: 'EXPLICIT' });
+    expect(inferredObjectives.length).toBeGreaterThan(0);
+    expect(inferredObjectives.every((objective) => objective.sourceType === 'HEURISTIC')).toBe(true);
+    expect(inferredCases.length).toBeGreaterThan(0);
+    expect(inferredCases.every((testCase) => testCase.source?.sourceType === 'HEURISTIC'
+      && testCase.executionMode === 'DESIGNED_ONLY')).toBe(true);
   });
 
   it('keeps Generator bound to canonical DENY/Actor/Target even if display text drifts later', () => {

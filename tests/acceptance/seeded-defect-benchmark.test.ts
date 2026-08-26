@@ -46,9 +46,9 @@ async function startBuggyService(): Promise<BuggyService> {
       response.end(JSON.stringify({ status: 'created-instead-of-ok' }));
       return;
     }
-    if (url.pathname === '/documents/bob') {
+    if (url.pathname === '/documents/bob-document') {
       response.statusCode = 200;
-      response.end(JSON.stringify({ id: 'bob', secret: 'leaked' }));
+      response.end(JSON.stringify({ id: 'bob-document', secret: 'leaked' }));
       return;
     }
     if (url.pathname === '/search') {
@@ -108,9 +108,9 @@ AC-1 GET /health 必须返回 200。`, 'seed-api.md');
       const permission = compile(`# Document permission
 GET /documents/{id}
 
-| 参数 | 位置 | 类型 | 必填 |
-| --- | --- | --- | --- |
-| id | path | string | 是 |
+| 参数 | 位置 | 类型 | 必填 | 默认值 |
+| --- | --- | --- | --- | --- |
+| id | path | string | 是 | bob-document |
 | Authorization | header | string | 是 |
 
 | 状态码 | 描述 |
@@ -127,7 +127,7 @@ GET /documents/{id}
 AC-1 alice 不得访问 bob 的文档，返回 403。`, 'seed-permission.md');
       const permissionCase = permission.testCases.find((testCase) => testCase.executionMode === 'EXECUTABLE'
         && testCase.actor?.id === 'alice'
-        && testCase.data?.targetId === 'bob'
+        && testCase.data?.targetId === 'bob-document'
         && expectedStatus(testCase, 403));
       expect(permissionCase).toBeDefined();
 
@@ -183,7 +183,7 @@ AC-1 订单创建和库存扣减必须原子完成。`, 'seed-atomicity.md');
       }
       expect(service.requests).toEqual(expect.arrayContaining([
         expect.objectContaining({ method: 'GET', path: '/health' }),
-        expect.objectContaining({ method: 'GET', path: '/documents/bob', authorization: 'Bearer alice' }),
+        expect.objectContaining({ method: 'GET', path: '/documents/bob-document', authorization: 'Bearer alice' }),
         expect.objectContaining({ method: 'GET', path: '/search?limit=0' }),
       ]));
       const defects = buildAcceptanceDefects(

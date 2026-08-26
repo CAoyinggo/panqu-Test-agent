@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { TestCase } from '../agents/test-design/testcase-schema.js';
+import { checkDslExecutable, type TestCase } from '../agents/test-design/testcase-schema.js';
 import type {
   AcceptanceRequirement,
   RequirementFact,
@@ -343,6 +343,17 @@ function ratio(numerator: number, denominator: number): number {
   return denominator === 0 ? 0 : numerator / denominator;
 }
 
+function isQualityExecutable(testCase: TestCase): boolean {
+  if (testCase.executionMode !== 'EXECUTABLE' || !checkDslExecutable(testCase).executable) return false;
+  if (testCase.schemaVersion !== 'TEST_CASE_V2') return true;
+  return testCase.readiness?.status === 'READY'
+    && testCase.oracle?.status === 'READY'
+    && Boolean(testCase.oracle.assertionIds.length && testCase.oracle.evidenceRequirementIds.length)
+    && testCase.steps.every((step) => step.execution === 'EXECUTABLE' && Boolean(step.id && step.channel && step.factIds?.length))
+    && testCase.assertions.filter((assertion) => assertion.type !== 'DESIGN_EXPECTATION')
+      .every((assertion) => Boolean(assertion.id && assertion.factIds?.length && assertion.evidenceRequirementIds?.length));
+}
+
 export function evaluateTestDesignQuality(
   truth: TestDesignGroundTruth,
   observation: TestDesignObservation,
@@ -394,7 +405,7 @@ export function evaluateTestDesignQuality(
     matchedCases: expectedCaseMatches.size,
     observedCases: relevantCases.length,
     duplicateCases,
-    executableCases: relevantCases.filter((testCase) => testCase.executionMode === 'EXECUTABLE').length,
+    executableCases: relevantCases.filter(isQualityExecutable).length,
   };
   return {
     benchmarkId: truth.id,

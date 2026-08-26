@@ -1,4 +1,14 @@
-import type { AssertionDefinition, TestActor, TestCase, TestType } from '../agents/test-design/testcase-schema.js';
+import type {
+  AssertionDefinition,
+  TestActor,
+  TestAspect,
+  TestBusinessScenario,
+  TestCase,
+  TestEvidenceRequirement,
+  TestExecutionContract,
+  TestStep,
+  TestType,
+} from '../agents/test-design/testcase-schema.js';
 import type { AcceptanceRequirement, ActorSpec, ApiSpec, ParameterSpec } from './requirement-ir.js';
 import type { TestPoint } from './test-point.js';
 import { assignStableAcceptanceCaseIds } from './acceptance-execution-plan.js';
@@ -140,7 +150,19 @@ function validValue(parameter: ParameterSpec): unknown {
   if (parameter.type === 'boolean') return true;
   if (parameter.type === 'array') return [];
   if (parameter.type === 'object') return {};
-  return 'valid';
+  // An unspecified type is not permission to invent a business value. Only
+  // an explicit default/enum above can make an unknown schema executable.
+  return undefined;
+}
+
+function unavailableBaselineParameters(api: ApiSpec, except?: ParameterSpec): ParameterSpec[] {
+  return [...api.query, ...api.headers, ...api.body]
+    .filter((parameter) => parameter !== except && parameter.required)
+    .filter((parameter) => !/^(?:authorization|cookie|set-cookie|x-api-key|api-key)$/i.test(parameter.name))
+    .filter((parameter) => {
+      const value = validValue(parameter);
+      return value === undefined || !parameterAccepts(parameter, value);
+    });
 }
 
 function validBody(api: ApiSpec): Record<string, unknown> {
@@ -262,6 +284,22 @@ function vectorsFor(parameter: ParameterSpec, successStatus?: number, invalidSta
     );
   }
   const normalized = vectors.flatMap((vector): ParameterVector[] => {
+    if (parameter.location === 'path' && vector.value === '') return [{
+      ...vector,
+      designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：空 Path segment 会改变路由而不是向同一 Operation 传递空参数',
+    }];
+    if (parameter.location === 'header' && parameter.required && vector.value === '') return [{
+      ...vector,
+      designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：当前 Binding/HTTP 层无法区分 required Header 空值与 Header 缺失',
+    }];
+    if (parameter.location !== 'body' && vector.kind === 'NULL') return [{
+      ...vector,
+      designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：HTTP path/query/header 无法确定性表达 JSON null，禁止把省略或字符串 "null" 当作 null',
+    }];
+    if (parameter.location !== 'body' && parameter.type === 'string' && vector.kind === 'INVALID_TYPE') return [{
+      ...vector,
+      designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：HTTP path/query/header 会把数值序列化为字符串，无法证明 string wrong-type 单故障',
+    }];
     if (parameter.type !== 'string' || typeof vector.value !== 'string') return [vector];
     const acceptedByFullContract = parameterAccepts(parameter, vector.value);
     if (vector.expectedOutcome === 'ACCEPT' && !acceptedByFullContract) {
@@ -394,6 +432,802 @@ function traceOf(requirement: AcceptanceRequirement, point: TestPoint): NonNulla
   };
 }
 
+/** Canonical Fact/Objective → Evidence Plan；不从自然语言补充新的产品规则。 */
+function evidenceRequirementsFor(point: TestPoint): TestEvidenceRequirement[] {
+  const requirements: TestEvidenceRequirement[] = [];
+  const add = (
+    channel: TestEvidenceRequirement['channel'],
+    phase: TestEvidenceRequirement['phase'],
+    description: string,
+    expectation: TestEvidenceRequirement['expectation'] = 'PRESENT',
+  ): void => {
+    if (requirements.some((item) => item.channel === channel && item.phase === phase
+      && (item.expectation ?? 'PRESENT') === expectation)) return;
+    requirements.push({ channel, phase, required: true, expectation, description, factIds: [...point.factIds] });
+  };
+  if (point.executionTarget === 'UI') {
+    add('UI_STATE', 'AFTER', '采集 Requirement 绑定页面元素及可见状态');
+    add('UI_SCREENSHOT', 'AFTER', '保存页面执行后的截图指纹');
+    return requirements;
+  }
+  if (point.apiBinding) {
+    add('API_REQUEST', 'DURING', '保存实际 Method、URL、参数与 Actor（敏感信息脱敏）');
+    add('API_RESPONSE', 'AFTER', '保存真实 Status、Headers 与 Response Body');
+  }
+  const canonical = point.canonicalFact;
+  const constraintKinds = new Set(canonical.constraints.map((item) => item.kind));
+  const mutatingOperation = Boolean((point.apiBinding?.method
+    && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(point.apiBinding.method))
+    // A contradictory/underspecified binding must not erase the business
+    // mutation expressed by the Requirement (for example, a delete rule
+    // accidentally bound to GET). Denied mutation paths still require proof
+    // that state was not changed.
+    || ['CREATE', 'UPDATE', 'DELETE', 'SUBMIT', 'TRANSITION', 'CHARGE', 'ROLLBACK', 'CLEANUP']
+      .includes(canonical.action.kind));
+  const deniedMutation = mutatingOperation
+    && ['DATA_ISOLATION', 'PERMISSION'].includes(point.category)
+    && point.canonicalFact.expected.kind === 'DENY';
+  // Do not mechanically require a database observer for every 4xx/5xx write.
+  // Non-mutation is a required Case oracle only when the Requirement gives us
+  // that rule (permission deny, unchanged/rollback/atomicity). DevTest's
+  // cross-case snapshots can still detect unexpected side effects independently.
+  const nonMutationProofRequired = deniedMutation
+    || canonical.expected.kind === 'UNCHANGED'
+    || canonical.sideEffects.some((item) => item.action === 'UNCHANGED' || item.action === 'ROLLBACK')
+    || canonical.constraints.some((item) => item.kind === 'ATOMIC');
+  const requiresState = ['BUSINESS_RULE', 'STATE', 'SIDE_EFFECT', 'CLEANUP', 'HYBRID'].includes(point.category)
+    || deniedMutation
+    || canonical.expected.kind === 'UNCHANGED'
+    || canonical.expected.kind === 'STATE_CHANGED'
+    || canonical.constraints.some((item) => ['ATOMIC', 'UNIQUE', 'IDEMPOTENT', 'CONCURRENCY', 'CONSISTENCY',
+      'FRONTEND_BACKEND_CONSISTENCY', 'RECOVERY', 'STATE_TRANSITION'].includes(item.kind));
+  if (requiresState) {
+    if (nonMutationProofRequired || canonical.expected.kind === 'STATE_CHANGED'
+      || ['ATOMIC', 'UNIQUE', 'IDEMPOTENT', 'CONCURRENCY', 'CONSISTENCY', 'FRONTEND_BACKEND_CONSISTENCY', 'RECOVERY']
+        .some((kind) => constraintKinds.has(kind as typeof canonical.constraints[number]['kind']))) {
+      add('DATABASE_STATE', 'BEFORE', '通过独立 Observer 采集操作前业务状态');
+    }
+    add('DATABASE_STATE', 'AFTER', '通过独立 Observer 验证持久化或资源状态');
+    add('STATE_CHANGE', 'AFTER', '比较执行前后业务状态', nonMutationProofRequired
+      ? 'UNCHANGED' : canonical.expected.kind === 'STATE_CHANGED' ? 'CHANGED' : 'CONSISTENT');
+  }
+  const requiresDiff = nonMutationProofRequired;
+  if (requiresDiff) add('DATA_DIFF', 'AFTER', '比较请求前后数据并证明失败路径无意外写入',
+    'UNCHANGED');
+  if (canonical.sideEffects.some((item) => item.observation === 'EVENT')) {
+    add('LOG', 'AFTER', '采集事件、审计或处理日志');
+  }
+  if (constraintKinds.has('FRONTEND_BACKEND_CONSISTENCY')) {
+    add('UI_STATE', 'AFTER', '采集 Requirement 绑定的前端显示值');
+  }
+  return requirements;
+}
+
+function testAspectsFor(point: TestPoint, testCase: TestCase): TestAspect[] {
+  const aspects = new Set<TestAspect>();
+  const constraints = new Set(point.canonicalFact.constraints.map((item) => item.kind));
+  const scopes = point.canonicalFact.scopes;
+  const vector = testCase.parameterContext?.boundaryVector;
+
+  if (point.dimension === 'UI') aspects.add('UI_INTERACTION');
+  if (point.dimension === 'FUNCTIONAL') aspects.add('CORE_FUNCTION');
+  if (point.dimension === 'API' || point.apiBinding) aspects.add('API_CONTRACT');
+  if (point.dimension === 'AUTH') aspects.add('AUTHENTICATION');
+  if (point.dimension === 'PERMISSION') aspects.add('ROLE_PERMISSION');
+  if (point.dimension === 'BOUNDARY') aspects.add('BOUNDARY_VALUE');
+  if (point.dimension === 'ERROR' || testCase.parameterContext?.expectedOutcome === 'REJECT') aspects.add('NEGATIVE_PATH');
+
+  if (vector === 'MISSING') aspects.add('PARAMETER_REQUIRED');
+  if (vector === 'NULL' || vector === 'EMPTY') aspects.add('PARAMETER_NULL');
+  if (vector === 'INVALID_TYPE' || vector === 'DECIMAL') aspects.add('PARAMETER_TYPE');
+  if (vector === 'FORMAT_INVALID' || vector === 'ENUM_INVALID') aspects.add('PARAMETER_FORMAT');
+  if (['MIN_MINUS', 'MIN', 'MIN_PLUS', 'MAX_MINUS', 'MAX', 'MAX_PLUS', 'EXTREME'].includes(vector ?? '')) {
+    aspects.add('BOUNDARY_VALUE');
+  }
+  if (point.dimension === 'PARAMETER_VALIDATION' && !vector) {
+    if (constraints.has('REQUIRED')) aspects.add('PARAMETER_REQUIRED');
+    if (constraints.has('NULLABLE')) aspects.add('PARAMETER_NULL');
+    if (constraints.has('TYPE')) aspects.add('PARAMETER_TYPE');
+    if (constraints.has('FORMAT') || constraints.has('ENUM')) aspects.add('PARAMETER_FORMAT');
+  }
+
+  if (scopes.some((scope) => scope.dimension === 'USER')) aspects.add('USER_ISOLATION');
+  if (scopes.some((scope) => scope.dimension === 'TENANT')) aspects.add('TENANT_ISOLATION');
+  if (scopes.some((scope) => scope.dimension === 'PROJECT')) aspects.add('PROJECT_ISOLATION');
+  if (constraints.has('STATE_TRANSITION') || point.dimension === 'STATE') aspects.add('STATE_TRANSITION');
+  if (constraints.has('IDEMPOTENT')) {
+    aspects.add('IDEMPOTENCY');
+    aspects.add('DUPLICATE_SUBMISSION');
+  }
+  if (constraints.has('UNIQUE')) aspects.add('DUPLICATE_SUBMISSION');
+  if (constraints.has('CONCURRENCY')) aspects.add('CONCURRENCY');
+  if (constraints.has('FRONTEND_BACKEND_CONSISTENCY')) aspects.add('FRONTEND_BACKEND_CONSISTENCY');
+  if (constraints.has('CONSISTENCY') || constraints.has('FRONTEND_BACKEND_CONSISTENCY')
+    || constraints.has('ATOMIC') || point.dimension === 'STATE') aspects.add('DATA_CONSISTENCY');
+  if (point.canonicalFact.sideEffects.length || point.dimension === 'SIDE_EFFECT') aspects.add('SIDE_EFFECT');
+  if (point.dimension === 'CLEANUP') aspects.add('CROSS_CASE_SIDE_EFFECT');
+  if (point.preconditions.length || ['STATE', 'SIDE_EFFECT', 'CLEANUP'].includes(point.dimension)
+    || ['UNCHANGED', 'STATE_CHANGED'].includes(point.canonicalFact.expected.kind)) {
+    aspects.add('PRE_POST_CONDITION');
+  }
+  if (constraints.has('ATOMIC') || constraints.has('RECOVERY')
+    || point.canonicalFact.action.kind === 'ROLLBACK'
+    || point.canonicalFact.sideEffects.some((item) => item.action === 'ROLLBACK')) {
+    aspects.add('ROLLBACK_RECOVERY');
+  }
+  if (!aspects.size) aspects.add('CORE_FUNCTION');
+  return [...aspects];
+}
+
+function assertionChannel(assertion: AssertionDefinition): NonNullable<AssertionDefinition['channel']> {
+  if (assertion.target === 'billing') return 'SIDE_EFFECT';
+  if (assertion.target === 'metrics' || assertion.target === 'env') return 'SYSTEM';
+  if (assertion.type) return assertion.type === 'DESIGN_EXPECTATION' ? 'SYSTEM' : 'RESPONSE';
+  return assertion.target === 'response' || assertion.target === 'submit' ? 'RESPONSE' : 'STATE';
+}
+
+function evidenceChannelForAssertion(assertion: AssertionDefinition): TestEvidenceRequirement['channel'][] {
+  const channel = assertionChannel(assertion);
+  if (channel === 'RESPONSE' || channel === 'API') return ['API_RESPONSE'];
+  if (channel === 'UI') return ['UI_STATE', 'UI_SCREENSHOT'];
+  if (channel === 'STATE' || channel === 'DATA') return ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF'];
+  if (channel === 'SIDE_EFFECT' || channel === 'AUDIT') return ['LOG', 'DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF'];
+  return [];
+}
+
+function structuredExpected(point: TestPoint, testCase: TestCase): NonNullable<TestCase['expected']> {
+  const fieldsValue = point.canonicalFact.expected.value;
+  const fields = fieldsValue && typeof fieldsValue === 'object' && !Array.isArray(fieldsValue)
+    && 'fields' in fieldsValue && fieldsValue.fields && typeof fieldsValue.fields === 'object'
+    ? fieldsValue.fields as Record<string, unknown> : undefined;
+  const stateCandidates = testCase.evidenceRequirements ?? [];
+  const stateRequirement = stateCandidates.find((item) => item.channel === 'STATE_CHANGE' || item.channel === 'DATA_DIFF')
+    ?? stateCandidates.find((item) => item.channel === 'DATABASE_STATE');
+  return {
+    ...testCase.expected,
+    description: point.outcomeStatus === 'KNOWN'
+      ? point.expectedOutcome
+      : 'UNKNOWN：需求未声明可判定的 Expected Result，需确认后才能执行',
+    response: point.canonicalFact.expected.status !== undefined || fields
+      ? {
+        status: point.canonicalFact.expected.status,
+        fields,
+        description: point.canonicalFact.expected.expression,
+      }
+      : undefined,
+    state: stateRequirement ? {
+      expectation: stateRequirement.expectation ?? 'PRESENT',
+      description: stateRequirement.description,
+    } : undefined,
+    sideEffects: point.canonicalFact.sideEffects.map((item) => ({
+      kind: item.kind,
+      action: item.action,
+      description: item.expression,
+      expectation: item.action === 'UNKNOWN' ? 'UNKNOWN'
+        : item.action === 'UNCHANGED' || item.action === 'ROLLBACK' ? 'UNCHANGED' : 'REQUIRED',
+    })),
+  };
+}
+
+function businessScenarioKind(point: TestPoint, aspects: readonly TestAspect[]): TestBusinessScenario['kind'] {
+  if (aspects.includes('CONCURRENCY')) return 'CONCURRENCY';
+  if (aspects.includes('IDEMPOTENCY') || aspects.includes('DUPLICATE_SUBMISSION')) return 'IDEMPOTENCY';
+  if (aspects.includes('ROLLBACK_RECOVERY')) return 'RECOVERY';
+  if (aspects.includes('STATE_TRANSITION')) return 'STATE_TRANSITION';
+  if (aspects.includes('TENANT_ISOLATION') || aspects.includes('PROJECT_ISOLATION')) return 'DATA_ISOLATION';
+  if (aspects.includes('USER_ISOLATION')) return 'RESOURCE_OWNERSHIP';
+  if (aspects.includes('ROLE_PERMISSION')) return 'PERMISSION';
+  if (aspects.some((item) => item.startsWith('PARAMETER_') || item === 'BOUNDARY_VALUE')) return 'PARAMETER_RULE';
+  if (aspects.includes('FRONTEND_BACKEND_CONSISTENCY') || aspects.includes('DATA_CONSISTENCY')) return 'CONSISTENCY';
+  if (aspects.includes('SIDE_EFFECT')) return 'SIDE_EFFECT';
+  return point.canonicalFact.action.kind === 'UNKNOWN' ? 'UNKNOWN' : 'CORE_FLOW';
+}
+
+function riskCategory(point: TestPoint, aspects: readonly TestAspect[]): TestBusinessScenario['risks'][number]['category'] {
+  if (aspects.some((item) => ['ROLE_PERMISSION', 'USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION'].includes(item))) return 'SECURITY';
+  if (point.canonicalFact.sideEffects.some((item) => item.kind === 'BILLING')) return 'FINANCIAL';
+  if (aspects.includes('CONCURRENCY')) return 'CONCURRENCY';
+  if (aspects.includes('ROLLBACK_RECOVERY')) return 'RECOVERY';
+  if (aspects.some((item) => ['DATA_CONSISTENCY', 'STATE_TRANSITION', 'IDEMPOTENCY', 'DUPLICATE_SUBMISSION'].includes(item))) return 'DATA_INTEGRITY';
+  if (point.canonicalFact.sideEffects.some((item) => item.kind === 'EXTERNAL')) return 'DEPENDENCY';
+  return point.risk ? 'BUSINESS_CONTINUITY' : 'UNKNOWN';
+}
+
+function configuredActorForCanonical(
+  requirement: AcceptanceRequirement,
+  actor: TestPoint['canonicalFact']['actor'] | undefined,
+): ActorSpec | undefined {
+  if (!actor) return undefined;
+  if (actor.id) return requirement.actors.find((candidate) => candidate.id === actor.id);
+  if (actor.role) {
+    const matches = requirement.actors.filter((candidate) => candidate.role.toLowerCase() === actor.role!.toLowerCase());
+    if (matches.length === 1) return matches[0];
+  }
+  return undefined;
+}
+
+function buildBusinessScenario(
+  requirement: AcceptanceRequirement,
+  point: TestPoint,
+  testCase: TestCase,
+  provenance: NonNullable<TestCase['source']>['provenance'] & string,
+  factIds: string[],
+  acceptanceCriteriaIds: string[],
+): TestBusinessScenario {
+  const canonical = point.canonicalFact;
+  const aspects = testCase.testAspects ?? [];
+  const subject = configuredActorForCanonical(requirement, canonical.actor);
+  const target = configuredActorForCanonical(requirement, canonical.targetActor);
+  const scope = canonical.scopes[0];
+  const owner = scope?.relation === 'OTHER' || scope?.relation === 'CROSS' ? target : subject;
+  const actorLabel = canonical.actor?.id ?? canonical.actor?.role
+    ?? (canonical.actor?.kind !== 'UNKNOWN' ? canonical.actor?.kind : undefined);
+  const actionLabel = canonical.action.kind !== 'UNKNOWN' ? canonical.action.kind : undefined;
+  const resourceLabel = canonical.resource.kind !== 'UNKNOWN' ? canonical.resource.kind : 'UNKNOWN';
+  const idRef = Object.values(canonical.resource.identifiers)[0]
+    ?? (testCase.data?.targetId === undefined ? undefined : String(testCase.data.targetId));
+  const stateRule = requirement.stateRules.find((rule) => {
+    const linkedFacts = requirement.factLedger.filter((fact) => factIds.includes(fact.id));
+    return linkedFacts.some((fact) => fact.entityRefs.items.some((ref) => ref.type === 'STATE_RULE' && ref.id === rule.id));
+  });
+  const stateExpression = canonical.constraints.find((item) => item.kind === 'STATE_TRANSITION')?.expression
+    ?? canonical.conditions.find((item) => item.kind === 'STATE')?.expression;
+  const permissionDecision = canonical.expected.kind === 'ALLOW' ? 'ALLOW'
+    : canonical.expected.kind === 'DENY' ? 'DENY'
+      : aspects.some((item) => ['ROLE_PERMISSION', 'USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION'].includes(item))
+        ? 'UNKNOWN' : 'NOT_APPLICABLE';
+  const permissionScope = canonical.scopes.map((item) => `${item.dimension}:${item.relation}`).join(', ') || undefined;
+  const relation: TestBusinessScenario['ownership']['relation'] = scope?.dimension === 'TENANT' && scope.relation === 'CROSS'
+    ? 'CROSS_TENANT' : scope?.dimension === 'TENANT' && scope.relation === 'SAME'
+      ? 'SAME_TENANT' : scope?.relation === 'OTHER' ? 'OTHER_USER'
+        : scope?.relation === 'SELF' || scope?.relation === 'OWNER_ONLY' ? 'SELF'
+          : aspects.some((item) => ['USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION'].includes(item))
+            ? 'UNKNOWN' : 'NOT_APPLICABLE';
+  const actorContexts: TestBusinessScenario['actors'] = [];
+  if (subject || canonical.actor) actorContexts.push({
+    id: subject?.id ?? canonical.actor?.id,
+    role: subject?.role ?? canonical.actor?.role,
+    tenantId: subject?.tenantId,
+    relation: 'SUBJECT',
+    provenance: subject ? 'CONFIGURED' : provenance,
+  });
+  if (target && target.id !== subject?.id) actorContexts.push({
+    id: target.id, role: target.role, tenantId: target.tenantId,
+    relation: scope?.dimension === 'TENANT' && scope.relation === 'CROSS' ? 'OTHER_TENANT' : 'TARGET',
+    provenance: 'CONFIGURED',
+  });
+  if (owner && !actorContexts.some((item) => item.id === owner.id && item.relation === 'OWNER')) actorContexts.push({
+    id: owner.id, role: owner.role, tenantId: owner.tenantId, relation: 'OWNER', provenance: 'CONFIGURED',
+  });
+  const mode: TestBusinessScenario['flow']['mode'] = testCase.steps.some((step) => step.concurrencyGroup)
+    ? 'PARALLEL' : aspects.includes('ROLLBACK_RECOVERY') && testCase.steps.length > 1 ? 'RECOVERY'
+      : relation === 'CROSS_TENANT' ? 'CROSS_TENANT' : relation === 'OTHER_USER' ? 'CROSS_ACTOR'
+        : testCase.steps.length > 1 ? 'SEQUENCE' : 'SINGLE_OPERATION';
+  const flowSteps = testCase.steps.map((step, index) => ({
+    id: step.id ?? `STEP-${String(index + 1).padStart(3, '0')}`,
+    action: step.action ?? step.type ?? 'PLANNED',
+    actorRef: step.actor?.id ?? testCase.actor?.id,
+    resourceRef: idRef,
+    operationRef: step.method && step.url ? `${step.method} ${step.url}` : step.action,
+    fromState: index === 0 ? stateRule?.from : undefined,
+    toState: index === testCase.steps.length - 1 ? stateRule?.to : undefined,
+    dependsOn: step.dependsOn ?? [],
+  }));
+  return {
+    title: point.objective,
+    goal: `${actorLabel ?? '需求指定的业务参与者'} ${actionLabel ?? '执行已声明动作'} ${resourceLabel}，业务结果必须满足已声明的验收条件`,
+    actor: actorLabel,
+    action: actionLabel,
+    resource: resourceLabel,
+    kind: businessScenarioKind(point, aspects),
+    actors: actorContexts,
+    resourceContext: { type: resourceLabel, idRef, provenance: resourceLabel === 'UNKNOWN' ? 'UNKNOWN' : provenance },
+    ownership: {
+      relation, ownerActorId: owner?.id, tenantId: owner?.tenantId,
+      provenance: relation === 'UNKNOWN' ? 'UNKNOWN' : relation === 'NOT_APPLICABLE' ? provenance : provenance,
+    },
+    state: {
+      status: stateRule || stateExpression ? 'KNOWN' : aspects.includes('STATE_TRANSITION') ? 'UNKNOWN' : 'NOT_APPLICABLE',
+      before: stateRule?.from, after: stateRule?.to, expression: stateExpression ?? stateRule?.action,
+      provenance: stateRule || stateExpression ? provenance : aspects.includes('STATE_TRANSITION') ? 'UNKNOWN' : provenance,
+    },
+    permission: {
+      decision: permissionDecision, role: subject?.role ?? canonical.actor?.role,
+      action: actionLabel, scope: permissionScope,
+      provenance: permissionDecision === 'UNKNOWN' ? 'UNKNOWN' : provenance,
+    },
+    flow: {
+      id: point.scenarioId ?? `FLOW-${point.id}`,
+      name: point.objective,
+      mode,
+      steps: flowSteps.length ? flowSteps : [{ id: 'STEP-001', action: 'PLANNED', dependsOn: [] }],
+    },
+    dependencies: [],
+    risks: point.risk || point.priority === 'P0' || aspects.some((item) => [
+      'ROLE_PERMISSION', 'USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION', 'STATE_TRANSITION',
+      'DATA_CONSISTENCY', 'IDEMPOTENCY', 'CONCURRENCY', 'ROLLBACK_RECOVERY', 'SIDE_EFFECT',
+    ].includes(item)) ? [{
+      id: `RISK-${point.id}`,
+      level: point.priority,
+      category: riskCategory(point, aspects),
+      description: point.risk ?? `该场景承担 ${aspects.join(', ')} 业务证明义务`,
+      source: point.sourceType === 'CONTRACT' ? 'CONTRACT' : point.risk ? 'REQUIREMENT' : 'TEST_STRATEGY',
+    }] : [],
+    expectedBusinessOutcome: point.outcomeStatus === 'KNOWN'
+      ? point.expectedOutcome : 'UNKNOWN：需求需补充成功/失败判定条件',
+    provenance,
+    factIds,
+    acceptanceCriteriaIds,
+  };
+}
+
+function buildExecutionContract(testCase: TestCase, point: TestPoint): TestExecutionContract {
+  const httpSteps = testCase.steps.filter((step) => step.type === 'HTTP_REQUEST');
+  const containsReference = (value: unknown, ref: string): boolean => {
+    if (value === ref) return true;
+    if (Array.isArray(value)) return value.some((item) => containsReference(item, ref));
+    return Boolean(value && typeof value === 'object'
+      && Object.values(value as Record<string, unknown>).some((item) => containsReference(item, ref)));
+  };
+  const kind: TestExecutionContract['executor']['kind'] = testCase.steps.length > 1
+    ? 'COMPOSITE' : point.executionTarget === 'UI' ? 'BROWSER'
+      : point.executionTarget === 'DATA' ? 'DATA' : httpSteps.length === 1 ? 'HTTP'
+        : point.executionTarget === 'FUNCTIONAL' ? 'FUNCTIONAL' : 'NONE';
+  const status: TestExecutionContract['executor']['status'] = kind === 'HTTP'
+    ? 'AVAILABLE' : kind === 'BROWSER' ? 'RUNTIME_REQUIRED' : 'UNAVAILABLE';
+  const observers = (testCase.evidenceRequirements ?? [])
+    .filter((evidence) => !['API_REQUEST', 'API_RESPONSE'].includes(evidence.channel))
+    .map((evidence) => ({
+      channel: evidence.channel,
+      ref: `runtime.observer.${evidence.channel}`,
+      phase: evidence.phase,
+      required: evidence.required,
+      status: 'RUNTIME_REQUIRED' as const,
+    }));
+  const preflight: TestExecutionContract['preflight'] = [{
+    kind: 'ENVIRONMENT', ref: kind === 'BROWSER' ? 'runtime.browser' : 'runtime.baseUrl', required: true,
+  }];
+  if (testCase.source?.apiSpecId) preflight.push({ kind: 'CONTRACT', ref: testCase.source.apiSpecId, required: true });
+  if (testCase.actor) preflight.push({ kind: 'IDENTITY', ref: testCase.actor.tokenRef ?? testCase.actor.id ?? 'runtime.actor', required: true });
+  const resourceContext = testCase.businessScenario?.resourceContext;
+  // An EXPLICIT/CONFIGURED resource id is already a deterministic part of the
+  // Case request contract. Requiring a second, unbound RESOURCE resolver would
+  // prevent the HTTP Processor from ever observing it. Only unresolved
+  // resource identity needs a runtime preflight provider; operation safety and
+  // mutation cleanup remain enforced by their independent gates.
+  const resourceBoundToRequest = Boolean(resourceContext?.idRef && httpSteps.some((step) =>
+    containsReference({ pathParams: step.pathParams, query: step.query, body: step.body }, resourceContext.idRef!)));
+  if (resourceContext?.idRef && !resourceBoundToRequest
+    && testCase.businessScenario?.ownership.relation !== 'NOT_APPLICABLE') {
+    preflight.push({ kind: 'RESOURCE', ref: resourceContext.idRef, required: true });
+  }
+  if (testCase.businessScenario?.state.status === 'KNOWN') preflight.push({ kind: 'STATE', ref: 'runtime.statePreflight', required: true });
+  return {
+    executor: {
+      kind,
+      ref: kind === 'HTTP' ? 'acceptance.apiProcessor' : kind === 'BROWSER' ? 'devtest.browserProcessor'
+        : kind === 'COMPOSITE' ? 'acceptance.scenarioRunner' : `runtime.executor.${kind}`,
+      status,
+      supports: httpSteps.map((step) => `${step.method ?? 'UNKNOWN'} ${step.url ?? 'UNKNOWN'}`),
+    },
+    observers,
+    preflight,
+    lifecycleHooks: [
+      ...(testCase.prepare ?? []).map((hook) => ({ phase: 'PREPARE' as const, hookId: hook.id, required: hook.required, evidenceRequired: hook.required })),
+      ...(testCase.cleanup ?? []).map((hook) => ({ phase: 'CLEANUP' as const, hookId: hook.id, required: hook.required, evidenceRequired: hook.required })),
+    ],
+  };
+}
+
+/**
+ * 将 canonical Fact/Objectives 编译为 TEST_CASE_V2 模板。这里只做结构投影，
+ * 不重读自然语言、不补产品规则；不完整能力通过 Readiness/Oracle fail-close。
+ */
+function completeGeneratedCase(
+  requirement: AcceptanceRequirement,
+  point: TestPoint,
+  testCase: TestCase,
+  api?: ApiSpec,
+  relatedPoints: TestPoint[] = [point],
+): TestCase {
+  const factIds = [...new Set(testCase.source?.factIds ?? point.factIds)];
+  const acceptanceCriteriaIds = [...new Set(testCase.source?.acceptanceCriteriaIds ?? point.acceptanceCriteriaIds)];
+  const provenance = testCase.source?.provenance ?? point.provenance;
+  const resourceLabel = point.canonicalFact.resource.kind !== 'UNKNOWN' ? point.canonicalFact.resource.kind : undefined;
+
+  testCase.schemaVersion = 'TEST_CASE_V2';
+  testCase.requirementStatus = point.outcomeStatus === 'UNKNOWN'
+    ? (provenance === 'UNKNOWN' ? 'UNKNOWN' : 'NEED_CONFIRMATION')
+    : point.sourceType === 'HEURISTIC' ? 'NEED_CONFIRMATION' : 'CONFIRMED';
+
+  if (!testCase.steps.length) {
+    const plannedActions = testCase.design?.actions?.length ? testCase.design.actions : [point.objective];
+    testCase.steps = plannedActions.map((description, index) => ({
+      id: `STEP-${String(index + 1).padStart(3, '0')}`,
+      channel: point.executionTarget === 'UI' ? 'UI'
+        : point.executionTarget === 'DATA' ? 'DATA'
+          : point.executionTarget === 'API' || point.executionTarget === 'HYBRID' ? 'API' : 'FUNCTIONAL',
+      action: 'PLAN',
+      description,
+      execution: 'PLANNED',
+      dependsOn: index ? [`STEP-${String(index).padStart(3, '0')}`] : [],
+      acceptanceCriteriaIds,
+      factIds,
+    }));
+  } else {
+    testCase.steps = testCase.steps.map((step, index) => ({
+      ...step,
+      id: step.id ?? `STEP-${String(index + 1).padStart(3, '0')}`,
+      channel: step.channel ?? (step.type === 'HTTP_REQUEST' ? 'API' : 'FUNCTIONAL'),
+      description: step.description ?? (step.type === 'HTTP_REQUEST'
+        ? `${step.method ?? 'UNKNOWN'} ${step.url ?? 'UNKNOWN'}` : step.action ?? point.objective),
+      execution: step.execution ?? (testCase.executionMode === 'EXECUTABLE' ? 'EXECUTABLE' : 'PLANNED'),
+      dependsOn: step.dependsOn ?? (index ? [`STEP-${String(index).padStart(3, '0')}`] : []),
+      acceptanceCriteriaIds: step.acceptanceCriteriaIds ?? acceptanceCriteriaIds,
+      factIds: step.factIds ?? factIds,
+    }));
+  }
+
+  const request = testCase.steps.find((step) => step.type === 'HTTP_REQUEST');
+  const mutates = Boolean((request?.method ?? api?.method)
+    && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((request?.method ?? api?.method)!));
+  testCase.testAspects = [...new Set(relatedPoints.flatMap((related) => testAspectsFor(related, testCase)))];
+  testCase.businessScenario = buildBusinessScenario(
+    requirement,
+    point,
+    testCase,
+    provenance,
+    factIds,
+    acceptanceCriteriaIds,
+  );
+  testCase.preconditions ??= [];
+  const explicitConditions = point.canonicalFact.conditions
+    .filter((condition) => condition.kind !== 'AFTER')
+    // “若实际返回 200 必须判 FAIL” describes the Oracle, not setup state.
+    .filter((condition) => !/(?:实际|actual).*(?:返回|response|status)|(?:判定|assert).*(?:pass|fail|通过|失败)/i.test(condition.expression));
+  testCase.preconditions = [...new Set([
+    ...testCase.preconditions,
+    ...explicitConditions.map((condition) => condition.expression),
+  ])];
+  testCase.preconditionPlan = testCase.preconditions.map((description, index) => {
+    const explicitCondition = explicitConditions.find((condition) => condition.expression === description);
+    return {
+    id: `PRE-${String(index + 1).padStart(3, '0')}`,
+    kind: explicitCondition ? 'STATE' : testCase.actor ? 'IDENTITY' : request ? 'ENVIRONMENT'
+      : point.executionTarget === 'DATA' ? 'DATA' : 'OTHER',
+    description,
+    required: true,
+    // Explicit IF/WHEN/BEFORE business state needs a real state/data resolver.
+    // Leaving checkRef absent deliberately makes the quality/runner gate block.
+    checkRef: explicitCondition ? undefined
+      : testCase.actor ? `runtime.actor.${testCase.actor.id ?? testCase.actor.role ?? 'configured'}`
+        : request ? 'runtime.preflight.api' : `runtime.preflight.${point.executionTarget.toLowerCase()}`,
+  };
+  });
+  const requestData = request ? {
+    pathParams: request.pathParams,
+    query: request.query,
+    body: request.body,
+  } : undefined;
+  testCase.data ??= {};
+  const hasRequestData = requestData && Object.values(requestData).some((value) => value !== undefined);
+  const plannedData = hasRequestData ? requestData
+    : testCase.parameterContext ? {
+      parameter: testCase.parameterContext.parameter,
+      value: testCase.parameterContext.testData,
+      constraint: testCase.parameterContext.constraint,
+    } : Object.keys(testCase.data ?? {}).length ? testCase.data : undefined;
+  testCase.testData = plannedData === undefined ? [] : [{
+    id: 'DATA-001',
+    source: testCase.parameterContext ? 'GENERATED' : testCase.actor ? 'CONFIGURATION' : 'GENERATED',
+    value: plannedData,
+    resourceType: resourceLabel,
+    resourceOwnerId: testCase.businessScenario.ownership.ownerActorId,
+    tenantId: testCase.businessScenario.ownership.tenantId,
+    mutable: mutates,
+    sensitive: false,
+    cleanupHookId: mutates ? 'CLEANUP-001' : undefined,
+  }];
+
+  testCase.assertions = testCase.assertions.map((assertion, index) => ({
+    ...assertion,
+    id: assertion.id ?? `AS-${String(index + 1).padStart(3, '0')}`,
+    channel: assertion.channel ?? assertionChannel(assertion),
+    acceptanceCriteriaIds: assertion.acceptanceCriteriaIds ?? acceptanceCriteriaIds,
+  }));
+  testCase.evidenceRequirements ??= [];
+  testCase.evidenceRequirements = testCase.evidenceRequirements.map((evidence, index) => ({
+    ...evidence,
+    id: evidence.id ?? `EV-${String(index + 1).padStart(3, '0')}`,
+    sourceStepId: evidence.sourceStepId
+      ?? testCase.steps.find((step) => step.execution === 'EXECUTABLE')?.id
+      ?? testCase.steps[0]?.id,
+    assertionIds: evidence.assertionIds ?? testCase.assertions
+      .filter((assertion) => evidenceChannelForAssertion(assertion).includes(evidence.channel)
+        && (!assertion.factIds?.length || assertion.factIds.some((id) => evidence.factIds.includes(id))))
+      .map((assertion) => assertion.id!)
+      .filter(Boolean),
+  }));
+  for (const assertion of testCase.assertions) {
+    assertion.evidenceRequirementIds = assertion.evidenceRequirementIds ?? testCase.evidenceRequirements
+      .filter((evidence) => evidence.assertionIds?.includes(assertion.id!))
+      .map((evidence) => evidence.id!)
+      .filter(Boolean);
+  }
+
+  testCase.expected = structuredExpected(point, testCase);
+  testCase.prepare = [];
+  testCase.cleanup = mutates ? [{
+    id: 'CLEANUP-001',
+    phase: 'CLEANUP',
+    handler: 'runtime.caseCleanup',
+    input: { caseRef: 'SELF' },
+    required: true,
+    produces: ['cleanupStatus', 'afterCleanupSnapshot'],
+  }] : [];
+
+  const dependencies: NonNullable<TestCase['dependencies']> = [];
+  const addDependency = (dependency: NonNullable<TestCase['dependencies']>[number]): void => {
+    if (!dependencies.some((item) => item.kind === dependency.kind && item.ref === dependency.ref)) dependencies.push(dependency);
+  };
+  if (request || point.executionTarget === 'API' || point.executionTarget === 'HYBRID') addDependency({
+    id: 'DEP-ENV-API', kind: 'ENVIRONMENT', ref: 'runtime.baseUrl',
+    description: '目标 API 环境通过 Preflight', required: true, resolution: 'RUNTIME_REQUIRED',
+  });
+  if (point.executionTarget === 'UI') addDependency({
+    id: 'DEP-ENV-UI', kind: 'ENVIRONMENT', ref: 'runtime.browser',
+    description: 'Browser Executor 与目标页面通过 Preflight', required: true, resolution: 'RUNTIME_REQUIRED',
+  });
+  if (api) addDependency({
+    id: 'DEP-CONTRACT-001', kind: 'CONTRACT', ref: api.id,
+    description: `${api.method} ${api.path} Contract`, required: true, resolution: 'STATIC',
+  });
+  if (testCase.actor) addDependency({
+    id: 'DEP-IDENTITY-001', kind: 'IDENTITY',
+    ref: testCase.actor.tokenRef ?? testCase.actor.id ?? testCase.actor.role ?? 'runtime.actor',
+    description: 'Actor 身份与凭据引用必须在运行时解析', required: true, resolution: 'RUNTIME_REQUIRED',
+  });
+  for (const evidence of testCase.evidenceRequirements.filter((item) =>
+    !['API_REQUEST', 'API_RESPONSE'].includes(item.channel))) addDependency({
+      id: `DEP-OBSERVER-${evidence.id}`,
+      kind: 'OBSERVER', ref: `runtime.observer.${evidence.channel}`,
+      description: `采集 ${evidence.channel} 证据`, required: evidence.required, resolution: 'RUNTIME_REQUIRED',
+    });
+  if (mutates) addDependency({
+    id: 'DEP-LIFECYCLE-CLEANUP', kind: 'LIFECYCLE', ref: 'runtime.caseCleanup',
+    description: '写操作必须配置隔离 Cleanup 并验证清理结果', required: true, resolution: 'RUNTIME_REQUIRED',
+  });
+  testCase.dependencies = dependencies;
+  testCase.businessScenario.dependencies = point.canonicalFact.sideEffects
+    .filter((effect) => effect.kind === 'EXTERNAL')
+    .map((effect) => effect.expression);
+  testCase.executionContract = buildExecutionContract(testCase, point);
+
+  const runtimeAssertions = testCase.assertions.filter((assertion) => assertion.type !== 'DESIGN_EXPECTATION');
+  const requiredEvidence = testCase.evidenceRequirements.filter((item) => item.required);
+  const missingCapabilities = [
+    ...(testCase.executionContract.executor.status === 'AVAILABLE'
+      ? [] : [testCase.executionContract.executor.ref]),
+    // RUNTIME_REQUIRED is a declared execution-time dependency, not a
+    // generation failure. The unified quality gate and Processor both verify
+    // that a provider is actually bound before any request can be dispatched.
+    // Only a statically unavailable capability makes the generated candidate
+    // non-executable at this stage.
+    ...testCase.executionContract.observers
+      .filter((observer) => observer.required && observer.status === 'UNAVAILABLE')
+      .map((observer) => observer.ref),
+    ...testCase.preconditionPlan
+      .filter((precondition) => precondition.required && !precondition.checkRef)
+      .map((precondition) => `preflight.${precondition.id}`),
+    ...dependencies
+      .filter((dependency) => dependency.required && dependency.resolution === 'UNRESOLVED')
+      .map((dependency) => dependency.ref),
+  ];
+  const candidateExecutable = testCase.executionMode === 'EXECUTABLE';
+  const deterministicOracleReady = candidateExecutable
+    && runtimeAssertions.length > 0
+    && runtimeAssertions.every((assertion) => assertion.evidenceRequirementIds?.length)
+    && requiredEvidence.length > 0
+    && missingCapabilities.length === 0;
+  const readinessReason = testCase.design?.reason ?? testCase.metadata?.reason;
+  const needsConfirmation = testCase.requirementStatus !== 'CONFIRMED';
+  const blockedReason = missingCapabilities.length
+    ? `缺少 Executor/Observer/Preflight 能力：${missingCapabilities.join(', ')}`
+    : String(readinessReason ?? '确定性 Assertion/Evidence/Executor 契约不完整');
+  testCase.oracle = {
+    mode: 'ALL',
+    deterministic: true,
+    status: needsConfirmation ? 'NEED_CONFIRMATION' : deterministicOracleReady ? 'READY' : 'BLOCKED',
+    assertionIds: runtimeAssertions.map((assertion) => assertion.id!),
+    evidenceRequirementIds: requiredEvidence.map((item) => item.id!),
+    reason: needsConfirmation
+      ? '需求未提供完整、明确的可判定结果'
+      : deterministicOracleReady ? undefined : blockedReason,
+  };
+  testCase.readiness = {
+    status: needsConfirmation ? 'NEED_CONFIRMATION' : deterministicOracleReady ? 'READY' : 'BLOCKED',
+    reasons: needsConfirmation ? ['REQUIREMENT_EXPECTED_OUTCOME_UNKNOWN']
+      : deterministicOracleReady ? [] : [blockedReason],
+    missingCapabilities: deterministicOracleReady ? [] : [...new Set(missingCapabilities)],
+  };
+  if (!deterministicOracleReady) {
+    testCase.executionMode = 'DESIGNED_ONLY';
+    testCase.protocol = undefined;
+    testCase.steps = testCase.steps.map((step) => ({ ...step, execution: 'PLANNED' as const }));
+    if (testCase.design) {
+      testCase.design.executability = 'DESIGNED_ONLY';
+      testCase.design.reason ??= needsConfirmation ? 'REQUIREMENT_EXPECTED_OUTCOME_UNKNOWN' : blockedReason;
+    }
+  }
+  testCase.tags = [...new Set([
+    ...testCase.tags,
+    ...testCase.testAspects.map((aspect) => aspect.toLowerCase().replaceAll('_', '-')),
+    testCase.requirementStatus.toLowerCase(),
+  ])];
+  return testCase;
+}
+
+type RiskCombinationKind = 'IDEMPOTENCY' | 'CONCURRENCY' | 'STATE_TRANSITION' | 'CROSS_SCOPE' | 'RECOVERY';
+
+function riskCombinationKind(point: TestPoint): RiskCombinationKind | undefined {
+  if (point.strategies.includes('CONCURRENT_REQUEST')) return 'CONCURRENCY';
+  if (point.strategies.includes('REPEAT')) return 'IDEMPOTENCY';
+  if (point.strategies.includes('RECOVERY_CHECK') || point.strategies.includes('PARTIAL_FAILURE')) return 'RECOVERY';
+  if (point.canonicalFact.scopes.some((scope) => scope.relation === 'OTHER' || scope.relation === 'CROSS')) return 'CROSS_SCOPE';
+  if (point.strategies.includes('VALID_INVALID_TRANSITION')
+    || point.canonicalFact.constraints.some((constraint) => constraint.kind === 'STATE_TRANSITION')) return 'STATE_TRANSITION';
+  return undefined;
+}
+
+function clonePlannedHttpStep(
+  step: TestStep,
+  id: string,
+  action: string,
+  dependsOn: string[],
+  concurrencyGroup?: string,
+): TestStep {
+  return {
+    ...step,
+    id,
+    action,
+    description: `${action}：${step.method ?? 'UNKNOWN'} ${step.url ?? 'UNKNOWN'}`,
+    execution: 'PLANNED',
+    dependsOn,
+    concurrencyGroup,
+    headers: step.headers ? { ...step.headers } : undefined,
+    pathParams: step.pathParams ? { ...step.pathParams } : undefined,
+    query: step.query ? { ...step.query } : undefined,
+    body: step.body && typeof step.body === 'object' && !Array.isArray(step.body)
+      ? { ...step.body } : step.body,
+  };
+}
+
+function combinationSteps(kind: RiskCombinationKind, request?: TestStep): TestStep[] {
+  const planned = (
+    id: string,
+    channel: NonNullable<TestStep['channel']>,
+    action: string,
+    description: string,
+    dependsOn: string[] = [],
+  ): TestStep => ({ id, channel, action, description, execution: 'PLANNED', dependsOn });
+  if (kind === 'IDEMPOTENCY') return request ? [
+    clonePlannedHttpStep(request, 'STEP-001', 'FIRST_SUBMIT', []),
+    clonePlannedHttpStep(request, 'STEP-002', 'REPEAT_SAME_SUBMIT', ['STEP-001']),
+    planned('STEP-003', 'DATA', 'OBSERVE_FINAL_STATE', '比较单次执行与重复执行后的实体、状态和副作用', ['STEP-002']),
+  ] : [
+    planned('STEP-001', 'FUNCTIONAL', 'FIRST_SUBMIT', '按需求声明的幂等身份首次提交'),
+    planned('STEP-002', 'FUNCTIONAL', 'REPEAT_SAME_SUBMIT', '使用完全相同的幂等身份重复提交', ['STEP-001']),
+    planned('STEP-003', 'DATA', 'OBSERVE_FINAL_STATE', '验证最终实体、状态和副作用没有重复', ['STEP-002']),
+  ];
+  if (kind === 'CONCURRENCY') return request ? [
+    planned('STEP-001', 'DATA', 'OBSERVE_STATE_BEFORE', '采集并发操作前业务状态'),
+    clonePlannedHttpStep(request, 'STEP-002', 'CONCURRENT_OPERATION_A', ['STEP-001'], 'CG-001'),
+    clonePlannedHttpStep(request, 'STEP-003', 'CONCURRENT_OPERATION_B', ['STEP-001'], 'CG-001'),
+    planned('STEP-004', 'DATA', 'OBSERVE_FINAL_STATE', '并发屏障完成后采集最终业务状态', ['STEP-002', 'STEP-003']),
+  ] : [
+    planned('STEP-001', 'DATA', 'OBSERVE_STATE_BEFORE', '采集并发操作前业务状态'),
+    { ...planned('STEP-002', 'FUNCTIONAL', 'CONCURRENT_OPERATION_A', '并发执行需求声明的操作 A', ['STEP-001']), concurrencyGroup: 'CG-001' },
+    { ...planned('STEP-003', 'FUNCTIONAL', 'CONCURRENT_OPERATION_B', '并发执行需求声明的操作 B', ['STEP-001']), concurrencyGroup: 'CG-001' },
+    planned('STEP-004', 'DATA', 'OBSERVE_FINAL_STATE', '并发屏障完成后采集最终业务状态', ['STEP-002', 'STEP-003']),
+  ];
+  if (kind === 'CROSS_SCOPE') return [
+    planned('STEP-001', 'DATA', 'PREPARE_OWNED_RESOURCE', '由需求声明的 Owner/Tenant 准备归属明确的业务资源'),
+    ...(request ? [clonePlannedHttpStep(request, 'STEP-002', 'CROSS_SCOPE_ACCESS', ['STEP-001'])] : [
+      planned('STEP-002', 'FUNCTIONAL', 'CROSS_SCOPE_ACCESS', '由另一 Actor/Tenant 访问该资源', ['STEP-001']),
+    ]),
+    planned('STEP-003', 'DATA', 'VERIFY_NO_CROSS_SCOPE_MUTATION', '独立验证响应与资源状态均符合隔离规则', ['STEP-002']),
+  ];
+  if (kind === 'RECOVERY') return [
+    planned('STEP-001', 'DATA', 'OBSERVE_STATE_BEFORE', '采集失败路径前业务状态'),
+    ...(request ? [clonePlannedHttpStep(request, 'STEP-002', 'EXECUTE_DECLARED_FAILURE_PATH', ['STEP-001'])] : [
+      planned('STEP-002', 'FUNCTIONAL', 'EXECUTE_DECLARED_FAILURE_PATH', '执行需求明确声明的失败/部分失败路径', ['STEP-001']),
+    ]),
+    planned('STEP-003', 'DATA', 'OBSERVE_RECOVERED_STATE', '验证回滚、补偿或恢复后的业务状态与副作用', ['STEP-002']),
+  ];
+  return [
+    planned('STEP-001', 'DATA', 'OBSERVE_STATE_BEFORE', '采集状态流转前业务状态'),
+    ...(request ? [clonePlannedHttpStep(request, 'STEP-002', 'EXECUTE_STATE_TRANSITION', ['STEP-001'])] : [
+      planned('STEP-002', 'FUNCTIONAL', 'EXECUTE_STATE_TRANSITION', '执行需求声明的状态流转动作', ['STEP-001']),
+    ]),
+    planned('STEP-003', 'DATA', 'OBSERVE_STATE_AFTER', '验证目标状态、禁止状态和相关副作用', ['STEP-002']),
+  ];
+}
+
+function combinationEvidence(point: TestPoint, steps: readonly TestStep[]): TestEvidenceRequirement[] {
+  const base = evidenceRequirementsFor(point);
+  const httpSteps = steps.filter((step) => step.type === 'HTTP_REQUEST');
+  const beforeStep = steps.find((step) => step.action?.includes('BEFORE')) ?? steps[0];
+  const afterStep = [...steps].reverse().find((step) => step.channel === 'DATA') ?? steps.at(-1);
+  const output: TestEvidenceRequirement[] = [];
+  for (const requirement of base) {
+    if (requirement.channel === 'API_REQUEST' || requirement.channel === 'API_RESPONSE') {
+      for (const step of httpSteps) output.push({
+        ...requirement,
+        id: undefined,
+        sourceStepId: step.id,
+        assertionIds: undefined,
+        description: `${step.action ?? step.id}：${requirement.description}`,
+      });
+      continue;
+    }
+    output.push({
+      ...requirement,
+      id: undefined,
+      sourceStepId: requirement.phase === 'BEFORE' ? beforeStep?.id : afterStep?.id,
+      assertionIds: undefined,
+    });
+  }
+  return output;
+}
+
+function buildRiskCombinationCase(input: {
+  requirement: AcceptanceRequirement;
+  point: TestPoint;
+  kind: RiskCombinationKind;
+  id: string;
+  anchor?: TestCase;
+}): TestCase {
+  const { requirement, point, kind, id, anchor } = input;
+  const request = anchor?.steps.find((step) => step.type === 'HTTP_REQUEST');
+  const steps = combinationSteps(kind, request);
+  // A composite plan cannot cure a missing business oracle. Preserve the
+  // earliest blocking reason so every derived Case tells users which
+  // requirement/evidence gap must be closed first.
+  const businessOracleMissing = ['BUSINESS_RULE', 'STATE', 'HYBRID'].includes(point.category)
+    && explicitFieldAssertions(requirement, point).length === 0;
+  const reason = businessOracleMissing
+    ? 'BUSINESS_OBSERVABILITY_MISSING：需求没有声明可执行的状态探针、字段或后置查询，禁止用 HTTP Status 代替业务验证'
+    : `COMPOSITE_EXECUTION_REQUIRED：${kind} 为高风险组合场景，必须绑定 Scenario Runner、所需 Observer 与逐步 Evidence 后执行`;
+  const testCase = designedOnlyCase(requirement, point, id, reason, steps.map((step) => step.description ?? step.action ?? step.id!));
+  testCase.name = `${point.objective} [${kind}]`;
+  testCase.actor = anchor?.actor ? { ...anchor.actor } : undefined;
+  testCase.data = anchor?.data ? { ...anchor.data } : {};
+  testCase.steps = steps;
+  // Without an executable HTTP anchor the composite is a pure design plan.
+  // Keep its sourced design oracle, but do not expose a runtime STATUS/JSON
+  // assertion that has no API step or evidence source to satisfy it.
+  testCase.assertions = [
+    ...(request ? anchor?.assertions ?? [] : []),
+    ...designAssertion(point).filter((assertion) => request || assertion.type === 'DESIGN_EXPECTATION'),
+  ]
+    .filter((assertion, index, all) => all.findIndex((candidate) => candidate.type === assertion.type
+      && candidate.path === assertion.path && candidate.header === assertion.header
+      && JSON.stringify(candidate.expected) === JSON.stringify(assertion.expected)) === index)
+    .map((assertion) => ({ ...assertion, id: undefined, evidenceRequirementIds: undefined }));
+  testCase.evidenceRequirements = combinationEvidence(point, steps);
+  if (anchor?.source) testCase.source = {
+    ...testCase.source!,
+    apiSpecId: anchor.source.apiSpecId,
+    apiOperationKey: anchor.source.apiOperationKey,
+    contractRef: anchor.source.contractRef,
+    contractVersion: anchor.source.contractVersion,
+    contractFingerprint: anchor.source.contractFingerprint,
+    objectiveIds: [...new Set([...(testCase.source?.objectiveIds ?? []), ...(anchor.source.objectiveIds ?? [])])],
+  };
+  testCase.metadata = { ...testCase.metadata, combinationKind: kind, riskDriven: true };
+  return testCase;
+}
+
 function actorMentionedByObjective(requirement: AcceptanceRequirement, point: TestPoint): ActorSpec | undefined {
   return actorsMentionedByObjective(requirement, point)[0];
 }
@@ -494,10 +1328,24 @@ function explicitPathTarget(api: ApiSpec, point: TestPoint): string | undefined 
 function actorCanProvidePathTarget(api: ApiSpec, point: TestPoint): boolean {
   if (api.pathParams.length !== 1) return false;
   const parameter = api.pathParams[0].name;
-  if (/(?:^|\/)(?:users?|profiles?|accounts?|members?)(?:\/|$)/i.test(api.path)
-    && /^(?:id|userId|accountId|profileId|memberId)$/i.test(parameter)) return true;
-  return ['PERMISSION', 'DATA_ISOLATION', 'AUTH'].includes(point.category)
-    && /^(?:id|userId|ownerId|accountId|tenantId)$/i.test(parameter);
+  return /(?:^|\/)(?:users?|profiles?|accounts?|members?)(?:\/|$)/i.test(api.path)
+    && /^(?:id|userId|accountId|profileId|memberId)$/i.test(parameter);
+}
+
+function actorOwnedPathTarget(
+  api: ApiSpec,
+  point: TestPoint,
+  actor: ActorSpec | undefined,
+  configuredDefaultHasDeclaredOwnership = false,
+): string | undefined {
+  if (api.pathParams.length !== 1) return undefined;
+  return explicitPathTarget(api, point)
+    // A documented/configured path value is business test data. It is safe to
+    // use only when the Requirement explicitly relates it to this target
+    // actor; a default value alone does not prove resource ownership.
+    ?? (configuredDefaultHasDeclaredOwnership ? api.pathParams[0].default?.toString() : undefined)
+    // The actor identifier is only a valid fallback for identity resources.
+    ?? (actorCanProvidePathTarget(api, point) ? actorTarget(actor) : undefined);
 }
 
 function configuredPathTarget(
@@ -555,7 +1403,11 @@ function designedOnlyCase(
     preconditions: point.preconditions,
     steps: [],
     assertions: designAssertion(point),
-    expected: point.outcomeStatus === 'KNOWN' ? { description: point.expectedOutcome } : undefined,
+    expected: {
+      description: point.outcomeStatus === 'KNOWN'
+        ? point.expectedOutcome : 'UNKNOWN：需求未声明可判定的 Expected Result，需确认后才能执行',
+    },
+    evidenceRequirements: evidenceRequirementsFor(point),
     design: {
       objectiveIds: [point.objectiveId],
       factIds: point.factIds,
@@ -691,6 +1543,17 @@ export function deduplicateAcceptanceCases(input: TestCase[]): TestCase[] {
         same.objectiveIds = mergeUnique(same.objectiveIds ?? (same.objectiveId ? [same.objectiveId] : []), assertion.objectiveIds ?? (assertion.objectiveId ? [assertion.objectiveId] : []));
       }
     }
+    for (const requirement of testCase.evidenceRequirements ?? []) {
+      const same = (existing.evidenceRequirements ??= []).find((candidate) =>
+        candidate.channel === requirement.channel && candidate.phase === requirement.phase
+        && (candidate.expectation ?? 'PRESENT') === (requirement.expectation ?? 'PRESENT'));
+      if (!same) existing.evidenceRequirements.push({ ...requirement, factIds: [...requirement.factIds] });
+      else {
+        same.required = same.required || requirement.required;
+        same.factIds = mergeUnique(same.factIds, requirement.factIds);
+        if (!same.description.includes(requirement.description)) same.description = `${same.description}；${requirement.description}`;
+      }
+    }
   }
   return output;
 }
@@ -745,13 +1608,16 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
           input.status,
           input.body,
           input.api,
-          requirement.factLedger.some((fact) => input.point.factIds.includes(fact.id)
-            && /返回.*(?:更新后|创建后|请求中).*(?:资料|数据|字段)/i.test(fact.statement)),
+          false,
           input.point,
         ),
+        ...explicitFieldAssertions(requirement, input.point),
         ...(input.extraAssertions ?? []),
-      ],
+      ].filter((assertion, index, all) => all.findIndex((candidate) => candidate.type === assertion.type
+        && candidate.path === assertion.path && candidate.header === assertion.header
+        && JSON.stringify(candidate.expected) === JSON.stringify(assertion.expected)) === index),
       expected: { status: String(input.status), description: input.point.expectedOutcome },
+      evidenceRequirements: evidenceRequirementsFor(input.point),
       design: {
         objectiveIds: [input.point.objectiveId],
         factIds: input.point.factIds,
@@ -786,7 +1652,7 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
     if (point.executionTarget === 'UI' || (point.executionTarget === 'FUNCTIONAL' && !point.apiBinding)
       || (point.executionTarget === 'DATA' && !point.apiBinding)) {
       const reason = point.executionTarget === 'UI'
-        ? 'UI_EXECUTOR_UNAVAILABLE：UI 测试已设计，但当前核心链没有 Browser/UI Processor'
+        ? 'UI_RUNTIME_BINDING_REQUIRED：UI 业务动作已结构化，运行时必须唯一绑定页面、稳定 Locator 与 Browser Processor'
         : point.executionTarget === 'DATA'
           ? 'DATA_EXECUTOR_UNAVAILABLE：数据验证已设计，但当前没有可靠 Data Connector 与状态证据'
           : point.outcomeStatus === 'UNKNOWN'
@@ -927,6 +1793,11 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
         ));
         continue;
       }
+      const unavailable = unavailableBaselineParameters(api);
+      if (unavailable.length) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), `TEST_DATA_UNAVAILABLE：无法从显式 Contract 构造必填字段 ${unavailable.map((item) => item.name).join(', ')}`));
+        continue;
+      }
       const body = api.body.length ? validBody(api) : undefined;
       const semanticActor = actorForApi(requirement, point, api);
       const semanticTarget = configuredPathTarget(api, point, semanticActor);
@@ -957,13 +1828,18 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
       const successStatus = explicitStatusNumber !== undefined && explicitStatusNumber < 400
         ? explicitStatusNumber
         : api.responses.find((response) => response.status >= 200 && response.status < 300)?.status;
+      const validationErrorResponses = api.responses.filter((response) => response.status === 400 || response.status === 422);
       const invalidStatus = explicitStatusNumber !== undefined && explicitStatusNumber >= 400
         ? explicitStatusNumber
-        : api.responses.find((response) => response.status >= 400)?.status;
+        : validationErrorResponses.length === 1 ? validationErrorResponses[0].status : undefined;
       const parameterVectors = parameters.map((parameter) => ({
         parameter,
         vectors: vectorsForStrategy(vectorsFor(parameter, successStatus, invalidStatus), point),
       }));
+      if (parameterVectors.every(({ vectors }) => vectors.length === 0)) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：参数 Contract 不足以构造可验证的正向或负向输入'));
+        continue;
+      }
       const configuredActor = actorForApi(requirement, point, api);
       const configuredTarget = configuredPathTarget(api, point, configuredActor);
       if (apiRequiresActor(api) && !configuredActor) {
@@ -978,7 +1854,24 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
         continue;
       }
       for (const { parameter, vectors } of parameterVectors) {
+        const unavailable = unavailableBaselineParameters(api, parameter);
         for (const vector of vectors) {
+          if (unavailable.length) {
+            const designed = designedOnlyCase(
+              requirement,
+              point,
+              nextId(),
+              `TEST_DATA_UNAVAILABLE：无法为其他必填字段构造合法基线 ${unavailable.map((item) => item.name).join(', ')}`,
+            );
+            designed.name = `${point.acceptanceCriteriaIds[0] ?? point.id} ${parameter.name} ${vector.label}`;
+            designed.parameterContext = {
+              parameter: parameter.name, constraint: vector.constraint, testData: vector.value,
+              expectedResponse: vector.expectedStatus, expectedOutcome: vector.expectedOutcome,
+              boundaryVector: vector.kind,
+            };
+            cases.push(designed);
+            continue;
+          }
           if (vector.designReason) {
             const designed = designedOnlyCase(
               requirement,
@@ -1118,6 +2011,11 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
     }
 
     const body = api.body.length ? validBody(api) : undefined;
+    const unavailable = unavailableBaselineParameters(api);
+    if (unavailable.length) {
+      cases.push(designedOnlyCase(requirement, point, nextId(), `TEST_DATA_UNAVAILABLE：无法从显式 Contract 构造必填字段 ${unavailable.map((item) => item.name).join(', ')}`));
+      continue;
+    }
     const relation = explicitActorRelation(requirement, point);
     const authNotRequired = point.canonicalFact.constraints.some((constraint) => constraint.kind === 'AUTH_NOT_REQUIRED');
     // Public 的业务 Fact 即使在文字里点名了某个配置 Actor，也必须使用匿名
@@ -1149,59 +2047,130 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
       }
     } else if (point.dimension === 'DATA_ISOLATION') {
       const sourceActor = configuredActor;
-      const targetActor = isolationTargetActor(requirement, point, sourceActor);
-      if (!sourceActor || !targetActor || !actorTarget(targetActor)) {
+      const denial = point.canonicalFact.expected.kind === 'DENY' || defaultStatus === 403;
+      const ownerOnly = point.canonicalFact.constraints.some((constraint) => constraint.kind === 'OWNER_ONLY')
+        || point.canonicalFact.scopes.some((scope) => scope.relation === 'OWNER_ONLY' || scope.relation === 'SELF');
+      const targetActor = explicitlyRelatedTarget
+        // A positive permission fact such as “admin may update a target user”
+        // does not prove that the source actor owns a generic business resource.
+        // Only SELF/OWNER_ONLY semantics make the source a valid implicit target;
+        // otherwise the target context must remain unresolved and fail closed.
+        ?? (denial ? isolationTargetActor(requirement, point, sourceActor) : ownerOnly ? sourceActor : undefined);
+      const declaredTargetOwnership = Boolean(explicitlyRelatedTarget
+        && targetActor && explicitlyRelatedTarget.id === targetActor.id);
+      const targetResourceId = actorOwnedPathTarget(api, point, targetActor, declaredTargetOwnership);
+      if (!sourceActor || !targetActor) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ISOLATION_CONTEXT_INCOMPLETE：需要至少两个 EXPLICIT/CONFIGURED Actor/Scope 与资源归属，禁止硬编码 A/B'));
-      } else if ((point.canonicalFact.expected.kind === 'DENY' || defaultStatus === 403)
+      } else if (api.pathParams.length && !targetResourceId) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：缺少归属于目标 Actor/Tenant 的显式业务资源 ID，禁止用用户 ID 代替订单/项目/通用资源 ID'));
+      } else if (denial
         && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(api.method)) {
         const designed = designedOnlyCase(requirement, point, nextId(), 'NON_MUTATION_EVIDENCE_UNAVAILABLE：隔离写操作不能只断言拒绝状态；缺少后置状态证据证明未发生跨范围修改');
         designed.actor = actorOf(sourceActor);
-        designed.data = { targetId: actorTarget(targetActor)! };
+        designed.data = { targetId: targetResourceId! };
         cases.push(designed);
       } else {
-        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 跨数据范围`, actor: sourceActor, targetId: actorTarget(targetActor)!, body, status: defaultStatus }));
+        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 跨数据范围`, actor: sourceActor, targetId: targetResourceId ?? 'no-target', body, status: defaultStatus }));
       }
     } else if (point.canonicalFact.actor?.kind === 'ADMIN') {
       const admin = configuredActor?.role.toUpperCase() === 'ADMIN'
         ? configuredActor
         : actorWithUniqueRole(requirement, 'ADMIN');
       const target = explicitlyRelatedTarget ?? otherActor(requirement, admin);
-      if (!admin || (api.pathParams.length && !actorTarget(target))) {
+      const targetResourceId = actorOwnedPathTarget(api, point, target, Boolean(explicitlyRelatedTarget));
+      if (!admin || !target) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ACTOR_CONTEXT_INCOMPLETE：需求提到管理员，但没有对应 CONFIGURED Actor/目标资源'));
+      } else if (api.pathParams.length && !targetResourceId) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：管理员场景缺少归属已知的显式业务资源 ID'));
       } else {
-        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 管理员`, actor: admin, targetId: actorTarget(target) ?? 'no-target', body, status: defaultStatus }));
+        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 管理员`, actor: admin, targetId: targetResourceId ?? 'no-target', body, status: defaultStatus }));
       }
     } else if (point.canonicalFact.expected.kind === 'DENY') {
       const sourceActor = configuredActor;
       const crossTenant = point.canonicalFact.scopes.some((scope) => scope.dimension === 'TENANT' && scope.relation === 'CROSS');
       const target = explicitlyRelatedTarget ?? otherActor(requirement, sourceActor, crossTenant);
-      if (!sourceActor || !target || !actorTarget(target)) {
+      const targetResourceId = actorOwnedPathTarget(api, point, target, Boolean(explicitlyRelatedTarget));
+      if (!sourceActor || !target) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ACTOR_CONTEXT_INCOMPLETE：拒绝语义缺少明确 Subject/Target Actor 与资源归属'));
+      } else if (api.pathParams.length && !targetResourceId) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：权限拒绝场景缺少归属目标 Actor 的显式业务资源 ID'));
       } else if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(api.method)) {
         const designed = designedOnlyCase(requirement, point, nextId(), 'NON_MUTATION_EVIDENCE_UNAVAILABLE：拒绝写操作不能只断言 403；缺少后置查询/DB/Event 证据证明资源未被修改');
         designed.actor = actorOf(sourceActor);
-        designed.data = { targetId: actorTarget(target)! };
+        designed.data = { targetId: targetResourceId! };
         cases.push(designed);
       } else {
-        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 无权限`, actor: sourceActor, targetId: actorTarget(target)!, body, status: defaultStatus }));
+        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 无权限`, actor: sourceActor, targetId: targetResourceId ?? 'no-target', body, status: defaultStatus }));
       }
     } else if (point.canonicalFact.expected.status === 403) {
       cases.push(designedOnlyCase(requirement, point, nextId(), 'AUTH_SCENARIO_AMBIGUOUS：403 未说明角色、Scope、Tenant 或目标资源，禁止推断身份场景'));
     } else if (defaultStatus >= 400) {
       cases.push(designedOnlyCase(requirement, point, nextId(), `ERROR_SCENARIO_UNSUPPORTED：期望 ${defaultStatus}，但需求没有提供当前 Runner 可确定性准备的错误前置条件`));
     } else {
+      const ownerOnly = point.canonicalFact.scopes.some((scope) => scope.relation === 'OWNER_ONLY');
+      const ownedTarget = ownerOnly ? actorOwnedPathTarget(api, point, configuredActor) : undefined;
       if (apiRequiresActor(api) && !configuredActor) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ACTOR_CONTEXT_INCOMPLETE：认证接口没有可唯一选择的 CONFIGURED Actor'));
+      } else if (ownerOnly && api.pathParams.length && !ownedTarget) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：Owner-only 成功场景缺少归属于当前 Actor 的显式业务资源 ID'));
       } else if (api.pathParams.length && !configuredTarget) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：资源 Path Parameter 没有 EXPLICIT/CONFIGURED 值'));
       } else {
-        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path}`, actor: configuredActor, targetId: configuredTarget ?? 'no-target', body, status: defaultStatus }));
+        cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path}`, actor: configuredActor, targetId: ownedTarget ?? configuredTarget ?? 'no-target', body, status: defaultStatus }));
       }
     }
   }
-  return assignStableAcceptanceCaseIds(coalesceCoveredOperationDesignCases(
+  const finalized = coalesceCoveredOperationDesignCases(
     failCloseAmbiguousExecutableOracles(deduplicateAcceptanceCases(cases)),
-  ));
+  );
+  const pointById = new Map(points.map((point) => [point.id, point]));
+  for (const testCase of finalized) {
+    const point = pointById.get(testCase.source?.testPointId ?? '');
+    if (!point) continue;
+    const objectiveIds = new Set(testCase.source?.objectiveIds ?? []);
+    const relatedPoints = points.filter((candidate) => objectiveIds.has(candidate.objectiveId));
+    completeGeneratedCase(requirement, point, testCase,
+      point.apiBinding ? apiById.get(point.apiBinding.apiSpecId) : undefined,
+      relatedPoints.length ? relatedPoints : [point]);
+  }
+  const generatedCombinationKeys = new Set<string>();
+  for (const point of points) {
+    const kind = riskCombinationKind(point);
+    if (!kind || point.priority !== 'P0') continue;
+    const key = `${kind}:${[...point.factIds].sort().join(',')}`;
+    if (generatedCombinationKeys.has(key)) continue;
+    generatedCombinationKeys.add(key);
+    const sameObjective = (candidate: TestCase): boolean => Boolean(
+      candidate.source?.objectiveIds?.includes(point.objectiveId),
+    );
+    const sameFact = (candidate: TestCase): boolean => Boolean(
+      candidate.source?.factIds?.some((id) => point.factIds.includes(id)),
+    );
+    const anchor = finalized.find((candidate) => sameObjective(candidate)
+      && candidate.steps.some((step) => step.type === 'HTTP_REQUEST'))
+      ?? finalized.find(sameObjective)
+      ?? finalized.find((candidate) => sameFact(candidate)
+        && candidate.steps.some((step) => step.type === 'HTTP_REQUEST'))
+      ?? finalized.find(sameFact);
+    const combination = buildRiskCombinationCase({
+      requirement,
+      point,
+      kind,
+      id: nextId(),
+      anchor,
+    });
+    const relatedPoints = points.filter((candidate) => candidate.factIds.some((id) => point.factIds.includes(id)));
+    const apiSpecId = anchor?.source?.apiSpecId ?? point.apiBinding?.apiSpecId;
+    completeGeneratedCase(
+      requirement,
+      point,
+      combination,
+      apiSpecId ? apiById.get(apiSpecId) : undefined,
+      relatedPoints.length ? relatedPoints : [point],
+    );
+    finalized.push(combination);
+  }
+  return assignStableAcceptanceCaseIds(finalized);
 }
 
 function failCloseAmbiguousExecutableOracles(input: TestCase[]): TestCase[] {
@@ -1229,7 +2198,23 @@ function failCloseAmbiguousExecutableOracles(input: TestCase[]): TestCase[] {
       .map((assertion) => Number(assertion.expected))));
     if (statuses.size <= 1) continue;
     const reason = `EXECUTION_ORACLE_AMBIGUOUS：相同 Actor/Input/Operation 对应多个期望状态 ${[...statuses].sort().join('/')}，禁止重复真实执行`;
-    for (const testCase of group) {
+    const explicitRequirementCases = group.filter((testCase) => testCase.source?.sourceType === 'REQUIREMENT'
+      && testCase.source.provenance === 'EXPLICIT');
+    const explicitStatuses = new Set(explicitRequirementCases.flatMap((testCase) => testCase.assertions
+      .filter((assertion) => assertion.type === 'STATUS_CODE')
+      .map((assertion) => Number(assertion.expected))));
+    // A generic Operation-contract happy path can accidentally resolve to the
+    // same configured resource as a more specific AC (for example, Alice
+    // reading Bob's configured order). The explicit AC owns that request
+    // oracle; demote only the weaker conflicting contract case. Conflicting
+    // explicit ACs remain a hard fail-close for every case in the group.
+    const authoritativeStatus = explicitStatuses.size === 1 ? [...explicitStatuses][0] : undefined;
+    const casesToBlock = authoritativeStatus !== undefined
+      ? group.filter((testCase) => !explicitRequirementCases.includes(testCase)
+        && testCase.assertions.some((assertion) => assertion.type === 'STATUS_CODE'
+          && Number(assertion.expected) !== authoritativeStatus))
+      : group;
+    for (const testCase of casesToBlock) {
       testCase.executionMode = 'DESIGNED_ONLY';
       testCase.protocol = undefined;
       testCase.steps = [];
@@ -1271,21 +2256,9 @@ function coalesceCoveredOperationDesignCases(input: TestCase[]): TestCase[] {
     if (!isOperationContextOnly) return true;
     const target = executableByOperation.get(testCase.source!.apiOperationKey!)?.[0];
     if (!target?.source) return true;
-    target.source.factIds = mergeUnique(target.source.factIds, testCase.source?.factIds);
-    target.source.objectiveIds = mergeUnique(target.source.objectiveIds, testCase.source?.objectiveIds);
-    target.source.acceptanceCriteriaIds = mergeUnique(target.source.acceptanceCriteriaIds, testCase.source?.acceptanceCriteriaIds);
-    if (target.design && testCase.design) {
-      target.design.factIds = mergeUnique(target.design.factIds, testCase.design.factIds);
-      target.design.objectiveIds = mergeUnique(target.design.objectiveIds, testCase.design.objectiveIds);
-    }
-    const assertion = target.assertions.find((candidate) => candidate.type === 'STATUS_CODE') ?? target.assertions[0];
-    if (assertion) {
-      assertion.factIds = mergeUnique(assertion.factIds, testCase.source?.factIds);
-      assertion.objectiveIds = mergeUnique(
-        assertion.objectiveIds ?? (assertion.objectiveId ? [assertion.objectiveId] : []),
-        testCase.source?.objectiveIds,
-      );
-    }
+    // 该 Case 只是在陈述已有 Operation Contract，真实 AC Case 已覆盖同一请求。
+    // 可以隐藏重复展示，但绝不能把 UNKNOWN/BINDING_INCOMPLETE Fact 合并进可执行
+    // Assertion，否则一个 2xx 结果会把未验证 Fact 错标为 VERIFIED。
     return false;
   });
 }

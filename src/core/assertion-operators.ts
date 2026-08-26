@@ -1,6 +1,7 @@
 // 断言操作符实现：每个操作符接收 (actual, expected, rule)，返回 { pass, detail }
 // detail 必须包含期望值 vs 实际值，便于调试
 import { formatValue } from './path-extractor.js';
+import { CodedError, ErrorCode } from './errors.js';
 
 export type AssertionOperator =
   | 'equals' | 'notEquals' | 'contains' | 'notContains'
@@ -274,12 +275,14 @@ register('jsonSchema', async (actual, expected, rule) => {
       return `${path}: ${msg}${params}`;
     }).join('; ') || 'unknown';
     return { pass: false, detail: `JSON Schema validation failed: ${errors}` };
-  } catch (e: any) {
-    // ajv 未安装或 schema 无效，降级跳过
-    return {
-      pass: true,
-      detail: `ajv 未安装或 schema 无效，跳过 JSON Schema 校验: ${e.message}`,
-    };
+  } catch (cause: unknown) {
+    // Missing AJV or an invalid Schema is an execution/design failure, never
+    // evidence that the product response satisfies the contract.
+    throw new CodedError(
+      ErrorCode.INVALID_TESTCASE,
+      `JSON Schema 断言无法执行：${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause, details: { operator: 'jsonSchema' } },
+    );
   }
 });
 
