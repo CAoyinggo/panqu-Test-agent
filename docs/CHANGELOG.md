@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.29.0] - 2026-08-27
+
+### 新增（Evidence-first 智能体升级）
+
+- Requirement、Test Design 与 Analysis 智能体强化需求事实账本、结构化需求解析、风险分析和证据优先的测试设计。
+- DevTest 新增源码同步、项目与环境发现、交付物生成及验收摘要能力，减少报告与实际执行证据不一致。
+- 完善开发交接发布清单、测试用例模板、智能体 Prompt、脱敏规则及对应单元、集成和验收测试。
+
+### 变更
+
+- README 同步最新智能体能力、执行流程与测试清单。
+- 版本 v4.28.0 → v4.29.0（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
 ## [4.28.0] - 2026-08-26
 
 ### 新增（DevTest v8 与 TestCase V2）
