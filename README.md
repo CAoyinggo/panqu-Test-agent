@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.29.1` |
+| 版本 | `v4.29.2` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -232,6 +232,7 @@ Frontend Network 和 Runtime Discovery 只产生候选契约，只有 Resolver �
 不能生成 `PASS / READY`。完整参数、模式边界和证据规则见
 [Developer Self-Test 指南](docs/testing/developer-self-test.md)。报告交付与发布前还必须逐项完成
 [开发交接、发布与报告输出检查清单](docs/testing/developer-handoff-release-checklist.md)，确保章节、状态、统计、证据和发布判定一致。
+每次推送 GitHub 还必须执行该清单的“GitHub 推送前全量同步（每次必做）”：核对全仓修改时间、内容差异、未跟踪文件和远端哈希，不能只提交点名文件。
 
 ## 执行链路
 

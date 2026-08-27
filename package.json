@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.29.1",
+  "version": "4.29.2",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",

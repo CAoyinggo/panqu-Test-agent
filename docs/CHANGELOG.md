@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.29.2] - 2026-08-27
+
+### 文档（GitHub 推送必做检查）
+
+- 新增每次 GitHub 推送前的全仓安全同步清单，强制核对修改时间、实际内容、内容哈希、未跟踪文件、忽略文件和远端差异。
+- 明确所有有效最新源码、模板、文档和测试必须一起提交，同时排除凭证、依赖、缓存、构建产物、测试输出及临时文件。
+- 推送后必须验证本地 `HEAD` 与远端目标分支哈希一致，禁止仅凭文件名或 `Everything up-to-date` 判断同步完成。
+
+### 变更
+
+- 版本 v4.29.1 → v4.29.2（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
 ## [4.29.1] - 2026-08-27
 
 ### 修复（飞书 Markdown 报告兼容）
