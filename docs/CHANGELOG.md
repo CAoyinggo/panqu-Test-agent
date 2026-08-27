@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.29.1] - 2026-08-27
+
+### 修复（飞书 Markdown 报告兼容）
+
+- 将开发自测测试用例与报告从内嵌 HTML/CSS 表格调整为飞书可导入的原生 Markdown 表格，避免飞书正文直接显示样式源码。
+- 同步报告生成器、智能体 Prompt、DevTest 文档、开发交付检查清单和集成测试，确保模板约束与实际产物一致。
+- 逐个复核 6 个正式模板并将文档更新日期统一为 2026-08-27。
+
+### 变更
+
+- 版本 v4.29.0 → v4.29.1（`package.json` / `package-lock.json` / `src/platform/version.ts` / `README.md` / `CHANGELOG.md` 同步）。
+
 ## [4.29.0] - 2026-08-27
 
 ### 新增（Evidence-first 智能体升级）

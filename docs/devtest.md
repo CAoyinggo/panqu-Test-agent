@@ -202,8 +202,9 @@ source-sync.json
 Expected、确定性 Oracle、Evidence、Cleanup/Dependency、推导契约来源和最终执行状态。
 `开发自测测试报告.md` 固定为七段：1.结论概览、2.需求与实现核对、3.用例执行清单、
 4.审查中发现的问题、5.自动化执行证据、6.未覆盖项与回归建议、7.发布判定。每个章节只生成
-一张完整响应式 HTML 表格，不按模块、编号或“概览＋详情”拆分；`测试用例.md`同样只生成一张
-包含全部字段和记录的完整用例表。统计与用例台账由确定性代码生成，不交给 LLM 计算或判定 PASS/FAIL。
+一张飞书兼容的原生 Markdown 表格，不按模块、编号或“概览＋详情”拆分；`测试用例.md`同样只生成
+一张包含全部字段和记录的完整用例表。正文不输出 HTML/CSS。统计与用例台账由确定性代码生成，
+不交给 LLM 计算或判定 PASS/FAIL。
 
 `report.json` 使用 `devtest.report.v8`，固定包含 run、feature model、summary、Requirement
 Coverage Matrix、Invariant、五维与动态维度、discovery、contracts、cases、problems、

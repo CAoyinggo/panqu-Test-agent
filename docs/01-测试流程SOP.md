@@ -1,6 +1,6 @@
 # 开发验收测试执行流程 SOP
 
-> 版本：v3.0 | 更新：2026-08-23 | 维护：AI 测试智能体
+> 版本：v3.0 | 更新：2026-08-27 | 维护：AI 测试智能体
 > **适用范围：需求驱动的开发验收测试**，不绑定特定产品、模型或业务。
 > 规范资产：[通用 Scenario 模板](../tests/acceptance/templates/scenario.md) + [Pattern Library](../tests/acceptance/patterns/) + [TestCase V2 字段规范](testing/testcase-v2-schema.md)。
 > 历史 `tasks/*.json`、旧 `run-test` 场景处理器和 TypeScript 内嵌 Markdown 仅为 **LEGACY** 兼容资产；保留它们不代表已经迁移到 canonical Scenario 主链。

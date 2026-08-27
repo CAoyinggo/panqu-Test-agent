@@ -667,27 +667,43 @@ describe('DevTest Mode integration', () => {
     expect(headingIndexes.every((index) => index >= 0)).toBe(true);
     expect(headingIndexes).toEqual([...headingIndexes].sort((left, right) => left - right));
     expect(developerReport.match(/^## /gm)).toHaveLength(7);
-    expect(developerReport.match(/<!-- report-responsive-table-style -->/g)).toHaveLength(1);
-    expect(developerReport.match(/<table class="pq-table">/g)).toHaveLength(7);
+    expect(developerReport).not.toMatch(/<\/?(?:style|div|table|thead|tbody|tr|th|td|br|code|a|strong)\b/i);
+    expect(developerReport.match(/^\|\s*:?-{3,}/gm)).toHaveLength(7);
     expect(developerReport).toContain('测试人：DevTest Agent');
     expect(developerReport).toContain('测试设计（无真实执行证据；未产生静态缺陷分析证据，DRY_RUN）');
     expect(developerReport).toContain('PASS/FAIL 只来自真实执行、确定性 Oracle 与完整 Evidence');
-    const statistic = /<td[^>]*>用例统计<\/td>\s*<td[^>]*>(\d+)<\/td>\s*<td[^>]*>PASS (\d+)；FAIL (\d+)；BLOCKED (\d+)；NOT_EXECUTED (\d+)<\/td>/.exec(developerReport);
+    const statistic = /^\| 用例统计 \| (\d+) \| PASS (\d+)；FAIL (\d+)；BLOCKED (\d+)；NOT_EXECUTED (\d+) \|$/m.exec(developerReport);
     expect(statistic).not.toBeNull();
     expect(Number(statistic![1])).toBe(Number(statistic![2]) + Number(statistic![3]) + Number(statistic![4]) + Number(statistic![5]));
     const caseDocument = await readFile(result.artifacts.testCasesMd, 'utf8');
-    expect(caseDocument.match(/<!-- report-responsive-table-style -->/g)).toHaveLength(1);
-    expect(caseDocument.match(/<table class="pq-table">/g)).toHaveLength(1);
+    expect(caseDocument).not.toMatch(/<\/?(?:style|div|table|thead|tbody|tr|th|td|br|code|a|strong)\b/i);
+    expect(caseDocument.match(/^\|\s*:?-{3,}/gm)).toHaveLength(1);
     const caseSection = developerReport.split('## 3. 用例执行清单')[1].split('## 4. 审查中发现的问题')[0];
-    const tableCells = (source: string) => [...source.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((rowMatch) =>
-      [...rowMatch[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cellMatch) => cellMatch[1]
-        .replace(/<br>/g, '\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>').replace(/&quot;/g, '"'))).filter((cells) => cells.length > 0);
-    const reportCaseRows = tableCells(caseSection);
-    const reportStatuses = reportCaseRows.map((cells) => cells[5]);
+    const markdownCells = (line: string) => {
+      const cells: string[] = [];
+      let current = '';
+      let escaped = false;
+      for (const character of line.trim().replace(/^\|/, '').replace(/\|$/, '')) {
+        if (escaped) {
+          current += character;
+          escaped = false;
+        } else if (character === '\\') escaped = true;
+        else if (character === '|') {
+          cells.push(current.trim());
+          current = '';
+        } else current += character;
+      }
+      cells.push(current.trim());
+      return cells;
+    };
+    const tableCells = (source: string) => source.split('\n').filter((line) => /^\|.*\|$/.test(line.trim()))
+      .map(markdownCells).filter((cells) => !cells.every((cell) => /^:?-{3,}:?$/.test(cell)));
+    const reportCaseRows = tableCells(caseSection).slice(1);
+    const reportStatuses = reportCaseRows.map((cells) => cells[3]);
     const traceIds = result.acceptanceTraces.map((trace) => trace.caseId).sort();
     const reportIds = reportCaseRows.map((cells) => cells[0]).sort();
-    const documentIds = tableCells(caseDocument).map((cells) => cells[0]).sort();
+    const documentRows = tableCells(caseDocument).slice(1);
+    const documentIds = documentRows.map((cells) => cells[0]).sort();
     expect(reportCaseRows).toHaveLength(Number(statistic![1]));
     expect(reportCaseRows).toHaveLength(result.deliveryCoverage.cases.generated);
     expect(reportIds).toEqual(traceIds);
@@ -698,7 +714,7 @@ describe('DevTest Mode integration', () => {
     expect(reportStatuses.filter((status) => status === 'NOT_EXECUTED')).toHaveLength(Number(statistic![5]));
     for (const section of ['Business Scenario', 'Preconditions / Test Data', 'Steps', 'Expected Result / Assertion / Oracle',
       'Evidence Required', 'Cleanup / Dependency']) expect(caseDocument).toContain(section);
-    expect(tableCells(caseDocument).every((cells) => ['PASS', 'FAIL', 'BLOCKED', 'NOT_EXECUTED'].includes(cells[5]))).toBe(true);
+    expect(documentRows.every((cells) => ['PASS', 'FAIL', 'BLOCKED', 'NOT_EXECUTED'].includes(cells[3]))).toBe(true);
     const html = await readFile(result.artifacts.reportHtml, 'utf8');
     expect(json.schema).toBe('devtest.report.v8');
     for (const heading of ['最终结论', 'Test Reliability', 'Requirement Quality', 'Adaptive Selection', 'Root Cause Graph',
