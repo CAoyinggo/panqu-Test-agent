@@ -16,6 +16,8 @@ import {
   renderDevTestHtml,
   renderProblemsMarkdown,
   renderAcceptanceSummary,
+  renderDeveloperSelfTestCases,
+  renderDeveloperSelfTestReport,
 } from './artifacts.js';
 import { devTestDimensionOf, selectDevTestCases } from './dimension-selector.js';
 import { discoverReferencedContractDependencies } from './contract-dependencies.js';
@@ -46,6 +48,7 @@ import { SnapshottingProcessor, buildPollutionProblems, detectTestPollution } fr
 import { adaptiveScore, assessRequirementQuality, buildNegativeIntelligence, buildPermissionMatrix,
   buildRequirementQualityProblems, buildRootCauseGraph } from './test-intelligence.js';
 import { readDiscoveryStageCache, workspaceCacheFingerprint, writeDiscoveryStageCache } from './stage-cache.js';
+import { synchronizeDevTestSource } from './source-sync.js';
 import {
   buildDevTestAcceptanceTraces,
   buildDevTestDeliveryCoverage,
@@ -53,7 +56,7 @@ import {
 } from './delivery-acceptance.js';
 import type { DevTestEnvironmentSnapshot, DevTestMode, DevTestOptions, DevTestRunResult } from './types.js';
 
-const DEFAULT_BASE_URL = 'http://127.0.0.1:3000';
+const STATIC_BASE_URL = 'http://devtest.invalid';
 const DEFAULT_ENVIRONMENT = 'local';
 const DEFAULT_MAX_CASES = 20;
 
@@ -85,7 +88,7 @@ function normalizeMode(options: DevTestOptions): DevTestMode {
 }
 
 function normalizeBaseUrl(value: string | undefined): string {
-  const raw = value ?? process.env.TESTFLOW_BASE_URL ?? DEFAULT_BASE_URL;
+  const raw = value ?? process.env.TESTFLOW_BASE_URL ?? STATIC_BASE_URL;
   try {
     const parsed = new URL(raw);
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password
@@ -112,18 +115,21 @@ function liveApprovalPolicies(
 
 export async function runDevTest(options: DevTestOptions): Promise<DevTestRunResult> {
   const startedAt = new Date().toISOString();
+  const mode = normalizeMode(options);
+  const projectRoot = options.projectRoot ?? options.sourceSync?.root ?? process.cwd();
+  if (options.final && (mode !== 'SAFE' || options.plan || options.preflight || options.rerun || options.reproProblemId)) {
+    throw new Error('DEVTEST_FINAL_CONFLICT：--final 必须执行完整 SAFE 验收，不能与 plan/preflight/rerun/repro/LIVE/DRY_RUN 组合');
+  }
+  const sourceSync = options.sourceSync?.enabled && mode !== 'DRY_RUN' && !options.plan && !options.preflight
+    ? await synchronizeDevTestSource(options.sourceSync)
+    : undefined;
   const resolvedInput = await resolveMarkdown(options);
   const originalMarkdown = resolvedInput.markdown;
   const docSource = resolvedInput.docSource;
   const explicitRequirement = parseAcceptanceRequirement(originalMarkdown, { documentId: options.documentId });
-  const mode = normalizeMode(options);
-  if (options.final && (mode !== 'SAFE' || options.plan || options.preflight || options.rerun || options.reproProblemId)) {
-    throw new Error('DEVTEST_FINAL_CONFLICT：--final 必须执行完整 SAFE 验收，不能与 plan/preflight/rerun/repro/LIVE/DRY_RUN 组合');
-  }
   const environment = (options.environment ?? DEFAULT_ENVIRONMENT).trim().toLowerCase();
   const explicitBaseUrl = options.baseUrl === undefined ? undefined : normalizeBaseUrl(options.baseUrl);
   const project = options.project ?? 'devtest';
-  const projectRoot = options.projectRoot ?? process.cwd();
   const outDir = options.outDir ?? 'devtest-results';
   const requirementFingerprint = requirementPlanFingerprint(originalMarkdown);
   const workspaceFingerprint = await workspaceCacheFingerprint(projectRoot);
@@ -144,7 +150,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     fetchImpl: options.fetchImpl,
     probeNetwork: mode !== 'DRY_RUN',
   });
-  const baseUrl = environmentPreflight.selectedBaseUrl ?? explicitBaseUrl ?? DEFAULT_BASE_URL;
+  const baseUrl = environmentPreflight.selectedBaseUrl ?? explicitBaseUrl ?? STATIC_BASE_URL;
   const resolvedDiscovery = resolveDiscoveredOperations(discovery.mappedOperations, contractResolver, environment);
   const additionalContractDependencies = [
     ...discoverReferencedContractDependencies(originalMarkdown, contractResolver),
@@ -265,7 +271,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     message: `Baseline 中不存在问题 ${reproProblemId}；未执行其他 Case`,
   });
   if (mode !== 'DRY_RUN' && environmentPreflight.status === 'BLOCKED') syntheticBlocks.push({
-    code: environmentPreflight.ambiguous ? 'AMBIGUOUS_ENVIRONMENT' : 'NETWORK_UNREACHABLE',
+    code: environmentPreflight.reason?.includes('ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY')
+      ? 'ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY'
+      : environmentPreflight.ambiguous ? 'AMBIGUOUS_ENVIRONMENT' : 'NETWORK_UNREACHABLE',
     message: environmentPreflight.reason ?? '环境 Preflight 阻断真实执行',
   });
   if (environmentPreflight.checks.authentication === 'BLOCKED') syntheticBlocks.push({
@@ -348,7 +356,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirement,
     discovery,
     environment: environmentPreflight,
-    mode,
+    mode: pipelineMode === 'dry-run' ? 'DRY_RUN' : mode,
     signal: options.signal,
     allowActions: confirmedMutation,
   });
@@ -662,6 +670,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirementModel,
     acceptanceTraces,
     deliveryCoverage,
+    sourceSync,
   };
 
   const dir = path.join(outDir, result.runId);
@@ -673,6 +682,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     casesCsv: path.join(dir, 'cases.csv'),
     problemsMd: path.join(dir, 'problems.md'),
     acceptanceSummaryMd: path.join(dir, 'acceptance-summary.md'),
+    testCasesMd: path.join(dir, '测试用例.md'),
+    developerSelfTestReportMd: path.join(dir, '开发自测测试报告.md'),
+    sourceSyncJson: sourceSync ? path.join(dir, 'source-sync.json') : undefined,
   };
   const unknowns = buildDevTestUnknowns(result.report);
   await Promise.all([
@@ -681,6 +693,11 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     writeFile(artifacts.casesCsv, renderCasesCsv(renderInput), 'utf8'),
     writeFile(artifacts.problemsMd, renderProblemsMarkdown(problems, { conclusion, unknowns }), 'utf8'),
     writeFile(artifacts.acceptanceSummaryMd, renderAcceptanceSummary(renderInput), 'utf8'),
+    writeFile(artifacts.testCasesMd, renderDeveloperSelfTestCases(renderInput), 'utf8'),
+    writeFile(artifacts.developerSelfTestReportMd, renderDeveloperSelfTestReport(renderInput), 'utf8'),
+    ...(artifacts.sourceSyncJson && sourceSync
+      ? [writeFile(artifacts.sourceSyncJson, `${JSON.stringify(sourceSync, null, 2)}\n`, 'utf8')]
+      : []),
   ]);
   if (!options.preflight && !options.plan && (!reproduction || reproduction.status === 'REPRODUCED')) {
     await saveDevTestBaseline({
@@ -715,6 +732,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     runId: result.runId,
     conclusion,
     mode,
+    sourceSync,
     pendingMutationCaseIds,
     problems,
     dimensionStats,

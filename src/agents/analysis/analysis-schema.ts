@@ -8,6 +8,16 @@ import type { CaseExecutionResult, ExecutionOutcome } from '../execution/executi
 /** 分析结论类型 */
 export type FindingType = 'pass' | 'fail' | 'flaky' | 'blocked' | 'info';
 
+/** 与 DevTest 交付验收一致的失败归因；异常不等于产品缺陷。 */
+export type AnalysisIssueClassification =
+  | 'PRODUCT_BUG'
+  | 'REQUIREMENT_GAP'
+  | 'TEST_DESIGN_ERROR'
+  | 'ENVIRONMENT_ERROR'
+  | 'EXECUTION_ERROR'
+  | 'NOT_TESTED'
+  | 'NONE';
+
 /** 单条分析结论 */
 export interface AnalysisFinding {
   type: FindingType;
@@ -16,6 +26,11 @@ export interface AnalysisFinding {
   detail: string;
   severity: 'high' | 'medium' | 'low';
   suggestion: string;
+  /** 只有真实执行 + 确定性失败断言 + Evidence 才允许 PRODUCT_BUG。 */
+  classification?: AnalysisIssueClassification;
+  /** 支撑分类的执行/断言证据摘要；不是 LLM 自述。 */
+  evidence?: string[];
+  confidence?: 'CONFIRMED' | 'LIKELY' | 'UNKNOWN';
 }
 
 /** 分析汇总 */
@@ -112,7 +127,8 @@ export function isAnalysisLike(data: unknown): data is Record<string, unknown> {
  * 归一化外部产出的 AnalysisReport（过滤非法结论，重算汇总）。
  * trustedSummary：由真实执行结果计算的汇总（summaryFromOutcome）——提供时**逐字采用**，
  * data.summary（可能来自 LLM 输出）整体丢弃：统计字段（total/passed/failed/timedOut/duration/
- * exitCode/overall）只能由 Deterministic Summary 产生，模型只能贡献 findings/aiSummary/recommendations。
+ * exitCode/overall）只能由 Deterministic Summary 产生。该函数可解析外部 findings/aiSummary/
+ * recommendations；Agent 证据门会进一步只保留逐 Case 解释，并重建最终摘要与建议。
  */
 export function normalizeAnalysis(data: Record<string, unknown>, opts: { trustedSummary?: AnalysisSummary } = {}): AnalysisReport {
   const findings = (Array.isArray(data.findings) ? data.findings : [])
@@ -121,6 +137,13 @@ export function normalizeAnalysis(data: Record<string, unknown>, opts: { trusted
       const raw = f as Record<string, unknown>;
       const type = ['pass', 'fail', 'flaky', 'blocked', 'info'].includes(String(raw.type)) ? String(raw.type) as FindingType : 'info';
       const severity = ['high', 'medium', 'low'].includes(String(raw.severity)) ? String(raw.severity) as 'high' | 'medium' | 'low' : 'medium';
+      const classifications = new Set<AnalysisIssueClassification>([
+        'PRODUCT_BUG', 'REQUIREMENT_GAP', 'TEST_DESIGN_ERROR', 'ENVIRONMENT_ERROR',
+        'EXECUTION_ERROR', 'NOT_TESTED', 'NONE',
+      ]);
+      const rawClassification = String(raw.classification ?? '');
+      const confidence = ['CONFIRMED', 'LIKELY', 'UNKNOWN'].includes(String(raw.confidence))
+        ? String(raw.confidence) as AnalysisFinding['confidence'] : undefined;
       return {
         type,
         caseId: raw.caseId !== undefined ? String(raw.caseId) : undefined,
@@ -128,6 +151,10 @@ export function normalizeAnalysis(data: Record<string, unknown>, opts: { trusted
         detail: String(raw.detail ?? ''),
         severity,
         suggestion: String(raw.suggestion ?? ''),
+        classification: classifications.has(rawClassification as AnalysisIssueClassification)
+          ? rawClassification as AnalysisIssueClassification : undefined,
+        evidence: Array.isArray(raw.evidence) ? raw.evidence.map(String) : undefined,
+        confidence,
       };
     })
     .filter((f) => f.title.length > 0);

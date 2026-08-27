@@ -38,6 +38,7 @@ export function suggestionForReasonCode(code: string | undefined): string | unde
     ASSERTION_MISSING: '补充来自 Requirement/Contract 的确定性断言。',
     EVIDENCE_MISSING: '接入独立 Observer，补齐 Request/Response/State/Side Effect 证据。',
     NETWORK_UNREACHABLE: '启动本地被测服务，或用 --base-url 指向可访问的 local/test 环境后重跑。',
+    ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY: '提供 --base-url，或在项目/环境配置中声明可审计的测试地址后重跑真实执行。',
     AMBIGUOUS_ENVIRONMENT: '用 --base-url 显式选择唯一被测环境后重跑。',
     AUTH_CONTEXT_INCOMPLETE: '提供至少两个隔离测试身份的 actorHeaders/Token Ref 后重跑权限场景。',
   };

@@ -52,6 +52,69 @@ function validCaseJson(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
+/** v2 Agent 输出：设计态必须被保留，但 Runtime 能力只能由确定性 Preflight 绑定。 */
+function validV2CaseJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 'TEST_CASE_V2',
+    id: 'tc-v2-01',
+    feature: 'wan3',
+    name: '用户查看视频任务状态',
+    priority: 'P0',
+    testType: 'FUNCTIONAL',
+    testAspects: ['CORE_FUNCTION'],
+    executionMode: 'EXECUTABLE',
+    requirementStatus: 'CONFIRMED',
+    source: {
+      requirementId: 'REQ-wan3', testPointId: 'TP-001', acceptanceCriteriaIds: [],
+      factIds: ['RF-001'], objectiveIds: ['OBJ-RF-001'], sourceType: 'REQUIREMENT', provenance: 'EXPLICIT',
+    },
+    businessScenario: {
+      title: '用户查看视频任务状态', goal: '用户确认已提交任务的当前状态', kind: 'CORE_FLOW',
+      actors: [{ id: 'user', relation: 'SUBJECT', provenance: 'EXPLICIT' }],
+      resourceContext: { type: 'video-task', idRef: 'fixture.taskId', provenance: 'EXPLICIT' },
+      ownership: { relation: 'SELF', ownerActorId: 'user', provenance: 'EXPLICIT' },
+      state: { status: 'UNKNOWN', provenance: 'UNKNOWN' },
+      permission: { decision: 'NOT_APPLICABLE', provenance: 'EXPLICIT' },
+      flow: { id: 'FLOW-001', name: '查看任务状态', mode: 'SINGLE_OPERATION', steps: [{ id: 'FLOW-STEP-1', action: 'query', dependsOn: [] }] },
+      dependencies: [], risks: [], expectedBusinessOutcome: '返回需求声明的任务状态',
+      provenance: 'EXPLICIT', factIds: ['RF-001'], acceptanceCriteriaIds: [],
+    },
+    tags: ['core'],
+    preconditions: [],
+    preconditionPlan: [],
+    data: {},
+    testData: [],
+    steps: [{
+      id: 'STEP-001', channel: 'FUNCTIONAL', description: '查询任务状态', execution: 'EXECUTABLE',
+      dependsOn: [], acceptanceCriteriaIds: [], factIds: ['RF-001'], action: 'query', input: {},
+    }],
+    assertions: [{
+      id: 'AS-001', channel: 'STATE', type: 'DESIGN_EXPECTATION', description: '状态与需求声明一致',
+      acceptanceCriteriaIds: [], factIds: ['RF-001'], objectiveIds: ['OBJ-RF-001'],
+      evidenceRequirementIds: ['EV-001'], sourceType: 'REQUIREMENT', provenance: 'EXPLICIT',
+    }],
+    expected: { state: { expectation: 'UNKNOWN', description: '需求未声明具体状态值' } },
+    evidenceRequirements: [{
+      id: 'EV-001', channel: 'STATE_CHANGE', phase: 'AFTER', required: true,
+      description: '任务状态观察证据', factIds: ['RF-001'], sourceStepId: 'STEP-001', assertionIds: ['AS-001'],
+    }],
+    oracle: { mode: 'ALL', deterministic: true, status: 'READY', assertionIds: ['AS-001'], evidenceRequirementIds: ['EV-001'] },
+    prepare: [],
+    cleanup: [],
+    dependencies: [{
+      id: 'DEP-EXECUTOR', kind: 'OBSERVER', ref: 'observer.task-state', description: '任务状态观察器',
+      required: true, resolution: 'RUNTIME_REQUIRED',
+    }],
+    readiness: { status: 'READY', reasons: [], missingCapabilities: [] },
+    executionContract: {
+      executor: { kind: 'FUNCTIONAL', ref: 'runner.task-query', status: 'AVAILABLE', supports: ['query'] },
+      observers: [{ channel: 'STATE_CHANGE', ref: 'observer.task-state', phase: 'AFTER', required: true, status: 'AVAILABLE' }],
+      preflight: [], lifecycleHooks: [],
+    },
+    ...overrides,
+  };
+}
+
 describe('test-design - Test DSL Schema 校验', () => {
   it('合法 TestCase 校验通过并归一化', async () => {
     const tc = await validateTestCase(validCaseJson());
@@ -195,23 +258,25 @@ describe('test-design - TestDesignAgent 全链路', () => {
 
   it('LLM 返回合法数组 → 走 LLM 生成', async () => {
     const llm = new MockLLMProvider({
-      scripted: [JSON.stringify([validCaseJson(), validCaseJson({ id: 'tc-02', name: '边界用例' })])],
+      scripted: [JSON.stringify([validV2CaseJson(), validV2CaseJson({ id: 'tc-v2-02', name: '边界用例' })])],
     });
     const agent = new TestDesignAgent();
     const cases = await agent.execute({ requirement: req }, makeContext(llm));
     expect(cases).toHaveLength(2);
-    expect(cases[0].id).toBe('tc-01');
+    expect(cases[0].id).toBe('tc-v2-01');
+    expect(cases[0]).toEqual(expect.objectContaining({ executionMode: 'DESIGNED_ONLY', readiness: expect.objectContaining({ status: 'BLOCKED' }) }));
+    expect(cases[0].executionContract?.executor.status).toBe('RUNTIME_REQUIRED');
     expect(llm.getCallCount()).toBe(1);
   });
 
   it('直接传 Requirement 对象同样可用', async () => {
-    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validCaseJson()])] });
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validV2CaseJson()])] });
     const cases = await new TestDesignAgent().execute(req, makeContext(llm));
     expect(cases).toHaveLength(1);
   });
 
   it('LLM 输出被 ```json 围栏包裹也能解析', async () => {
-    const llm = new MockLLMProvider({ scripted: [`\`\`\`json\n${JSON.stringify([validCaseJson()])}\n\`\`\``] });
+    const llm = new MockLLMProvider({ scripted: [`\`\`\`json\n${JSON.stringify([validV2CaseJson()])}\n\`\`\``] });
     const cases = await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
     expect(cases).toHaveLength(1);
   });
@@ -259,21 +324,24 @@ describe('test-design - TestDesignAgent 全链路', () => {
     await expect(agent.execute({ requirement: '' }, makeContext(new MockLLMProvider()))).rejects.toThrow('测试设计输入为空');
   });
 
-  it('生成用例可整体转为 LoadedCase 进入执行链路', async () => {
-    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validCaseJson()])] });
+  it('LLM 自报 AVAILABLE 不能让用例进入执行链', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validV2CaseJson()])] });
     const cases = await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
-    const loaded = cases.map(toLoadedCase);
-    expect(loaded[0].def.adapter).toBe('wan3');
-    expect(loaded[0].def.scene).toBe('video');
-    expect(loaded[0].file).toMatch(/^<agent:/);
+    expect(cases[0].executionMode).toBe('DESIGNED_ONLY');
+    expect(cases[0].steps.every((step) => step.execution === 'PLANNED')).toBe(true);
+    expect(cases[0].oracle?.status).toBe('BLOCKED');
+    expect(cases[0].readiness?.reasons.join(' ')).toContain('RUNTIME_CAPABILITIES_NOT_VERIFIED');
   });
 
   it('LLM 提示词包含 Requirement 结构化描述', async () => {
-    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validCaseJson()])] });
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify([validV2CaseJson()])] });
     await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
     const last = llm.getLastCall()!;
     expect(last.messages[0].content).toContain('JSON Schema');
     expect(last.messages[0].content).toContain('"priority"');
+    expect(last.messages[0].content).toContain('五维逐项判断适用性');
+    expect(last.messages[0].content).toContain('禁止统一伪造 submit 步骤');
+    expect(last.messages[0].content).toContain('不设最低条数');
     expect(last.messages[1].content).toContain('功能模块：wan3');
     expect(last.temperature).toBe(0);
     expect(last.jsonMode).toBe(true);

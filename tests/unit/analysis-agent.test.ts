@@ -28,6 +28,7 @@ const EXECUTED_FIXTURE = {
   executed: true,
   processor: 'UnitTestProcessor',
   processorInvoked: true,
+  evidence: { source: 'unit-test-runner' },
 } as const;
 
 /** 构造包含失败/超时的执行结果 */
@@ -103,9 +104,14 @@ describe('analysis - 确定性分析器', () => {
     expect(r.summary.overall).toBe('fail');
     expect(r.failedCases).toHaveLength(2);
     expect(r.findings.some((f) => f.type === 'fail' && f.caseId === 'tc-02')).toBe(true);
+    expect(r.findings.find((f) => f.caseId === 'tc-02')).toEqual(expect.objectContaining({
+      classification: 'PRODUCT_BUG', confidence: 'CONFIRMED', evidence: ['billing: expected 10, actual 5'],
+    }));
+    expect(r.findings.find((f) => f.caseId === 'tc-03')?.classification).toBe('ENVIRONMENT_ERROR');
     expect(r.findings.some((f) => f.title.includes('超时'))).toBe(true);
     expect(r.recommendations.length).toBeGreaterThan(0);
     expect(r.memoryWorthy).toHaveLength(2);
+    expect(r.findings[0]).toEqual(expect.objectContaining({ classification: 'PRODUCT_BUG', confidence: 'CONFIRMED' }));
   });
 
   it('高风险 + 对应用例失败 → 阻塞结论', () => {
@@ -161,7 +167,14 @@ describe('analysis - AnalysisAgent 全链路', () => {
     const r = await new AnalysisAgent().execute({ requirement: req, testCases: cases, outcome, risk }, makeContext(llm));
     expect(r.feature).toBe('wan3');
     expect(r.findings[0].caseId).toBe('tc-02');
-    expect(r.aiSummary).toContain('计费断言失败');
+    expect(r.findings[0]).toEqual(expect.objectContaining({
+      detail: '积分扣减异常',
+      suggestion: '复核账单',
+      classification: 'PRODUCT_BUG',
+      confidence: 'CONFIRMED',
+    }));
+    expect(r.aiSummary).toContain('通过率 33.3%');
+    expect(r.aiSummary).not.toContain('计费断言失败');
     expect(llm.getCallCount()).toBe(1);
     // LLM 分支仍补全真实失败明细
     expect(r.failedCases).toHaveLength(2);
@@ -205,6 +218,44 @@ describe('analysis - AnalysisAgent 全链路', () => {
     expect(last.messages[1].content).toContain('执行结果：共 3 条');
     expect(last.messages[1].content).toContain('通过 1');
     expect(last.messages[1].content).toContain('高风险项');
+    expect(last.messages[1].content).toContain('processorInvoked');
+    expect(last.messages[0].content).toContain('LLM 不是 Oracle');
     expect(last.temperature).toBe(0);
+  });
+
+  it('过滤 LLM 编造的失败 Case，并补回模型遗漏的真实失败', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({
+      feature: 'wan3',
+      findings: [{ type: 'fail', caseId: 'tc-does-not-exist', title: '编造失败', detail: '无', severity: 'high', suggestion: '无' }],
+    })] });
+    const r = await new AnalysisAgent().execute({ requirement: req, testCases: cases, outcome, risk }, makeContext(llm));
+    expect(r.findings.some((finding) => finding.caseId === 'tc-does-not-exist')).toBe(false);
+    expect(r.findings.some((finding) => finding.caseId === 'tc-02' && finding.classification === 'PRODUCT_BUG')).toBe(true);
+    expect(r.findings.some((finding) => finding.caseId === 'tc-03' && finding.classification === 'ENVIRONMENT_ERROR')).toBe(true);
+  });
+
+  it('LLM 不能把真实 P0 失败降级为 info/low，也不能伪造无 Case 结论', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({
+      feature: 'wan3',
+      findings: [
+        { type: 'info', caseId: 'tc-02', title: '可忽略', detail: '模型解释', severity: 'low', suggestion: '不处理' },
+        { type: 'fail', title: '无来源的整体失败', detail: '编造', severity: 'high', suggestion: '无' },
+      ],
+    })] });
+    const r = await new AnalysisAgent().execute({ requirement: req, testCases: cases, outcome, risk }, makeContext(llm));
+    const billing = r.findings.find((finding) => finding.caseId === 'tc-02');
+    expect(billing).toEqual(expect.objectContaining({ type: 'fail', severity: 'high', classification: 'PRODUCT_BUG' }));
+    expect(r.findings.some((finding) => finding.title === '无来源的整体失败')).toBe(false);
+  });
+
+  it('发给 LLM 的执行摘要会脱敏，且包含 Expected/断言上下文', async () => {
+    const sensitiveOutcome = makeOutcome();
+    sensitiveOutcome.results[1].error = 'Authorization: Bearer top-secret-token';
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({ feature: 'wan3', findings: [] })] });
+    await new AnalysisAgent().execute({ requirement: req, testCases: cases, outcome: sensitiveOutcome, risk }, makeContext(llm));
+    const prompt = llm.getLastCall()!.messages[1].content;
+    expect(prompt).not.toContain('top-secret-token');
+    expect(prompt).toContain('expected');
+    expect(prompt).toContain('assertions');
   });
 });

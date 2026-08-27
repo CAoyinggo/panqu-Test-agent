@@ -2,6 +2,7 @@ import type { AcceptanceReport } from '../acceptance/acceptance-report.js';
 import type { AcceptanceCaseExecutionResult } from '../acceptance/api-processor.js';
 import type { ContractPreflight } from '../contracts/contract-gate.js';
 import type { TestCase } from '../agents/test-design/testcase-schema.js';
+import { redactSensitive, redactSensitiveText } from '../core/redact.js';
 import { devTestDimensionOf } from './dimension-selector.js';
 import type {
   DevTestDimensionDecision,
@@ -39,6 +40,7 @@ import type {
   DevTestAcceptanceTrace,
   DevTestDeliveryCoverage,
 } from './types.js';
+import type { DevTestSourceSyncResult } from './source-sync.js';
 
 export const DEVTEST_REPORT_SCHEMA = 'devtest.report.v8';
 
@@ -93,6 +95,7 @@ export interface DevTestRenderInput {
   requirementModel: DevTestRequirementModel;
   acceptanceTraces: DevTestAcceptanceTrace[];
   deliveryCoverage: DevTestDeliveryCoverage;
+  sourceSync?: DevTestSourceSyncResult;
 }
 
 function escapeHtml(value: unknown): string {
@@ -103,6 +106,83 @@ function escapeHtml(value: unknown): string {
 function escapeCsv(value: unknown): string {
   const text = String(value ?? '');
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function markdownCell(value: unknown): string {
+  const text = typeof value === 'string' ? redactSensitiveText(value)
+    : JSON.stringify(redactSensitive(value));
+  return (text || '-').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+}
+
+function markdownInline(value: unknown): string {
+  return markdownCell(value).replace(/<br>/g, ' ');
+}
+
+const RESPONSIVE_MARKDOWN_TABLE_STYLE = `<!-- report-responsive-table-style -->
+<style>
+.pq-table-wrap{width:100%;margin:1rem 0 1.5rem;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.pq-table{width:100%;border-collapse:collapse;table-layout:auto}
+.pq-table th,.pq-table td{padding:.6rem .75rem;border:1px solid;vertical-align:top;text-align:left;overflow-wrap:anywhere}
+.pq-table .pq-cell-compact{width:1%;white-space:nowrap;text-align:center}
+.pq-table .pq-cell-medium{white-space:normal}
+.pq-table .pq-cell-long{width:auto;white-space:normal}
+@media(max-width:768px){.pq-table{width:max-content;min-width:100%}.pq-table .pq-cell-long{min-width:16rem;max-width:72vw}}
+</style>`;
+
+function responsiveColumnClass(header: string): 'pq-cell-compact' | 'pq-cell-medium' | 'pq-cell-long' {
+  if (/^(编号|Case ID|#|结果|状态|数量|级别|优先级|执行状态|Oracle 结论)$/.test(header)) return 'pq-cell-compact';
+  if (/^(模块|类型|类型\/优先级|影响的用例|需谁确认|关联用例|Requirement ID|AC|Fact)$/.test(header)) return 'pq-cell-medium';
+  return 'pq-cell-long';
+}
+
+function responsiveTableCell(value: unknown): string {
+  const redacted = typeof value === 'string' ? redactSensitiveText(value) : redactSensitive(value);
+  const text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted);
+  return escapeHtml(text || 'N/A（不适用）').replace(/\r?\n/g, '<br>');
+}
+
+function renderResponsiveMarkdownTable(headers: string[], rows: unknown[][], kind = 'standard'): string {
+  const classes = headers.map(responsiveColumnClass);
+  const lines = [
+    `<div class="pq-table-wrap pq-table-${kind}">`,
+    '<table class="pq-table">',
+    '  <colgroup>',
+    ...classes.map((className) => `    <col class="${className}">`),
+    '  </colgroup>',
+    '  <thead>',
+    '    <tr>',
+    ...headers.map((header, index) => `      <th class="${classes[index]}">${escapeHtml(header)}</th>`),
+    '    </tr>',
+    '  </thead>',
+    '  <tbody>',
+  ];
+  for (const row of rows) {
+    if (row.length !== headers.length) throw new Error(`响应式表格列数不一致：${row.length}/${headers.length}`);
+    lines.push('    <tr>');
+    row.forEach((cell, index) => lines.push(`      <td class="${classes[index]}">${responsiveTableCell(cell)}</td>`));
+    lines.push('    </tr>');
+  }
+  lines.push('  </tbody>', '</table>', '</div>');
+  return lines.join('\n');
+}
+
+/** 按报告所在时区格式化日期，避免 UTC ISO 在东八区凌晨显示成前一天。 */
+export function formatReportDate(value: string, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const read = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
+    return `${read('year')}-${read('month')}-${read('day')}`;
+  } catch {
+    return value.slice(0, 10);
+  }
 }
 
 function unknownsOf(report: AcceptanceReport): Array<{ type: string; id: string; message: string }> {
@@ -120,7 +200,7 @@ function unknownsOf(report: AcceptanceReport): Array<{ type: string; id: string;
     }));
   });
   return [
-    ...report.coverage.unverifiedFacts.map((fact) => ({ type: 'UNKNOWN_REQUIREMENT', id: fact.id, message: fact.statement })),
+    ...report.coverage.unverifiedFacts.map((fact) => ({ type: 'UNVERIFIED_REQUIREMENT', id: fact.id, message: fact.statement })),
     ...observationUnknowns,
     ...report.bindingIssues.map((issue) => ({ type: 'UNKNOWN_CONTRACT', id: issue.code, message: issue.message })),
   ];
@@ -148,26 +228,27 @@ function contractRowsOf(input: DevTestRenderInput) {
 function caseRows(input: DevTestRenderInput) {
   const executionByCase = new Map(input.results.map((execution) => [execution.caseId, execution]));
   const uiByCase = new Map(input.uiExecutions.map((execution) => [execution.caseId, execution]));
-  const canonicalByCase = new Map(input.testCases.map((testCase) => [testCase.id, testCase]));
+  const reportByCase = new Map(input.report.cases.map((item) => [item.caseId, item]));
   const traceByCase = new Map(input.acceptanceTraces.map((trace) => [trace.caseId, trace]));
-  return input.report.cases.map((item) => {
-    const execution = executionByCase.get(item.caseId);
-    const uiExecution = uiByCase.get(item.caseId);
-    const canonical = canonicalByCase.get(item.caseId);
-    const trace = traceByCase.get(item.caseId);
+  // 全量候选是唯一用例台账；未被选择/执行的 Case 也必须有一行和明确原因。
+  return input.testCases.map((canonical) => {
+    const item = reportByCase.get(canonical.id);
+    const execution = executionByCase.get(canonical.id);
+    const uiExecution = uiByCase.get(canonical.id);
+    const trace = traceByCase.get(canonical.id);
     const assertions = execution?.evidence.assertions ?? [];
     const requiredEvidence = [
       canonical?.executionMode === 'EXECUTABLE' ? 'REQUEST' : undefined,
       canonical?.executionMode === 'EXECUTABLE' ? 'RESPONSE' : undefined,
       canonical?.assertions.length ? 'ASSERTIONS' : undefined,
-      ['DATA_ISOLATION', 'FUNCTIONAL'].includes(devTestDimensionOf(item.testType)) ? 'STATE_OR_SIDE_EFFECT_OBSERVER' : undefined,
+      ['DATA_ISOLATION', 'FUNCTIONAL'].includes(devTestDimensionOf(canonical.testType ?? item?.testType)) ? 'STATE_OR_SIDE_EFFECT_OBSERVER' : undefined,
     ].filter((value): value is string => Boolean(value));
     return {
-      caseId: item.caseId,
-      acId: item.evidence.acceptanceCriteriaIds?.[0] ?? '',
-      dimension: devTestDimensionOf(item.testType),
-      title: item.scenario,
-      priority: item.priority,
+      caseId: canonical.id,
+      acId: item?.evidence.acceptanceCriteriaIds?.[0] ?? canonical.source?.acceptanceCriteriaIds?.[0] ?? '',
+      dimension: devTestDimensionOf(canonical.testType ?? item?.testType),
+      title: item?.scenario ?? canonical.businessScenario?.title ?? canonical.name,
+      priority: item?.priority ?? canonical.priority,
       risk: canonical?.design?.expectedOutcome ?? canonical?.metadata?.risk ?? '',
       actor: canonical?.actor?.id ?? '',
       role: canonical?.actor?.role ?? '',
@@ -180,23 +261,25 @@ function caseRows(input: DevTestRenderInput) {
       expectedState: canonical?.design?.expectedOutcome ?? '',
       assertions: canonical?.assertions ?? [],
       requiredEvidence,
-      executionMode: item.executionMode,
+      executionMode: item?.executionMode ?? canonical.executionMode ?? 'DESIGNED_ONLY',
       status: trace?.result === 'NOT_TESTED' ? 'NOT_EXECUTED' : trace?.result ?? 'BLOCKED',
-      rawStatus: uiExecution?.status ?? execution?.status ?? item.executionStatus,
-      blockedReason: trace?.result === 'BLOCKED' || trace?.result === 'NOT_TESTED'
-        ? trace.explanation.join('；') : uiExecution?.error ?? execution?.attribution.reason ?? item.qualityIssues.join('；'),
+      rawStatus: uiExecution?.status ?? execution?.status ?? item?.executionStatus ?? 'NOT_EXECUTED',
+      blockedReason: !trace
+        ? 'ACCEPTANCE_TRACE_MISSING：用例未进入可审计验收链'
+        : trace.result === 'BLOCKED' || trace.result === 'NOT_TESTED'
+          ? trace.explanation.join('；') : uiExecution?.error ?? execution?.attribution.reason ?? item?.qualityIssues.join('；') ?? '',
       executed: uiExecution?.executed ?? execution?.executed === true,
       processor: uiExecution ? 'PlaywrightBrowserProcessor' : execution?.processor ?? '',
       assertionEvidence: uiExecution?.assertions ?? assertions,
       evidence: uiExecution?.evidence ?? execution?.evidence,
       contractStatus: input.contracts.validation.status,
-      valueScore: input.testValueScores[item.caseId],
-      core: input.caseProfiles[item.caseId]?.core ?? false,
-      coreKind: input.caseProfiles[item.caseId]?.coreKind,
-      problemIds: input.problems.filter((problem) => problem.affectedCases.includes(item.caseId)).map((problem) => problem.id),
-      confidence: input.problems.filter((problem) => problem.affectedCases.includes(item.caseId))
+      valueScore: input.testValueScores[canonical.id],
+      core: input.caseProfiles[canonical.id]?.core ?? false,
+      coreKind: input.caseProfiles[canonical.id]?.coreKind,
+      problemIds: input.problems.filter((problem) => problem.affectedCases.includes(canonical.id)).map((problem) => problem.id),
+      confidence: input.problems.filter((problem) => problem.affectedCases.includes(canonical.id))
         .reduce((highest, problem) => Math.max(highest, problem.confidence ?? 0), 0),
-      actual: uiExecution?.error ?? execution?.error ?? execution?.attribution.reason ?? uiExecution?.status ?? execution?.status ?? item.executionStatus,
+      actual: uiExecution?.error ?? execution?.error ?? execution?.attribution.reason ?? uiExecution?.status ?? execution?.status ?? item?.executionStatus ?? 'NOT_EXECUTED',
     };
   });
 }
@@ -284,6 +367,7 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
     dimensions: dimensionsObject(input),
     discovery: input.discovery,
     environment: input.environmentPreflight,
+    sourceSync: input.sourceSync,
     uiExecutions: input.uiExecutions,
     contracts: contractRowsOf(input),
     cases,
@@ -376,6 +460,14 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
   ];
   const lines = [
     '# Feature Acceptance', '', '## Result', '', input.conclusion, '',
+    '## Source Sync', '',
+    ...(input.sourceSync ? [
+      `- Status: ${input.sourceSync.status}`,
+      `- Root: ${input.sourceSync.root}`,
+      `- Repositories: ${input.sourceSync.repositories.length}`,
+      `- Updated: ${input.sourceSync.repositories.filter((item) => item.updated).length}`,
+      ...input.sourceSync.repositories.map((item) => `- ${item.name}: ${item.branch} -> ${item.upstream} @ ${item.afterCommit}`),
+    ] : ['- NOT_REQUIRED（plan/preflight/dry-run）']), '',
     `Dev Confidence: ${input.devConfidence.score}/100${input.devConfidence.failClosed ? ' (Fail-Closed)' : ''}`, '',
     `Test Reliability: ${input.reliability.score}/100`,
     `Requirement Quality: ${input.requirementQuality.score}/100 · Testability: ${input.requirementQuality.testability}/100`, '',
@@ -419,6 +511,273 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
   return lines.join('\n');
 }
 
+const HANDOFF_LEVEL_WEIGHT = { P0: 4, P1: 3, P2: 2, P3: 1 } as const;
+
+export function handoffProblemLevel(problem: DevTestProblem, input: Pick<DevTestRenderInput, 'caseProfiles'>): keyof typeof HANDOFF_LEVEL_WEIGHT {
+  const product = problem.issueClassification === 'PRODUCT_BUG' || problem.failureClass === 'PRODUCT_BUG';
+  const descriptor = `${problem.category ?? ''} ${problem.type} ${problem.scope ?? ''} ${problem.dimension ?? ''} ${problem.message}`;
+  const criticalBusiness = /Permission|Authorization|Security|Data Isolation|DATA_ISOLATION|Billing|Financial|DATA_CONSISTENCY|DATA_DAMAGE|DATA_LEAK/i
+    .test(descriptor);
+  const generalValidationOrUi = /Parameter Validation|PARAMETER_VALIDATION|UI Behavior|\bUI\b/i.test(descriptor);
+  const mainFlowAffected = problem.affectedCases.some((caseId) =>
+    ['HAPPY_PATH', 'PERSISTENCE'].includes(input.caseProfiles[caseId]?.coreKind ?? ''));
+  if (product && (criticalBusiness || mainFlowAffected)) return 'P0';
+  if (generalValidationOrUi) return 'P2';
+  if (product) return 'P1';
+  if (problem.severity === 'CRITICAL' || problem.severity === 'HIGH') return 'P1';
+  if (problem.severity === 'MEDIUM') return 'P2';
+  return 'P3';
+}
+
+function sortedHandoffProblems(input: DevTestRenderInput): DevTestProblem[] {
+  return [...input.problems].sort((left, right) => {
+    const byLevel = HANDOFF_LEVEL_WEIGHT[handoffProblemLevel(right, input)]
+      - HANDOFF_LEVEL_WEIGHT[handoffProblemLevel(left, input)];
+    return byLevel || (right.benefitScore ?? 0) - (left.benefitScore ?? 0)
+      || (right.confidence ?? 0) - (left.confidence ?? 0) || left.id.localeCompare(right.id);
+  });
+}
+
+function testTypeLabel(value: string): string {
+  return ({ API: '接口', FUNCTIONAL: '功能', UI: 'UI', DATA_ISOLATION: '数据隔离',
+    PARAMETER_VALIDATION: '参数校验' } as Record<string, string>)[value] ?? value;
+}
+
+function inferredContractNote(testCase: TestCase | undefined): string | undefined {
+  if (!testCase) return undefined;
+  const sources = (testCase.contractDependencies ?? []).flatMap((dependency) => dependency.sources ?? []);
+  const inferred = sources.filter((source) => !['requirement', 'markdown'].includes(source.type));
+  if (!inferred.length) return undefined;
+  return `推导契约：${inferred.map((source) => `${source.type}:${source.ref}@${source.confidence ?? 'unknown'}`).join('；')}`;
+}
+
+function pendingOwner(fact: DevTestRequirementModel['facts'][number]): string {
+  if (fact.provenance === 'CONTRACT' || fact.category === 'API') return '后端/接口负责人';
+  if (fact.provenance === 'CONFIGURED') return '测试环境/账号负责人';
+  return '产品/需求负责人';
+}
+
+function pendingQuestion(fact: DevTestRequirementModel['facts'][number]): string {
+  const subject = `“${fact.statement}”`;
+  const questions: Record<string, string> = {
+    ACTOR_UNRESOLVED: `${subject}由哪个角色执行？`,
+    TARGET_OR_SCOPE_UNRESOLVED: `${subject}适用的目标用户、租户或资源范围是什么？`,
+    ACTION_UNRESOLVED: `${subject}要求执行什么业务动作？`,
+    RESOURCE_UNRESOLVED: `${subject}作用于哪个业务资源？`,
+    EXPECTED_OUTCOME_UNRESOLVED: `${subject}的可验证成功或失败结果是什么？`,
+  };
+  const unresolved = fact.canonical.unresolved.map((code) => questions[code] ?? `${subject}缺少 ${code}，请补充可验证定义。`);
+  return unresolved.join('；') || `${subject}缺少可验证业务预期，请补充。`;
+}
+
+function handoffProblemStatus(problem: DevTestProblem): 'OPEN' | 'RESOLVED（待验证）' | 'VERIFIED（验证通过）' {
+  if (problem.lifecycle === 'FIXED') return 'VERIFIED（验证通过）';
+  return 'OPEN';
+}
+
+/**
+ * 开发交接用例资产：展示设计、执行契约、Oracle、Evidence 和最终状态；
+ * 不会把设计态 READY 或静态发现渲染成 PASS。
+ */
+export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string {
+  const rows = caseRows(input);
+  const rowByCase = new Map(rows.map((row) => [row.caseId, row]));
+  const traceByCase = new Map(input.acceptanceTraces.map((trace) => [trace.caseId, trace]));
+  const tableRows = input.testCases.map((testCase) => {
+    const row = rowByCase.get(testCase.id);
+    const trace = traceByCase.get(testCase.id);
+    const contractSources = (testCase.contractDependencies ?? []).flatMap((dependency) => dependency.sources ?? []);
+    const inferred = contractSources.some((source) => !['requirement', 'markdown'].includes(source.type));
+    return [
+      testCase.id,
+      input.report.requirement.title,
+      testCase.name,
+      testCase.priority,
+      testTypeLabel(row?.dimension ?? devTestDimensionOf(testCase.testType)),
+      row?.status ?? 'NOT_EXECUTED',
+      testCase.source?.requirementId ?? input.requirementModel.requirementId,
+      testCase.source?.acceptanceCriteriaIds?.join(', ') || 'N/A（不适用）',
+      testCase.source?.factIds?.join(', ') || 'N/A（不适用）',
+      testCase.businessScenario ?? { title: testCase.name, goal: testCase.design?.expectedOutcome ?? 'UNKNOWN' },
+      { preconditions: testCase.preconditions ?? [], preconditionPlan: testCase.preconditionPlan ?? [],
+        data: testCase.data ?? {}, testData: testCase.testData ?? [] },
+      testCase.steps,
+      { expected: testCase.expected ?? {}, assertions: testCase.assertions,
+        oracle: testCase.oracle ?? { status: 'BLOCKED', reason: 'ORACLE_NOT_DECLARED' } },
+      { required: testCase.evidenceRequirements ?? [], collected: trace?.evidence.collectedItems ?? [],
+        missing: trace?.evidence.missingItems ?? [] },
+      { prepare: testCase.prepare ?? [], cleanup: testCase.cleanup ?? [], dependencies: testCase.dependencies ?? [],
+        executionContract: testCase.executionContract },
+      [
+        `Classification=${trace?.classification ?? 'NOT_TESTED'}`,
+        `Execution=${testCase.executionMode ?? 'DESIGNED_ONLY'}/${testCase.readiness?.status ?? 'BLOCKED'}`,
+        `Contract=${inferred ? '推导契约' : '需求/配置契约'}${contractSources.length
+          ? `（${contractSources.map((source) => `${source.type}:${source.ref}@${source.confidence ?? 'unknown'}`).join('；')}）` : '（来源未解析）'}`,
+        `Tags=${testCase.tags.join(', ') || 'N/A（不适用）'}`,
+        row?.blockedReason || 'Oracle 与 Evidence 完整性由确定性运行链判定。',
+      ].join('；'),
+    ];
+  });
+  const lines = [
+    `# ${markdownInline(input.report.requirement.title)} 测试用例`, '',
+    RESPONSIVE_MARKDOWN_TABLE_STYLE, '',
+    `- 需求文档：${markdownInline(input.meta.docSource)}`,
+    `- Run ID：${markdownInline(input.runId)}`,
+    `- 生成时间：${markdownInline(input.meta.finishedAt)}`,
+    `- 用例统计：共 ${rows.length} 条｜PASS ${rows.filter((row) => row.status === 'PASS').length}｜FAIL ${rows.filter((row) => row.status === 'FAIL').length}｜BLOCKED ${rows.filter((row) => row.status === 'BLOCKED').length}｜NOT_EXECUTED ${rows.filter((row) => row.status === 'NOT_EXECUTED').length}`,
+    '', '## 全部测试用例', '',
+    renderResponsiveMarkdownTable([
+      '编号', '模块', '标题', '优先级', '类型', '结果', 'Requirement ID', 'AC', 'Fact',
+      'Business Scenario', 'Preconditions / Test Data', 'Steps', 'Expected Result / Assertion / Oracle',
+      'Evidence Required', 'Cleanup / Dependency', '备注',
+    ], tableRows, 'cases'), '',
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+/** 用户约定的固定七段开发自测报告。每个章节只渲染一张完整响应式表格。 */
+export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string {
+  const rows = caseRows(input);
+  const passed = rows.filter((row) => row.status === 'PASS').length;
+  const failed = rows.filter((row) => row.status === 'FAIL').length;
+  const blocked = rows.filter((row) => row.status === 'BLOCKED').length;
+  const notExecuted = rows.filter((row) => row.status === 'NOT_EXECUTED').length;
+  const total = passed + failed + blocked + notExecuted;
+  const unknowns = unknownsOf(input.report);
+  const orderedProblems = sortedHandoffProblems(input);
+  const recommendation = input.conclusion === 'READY' ? '建议发布'
+    : input.conclusion === 'NOT_READY' ? '暂不发布（修复后再提）' : '待补测';
+  const validationMode = input.deliveryCoverage.cases.executed > 0
+    ? `真实调用（${input.meta.baseUrl}，${input.meta.mode}）`
+    : `测试设计（无真实执行证据；未产生静态缺陷分析证据，${input.meta.mode}）`;
+  const topRisks = orderedProblems.slice(0, 3).map((problem, index) =>
+    `${index + 1}. ${handoffProblemLevel(problem, input)} ${markdownInline(problem.id)} ${markdownInline(problem.message)}`);
+  if (!topRisks.length) topRisks.push(...unknowns.slice(0, 3).map((item, index) =>
+    `${index + 1}. ${markdownInline(item.type)} ${markdownInline(item.message)}`));
+
+  const pending: Array<{ key: string; question: string; cases: string; owner: string }> = [];
+  for (const issue of input.requirementQuality.issues) {
+    const cases = input.acceptanceTraces.filter((trace) => !issue.acId
+      || trace.requirement.acceptanceCriteriaIds.includes(issue.acId)).map((trace) => trace.caseId);
+    pending.push({ key: `QUALITY:${issue.code}:${issue.acId ?? '-'}`, question: issue.message,
+      cases: cases.join(', ') || 'N/A（不适用）', owner: issue.code === 'API_MISSING' ? '后端/接口负责人' : '产品/需求负责人' });
+  }
+  for (const fact of input.requirementModel.facts.filter((fact) => fact.knowledge === 'UNKNOWN'
+    && fact.normativity === 'NORMATIVE' && !['CONFIGURED', 'CONTRACT'].includes(fact.provenance)
+    && fact.canonical.unresolved.length > 0)) {
+    const cases = input.acceptanceTraces.filter((trace) => trace.requirement.factIds.includes(fact.id)).map((trace) => trace.caseId);
+    pending.push({ key: `FACT:${fact.id}`, question: `${fact.id}：${pendingQuestion(fact)}`,
+      cases: cases.join(', ') || 'N/A（不适用）', owner: pendingOwner(fact) });
+  }
+  const uniquePending = pending.filter((item, index, all) => all.findIndex((other) => other.key === item.key) === index);
+
+  const caseTableRows = rows.map((row) => {
+    const trace = input.acceptanceTraces.find((item) => item.caseId === row.caseId);
+    const executionNote = row.status === 'PASS' || row.status === 'FAIL'
+      ? `${trace?.oracle.verdict ?? row.rawStatus}；Evidence ${trace?.evidence.collectedItems?.length ?? 0}/${trace?.evidence.requiredItems?.length ?? 0}`
+      : row.blockedReason || trace?.explanation.join('；') || '未获得真实执行与证据';
+    const contractNote = inferredContractNote(input.testCases.find((item) => item.id === row.caseId));
+    const note = [executionNote, contractNote].filter(Boolean).join('；');
+    return [row.caseId, input.report.requirement.title, row.title, row.priority,
+      testTypeLabel(row.dimension), row.status, note];
+  });
+
+  const problemTableRows = orderedProblems.map((problem) => {
+    const reproduction = problem.reproduction?.length ? problem.reproduction.map((step, index) => `${index + 1}.${step}`).join(' ') : '补齐执行条件后按关联 Case 复现';
+    const evidence = {
+      why: problem.why,
+      expected: problem.expected,
+      actual: problem.actual,
+      evidence: problem.evidence,
+      request: problem.request,
+      response: problem.response,
+    };
+    return [problem.id, handoffProblemLevel(problem, input), problem.message, reproduction, evidence,
+      handoffProblemStatus(problem)];
+  });
+
+  const uncovered: Array<{ item: string; reason: string; material: string }> = [];
+  for (const trace of input.acceptanceTraces.filter((item) => item.result === 'BLOCKED' || item.result === 'NOT_TESTED')) {
+    uncovered.push({
+      item: trace.caseId,
+      reason: trace.explanation.join('；'),
+      material: [...trace.executableTest.missing, ...(trace.evidence.missingItems ?? [])].join(', ') || '可执行环境、账号或 Observer',
+    });
+  }
+  for (const dimension of input.environmentPreflight.blockedDimensions) {
+    uncovered.push({ item: dimension.dimension, reason: dimension.reason, material: '对应执行器、测试环境与账号/数据配置' });
+  }
+  for (const item of unknowns) {
+    uncovered.push({
+      item: item.id || item.type,
+      reason: `${item.type}：${item.message}`,
+      material: item.type === 'UNKNOWN_CONTRACT' ? '权威契约/源码映射与复核'
+        : item.type === 'UNVERIFIED_REQUIREMENT' ? '测试环境、账号、执行器与有效 Evidence'
+          : '对应 Observer、执行器或环境能力',
+    });
+  }
+  const uniqueUncovered = uncovered.filter((item, index, all) => all.findIndex((other) => other.item === item.item
+    && other.reason === item.reason) === index);
+
+  const requirementTableRows: unknown[][] = input.requirementModel.facts.map((fact) => [
+    '需求事实', fact.id, fact.statement, `${fact.knowledge}/${fact.provenance}`,
+    input.acceptanceTraces.filter((trace) => trace.requirement.factIds.includes(fact.id)).map((trace) => trace.caseId).join(', ') || '-',
+    fact.canonical.unresolved.join(', ') || 'N/A（不适用）',
+  ]);
+  requirementTableRows.push(...uniquePending.map((item, index) => [
+    '待确认', index + 1, item.question, 'NEED_CONFIRMATION', item.cases, item.owner,
+  ]));
+  if (!requirementTableRows.length) requirementTableRows.push(['需求核对', 'N/A（不适用）', '无待确认项', 'CONFIRMED', 'N/A（不适用）', 'N/A（不适用）']);
+
+  const evidenceTableRows = input.acceptanceTraces.map((trace) => {
+    const row = rows.find((item) => item.caseId === trace.caseId);
+    return [trace.caseId, row?.status ?? 'NOT_EXECUTED', trace.oracle.verdict,
+      trace.evidence.collectedItems?.join(', ') || 'N/A（不适用）', trace.evidence.missingItems?.join(', ') || 'N/A（不适用）',
+      trace.explanation.join('；') || 'N/A（不适用）'];
+  });
+
+  const lines = [
+    `# ${markdownInline(input.report.requirement.title)} 开发自测测试报告`, '',
+    RESPONSIVE_MARKDOWN_TABLE_STYLE, '',
+    `- 需求文档：${markdownInline(input.meta.docSource)} / 报告类型：开发自测报告 / 测试人：DevTest Agent / 日期：${markdownInline(formatReportDate(input.meta.finishedAt))} / 验证模式：${markdownInline(validationMode)}`,
+    `- 工蜂源码同步：${input.sourceSync ? `${input.sourceSync.status}；${input.sourceSync.repositories.length} 个仓库；${input.sourceSync.repositories.filter((item) => item.updated).length} 个发生覆盖更新` : 'NOT_REQUIRED（plan/preflight/dry-run）'}`, '',
+    '## 1. 结论概览', '',
+    renderResponsiveMarkdownTable(['项目', '结果', '说明'], [
+      ['用例统计', total, `PASS ${passed}；FAIL ${failed}；BLOCKED ${blocked}；NOT_EXECUTED ${notExecuted}`],
+      ['提测建议', recommendation, input.conclusion],
+      ['代码与环境结论', input.conclusion, `Dev Confidence ${input.devConfidence.score}/100${input.devConfidence.failClosed ? '（Fail-Closed）' : ''}`],
+      ['Requirement Coverage', `${input.deliveryCoverage.requirements.verifiedCoverage}%`,
+        `Generated ${input.deliveryCoverage.requirements.generatedCoverage}%；Executed ${input.deliveryCoverage.requirements.executedCoverage}%；Evidence ${input.deliveryCoverage.evidence.coverage}%`],
+      ['Top 风险', topRisks.length, topRisks.join('；') || '当前可观察范围内无已识别风险。'],
+    ], 'conclusion'),
+    '', '## 2. 需求与实现核对', '',
+    renderResponsiveMarkdownTable(['类型', '编号', '需求/问题', '状态/来源', '关联用例', '负责人/说明'], requirementTableRows, 'requirements'),
+    '', '## 3. 用例执行清单', '',
+    renderResponsiveMarkdownTable(['编号', '模块', '标题', '优先级', '类型', '结果', '备注'],
+      caseTableRows.length ? caseTableRows : [['N/A（不适用）', 'N/A（不适用）', '无', 'N/A（不适用）', 'N/A（不适用）', 'NOT_EXECUTED', '用例数为 0']], 'cases'),
+    '', '## 4. 审查中发现的问题', '',
+    renderResponsiveMarkdownTable(['编号', '级别', '标题', '复现步骤', '证据', '状态'],
+      problemTableRows.length ? problemTableRows : [['N/A（不适用）', 'N/A（不适用）', '当前可观察范围内无已确认缺陷', 'N/A（不适用）', 'N/A（不适用）', 'N/A（不适用）']], 'problems'),
+    '', '## 5. 自动化执行证据', '',
+    renderResponsiveMarkdownTable(['编号', '执行状态', 'Oracle 结论', '已收集证据', '缺失证据', '说明'],
+      evidenceTableRows.length ? evidenceTableRows : [['N/A（不适用）', 'NOT_EXECUTED', 'N/A（不适用）', 'N/A（不适用）', 'N/A（不适用）', '无执行证据']], 'evidence'),
+    '', '## 6. 未覆盖项与回归建议', '',
+    renderResponsiveMarkdownTable(['未覆盖项', '原因', '需要补充的材料'],
+      uniqueUncovered.length ? uniqueUncovered.map((item) => [item.item, item.reason, item.material]) : [['N/A（不适用）', '无', 'N/A（不适用）']], 'uncovered'),
+    '', '## 7. 发布判定', '',
+    renderResponsiveMarkdownTable(['判定项', '结果', '依据'], [
+      ['最终判定', recommendation, input.conclusion],
+      ['必测项状态', failed + blocked + notExecuted === 0 ? '全部完成' : '未全部完成',
+        `FAIL ${failed}；BLOCKED ${blocked}；NOT_EXECUTED ${notExecuted}`],
+      ['未解决问题', orderedProblems.length, orderedProblems.map((problem) => problem.id).join(', ') || '无'],
+    ], 'release'),
+    '',
+    '> 说明：生成不等于执行，执行不等于验证。PASS/FAIL 只来自真实执行、确定性 Oracle 与完整 Evidence；静态发现和证据不足项保持 BLOCKED/NOT_EXECUTED。',
+    '',
+  ];
+  return lines.join('\n');
+}
+
 function statusClass(status: string): string {
   return status === 'READY' || status === 'PASS' ? 'ok' : status === 'NOT_READY' || status === 'FAIL' ? 'bad' : 'warn';
 }
@@ -426,6 +785,7 @@ function statusClass(status: string): string {
 export function renderDevTestHtml(input: DevTestRenderInput): string {
   const rows = caseRows(input);
   const unknowns = unknownsOf(input.report);
+  const sourceSyncRows = input.sourceSync?.repositories.map((repository) => `<tr><td>${escapeHtml(repository.name)}</td><td>${escapeHtml(repository.branch)}</td><td>${escapeHtml(repository.upstream)}</td><td><code>${escapeHtml(repository.beforeCommit)}</code></td><td><code>${escapeHtml(repository.afterCommit)}</code></td><td>${repository.updated ? 'YES' : 'NO'}</td><td>${repository.discardedWorktreeEntries}</td></tr>`).join('') ?? '';
   const contractRows = contractRowsOf(input).map((contract) => `<tr><td>${escapeHtml(contract.id)}</td><td>${escapeHtml(contract.status)}</td><td>${escapeHtml(contract.version ?? '-')}</td><td><code>${escapeHtml(contract.fingerprint ?? '-')}</code></td><td>${escapeHtml(contract.reason ?? '-')}</td></tr>`).join('');
   const dimensionRows = input.dimensionStats.map((stat) => {
     const decision = input.dimensionApplicability.find((item) => item.dimension === stat.dimension);
@@ -473,6 +833,7 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f8fa;color:#1f2328;margin:0}.wrap{max-width:1500px;margin:auto;padding:24px}section,.problem{background:#fff;border:1px solid #d0d7de;border-radius:8px;margin:16px 0;padding:18px}.banner{border-left:6px solid #9a6700}.ok{color:#1a7f37;font-weight:700}.bad{color:#cf222e;font-weight:700}.warn{color:#9a6700;font-weight:700}.cards{display:flex;gap:12px;flex-wrap:wrap}.card{border:1px solid #d0d7de;padding:10px 16px;border-radius:6px}.card b{font-size:22px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{border:1px solid #d0d7de;padding:7px;text-align:left;vertical-align:top}.scroll{overflow:auto}code{font-size:11px;word-break:break-all}</style></head><body><main class="wrap">
 <h1>${escapeHtml(input.report.requirement.title)}</h1>
 <section class="banner"><h2>开发首页 · Feature Acceptance</h2><p><b>Feature：</b>${escapeHtml(input.report.requirement.title)}</p><p class="${statusClass(input.conclusion)}" style="font-size:30px"><b>最终结论 / Final Result：</b>${input.conclusion}</p><div class="cards"><div class="card"><b>${input.devConfidence.score}</b><br>Dev Confidence</div><div class="card"><b>${input.requirementCoverage.coreCoverage}%</b><br>Core Coverage</div><div class="card"><b>${input.businessFlowGraph.applicable === false ? 'N/A' : `${input.businessFlowGraph.coverage}%`}</b><br>Business Flow Coverage</div><div class="card"><b>${evidenceCoverage}%</b><br>Evidence Coverage</div><div class="card bad"><b>${confirmedBugs.length}</b><br>Confirmed Bugs</div><div class="card warn"><b>${likelyProblems.length}</b><br>Likely Bugs</div><div class="card warn"><b>${blocked + notExecuted}</b><br>Blocked</div><div class="card"><b>${unknowns.length}</b><br>Unknowns</div><div class="card"><b>${input.reliability.score}</b><br>Test Reliability</div></div>${input.reproduction ? `<p><b>Reproduction ${input.reproduction.problemId}：</b>${input.reproduction.status}</p>` : ''}</section>
+<section><h2>Worker Source Sync</h2>${input.sourceSync ? `<p class="ok"><b>${escapeHtml(input.sourceSync.status)}</b> · ${escapeHtml(input.sourceSync.root)} · ${input.sourceSync.repositories.length} repositories · ${input.sourceSync.repositories.filter((repository) => repository.updated).length} overwritten/updated</p><div class="scroll"><table><tr><th>Repository</th><th>Branch</th><th>Upstream</th><th>Before SHA</th><th>After SHA</th><th>Updated</th><th>Discarded Entries</th></tr>${sourceSyncRows}</table></div>` : '<p>NOT_REQUIRED（plan/preflight/dry-run）</p>'}</section>
 <section><h2>Top Business Risks</h2>${topRiskHtml ? `<ol>${topRiskHtml}</ol>` : '<p>none</p>'}</section>
 <section><h2>Test Reliability</h2><p><b>Score：</b>${input.reliability.score}/100　Stable ${input.reliability.stable}　Flaky ${input.reliability.flaky}　Unstable ${input.reliability.unstable}</p>${reliabilityRows ? `<div class="scroll"><table><tr><th>Case</th><th>Status</th><th>Pass Rate</th><th>Failure Rate</th><th>Flake Rate</th><th>Avg Duration ms</th></tr>${reliabilityRows}</table></div>` : '<p>No flaky or unstable test.</p>'}<h3>Environment Problems</h3>${environmentProblems ? `<ul>${environmentProblems}</ul>` : '<p>none</p>'}<h3>Test Pollution</h3>${pollutionRows ? `<div class="scroll"><table><tr><th>Case</th><th>Classification</th><th>Severity</th><th>Changed State</th><th>Reason</th></tr>${pollutionRows}</table></div>` : '<p>none</p>'}</section>
 <section><h2>Requirement Quality</h2><p><b>Requirement Quality：</b>${input.requirementQuality.score}/100　<b>Testability：</b>${input.requirementQuality.testability}/100　${input.requirementQuality.needsClarification ? '<b class="warn">Requirement needs clarification</b>' : ''}</p><ul>${input.requirementQuality.issues.map((item) => `<li>${item.acId ?? 'Requirement'} · ${item.code}: ${escapeHtml(item.message)}</li>`).join('') || '<li>none</li>'}</ul></section>

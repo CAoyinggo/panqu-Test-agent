@@ -6,6 +6,7 @@ Processor、Assertion、Evidence 和 Acceptance Report 组织成一条可审计�
 
 ```text
 Requirement
+  → 工蜂源码强制同步（/Users/mac/agents/panqu-ai 下所有 Git 子仓库）
   → Requirement Model（EXPLICIT / DERIVED / UNKNOWN）
   → Feature Model（Actor/Resource/Operation/UI/State/Constraint/Side Effect）
   → Route/Controller/OpenAPI/Frontend/UI 只读发现
@@ -21,7 +22,7 @@ Requirement
   → Regression Guard / Baseline / Version Comparison / Dev Confidence
   → READY / NOT_READY / BLOCKED
   → Deterministic Oracle / Adaptive Selection / Reliability
-  → Report v8 + Acceptance Summary 固定五类产物
+  → 测试用例.md + 开发自测测试报告.md + 机器审计附件
 ```
 
 ## 使用
@@ -75,9 +76,18 @@ npm run devtest -- requirements/new-feature.md \
 
 可用 `--no-ui`、`--no-api`、`--no-data-isolation`、
 `--no-parameter-validation` 显式关闭维度。关闭决定会进入报告，不会静默丢失。
-源码发现默认以当前目录为项目根；可用 `--project-root` 指向实际项目。发现结果只有在
-Route/Controller/OpenAPI 等权威来源精确或高置信映射时才进入 Contract 附录；前端请求
-只能作为候选，无法唯一映射时保持 UNKNOWN。
+CLI 源码发现默认以 `/Users/mac/agents/panqu-ai` 为项目根；可用 `--project-root` 缩小发现范围。
+除 `--plan`、`--preflight`、`--mode dry-run` 外，每次测试执行前都会先对该目录下所有工蜂
+Git 子仓库执行两阶段强制同步：全部仓库先成功 `fetch --prune`，随后逐仓库
+`reset --hard <upstream>` 与 `clean -fd`。这会覆盖 tracked 本地修改/本地领先提交并删除
+非 ignored 未跟踪文件；任一仓库 fetch、upstream 解析或最终 SHA 校验失败时，测试零执行并
+fail-closed。每个仓库的 branch、upstream、同步前后 commit SHA 和覆盖计数进入
+`report.json`、`acceptance-summary.md` 与独立 `source-sync.json`。
+
+发现结果只有在
+Route/Controller/OpenAPI 等后端权威来源优先精确或高置信映射；后端没有可映射契约时，
+才使用前端实际请求作为回退来源。每个推导契约都保留来源、置信度和「推导契约」标记；
+无法唯一映射时保持 UNKNOWN。
 
 ## 高价值选择
 
@@ -143,8 +153,9 @@ UNCOVERED / AMBIGUOUS / BLOCKED`，所有核心 AC 都进入覆盖率分母。
 ## Environment Preflight
 
 每次运行先检查 Base URL、Health、API、Authentication、Browser 与 Database。
-候选来源依次为开发者显式 `--base-url`、专用环境变量、项目测试配置和本机
-`127.0.0.1/localhost`。只有一个候选可访问时才自动选择；多个可访问候选会输出
+候选来源依次为开发者显式 `--base-url`、专用环境变量和项目测试配置。默认不猜测
+`127.0.0.1/localhost`；没有任何候选地址时输出 `ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY`，全程零网络请求，
+执行结果保持 `BLOCKED/NOT_EXECUTED`。只有一个候选可访问时才自动选择；多个可访问候选会输出
 `AMBIGUOUS_ENVIRONMENT`，要求开发者显式选择。Preflight 只使用 GET/HEAD 探针，
 不会为了探测环境触发写入、删除、扣费或 Provider。
 
@@ -168,21 +179,31 @@ Minimal Reproduction。
 `Dev Confidence (0~100)` 由 Core AC、执行、证据、问题可信度、Unknown 和 Blocked P0
 计算。它只解释结论，不能覆盖 Fail-Closed：存在关键阻断时，即使分数高也不能 READY。
 
-五类报告始终先完整落盘。CLI 退出码同样 fail-closed：只有 `READY` 返回 `0`；
+两份开发者 Markdown 和五份机器审计附件始终先完整落盘。CLI 退出码同样 fail-closed：只有 `READY` 返回 `0`；
 `NOT_READY`、`BLOCKED` 返回 `1`；输入或配置错误返回 `2`。`--preflight` 在环境
 READY/PARTIAL 时返回 `0`，环境 BLOCKED 时返回 `1`。
 
 ## 固定产物
 
-每次运行只在 `devtest-results/<runId>/`（或 `--output`）生成：
+每次运行在 `devtest-results/<runId>/`（或 `--output`）生成：
 
 ```text
+测试用例.md
+开发自测测试报告.md
 report.html
 report.json
 cases.csv
 problems.md
 acceptance-summary.md
+source-sync.json
 ```
+
+`测试用例.md` 保留全部候选用例及 Requirement ID、Business Scenario、前置/数据、可执行 Steps、
+Expected、确定性 Oracle、Evidence、Cleanup/Dependency、推导契约来源和最终执行状态。
+`开发自测测试报告.md` 固定为七段：1.结论概览、2.需求与实现核对、3.用例执行清单、
+4.审查中发现的问题、5.自动化执行证据、6.未覆盖项与回归建议、7.发布判定。每个章节只生成
+一张完整响应式 HTML 表格，不按模块、编号或“概览＋详情”拆分；`测试用例.md`同样只生成一张
+包含全部字段和记录的完整用例表。统计与用例台账由确定性代码生成，不交给 LLM 计算或判定 PASS/FAIL。
 
 `report.json` 使用 `devtest.report.v8`，固定包含 run、feature model、summary、Requirement
 Coverage Matrix、Invariant、五维与动态维度、discovery、contracts、cases、problems、

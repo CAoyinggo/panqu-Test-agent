@@ -74,4 +74,34 @@ AC-1 name 超过 20 返回 400。
       expect.objectContaining({ code: 'PARAMETER_CONTRACT_CONFLICT', message: expect.stringContaining('Requirement=20 OpenAPI=200') }),
     ]);
   });
+
+  it('后端契约缺失时按第二优先级使用前端真实调用，并标记推导来源和置信度', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'devtest-frontend-contract-'));
+    await writeFile(path.join(root, 'profile-client.ts'), `
+      export const updateProfile = (nickname: string) => fetch('/api/profile', {
+        method: 'PATCH', body: JSON.stringify({ nickname })
+      });
+    `);
+    const requirement = parseAcceptanceRequirement(REQUIREMENT);
+    const discovery = await discoverDevTestProject({ projectRoot: root, requirement });
+    expect(discovery.mappedOperations).toEqual([
+      expect.objectContaining({ method: 'PATCH', path: '/api/profile', confidence: 0.72,
+        source: [expect.objectContaining({ type: 'FRONTEND' })] }),
+    ]);
+    expect(discovery.mappingReasons[0]).toContain('推导契约来源 FRONTEND:');
+    const enriched = appendDiscoveredContracts(REQUIREMENT, discovery, false);
+    expect(enriched).toContain('> 推导契约；来源：FRONTEND:profile-client.ts；置信度：0.72。');
+  });
+
+  it('全项目只有一个但与 Requirement 语义无关的接口时保持 UNKNOWN', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'devtest-unrelated-contract-'));
+    await writeFile(path.join(root, 'metrics.ts'), `router.get('/internal/metrics', metrics);`);
+    const discovery = await discoverDevTestProject({
+      projectRoot: root,
+      requirement: parseAcceptanceRequirement(REQUIREMENT),
+    });
+    expect(discovery.operations).toHaveLength(1);
+    expect(discovery.mappedOperations).toEqual([]);
+    expect(discovery.mappingReasons[0]).toContain('保持 UNKNOWN');
+  });
 });

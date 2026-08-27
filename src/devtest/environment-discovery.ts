@@ -116,6 +116,10 @@ export async function discoverDevTestEnvironment(input: {
   fetchImpl?: typeof fetch;
   /** DRY_RUN 只解析候选地址和能力需求，禁止发出 Health/API 探针。 */
   probeNetwork?: boolean;
+  /** 仅供明确要求的本机约定模式使用；DevTest 默认不猜测 localhost。 */
+  allowLocalDefaults?: boolean;
+  /** 项目配置只是静态候选；必须显式授权才可向其发探针。 */
+  allowDiscoveredEnvironmentProbe?: boolean;
 }): Promise<DevTestEnvironmentPreflight> {
   const raw: Array<Omit<DevTestEnvironmentCandidate, 'reachable'>> = [];
   const add = (value: string | undefined, source: DevTestEnvironmentCandidate['source'], sourceRef: string): void => {
@@ -127,13 +131,24 @@ export async function discoverDevTestEnvironment(input: {
   else {
     for (const name of ['DEVTEST_BASE_URL', 'TESTFLOW_BASE_URL', 'TEST_BASE_URL']) add(process.env[name], 'ENV', name);
     for (const item of await projectConfigCandidates(input.projectRoot, input.environment)) add(item.url, 'PROJECT_CONFIG', item.ref);
-    if (!raw.length || input.environment === 'local') for (const value of LOCAL_DEFAULTS) add(value, 'LOCAL_DEFAULT', 'local convention');
+    if (!raw.length && input.allowLocalDefaults === true) {
+      for (const value of LOCAL_DEFAULTS) add(value, 'LOCAL_DEFAULT', 'explicit local convention');
+    }
   }
-  if (!raw.length) throw new Error('DEVTEST_ENVIRONMENT_NO_CANDIDATE：没有显式、环境变量、项目配置或本机候选地址');
-  const probeNetwork = input.probeNetwork !== false;
-  const candidates = probeNetwork
-    ? await Promise.all(raw.map((candidate) => probeCandidate(candidate, input.requirement, input.fetchImpl ?? fetch)))
-    : raw.map((candidate) => ({ ...candidate, reachable: false, error: 'DRY_RUN_ENVIRONMENT_NOT_PROBED' }));
+  const authorized = raw.filter((candidate) => candidate.source !== 'PROJECT_CONFIG'
+    || input.allowDiscoveredEnvironmentProbe === true);
+  const environmentMissing = raw.length === 0;
+  const environmentUnauthorized = !environmentMissing && authorized.length === 0;
+  const probeNetwork = input.probeNetwork !== false && authorized.length > 0;
+  const authorizedUrls = new Set(authorized.map((candidate) => candidate.url));
+  const candidates = await Promise.all(raw.map((candidate) => {
+    if (!authorizedUrls.has(candidate.url)) return Promise.resolve({
+      ...candidate, reachable: false, error: 'ENVIRONMENT_CANDIDATE_NOT_AUTHORIZED',
+    });
+    return probeNetwork ? probeCandidate(candidate, input.requirement, input.fetchImpl ?? fetch) : Promise.resolve({
+      ...candidate, reachable: false, error: 'DRY_RUN_ENVIRONMENT_NOT_PROBED',
+    });
+  }));
   const reachable = candidates.filter((candidate) => candidate.reachable);
   const explicit = candidates.find((candidate) => candidate.source === 'CLI');
   const ambiguous = probeNetwork && !explicit && reachable.length > 1;
@@ -162,7 +177,9 @@ export async function discoverDevTestEnvironment(input: {
   if (isolationRequired) applicable.add('DATA_ISOLATION');
   if (parameterRequired || input.requirement.factLedger.some((fact) => ['VALIDATION', 'BOUNDARY'].includes(fact.category))) applicable.add('PARAMETER_VALIDATION');
   const blockedDimensions: DevTestEnvironmentPreflight['blockedDimensions'] = [];
-  if (!probeNetwork) {
+  if (environmentMissing || environmentUnauthorized) {
+    for (const dimension of applicable) blockedDimensions.push({ dimension, reason: 'ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY' });
+  } else if (!probeNetwork) {
     for (const dimension of applicable) blockedDimensions.push({ dimension, reason: 'DRY_RUN_ENVIRONMENT_NOT_PROBED' });
   } else if (!selected || ambiguous) {
     for (const dimension of applicable) {
@@ -184,7 +201,9 @@ export async function discoverDevTestEnvironment(input: {
   return {
     status,
     selectedBaseUrl: selected?.url,
-    reason: !probeNetwork ? 'DRY_RUN_ENVIRONMENT_NOT_PROBED：DRY_RUN 禁止 Health/API 网络探针'
+    reason: environmentMissing ? 'ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY：未提供获授权的测试环境地址，已降级为测试设计；未向被测环境发出请求'
+      : environmentUnauthorized ? 'ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY：只发现项目配置候选地址，未获网络探测授权；未向被测环境发出请求'
+      : !probeNetwork ? 'DRY_RUN_ENVIRONMENT_NOT_PROBED：DRY_RUN 禁止 Health/API 网络探针'
       : ambiguous ? `AMBIGUOUS_ENVIRONMENT：多个候选可访问：${reachable.map((item) => item.url).join(', ')}`
         : !selected ? 'NETWORK_UNREACHABLE：没有候选地址可访问' : undefined,
     ambiguous,

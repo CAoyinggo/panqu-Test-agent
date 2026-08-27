@@ -49,6 +49,7 @@ const ACTION_PATTERNS: ReadonlyArray<[CanonicalAction['kind'], RegExp]> = [
 ];
 
 const RESOURCE_PATTERNS: ReadonlyArray<[string, RegExp]> = [
+  ['TASK', /(?:任务|tasks?)/i],
   ['USER_PROFILE', /(?:用户资料|个人资料|profile)/i],
   ['ORDER', /(?:订单|orders?)/i],
   ['INVENTORY', /(?:库存|inventory|stock)/i],
@@ -116,7 +117,7 @@ function identityPosition(statement: string, actor: ActorSpec): number {
   }));
 }
 
-function actorRelation(statement: string, actors: ActorSpec[]): { actor?: CanonicalActor; targetActor?: CanonicalActor } {
+function actorRelation(statement: string, actors: ActorSpec[], allowConfiguredDefault = false): { actor?: CanonicalActor; targetActor?: CanonicalActor } {
   const mentioned = actors
     .map((actor) => ({ actor, position: identityPosition(statement, actor) }))
     .filter((entry) => Number.isFinite(entry.position))
@@ -133,7 +134,7 @@ function actorRelation(statement: string, actors: ActorSpec[]): { actor?: Canoni
   }
   if (mentioned.length === 1) return { actor: configuredActor(mentioned[0].actor) };
   const role = explicitRole(statement);
-  if (!role?.role) return { actor: role };
+  if (!role?.role) return allowConfiguredDefault && actors.length === 1 ? { actor: configuredActor(actors[0]) } : { actor: role };
   const roleMatches = actors.filter((actor) => actor.role.toUpperCase() === role.role);
   return roleMatches.length === 1 ? { actor: configuredActor(roleMatches[0]) } : { actor: role };
 }
@@ -157,7 +158,7 @@ function operationFromRefs(refs: RequirementFactEntityRef[], apis: ApiSpec[]): A
 
 function explicitStatus(statement: string): number | undefined {
   const withoutOperation = statement.replace(/\b(?:GET|HEAD|POST|PUT|PATCH|DELETE)\s+\/[^\s|`，。,;；]+/gi, ' ');
-  for (const match of withoutOperation.matchAll(/(?:返回|响应(?:状态码)?|状态码|returns?|responds?\s+with|status(?:\s+code)?\s*[:=]?)\s*([1-5]\d{2})/gi)) {
+  for (const match of withoutOperation.matchAll(/(?:返回|响应(?:状态码)?|状态码|returns?|responds?\s+with|status(?:\s+code)?\s*[:=]?)\s*(?:HTTP\s*)?([1-5]\d{2})/gi)) {
     const before = withoutOperation.slice(Math.max(0, match.index! - 16), match.index);
     const after = withoutOperation.slice(match.index! + match[0].length, match.index! + match[0].length + 24);
     if (/(?:若|如果|当|实际|观察到|unexpected|actual|observed|if|when)/i.test(before)
@@ -335,10 +336,22 @@ function expectedOutcome(input: RequirementNormalizationContext, response: Respo
     return { kind: 'ALLOW', value, expression: input.statement, explicit: true };
   }
   if (/(?:保持不变|不得改变|unchanged|must\s+not\s+change)/i.test(input.statement)) return { kind: 'UNCHANGED', value, expression: input.statement, explicit: true };
+  const transition = input.statement.match(/(?:从\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)\s*(?:变为|变成|转为|转换到|流转到|到)\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)|(?:transition(?:s|ed)?\s+from\s+([^,.;\s]+)\s+to\s+([^,.;\s]+)))/i);
+  if (transition && status === undefined) return {
+    kind: 'STATE_CHANGED',
+    value: { from: transition[1] ?? transition[3], to: transition[2] ?? transition[4] },
+    expression: input.statement,
+    explicit: true,
+  };
+  const terminalState = input.category === 'STATE'
+    ? input.statement.match(/(?:返回|达到|终态(?:为)?)[^，。；]*?\b([A-Z][A-Z0-9_]{2,})\b/) : undefined;
+  if (terminalState && status === undefined) return {
+    kind: 'STATE_CHANGED', value: { to: terminalState[1] }, expression: input.statement, explicit: true,
+  };
   if (/(?:显示|展示|可见|display|show|visible)/i.test(input.statement)) return { kind: 'VISIBLE', value, expression: input.statement, explicit: true };
   if (/(?:失败|错误|异常|拒绝|fail|error|exception|reject)/i.test(input.statement)) return { kind: 'FAILURE', status, value, expression: input.statement, explicit: true };
   if (status !== undefined) return { kind: 'STATUS', status, value, expression: input.statement, explicit: true };
-  if (/(?:成功|可以|允许|必须|需要|应当|应该|支持|success|shall|must|should|required|can\s+)/i.test(input.statement)) {
+  if (/(?:成功|可以|允许|必须|需要|应当|应该|支持|非空|存在|等于|一致|均为|只创建|只有|success|shall|must|should|required|non[-\s]?empty|exists?|equals?|can\s+)/i.test(input.statement)) {
     return { kind: 'SUCCESS', value, expression: input.statement, explicit: true };
   }
   return { kind: 'UNKNOWN', explicit: false };
@@ -400,7 +413,9 @@ export function normalizeRequirementFact(input: RequirementNormalizationContext)
   const operation = operationFromRefs(input.entityRefs, input.apis);
   const parameter = input.entityRefs.map((ref) => parameterFromRef(ref, input.apis)).find(Boolean);
   const response = input.entityRefs.map((ref) => responseFromRef(ref, input.apis)).find(Boolean);
-  const relation = actorRelation(input.statement, input.actors);
+  const allowConfiguredDefault = operation?.authPolicy === 'AUTH_REQUIRED'
+    || (!operation && input.apis.length > 0 && input.apis.every((api) => api.authPolicy === 'AUTH_REQUIRED'));
+  const relation = actorRelation(input.statement, input.actors, allowConfiguredDefault);
   const canonicalScopes = scopes(input.statement, isolation, permission);
   if (relation.actor?.id && relation.targetActor?.id
     && !canonicalScopes.some((scope) => scope.dimension === 'USER')) {

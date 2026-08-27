@@ -18,6 +18,7 @@ import type {
   RequirementSourceSpan,
 } from '../acceptance/requirement-ir.js';
 import type { TestEvidenceRequirement } from '../agents/test-design/testcase-schema.js';
+import type { DevTestSourceSyncOptions, DevTestSourceSyncResult } from './source-sync.js';
 
 export const DEVTEST_CASE_DIMENSIONS = [
   'API',
@@ -697,7 +698,7 @@ export interface DevTestOptions {
   feishuCredentialsPath?: string;
   documentId?: string;
   project?: string;
-  /** 缺省读取 TESTFLOW_BASE_URL，再缺省使用本机 127.0.0.1:3000。 */
+  /** 可选；缺省读取专用 Base URL 环境变量，仍缺失时只做测试设计并 fail-close。 */
   baseUrl?: string;
   /** 缺省 local；production 始终 fail-closed。 */
   environment?: string;
@@ -721,6 +722,8 @@ export interface DevTestOptions {
   enabledDimensions?: Partial<Record<DevTestCaseDimension, boolean>>;
   /** 默认当前工作目录；用于只读发现 Route/Controller/OpenAPI/前端页面。 */
   projectRoot?: string;
+  /** CLI 执行前强制把工蜂仓库覆盖为远端跟踪分支最新代码。 */
+  sourceSync?: DevTestSourceSyncOptions & { enabled: boolean };
   /** false 可完全关闭源码发现；不影响 Requirement 中显式 Contract。 */
   discoverProject?: boolean;
   /** 优先重跑上一 baseline 的 FAIL/BLOCKED/受影响 Case。 */
@@ -774,12 +777,18 @@ export interface DevTestArtifacts {
   casesCsv: string;
   problemsMd: string;
   acceptanceSummaryMd: string;
+  /** 面向开发交接的完整结构化测试用例。 */
+  testCasesMd: string;
+  /** 用户约定的固定七段开发自测报告。 */
+  developerSelfTestReportMd: string;
+  sourceSyncJson?: string;
 }
 
 export interface DevTestRunResult {
   runId: string;
   conclusion: DevTestFeatureResult;
   mode: DevTestMode;
+  sourceSync?: DevTestSourceSyncResult;
   pendingMutationCaseIds: string[];
   problems: DevTestProblem[];
   dimensionStats: DevTestDimensionStat[];

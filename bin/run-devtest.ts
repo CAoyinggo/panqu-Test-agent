@@ -4,6 +4,8 @@ import { redactSensitiveText } from '../src/core/redact.js';
 import { runDevTest } from '../src/devtest/index.js';
 import type { DevTestCaseDimension, DevTestMode } from '../src/devtest/types.js';
 
+const PANQU_AI_SOURCE_ROOT = '/Users/mac/agents/panqu-ai';
+
 export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
 
 用法:
@@ -16,8 +18,9 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   --mode <safe|dry-run|live>  默认 safe；live 必须提供 --approval
   --output <目录>             默认 ./devtest-results（兼容 --out）
   --max-cases <1~100>         默认 20；按 P0→P1→P2 和维度覆盖裁剪
-  --base-url <origin>         默认 TESTFLOW_BASE_URL 或 http://127.0.0.1:3000
-  --project-root <目录>       Route/OpenAPI/UI 自动发现根目录（默认当前目录）
+  --base-url <origin>         可选；未提供且无专用环境变量时只做测试设计
+  --project-root <目录>       Route/OpenAPI/UI 自动发现根目录（默认 /Users/mac/agents/panqu-ai）
+  执行模式固定在测试前覆盖同步 /Users/mac/agents/panqu-ai 下所有工蜂 Git 子仓库；plan/preflight/dry-run 不改源码。
   --no-ui                    关闭 UI 维度
   --no-api                   关闭 API 维度
   --no-data-isolation        关闭数据隔离维度
@@ -43,7 +46,8 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   --help                     显示帮助
 
 固定产物:
-  acceptance-summary.md  report.html  report.json  cases.csv  problems.md
+  测试用例.md  开发自测测试报告.md
+  acceptance-summary.md  report.html  report.json  cases.csv  problems.md（审计附件）
 `;
 
 export interface ParsedDevTestArgs {
@@ -211,6 +215,9 @@ function printResult(result: Awaited<ReturnType<typeof runDevTest>>, preflightOn
     + result.pipeline.report.observationGaps.length + result.pipeline.report.bindingIssues.length;
   console.log('\nDevTest');
   console.log('────────────────────────────');
+  if (result.sourceSync) {
+    console.log(`Source Sync        ${result.sourceSync.status} ${result.sourceSync.repositories.length} repos / ${result.sourceSync.repositories.filter((item) => item.updated).length} updated`);
+  }
   const checks = result.environmentPreflight.checks;
   const mark = (status: string): string => status === 'READY' || status === 'NOT_REQUIRED' ? '✓' : status === 'UNKNOWN' ? '?' : '✗';
   console.log(`Environment        ${result.environmentPreflight.status}`);
@@ -273,6 +280,9 @@ function printResult(result: Awaited<ReturnType<typeof runDevTest>>, preflightOn
   console.log(result.artifacts.casesCsv);
   console.log(result.artifacts.problemsMd);
   console.log(result.artifacts.acceptanceSummaryMd);
+  console.log(result.artifacts.testCasesMd);
+  console.log(result.artifacts.developerSelfTestReportMd);
+  if (result.artifacts.sourceSyncJson) console.log(result.artifacts.sourceSyncJson);
 }
 
 /** CI/脚本语义同样 fail-closed：只有 READY 才是成功退出。报告始终先完整落盘。 */
@@ -291,7 +301,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       docPath: args.doc, feishuUrl: args.feishu, feishuCredentialsPath: args.feishuCredentials,
       baseUrl: args.baseUrl, environment: args.env, mode: args.mode, project: args.project,
       outDir: args.output, approvalId: args.approvalId, confirmMutations: args.confirmMutations,
-      maxCases: args.maxCases, enabledDimensions: args.enabledDimensions, projectRoot: args.projectRoot,
+      maxCases: args.maxCases, enabledDimensions: args.enabledDimensions,
       rerun: args.rerun,
       rerunTarget: args.rerunTarget,
       reproProblemId: args.reproProblemId,
@@ -306,6 +316,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       budget: args.budget,
       deep: args.deep,
       summary: args.summary,
+      projectRoot: args.projectRoot ?? PANQU_AI_SOURCE_ROOT,
+      sourceSync: { enabled: true, root: PANQU_AI_SOURCE_ROOT, cleanUntracked: true },
     });
     printResult(result, args.preflight, args.plan, args.summary);
     if (args.preflight) return result.environmentPreflight.status === 'BLOCKED' ? 1 : 0;

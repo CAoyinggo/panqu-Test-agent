@@ -8,6 +8,49 @@ export interface RequirementItem {
   values: unknown[];
 }
 
+/** Requirement Understanding 中单条事实的认知边界。 */
+export type RequirementKnowledge = 'EXPLICIT' | 'INFERRED' | 'UNKNOWN';
+
+export type RequirementUnderstandingCategory =
+  | 'ACTOR'
+  | 'ACTION'
+  | 'RESOURCE'
+  | 'BUSINESS_RULE'
+  | 'EXPECTED_RESULT'
+  | 'STATE'
+  | 'PERMISSION'
+  | 'DATA_RELATION'
+  | 'INTERFACE'
+  | 'FIELD'
+  | 'CONSTRAINT';
+
+/**
+ * 需求事实保留“原文明确 / 有依据推导 / 当前未知”的边界。
+ * EXPLICIT 必须携带可在原需求中定位的 source 原文，防止把模型补全伪装成产品规则。
+ */
+export interface RequirementUnderstandingFact {
+  id: string;
+  category: RequirementUnderstandingCategory;
+  statement: string;
+  knowledge: RequirementKnowledge;
+  source?: string;
+  confidence?: number;
+}
+
+export interface RequirementAmbiguity {
+  id: string;
+  question: string;
+  impactedFacts: string[];
+  owner?: string;
+}
+
+export interface RequirementUnderstanding {
+  facts: RequirementUnderstandingFact[];
+  ambiguities: RequirementAmbiguity[];
+  /** 仍缺失且会影响设计、执行或 Oracle 的信息；不得转成已确认业务规则。 */
+  unknowns: string[];
+}
+
 /** 结构化测试需求 */
 export interface Requirement {
   /** 功能模块（如 wan3 / user / order / payment） */
@@ -34,6 +77,8 @@ export interface Requirement {
   source?: string;
   /** 解析置信度 0~1 */
   confidence?: number;
+  /** 角色/动作/资源/规则/预期的可追溯理解结果与认知边界。 */
+  understanding?: RequirementUnderstanding;
 }
 
 /** Requirement JSON Schema（供 ajv 校验 LLM/规则输出） */
@@ -63,6 +108,41 @@ export const REQUIREMENT_JSON_SCHEMA = {
     risks: { type: 'array', items: { type: 'string' } },
     version: { type: 'string' },
     confidence: { type: 'number' },
+    understanding: {
+      type: 'object',
+      required: ['facts', 'ambiguities', 'unknowns'],
+      properties: {
+        facts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['id', 'category', 'statement', 'knowledge'],
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              category: { enum: ['ACTOR', 'ACTION', 'RESOURCE', 'BUSINESS_RULE', 'EXPECTED_RESULT', 'STATE', 'PERMISSION', 'DATA_RELATION', 'INTERFACE', 'FIELD', 'CONSTRAINT'] },
+              statement: { type: 'string', minLength: 1 },
+              knowledge: { enum: ['EXPLICIT', 'INFERRED', 'UNKNOWN'] },
+              source: { type: 'string' },
+              confidence: { type: 'number', minimum: 0, maximum: 1 },
+            },
+          },
+        },
+        ambiguities: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['id', 'question', 'impactedFacts'],
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              question: { type: 'string', minLength: 1 },
+              impactedFacts: { type: 'array', items: { type: 'string' } },
+              owner: { type: 'string' },
+            },
+          },
+        },
+        unknowns: { type: 'array', items: { type: 'string' } },
+      },
+    },
   },
 } as const;
 
@@ -104,7 +184,45 @@ export function normalizeRequirement(data: Record<string, unknown>): Requirement
     version: data.version !== undefined ? String(data.version) : undefined,
     source: data.source !== undefined ? String(data.source) : undefined,
     confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
+    understanding: normalizeUnderstanding(data.understanding),
   };
+}
+
+function normalizeUnderstanding(value: unknown): RequirementUnderstanding | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const categories = new Set<RequirementUnderstandingCategory>([
+    'ACTOR', 'ACTION', 'RESOURCE', 'BUSINESS_RULE', 'EXPECTED_RESULT', 'STATE', 'PERMISSION',
+    'DATA_RELATION', 'INTERFACE', 'FIELD', 'CONSTRAINT',
+  ]);
+  const knowledge = new Set<RequirementKnowledge>(['EXPLICIT', 'INFERRED', 'UNKNOWN']);
+  const facts = (Array.isArray(raw.facts) ? raw.facts : []).flatMap((item): RequirementUnderstandingFact[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const fact = item as Record<string, unknown>;
+    const category = String(fact.category ?? '') as RequirementUnderstandingCategory;
+    const boundary = String(fact.knowledge ?? '') as RequirementKnowledge;
+    const id = String(fact.id ?? '').trim();
+    const statement = String(fact.statement ?? '').trim();
+    if (!id || !statement || !categories.has(category) || !knowledge.has(boundary)) return [];
+    return [{
+      id, category, statement, knowledge: boundary,
+      source: fact.source === undefined ? undefined : String(fact.source),
+      confidence: typeof fact.confidence === 'number' && fact.confidence >= 0 && fact.confidence <= 1
+        ? fact.confidence : undefined,
+    }];
+  });
+  const ambiguities = (Array.isArray(raw.ambiguities) ? raw.ambiguities : []).flatMap((item): RequirementAmbiguity[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const ambiguity = item as Record<string, unknown>;
+    const id = String(ambiguity.id ?? '').trim();
+    const question = String(ambiguity.question ?? '').trim();
+    if (!id || !question) return [];
+    return [{
+      id, question, impactedFacts: toStringArray(ambiguity.impactedFacts),
+      owner: ambiguity.owner === undefined ? undefined : String(ambiguity.owner),
+    }];
+  });
+  return { facts, ambiguities, unknowns: toStringArray(raw.unknowns) };
 }
 
 function toStringArray(v: unknown): string[] {
@@ -151,5 +269,6 @@ export function buildRequirement(partial: Partial<Requirement> & { feature: stri
     version: partial.version,
     source: partial.source,
     confidence: partial.confidence,
+    understanding: partial.understanding,
   };
 }

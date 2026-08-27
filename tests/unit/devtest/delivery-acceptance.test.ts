@@ -118,10 +118,10 @@ function apiCase(
 
 function apiResult(
   caseId: string,
-  status: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_EXECUTED',
-  options: { error?: string; includeRequest?: boolean; includeResponse?: boolean } = {},
+  status: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_EXECUTED' | 'CANCELLED',
+  options: { error?: string; includeRequest?: boolean; includeResponse?: boolean; executed?: boolean } = {},
 ): AcceptanceCaseExecutionResult {
-  const executed = status === 'PASS' || status === 'FAIL';
+  const executed = options.executed ?? (status === 'PASS' || status === 'FAIL');
   const assertionPass = status === 'PASS';
   const includeRequest = options.includeRequest ?? executed;
   const includeResponse = options.includeResponse ?? executed;
@@ -399,6 +399,52 @@ describe('DevTest delivery acceptance', () => {
     expect(coverage.requirements).toMatchObject({ total: 1, generated: 1, executed: 0, verified: 0, untested: 1 });
   });
 
+  it('Oracle/Evidence 即使被误标完整，没有 Processor 真实执行也不得产生 PASS', () => {
+    const testCase = apiCase('CASE-FALSE-PASS-GUARD', 'FACT-1');
+    const falseOracle = oracle(testCase.id, 'PASS', true);
+    falseOracle.evidence.collected = ['API_REQUEST@DURING:PRESENT', 'API_RESPONSE@AFTER:PRESENT'];
+    falseOracle.evidence.missing = [];
+    const [trace] = traces({ testCase, oracle: falseOracle });
+    expect(trace.execution).toMatchObject({ status: 'NOT_EXECUTED', executed: false, processorInvoked: false });
+    expect(trace.result).toBe('NOT_TESTED');
+    expect(trace.classification).toBe('NOT_TESTED');
+    expect(trace.requirement.verifiedFactIds).toEqual([]);
+  });
+
+  it('请求已经发出后取消时保持 BLOCKED，不能伪装成 NOT_TESTED', () => {
+    const testCase = apiCase('CASE-CANCELLED-AFTER-SEND', 'FACT-1');
+    const cancelled = apiResult(testCase.id, 'CANCELLED', {
+      executed: true, includeRequest: true, includeResponse: false, error: 'CANCELLED after request dispatch',
+    });
+    const [trace] = traces({ testCase, result: cancelled, oracle: oracle(testCase.id, 'BLOCKED', false) });
+    expect(trace).toMatchObject({
+      execution: { status: 'EXECUTED', rawStatus: 'CANCELLED', executed: true },
+      result: 'BLOCKED',
+    });
+    expect(trace.classification).not.toBe('NOT_TESTED');
+  });
+
+  it('取消后即使残留完整 PASS Oracle 也必须 BLOCKED', () => {
+    const testCase = apiCase('CASE-CANCELLED-STALE-ORACLE', 'FACT-1');
+    const cancelled = apiResult(testCase.id, 'CANCELLED', {
+      executed: true, includeRequest: true, includeResponse: true, error: 'CANCELLED after response',
+    });
+    const staleOracle = oracle(testCase.id, 'PASS', true);
+    staleOracle.evidence.collected = ['API_REQUEST@DURING:PRESENT', 'API_RESPONSE@AFTER:PRESENT'];
+    staleOracle.evidence.missing = [];
+    const [trace] = traces({ testCase, result: cancelled, oracle: staleOracle });
+    expect(trace.result).toBe('BLOCKED');
+  });
+
+  it('Runner FAIL 与残留 PASS Oracle 冲突时保持 BLOCKED', () => {
+    const testCase = apiCase('CASE-FAIL-STALE-PASS', 'FACT-1');
+    const staleOracle = oracle(testCase.id, 'PASS', true);
+    staleOracle.evidence.collected = ['API_REQUEST@DURING:PRESENT', 'API_RESPONSE@AFTER:PRESENT'];
+    staleOracle.evidence.missing = [];
+    const [trace] = traces({ testCase, result: apiResult(testCase.id, 'FAIL'), oracle: staleOracle });
+    expect(trace.result).toBe('BLOCKED');
+  });
+
   it('keeps GENERATED, EXECUTED, VERIFIED and UNTESTED delivery coverage arithmetically consistent', () => {
     const model = requirementModel(['FACT-PASS', 'FACT-FAIL', 'FACT-BLOCKED', 'FACT-UNTESTED']);
     const deliveryTraces = [
@@ -424,6 +470,16 @@ describe('DevTest delivery acceptance', () => {
     }));
     expect(coverage.requirements.verified + coverage.requirements.blocked + coverage.requirements.untested)
       .toBe(coverage.requirements.total);
+  });
+
+  it('Evidence Coverage 按 required item 计数，同一 Channel 的 before/after 缺一项不能到 100%', () => {
+    const trace = coverageTrace({ caseId: 'CASE-DIFF', factId: 'FACT-1', result: 'BLOCKED', execution: 'EXECUTED' });
+    trace.evidence = {
+      required: ['DATA_DIFF'], collected: ['DATA_DIFF'], missing: [], complete: false,
+      requiredItems: ['EV-BEFORE', 'EV-AFTER'], collectedItems: ['EV-BEFORE'], missingItems: ['EV-AFTER'],
+    };
+    const coverage = buildDevTestDeliveryCoverage({ requirementModel: requirementModel(['FACT-1']), traces: [trace] });
+    expect(coverage.evidence).toEqual(expect.objectContaining({ required: 2, collected: 1, coverage: 50 }));
   });
 
   it.each<{

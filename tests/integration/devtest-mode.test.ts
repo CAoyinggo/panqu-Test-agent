@@ -251,7 +251,9 @@ describe('DevTest Mode integration', () => {
     expect(result.featureModel.feature.name).not.toBe('未命名开发验收需求');
     expect(result.dimensionStats.find((item) => item.dimension === expectedDimension)?.total).toBeGreaterThan(0);
     expect(result.pipeline.summary.designed).toBeGreaterThan(0);
-    expect(await readdir(result.artifacts.dir)).toEqual(['acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json']);
+    expect(await readdir(result.artifacts.dir)).toEqual([
+      'acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
+    ]);
     expect(result.pipeline.summary.passed).toBe(0);
     expect(result.conclusion).toBe('BLOCKED');
     if (expectedDimension === 'DATA_ISOLATION') {
@@ -277,6 +279,30 @@ describe('DevTest Mode integration', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(result.pipeline.report.executions.every((item) => item.executed === false)).toBe(true);
     expect(result.environmentPreflight.reason).toContain('DRY_RUN_ENVIRONMENT_NOT_PROBED');
+  });
+
+  it('SAFE 未提供环境时只做静态降级，不探测本机约定端口', async () => {
+    const output = await mkdtemp(path.join(tmpdir(), 'devtest-safe-static-only-'));
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'devtest-no-environment-'));
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('missing environment must not call fetch');
+    }) as unknown as typeof fetch;
+    const result = await runDevTest({
+      markdown: SAFE_READ_REQUIREMENT,
+      environment: 'local',
+      mode: 'SAFE',
+      outDir: output,
+      projectRoot,
+      discoverProject: false,
+      fetchImpl,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.environmentPreflight.reason).toContain('ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY');
+    expect(result.pipeline.summary.executed).toBe(0);
+    expect(result.conclusion).toBe('BLOCKED');
+    const report = await readFile(result.artifacts.developerSelfTestReportMd, 'utf8');
+    expect(report).toContain('无真实执行证据');
+    expect(report).toContain('ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY');
   });
 
   it('SAFE 允许真实只读请求，并保留 Processor/Assertion/Evidence', async () => {
@@ -376,7 +402,7 @@ describe('DevTest Mode integration', () => {
     expect(final.devConfidence.failClosed).toBe(true);
     expect(final.deliveryCoverage.requirements.verifiedCoverage).toBeLessThan(100);
     expect(final.acceptanceTraces.some((trace) => trace.result === 'NOT_TESTED' || trace.result === 'BLOCKED')).toBe(true);
-  });
+  }, 15_000);
 
   it('--plan 只输出去重后的计划，不执行业务请求也不覆盖 Baseline', async () => {
     const server = await localServer();
@@ -603,13 +629,15 @@ describe('DevTest Mode integration', () => {
     expect(flaky.conclusion).toBe('BLOCKED');
   });
 
-  it('固定生成五类产物且 schema/CSV/Markdown/HTML 稳定', async () => {
+  it('固定生成机器审计附件与七段单表开发交付 Markdown，且 schema/CSV/Markdown/HTML 稳定', async () => {
     const output = await mkdtemp(path.join(tmpdir(), 'devtest-report-'));
     const result = await runDevTest({
       docPath: 'tests/acceptance/fixtures/devtest-sample.md', mode: 'DRY_RUN',
       outDir: output, maxCases: 20,
     });
-    expect(await readdir(result.artifacts.dir)).toEqual(['acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json']);
+    expect(await readdir(result.artifacts.dir)).toEqual([
+      'acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
+    ]);
     const json = JSON.parse(await readFile(result.artifacts.reportJson, 'utf8')) as Record<string, unknown>;
     expect(json).toEqual(expect.objectContaining({
       run: expect.objectContaining({ mode: 'DRY_RUN' }),
@@ -632,6 +660,45 @@ describe('DevTest Mode integration', () => {
       '## Invariants', '## Regression Guard', '## Risks', '## Developer Action', '## Execution Budget']) {
       expect(acceptanceSummary).toContain(heading);
     }
+    const developerReport = await readFile(result.artifacts.developerSelfTestReportMd, 'utf8');
+    const headings = ['## 1. 结论概览', '## 2. 需求与实现核对', '## 3. 用例执行清单', '## 4. 审查中发现的问题',
+      '## 5. 自动化执行证据', '## 6. 未覆盖项与回归建议', '## 7. 发布判定'];
+    const headingIndexes = headings.map((heading) => developerReport.indexOf(heading));
+    expect(headingIndexes.every((index) => index >= 0)).toBe(true);
+    expect(headingIndexes).toEqual([...headingIndexes].sort((left, right) => left - right));
+    expect(developerReport.match(/^## /gm)).toHaveLength(7);
+    expect(developerReport.match(/<!-- report-responsive-table-style -->/g)).toHaveLength(1);
+    expect(developerReport.match(/<table class="pq-table">/g)).toHaveLength(7);
+    expect(developerReport).toContain('测试人：DevTest Agent');
+    expect(developerReport).toContain('测试设计（无真实执行证据；未产生静态缺陷分析证据，DRY_RUN）');
+    expect(developerReport).toContain('PASS/FAIL 只来自真实执行、确定性 Oracle 与完整 Evidence');
+    const statistic = /<td[^>]*>用例统计<\/td>\s*<td[^>]*>(\d+)<\/td>\s*<td[^>]*>PASS (\d+)；FAIL (\d+)；BLOCKED (\d+)；NOT_EXECUTED (\d+)<\/td>/.exec(developerReport);
+    expect(statistic).not.toBeNull();
+    expect(Number(statistic![1])).toBe(Number(statistic![2]) + Number(statistic![3]) + Number(statistic![4]) + Number(statistic![5]));
+    const caseDocument = await readFile(result.artifacts.testCasesMd, 'utf8');
+    expect(caseDocument.match(/<!-- report-responsive-table-style -->/g)).toHaveLength(1);
+    expect(caseDocument.match(/<table class="pq-table">/g)).toHaveLength(1);
+    const caseSection = developerReport.split('## 3. 用例执行清单')[1].split('## 4. 审查中发现的问题')[0];
+    const tableCells = (source: string) => [...source.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((rowMatch) =>
+      [...rowMatch[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cellMatch) => cellMatch[1]
+        .replace(/<br>/g, '\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>').replace(/&quot;/g, '"'))).filter((cells) => cells.length > 0);
+    const reportCaseRows = tableCells(caseSection);
+    const reportStatuses = reportCaseRows.map((cells) => cells[5]);
+    const traceIds = result.acceptanceTraces.map((trace) => trace.caseId).sort();
+    const reportIds = reportCaseRows.map((cells) => cells[0]).sort();
+    const documentIds = tableCells(caseDocument).map((cells) => cells[0]).sort();
+    expect(reportCaseRows).toHaveLength(Number(statistic![1]));
+    expect(reportCaseRows).toHaveLength(result.deliveryCoverage.cases.generated);
+    expect(reportIds).toEqual(traceIds);
+    expect(documentIds).toEqual(traceIds);
+    expect(reportStatuses.filter((status) => status === 'PASS')).toHaveLength(Number(statistic![2]));
+    expect(reportStatuses.filter((status) => status === 'FAIL')).toHaveLength(Number(statistic![3]));
+    expect(reportStatuses.filter((status) => status === 'BLOCKED')).toHaveLength(Number(statistic![4]));
+    expect(reportStatuses.filter((status) => status === 'NOT_EXECUTED')).toHaveLength(Number(statistic![5]));
+    for (const section of ['Business Scenario', 'Preconditions / Test Data', 'Steps', 'Expected Result / Assertion / Oracle',
+      'Evidence Required', 'Cleanup / Dependency']) expect(caseDocument).toContain(section);
+    expect(tableCells(caseDocument).every((cells) => ['PASS', 'FAIL', 'BLOCKED', 'NOT_EXECUTED'].includes(cells[5]))).toBe(true);
     const html = await readFile(result.artifacts.reportHtml, 'utf8');
     expect(json.schema).toBe('devtest.report.v8');
     for (const heading of ['最终结论', 'Test Reliability', 'Requirement Quality', 'Adaptive Selection', 'Root Cause Graph',

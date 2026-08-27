@@ -180,7 +180,7 @@ describe('TestDesignAgent：unknown 业务 fail-fast（不伪造）', () => {
     ).rejects.toThrow(/无法识别业务/);
   });
 
-  it('LLM 识别出业务（输出合法用例）→ 通过 DSL 门后采纳', async () => {
+  it('LLM 输出 legacy 用例 → 拒绝进入 v2 主链并回退确定性生成器', async () => {
     const llm = new MockLLMProvider({
       scripted: [JSON.stringify([{
         id: 'tc-01', feature: 'wan3', name: '正常提交', priority: 'P0', tags: [],
@@ -190,7 +190,7 @@ describe('TestDesignAgent：unknown 业务 fail-fast（不伪造）', () => {
     });
     const agent = new TestDesignAgent();
     const cases = await agent.execute({ requirement: reqOf({ feature: 'wan3' }) }, makeContext(llm));
-    expect(cases).toHaveLength(1);
+    expect(cases.length).toBeGreaterThan(1);
     expectAllExecutable(cases);
   });
 

@@ -156,7 +156,9 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
       && item.checks?.some((check) => check.kind === 'BUSINESS')
     ))).toBe(true);
     expect(r.outcome.results.find((item) => item.status === 'TIMEOUT')?.executed).toBe(false);
-    expect(r.outcome.failed).toBeGreaterThanOrEqual(3);
+    // FAIL 与 TIMEOUT 是互斥终态；超时由 timedOut 单独统计，不伪装成已执行失败。
+    expect(r.outcome.failed).toBeGreaterThanOrEqual(2);
+    expect(r.outcome.timedOut).toBeGreaterThanOrEqual(1);
 
     // 8 结果分析
     expect(r.report.findings.length).toBeGreaterThan(0);

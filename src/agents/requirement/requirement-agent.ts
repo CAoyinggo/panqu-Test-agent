@@ -7,33 +7,17 @@ import type { AgentContext } from '../core/agent-context.js';
 import { parseLLMJson } from '../../llm/index.js';
 import {
   Requirement,
-  REQUIREMENT_JSON_SCHEMA,
   isRequirementLike,
   validateRequirement,
 } from './requirement-schema.js';
 import { parseRequirement } from './requirement-parser.js';
 import { extractRequirementText, normalizeRequirementInput } from './requirement-normalizer.js';
 import { promptRegistry } from '../prompts/registry.js';
-
-/** 系统提示词：要求 LLM 严格按 Schema 输出 JSON（默认内置，可被 Prompt Registry 覆盖） */
-const SYSTEM_PROMPT = `你是测试需求解析器。将用户的自然语言测试需求转换为结构化 JSON。
-输出必须严格符合如下 JSON Schema（只输出 JSON，不要任何解释或 Markdown 围栏）：
-${JSON.stringify(REQUIREMENT_JSON_SCHEMA, null, 2)}
-
-规则：
-- feature 为功能模块名（如 wan3 / user / order / payment），无法判断时必须输出 "unknown"（禁止猜测为 wan3）
-- goal 为一句话测试目标（如 验证文生视频完整链路）
-- requirements 为参数取值数组，例如 {"name":"resolution","values":["720P","1080P"]}
-- capabilities 用英文标签（如 text-to-video / image-to-video）
-- businessRules / dependencies 用简短中文短语
-- constraints 为测试约束（如 禁止真实扣费、仅限测试环境），未提及则为空数组
-- risks 为风险标签（如 timeout / billing / concurrency / security），按原文合理推断
-- version 固定为 "v1"
-- 若原文未提及某字段，用空数组或合理推断，不要编造具体取值`;
+import { REQUIREMENT_PROMPT_V2 } from '../prompts/requirement.js';
 
 /** 从 Prompt Registry 取系统提示词（未注册时回退内置常量） */
 function resolveSystemPrompt(): string {
-  return promptRegistry.getVersion('requirement')?.system ?? SYSTEM_PROMPT;
+  return promptRegistry.getVersion('requirement')?.system ?? REQUIREMENT_PROMPT_V2.system;
 }
 
 /** 解析需求输入 */
@@ -110,7 +94,7 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
     }
     // ajv 校验（不通过抛错 → 回退），通过则归一化
     const validated = await validateRequirement(parsed);
-    assertRequirementGrounded(validated, parseRequirement(text, text), hintFeature);
+    assertRequirementGrounded(validated, parseRequirement(text, text), text, hintFeature);
     validated.source = text;
     validated.confidence = Math.max(validated.confidence ?? 0, 0.9);
     return validated;
@@ -124,6 +108,7 @@ export class RequirementAgent extends BaseAgent<RequirementAgentInput | string, 
 function assertRequirementGrounded(
   candidate: Requirement,
   deterministic: Requirement,
+  originalText: string,
   trustedFeature?: string,
 ): void {
   const expectedFeature = trustedFeature ?? (deterministic.feature !== 'unknown' ? deterministic.feature : undefined);
@@ -134,6 +119,19 @@ function assertRequirementGrounded(
   if (deterministic.capabilities.length > 0 && candidate.capabilities.length > 0
     && !deterministic.capabilities.some((item) => candidate.capabilities.includes(item))) {
     throw new Error(`LLM 需求语义不一致：能力 ${candidate.capabilities.join('、')} 与原始需求无交集`);
+  }
+  if (!candidate.understanding
+    || (candidate.understanding.facts.length === 0 && candidate.understanding.unknowns.length === 0)) {
+    throw new Error('LLM 需求认知边界缺失：v2 必须输出 understanding.facts/ambiguities/unknowns');
+  }
+  for (const fact of candidate.understanding.facts) {
+    if (fact.knowledge !== 'EXPLICIT') continue;
+    if (!fact.source?.trim()) {
+      throw new Error(`LLM 需求事实不可追溯：${fact.id} 标记 EXPLICIT 但缺少 source 原文`);
+    }
+    if (!originalText.includes(fact.source)) {
+      throw new Error(`LLM 需求事实不可追溯：${fact.id} 的 source 不存在于原需求`);
+    }
   }
 }
 

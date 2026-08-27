@@ -35,6 +35,7 @@ function collectCaseIds(testCases: TestCase[], predicate: (c: TestCase) => boole
  */
 export function analyzeRisks(input: RiskAnalyzerInput): RiskAssessment {
   const { requirement, testCases = [], environment } = input;
+  const declaredRisks = new Set(requirement.risks ?? []);
   const risks: RiskItem[] = [];
   let n = 0;
   const push = (item: Omit<RiskItem, 'id'>): void => {
@@ -109,7 +110,9 @@ export function analyzeRisks(input: RiskAnalyzerInput): RiskAssessment {
 
   // ── 计费 ──
   const billingIds = collectCaseIds(testCases, (c) => c.assertions.some((a) => a.target === 'billing'));
-  if (billingIds.length || requirement.dependencies.some((d) => /积分|计费|billing/i.test(d))) {
+  if (billingIds.length
+    || declaredRisks.has('billing')
+    || requirement.dependencies.some((d) => /积分|计费|billing/i.test(d))) {
     push({
       category: 'billing',
       level: 'high',
@@ -157,7 +160,7 @@ export function analyzeRisks(input: RiskAnalyzerInput): RiskAssessment {
   }
 
   // ── 超时 / 重试（业务规则驱动） ──
-  if (requirement.businessRules.some((r) => /超时/i.test(r))) {
+  if (declaredRisks.has('timeout') || requirement.businessRules.some((r) => /超时/i.test(r))) {
     push({
       category: 'timeout',
       level: 'medium',
@@ -167,7 +170,7 @@ export function analyzeRisks(input: RiskAnalyzerInput): RiskAssessment {
       confidence: 0.7,
     });
   }
-  if (requirement.businessRules.some((r) => /重试/i.test(r))) {
+  if (declaredRisks.has('retry') || requirement.businessRules.some((r) => /重试/i.test(r))) {
     push({
       category: 'retry',
       level: 'low',

@@ -1,7 +1,7 @@
 // 验收测试：Analysis 汇总统计的完整性（防 LLM 污染）
 // 契约：
 //   Runner Outcome → Deterministic Summary → total / passed / failed / timedOut / duration / exitCode / overall
-//   LLM 只能贡献 → findings / recommendations / aiSummary
+//   LLM 只能贡献逐 Case 的解释；汇总、最终建议与状态必须来自确定性分析
 // 任何 LLM 输出（哪怕恶意伪造 summary.total=999）都不得改变平台统计与退出码。
 import { describe, it, expect } from 'vitest';
 import {
@@ -119,10 +119,14 @@ describe('AnalysisAgent 端到端：LLM 无法污染统计', () => {
     expect(report.summary.overall).toBe('fail');
     expect(report.summary.exitCode).toBe(3); // 退出码不受「全部通过」幻觉影响（超时 → 3）
 
-    // LLM 的合法贡献保留：findings / recommendations / aiSummary
-    expect(report.aiSummary).toBe('一切正常，全部通过！');
-    expect(report.findings).toHaveLength(1);
-    expect(report.recommendations).toEqual(['直接上线']);
+    // 与执行事实冲突的模型摘要/上线建议不得进入最终结论；失败项由确定性分析补齐。
+    expect(report.aiSummary).toBe('⚠️ wan3 通过率 33.3%：2 条失败，1 条超时。');
+    expect(report.aiSummary).not.toContain('全部通过');
+    expect(report.findings.map((finding) => finding.caseId).filter(Boolean)).toEqual(['tc-02', 'tc-03']);
+    expect(report.findings.some((finding) => !finding.caseId
+      && finding.title.includes('用例超时')
+      && finding.classification === 'ENVIRONMENT_ERROR')).toBe(true);
+    expect(report.recommendations).not.toContain('直接上线');
 
     // 失败明细来自真实结果（非 LLM 输出）
     expect(report.failedCases.map((c) => c.caseId)).toEqual(['tc-02', 'tc-03']);

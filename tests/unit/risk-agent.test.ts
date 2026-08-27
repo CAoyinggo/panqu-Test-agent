@@ -113,6 +113,14 @@ describe('risk - 确定性分析器', () => {
     expect(billing!.level).toBe('high');
   });
 
+  it('Requirement 已明确声明计费风险时，无用例或依赖线索也不得漏报', () => {
+    const r = analyzeRisks({
+      requirement: { ...req, dependencies: [], risks: ['billing'] },
+      testCases: [],
+    });
+    expect(r.risks.find((risk) => risk.category === 'billing')).toMatchObject({ level: 'high' });
+  });
+
   it('并发用例产出并发高风险', () => {
     const r = analyzeRisks({ requirement: req, testCases: cases });
     const concurrency = r.risks.find((x) => x.category === 'concurrency');

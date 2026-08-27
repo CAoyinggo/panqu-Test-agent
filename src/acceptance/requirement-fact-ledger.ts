@@ -63,6 +63,8 @@ const CONTRACT_SECTION = /(?:接口|\bapi\b|endpoint|参数|parameter|request\s*
 const NORMATIVE_MODAL = /(?:必须|需要|只能|不得|禁止|允许|应当|应该|需(?:要)?|不可|不能|支持|确保|要求|must|shall|required|may\s+only|must\s+not|cannot|can\s+only|is\s+required\s+to)/i;
 const NORMATIVE_BEHAVIOR = /(?:返回|显示|创建|更新|修改|删除|查询|查看|访问|提交|保存|进入|刷新|发送|通知|扣减|扣除|回滚|拒绝|校验|验证|转换|转为|变为|失败|成功|returns?|responds?|display|show|create|update|delete|query|read|access|submit|save|refresh|send|notify|deduct|rollback|reject|validate|transition)/i;
 const CONDITIONAL_BEHAVIOR = /(?:当.+时|如果.+则|一旦|之后|以后|成功后|失败时|when\b|if\b.+\bthen\b|after\b|before\b)/i;
+/** 测试装配/执行元数据只作为上下文消费，不得独立扩增业务 Case 或需求歧义。 */
+const SUPPORTING_ONLY_SECTION = /^(?:scenario\s*id|priority|patterns?|actor|role|tenant|project|authentication|preconditions?|test\s*data|execution\s*steps?|assertions?|evidence|prepare|cleanup|final\s*rule|blocked\s*reasons?|mutation\s*policy|execution(?:\s*mode)?|risks?|dependencies?|场景编号|优先级|模式|角色|租户|项目|认证|鉴权配置|前置条件|测试数据|执行步骤|断言|证据|准备|清理|最终规则|阻断原因|变更策略|执行模式|风险|依赖)$/i;
 
 function normalizedText(value: string): string {
   return value
@@ -149,6 +151,7 @@ function classifyNormativity(
 ): RequirementNormativity {
   if (kind === 'HEADING' || kind === 'TABLE_HEADER') return 'NON_NORMATIVE';
   if (epistemicType === 'OPINION' || epistemicType === 'HYPOTHESIS') return 'NON_NORMATIVE';
+  if (SUPPORTING_ONLY_SECTION.test((section ?? '').trim())) return 'NON_NORMATIVE';
   if (kind === 'TABLE_ROW') return 'NORMATIVE';
   if (/\bAC-\d+\b/i.test(statement)) return 'NORMATIVE';
   if (/\b(?:GET|HEAD|POST|PUT|PATCH|DELETE)\s+\//i.test(statement)) return 'NORMATIVE';

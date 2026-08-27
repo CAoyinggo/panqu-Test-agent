@@ -144,25 +144,43 @@ function operationScore(operation: DiscoveredOperation, tokens: readonly string[
 function mapOperations(
   operations: readonly DiscoveredOperation[], requirement: AcceptanceRequirement, scope: DevTestDiscoveryResult['scope'],
 ): { mapped: DiscoveredOperation[]; reasons: string[] } {
-  const authoritative = operations.filter((operation) => operation.source.some((source) => ['ROUTE', 'CONTROLLER', 'OPENAPI'].includes(source.type)));
+  const backend = operations.filter((operation) => operation.source.some((source) => ['ROUTE', 'CONTROLLER', 'OPENAPI'].includes(source.type)));
+  const frontend = operations.filter((operation) => operation.source.some((source) => source.type === 'FRONTEND'));
+  const sourceLabel = (operation: DiscoveredOperation): string => operation.source
+    .map((source) => `${source.type}:${source.ref}@${source.confidence.toFixed(2)}`).join(', ');
   if (requirement.apis.length) {
     const explicit = new Set(requirement.apis.map((api) => api.operationKey));
-    const mapped = authoritative.filter((operation) => explicit.has(`${operation.method} ${operation.path}`));
-    return { mapped, reasons: mapped.map((item) => `${item.method} ${item.path} 与 Requirement 显式 Operation 精确匹配`) };
+    const backendMatches = backend.filter((operation) => explicit.has(`${operation.method} ${operation.path}`));
+    const mapped = backendMatches.length
+      ? backendMatches
+      : frontend.filter((operation) => explicit.has(`${operation.method} ${operation.path}`));
+    return {
+      mapped,
+      reasons: mapped.map((item) => `${item.method} ${item.path} 与 Requirement 显式 Operation 精确匹配；推导契约来源 ${sourceLabel(item)}`),
+    };
   }
-  if (authoritative.length === 1) return {
-    mapped: [...authoritative], reasons: [`项目只发现一个权威 Operation：${authoritative[0].method} ${authoritative[0].path}`],
-  };
-  if (scope === 'CHANGED_FILES' && authoritative.length > 0 && authoritative.length <= 8) return {
-    mapped: [...authoritative], reasons: authoritative.map((item) => `${item.method} ${item.path} 来自当前功能的未提交 Route/Controller/OpenAPI 变更`),
-  };
   const tokens = semanticTokens(requirement);
-  const scored = authoritative.map((operation) => ({ operation, score: operationScore(operation, tokens, requirement) }));
-  const high = scored.filter((item) => item.score >= 3);
-  if (!high.length) return { mapped: [], reasons: ['源码中存在 API 候选，但没有唯一且足够强的 Requirement 语义映射；保持 UNKNOWN'] };
-  const best = Math.max(...high.map((item) => item.score));
-  const mapped = high.filter((item) => item.score >= best - 1).map((item) => item.operation).slice(0, 8);
-  return { mapped, reasons: mapped.map((item) => `${item.method} ${item.path} 与 Feature/Resource/Action 语义匹配`) };
+  const select = (pool: readonly DiscoveredOperation[]): DiscoveredOperation[] => {
+    if (!pool.length) return [];
+    const scored = pool.map((operation) => ({ operation, score: operationScore(operation, tokens, requirement) }));
+    // Changed-files 中的唯一候选可作为当前功能线索；全项目唯一但语义无关的接口仍保持 UNKNOWN。
+    if (scope === 'CHANGED_FILES' && pool.length === 1) return [pool[0]];
+    const high = scored.filter((item) => item.score >= 3);
+    if (!high.length) return [];
+    const best = Math.max(...high.map((item) => item.score));
+    return high.filter((item) => item.score >= best - 1).map((item) => item.operation).slice(0, 8);
+  };
+  // 后端 Route/Controller/OpenAPI 优先；只有无法建立足够强的语义映射时才回退前端实际调用。
+  const backendMapped = select(backend);
+  const mapped = backendMapped.length ? backendMapped : select(frontend);
+  if (!mapped.length) return {
+    mapped: [],
+    reasons: ['代码/前端中存在 API 候选，但没有精确或足够强的 Requirement 语义映射；保持 UNKNOWN'],
+  };
+  return {
+    mapped,
+    reasons: mapped.map((item) => `${item.method} ${item.path} 与 Feature/Resource/Action 语义匹配；推导契约来源 ${sourceLabel(item)}`),
+  };
 }
 
 function mapUi(elements: readonly DevTestUiElement[], requirement: AcceptanceRequirement, scope: DevTestDiscoveryResult['scope']): DevTestUiElement[] {
@@ -250,6 +268,7 @@ export function appendDiscoveredContracts(markdown: string, discovery: DevTestDi
       sections.push(`### Discovered Contract ${operation.method} ${operation.path}`);
       sections.push(`\`${operation.method} ${operation.path}\``);
       sections.push(`<!-- source: ${operation.source.map((item) => `${item.type}:${item.ref}`).join(', ')} -->`);
+      sections.push(`> 推导契约；来源：${operation.source.map((item) => `${item.type}:${item.ref}`).join(', ')}；置信度：${operation.confidence.toFixed(2)}。`);
       const auth = authRequired(operation);
       if (auth === false) sections.push('公开接口，无需认证。');
       else if (auth === true) sections.push('| 参数 | 类型 | 位置 | 必填 |\n| --- | --- | --- | --- |\n| Authorization | string | header | true |');

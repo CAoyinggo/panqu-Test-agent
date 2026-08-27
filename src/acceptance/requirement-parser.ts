@@ -351,6 +351,35 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
     }
   }
 
+  // 兼容真实 PRD/Scenario 常见的分节键值写法；只保存凭据引用，不接收明文 Token。
+  // 单一全局 Actor 会在 canonical normalization 中作为未另行指定 AC 的默认执行者。
+  const linesInSection = (pattern: RegExp): ParsedLine[] => lines.filter((line) => pattern.test((line.section ?? '').trim()));
+  const field = (sectionLines: ParsedLine[], name: RegExp): { value: string; line: ParsedLine } | undefined => {
+    for (const line of sectionLines) {
+      const cleaned = line.text.trim().replace(/^[-*+]\s*/, '');
+      const match = cleaned.match(/^([^:：]+)\s*[:：]\s*(.+)$/);
+      if (match && name.test(match[1].trim())) return { value: match[2].trim(), line };
+    }
+    return undefined;
+  };
+  const actorSection = linesInSection(/^(?:actor|actors|角色)$/i);
+  const actorIdField = field(actorSection, /^(?:id|actor\s*id|user\s*id|编号)$/i);
+  if (actorIdField && !actors.some((actor) => actor.id === actorIdField.value)) {
+    const actorType = field(actorSection, /^(?:type|类型)$/i)?.value;
+    const roleLine = linesInSection(/^(?:role|角色类型)$/i).find((line) => line.text.trim() && !/^#/.test(line.text));
+    const tenantField = field(linesInSection(/^(?:tenant|租户)$/i), /^(?:id|tenant\s*id|编号)$/i);
+    const tokenField = field(linesInSection(/^(?:authentication|auth|认证|鉴权配置)$/i), /^(?:reference|token\s*ref|credential\s*ref|引用)$/i);
+    actors.push({
+      id: actorIdField.value,
+      name: actorIdField.value,
+      userId: actorIdField.value,
+      role: roleLine?.text.trim().replace(/^[-*+]\s*/, '') || actorType || 'USER',
+      tenantId: tenantField?.value,
+      tokenRef: tokenField?.value,
+      source: sourceOf(actorIdField.line, documentId),
+    });
+  }
+
   // 解析紧邻 API 的 prose 参数，如 `nickname: string required 2~20`。
   for (const line of lines) {
     const match = line.text.match(/^\s*[-*]?\s*([A-Za-z_][\w-]*)\s*[:：]\s*(string|integer|number|boolean)\b(.*)$/i);
@@ -406,27 +435,42 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
 
   const acceptanceCriteria: AcceptanceCriterion[] = [];
   const acceptanceCriterionById = new Map<string, AcceptanceCriterion>();
-  for (const line of lines) {
+  const registerAcceptanceCriterion = (criterionId: string, objective: string, line: ParsedLine): void => {
+    const existing = acceptanceCriterionById.get(criterionId);
+    if (!existing) {
+      const criterion = { criterionId, objective, source: sourceOf(line, documentId) };
+      acceptanceCriteria.push(criterion);
+      acceptanceCriterionById.set(criterionId, criterion);
+      return;
+    }
+    const same = existing.objective.replace(/\s+/g, '').toLowerCase() === objective.replace(/\s+/g, '').toLowerCase();
+    warnings.push({
+      code: same ? 'DUPLICATE_AC' : 'REQUIREMENT_CONFLICT', stage: 'PARSER', blocking: same ? undefined : true,
+      message: same
+        ? `${criterionId} 重复定义，已保留首次定义`
+        : `${criterionId} 存在冲突定义，系统不会选择性保留其中一个`,
+      source: sourceOf(line, documentId),
+    });
+  };
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    // AC 只能在行首（允许 Markdown 标题/列表前缀）声明。API/Assertion/Evidence
+    // 表格中的 “AC-001, AC-004” 只是引用，绝不能被解析成内容为逗号的新需求。
+    if (!/^\s*(?:[-*+]\s+)?(?:#{1,6}\s+)?AC-\d+\b/i.test(line.text)) continue;
     const matches = [...line.text.matchAll(/\b(AC-\d+)\b\s*[:：-]?\s*([^|]*?)(?=\s+AC-\d+\b|$)/gi)];
     for (const match of matches) {
-      const objective = match[2].trim().replace(/^[-–—]\s*/, '');
-      if (!objective) continue;
       const criterionId = match[1].toUpperCase();
-      const existing = acceptanceCriterionById.get(criterionId);
-      if (!existing) {
-        const criterion = { criterionId, objective, source: sourceOf(line, documentId) };
-        acceptanceCriteria.push(criterion);
-        acceptanceCriterionById.set(criterionId, criterion);
-      } else {
-        const same = existing.objective.replace(/\s+/g, '').toLowerCase() === objective.replace(/\s+/g, '').toLowerCase();
-        warnings.push({
-          code: same ? 'DUPLICATE_AC' : 'REQUIREMENT_CONFLICT', stage: 'PARSER', blocking: same ? undefined : true,
-          message: same
-            ? `${criterionId} 重复定义，已保留首次定义`
-            : `${criterionId} 存在冲突定义，系统不会选择性保留其中一个`,
-          source: sourceOf(line, documentId),
-        });
+      let objective = match[2].trim().replace(/^[-–—]\s*/, '');
+      let objectiveLine = line;
+      if (!objective && matches.length === 1) {
+        const next = lines.slice(index + 1).find((candidate) => candidate.text.trim());
+        if (next && next.section?.toUpperCase() === criterionId && !/^\s*(?:#|\|)/.test(next.text)) {
+          objective = next.text.trim().replace(/^\s*[-*+]\s*/, '');
+          objectiveLine = next;
+        }
       }
+      if (!objective) continue;
+      registerAcceptanceCriterion(criterionId, objective, objectiveLine);
     }
   }
 
@@ -496,11 +540,14 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
       if (!/(?:无需|不需要|免)(?:鉴权|认证|登录)|公开接口|public\s+(?:api|endpoint)|auth(?:entication)?\s+not\s+required/i.test(line.text)) return false;
       return apis.length === 1 || (line.text.includes(api.path) && new RegExp(`\\b${api.method}\\b`, 'i').test(line.text));
     });
-    if (hasRequiredAuthHeader && explicitlyPublic) warnings.push({
+    const globalAuthentication = lines.some((line) => /^(?:authentication|auth|认证|鉴权配置)$/i.test((line.section ?? '').trim())
+      && /(?:TOKEN|Bearer|JWT|API\s*Key|Cookie|认证|鉴权)/i.test(line.text));
+    if ((hasRequiredAuthHeader || globalAuthentication) && explicitlyPublic) warnings.push({
       code: 'REQUIREMENT_CONFLICT', stage: 'PARSER', blocking: true,
       message: `${api.operationKey} 同时声明必须认证和无需认证`, source: api.source,
     });
-    api.authPolicy = hasRequiredAuthHeader ? 'AUTH_REQUIRED' : explicitlyPublic ? 'AUTH_NOT_REQUIRED' : 'AUTH_UNKNOWN';
+    api.authPolicy = hasRequiredAuthHeader || globalAuthentication ? 'AUTH_REQUIRED'
+      : explicitlyPublic ? 'AUTH_NOT_REQUIRED' : 'AUTH_UNKNOWN';
   }
   if (!actors.length && !apis.length) {
     warnings.push({ code: 'NO_ACTOR', message: '未识别到 Actor / Role / Tenant', source: { documentId, section: title, line: 1 } });

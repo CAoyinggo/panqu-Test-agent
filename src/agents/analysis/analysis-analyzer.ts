@@ -6,9 +6,11 @@ import type { Requirement } from '../requirement/requirement-schema.js';
 import type { TestCase } from '../test-design/testcase-schema.js';
 import type { RiskAssessment } from '../risk/risk-schema.js';
 import type { ExecutionOutcome } from '../execution/execution-schema.js';
+import type { CaseExecutionResult } from '../execution/execution-schema.js';
 import {
   AnalysisReport,
   AnalysisFinding,
+  AnalysisIssueClassification,
   summaryFromOutcome,
   toMemoryWorthy,
 } from './analysis-schema.js';
@@ -33,6 +35,43 @@ function suggestFor(c: { error?: string; timedOut?: boolean; checks?: Array<{ na
   return '查看执行错误详情，人工介入定位';
 }
 
+export interface DeterministicFindingClassification {
+  classification: AnalysisIssueClassification;
+  evidence: string[];
+  confidence: NonNullable<AnalysisFinding['confidence']>;
+}
+
+/**
+ * Evidence-first 分类：HTTP 500、超时、空响应、Browser/环境异常都不能仅凭异常字符串成为 PRODUCT_BUG。
+ * 只有真实 Processor 执行且存在失败的确定性业务断言，才能确认产品缺陷。
+ */
+export function classifyExecutionResult(result: CaseExecutionResult): DeterministicFindingClassification {
+  const text = `${result.status ?? ''} ${result.error ?? ''} ${JSON.stringify(result.blockedReason ?? '')}`;
+  const failedChecks = (result.checks ?? []).filter((check) => !check.pass && check.kind !== 'INFORMATIONAL'
+    && check.kind !== 'SYSTEM' && check.kind !== 'TEARDOWN' && check.kind !== 'SKIPPED');
+  const evidence = failedChecks.map((check) => `${check.name}: ${check.detail}`);
+  if (result.status === 'NOT_EXECUTED' || (!result.executed && !result.timedOut && result.status !== 'BLOCKED')) {
+    return { classification: 'NOT_TESTED', evidence: [], confidence: 'CONFIRMED' };
+  }
+  if (/REQUIREMENT|CONTRACT|AMBIGUOUS|UNKNOWN_EXPECTED/i.test(text)) {
+    return { classification: 'REQUIREMENT_GAP', evidence, confidence: 'LIKELY' };
+  }
+  if (/MISSING_ASSERTION|ASSERTION.*MISSING|TEST_DESIGN|DSL|ORACLE.*MISSING/i.test(text)) {
+    return { classification: 'TEST_DESIGN_ERROR', evidence, confidence: 'CONFIRMED' };
+  }
+  if (result.timedOut || /TIMEOUT|ECONN|ENOTFOUND|NETWORK|FETCH|BROWSER|AUTH_CONTEXT|TEST_DATA|ENVIRONMENT/i.test(text)) {
+    return { classification: 'ENVIRONMENT_ERROR', evidence, confidence: 'LIKELY' };
+  }
+  if (/\b5\d{2}\b|EMPTY_RESPONSE|MISSING_PROCESSOR|PROCESSOR|EXECUTOR|RUNNER|OBSERVER|EVIDENCE_MISSING/i.test(text)) {
+    return { classification: 'EXECUTION_ERROR', evidence, confidence: 'UNKNOWN' };
+  }
+  if (result.executed === true && result.processorInvoked === true && result.evidence !== undefined
+    && (result.assertions ?? failedChecks.length) > 0 && failedChecks.length > 0) {
+    return { classification: 'PRODUCT_BUG', evidence, confidence: 'CONFIRMED' };
+  }
+  return { classification: 'EXECUTION_ERROR', evidence, confidence: 'UNKNOWN' };
+}
+
 /** 确定性分析 */
 export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
   const { requirement, testCases = [], outcome, risk, flakyCaseIds = [] } = input;
@@ -48,6 +87,7 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
   for (const c of failed) {
     const isFlaky = flakyCaseIds.includes(c.caseId);
     const type: AnalysisFinding['type'] = c.timedOut ? 'fail' : isFlaky ? 'flaky' : 'fail';
+    const classified = classifyExecutionResult(c);
     findings.push({
       type,
       caseId: c.caseId,
@@ -55,6 +95,9 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
       detail: c.error ?? `断言失败，通过率 ${c.passRate}%`,
       severity: c.timedOut ? 'high' : isFlaky ? 'medium' : 'high',
       suggestion: suggestFor(c),
+      classification: isFlaky ? 'TEST_DESIGN_ERROR' : classified.classification,
+      evidence: classified.evidence,
+      confidence: isFlaky ? 'LIKELY' : classified.confidence,
     });
     recommendations.push(`${c.caseId} ${c.name}：${suggestFor(c)}`);
   }
@@ -67,6 +110,9 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
       detail: '整体或用例级超时导致结果缺失，可能为长链路或服务响应慢',
       severity: 'high',
       suggestion: '增大超时阈值、拆分用例或优化轮询间隔',
+      classification: 'ENVIRONMENT_ERROR',
+      evidence: [],
+      confidence: 'LIKELY',
     });
   }
 
@@ -81,6 +127,9 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
         detail: r.desc,
         severity: 'high',
         suggestion: r.mitigation,
+        classification: 'EXECUTION_ERROR',
+        evidence: blocked.flatMap((item) => classifyExecutionResult(item).evidence),
+        confidence: 'UNKNOWN',
       });
       recommendations.push(`阻塞风险 ${r.title}：${r.mitigation}`);
     }
@@ -94,6 +143,9 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
       detail: `通过率 ${summary.passRate}%，需人工确认超时与待处理项`,
       severity: 'medium',
       suggestion: '人工复核超时项，必要时重跑',
+      classification: 'NOT_TESTED',
+      evidence: [],
+      confidence: 'CONFIRMED',
     });
   }
 
@@ -105,6 +157,9 @@ export function analyzeExecution(input: AnalysisAnalyzerInput): AnalysisReport {
       detail: `${outcome.total} 条用例全部通过，通过率 100%`,
       severity: 'low',
       suggestion: '可归档基线，进入回归稳定阶段',
+      classification: 'NONE',
+      evidence: [],
+      confidence: 'CONFIRMED',
     });
   }
 

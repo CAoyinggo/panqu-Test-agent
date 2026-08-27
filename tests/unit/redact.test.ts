@@ -75,6 +75,22 @@ describe('redactSensitive：敏感信息脱敏', () => {
     expect(output).toContain('***');
   });
 
+  it('自由文本中完整遮盖 Basic Authorization、Cookie 链和带空格的引号密码', () => {
+    const output = redactSensitiveText([
+      'Authorization: Basic dXNlcjpwYXNz',
+      'Authorization: Digest username=alice, realm=admin, nonce=deadbeef, response=secret',
+      'Cookie: sid=abc; csrf=def',
+      'password="secret world"',
+      'token=unquoted secret words',
+    ].join('\n'));
+    for (const secret of ['dXNlcjpwYXNz', 'username=alice', 'nonce=deadbeef', 'sid=abc', 'csrf=def', 'secret world', 'unquoted secret words']) {
+      expect(output).not.toContain(secret);
+    }
+    expect(output).toContain('Authorization: ***');
+    expect(output).toContain('Cookie: ***');
+    expect(output).toContain('password="***"');
+  });
+
   it('日志写出前强制脱敏', () => {
     setNoColor(true);
     const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);

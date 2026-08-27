@@ -113,6 +113,47 @@ AC-1 POST /orders/{id} 返回 201`);
     });
   });
 
+  it('keeps test setup, credentials and evidence tables as non-normative context', () => {
+    const requirement = parseAcceptanceRequirement(`# 创建订单
+## API
+POST /orders
+## Authentication
+- Type: TOKEN
+- Reference: ACTOR_TOKEN_REF
+## Preconditions
+| ID | Condition | Evidence Channel |
+| --- | --- | --- |
+| PRE-001 | 创建隔离用户 | RESOURCE |
+## Test Data
+| ID | Owner | Value |
+| --- | --- | --- |
+| DATA-001 | test-user | order-a |
+## Assertions
+| ID | Target | Expected |
+| --- | --- | --- |
+| AS-001 | status | 201 |
+## Evidence
+| ID | Kind | Description |
+| --- | --- | --- |
+| EV-001 | RESPONSE | 创建响应 |
+## Cleanup
+| Handler | Required | Description |
+| --- | --- | --- |
+| cleanup-order | true | 删除测试订单 |
+## Acceptance Criteria
+AC-1 POST /orders 返回 201。`);
+
+    for (const fragment of ['Type: TOKEN', 'PRE-001', 'DATA-001', 'AS-001', 'EV-001', 'cleanup-order']) {
+      expect(requirement.factLedger.find((fact) => fact.statement.includes(fragment))).toMatchObject({
+        normativity: 'NON_NORMATIVE',
+        status: 'NON_NORMATIVE',
+      });
+    }
+    expect(requirement.factLedger.find((fact) => fact.statement.includes('POST /orders 返回 201'))).toMatchObject({
+      normativity: 'NORMATIVE',
+    });
+  });
+
   it('links every structured contract/rule projection with de-duplicated entityRefs', () => {
     const requirement = parseAcceptanceRequirement(`# 用户资料修改
 ## 页面
@@ -198,6 +239,20 @@ AC-1 POST /orders/{id}/ship 返回 200`);
     expect(factByStatement(requirement.factLedger, '订单只能从 PAID 转为 SHIPPED。')).toMatchObject({
       category: 'STATE', status: 'UNVERIFIED',
       entityRefs: { items: [expect.objectContaining({ type: 'STATE_RULE' })] },
+    });
+  });
+
+  it('normalizes an explicit state transition into a deterministic expected state', () => {
+    const requirement = parseAcceptanceRequirement(`# 异步任务
+任务状态从 STEP-002 的 QUEUED 转换到 STEP-003 的 COMPLETED。
+AC-1 任务状态从 STEP-002 的 QUEUED 转换到 STEP-003 的 COMPLETED。`);
+    const fact = factByStatement(requirement.factLedger, '任务状态从 STEP-002 的 QUEUED 转换到 STEP-003 的 COMPLETED。');
+    expect(fact.canonical).toMatchObject({
+      resource: { kind: 'TASK' },
+      action: { kind: 'TRANSITION' },
+      expected: { kind: 'STATE_CHANGED', value: { from: 'QUEUED', to: 'COMPLETED' }, explicit: true },
+      normalizationStatus: 'COMPLETE',
+      unresolved: [],
     });
   });
 });

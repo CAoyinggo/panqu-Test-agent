@@ -116,12 +116,17 @@ function traceResult(input: {
   selected: boolean;
 }): DevTestAcceptanceResult {
   if (!input.selected) return 'NOT_TESTED';
-  if (input.executableReady && input.evidenceComplete && input.missing.length === 0
-    && input.oracle?.verdict === 'PASS' && input.oracle.evidence.complete) return 'PASS';
-  if (input.executableReady && input.evidenceComplete && input.missing.length === 0
-    && input.oracle?.verdict === 'FAIL' && input.oracle.evidence.complete) return 'FAIL';
   const raw = input.ui?.status ?? input.result?.status;
-  if (!raw || raw === 'NOT_EXECUTED' || raw === 'CANCELLED') return 'NOT_TESTED';
+  if (!raw || raw === 'NOT_EXECUTED') return 'NOT_TESTED';
+  // 先收敛 Runner 原始状态：取消/超时/阻断后的旧 Oracle 绝不能把结果翻回 PASS。
+  if (raw === 'CANCELLED') return input.ui?.executed || input.result?.executed ? 'BLOCKED' : 'NOT_TESTED';
+  if (raw === 'TIMEOUT' || raw === 'BLOCKED') return 'BLOCKED';
+  const executed = (input.ui?.executed === true && input.ui.processorInvoked === true)
+    || (input.result?.executed === true && input.result.processorInvoked === true);
+  if (raw === 'PASS' && executed && input.executableReady && input.evidenceComplete && input.missing.length === 0
+    && input.oracle?.verdict === 'PASS' && input.oracle.evidence.complete) return 'PASS';
+  if ((raw === 'PASS' || raw === 'FAIL') && executed && input.executableReady && input.evidenceComplete && input.missing.length === 0
+    && input.oracle?.verdict === 'FAIL' && input.oracle.evidence.complete) return 'FAIL';
   return 'BLOCKED';
 }
 
@@ -294,9 +299,15 @@ export function buildDevTestDeliveryCoverage(input: {
     && linked(fact.id).some((trace) => trace.result === 'BLOCKED')).map((fact) => fact.id);
   const complete = input.traces.filter((trace) => trace.evidence.complete).map((trace) => trace.caseId);
   const incomplete = input.traces.filter((trace) => !trace.evidence.complete).map((trace) => trace.caseId);
-  const requiredEvidence = input.traces.reduce((sum, trace) => sum + trace.evidence.required.length, 0);
-  const collectedEvidence = input.traces.reduce((sum, trace) => sum
-    + trace.evidence.required.filter((item) => trace.evidence.collected.includes(item)).length, 0);
+  // Evidence Coverage 以 Requirement Item ID 计数，而不是按 Channel 去重。
+  // 同一 DATA_DIFF/STATE Channel 下的 BEFORE、AFTER 缺一项时不能显示 100%。
+  const requiredEvidence = input.traces.reduce((sum, trace) => sum
+    + (trace.evidence.requiredItems ?? trace.evidence.required).length, 0);
+  const collectedEvidence = input.traces.reduce((sum, trace) => {
+    const requiredItems = trace.evidence.requiredItems ?? trace.evidence.required;
+    const collectedItems = trace.evidence.collectedItems ?? trace.evidence.collected;
+    return sum + requiredItems.filter((item) => collectedItems.includes(item)).length;
+  }, 0);
   return {
     requirements: {
       total: facts.length,

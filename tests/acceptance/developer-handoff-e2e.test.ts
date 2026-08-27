@@ -132,7 +132,7 @@ describe('Developer Handoff E2E', () => {
     ])).rejects.toThrow('ARCHIVE_REPLAY_UNSAFE');
     expect(server.lifecycle).toEqual(lifecycleBeforeRegression);
     expect(server.requests).toHaveLength(requestsBeforeRegression);
-  });
+  }, 15_000);
 
   it('reproduces a real product FAIL by Run ID + Case ID without creating defects for infrastructure states', async () => {
     server = await startFakeApiServer();

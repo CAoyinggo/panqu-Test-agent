@@ -76,7 +76,7 @@ export interface AcceptanceExecutionEvidence {
     reason?: string;
     artifactRef?: string;
   }>;
-  evidenceItems: Array<{
+  evidenceItems?: Array<{
     requirementId: string;
     channel: string;
     sourceStepId?: string;
@@ -359,7 +359,7 @@ function materializeEvidenceItems(
   testCase: TestCase,
   evidence: AcceptanceExecutionEvidence,
   assertions: readonly AcceptanceAssertionEvidence[],
-): AcceptanceExecutionEvidence['evidenceItems'] {
+): NonNullable<AcceptanceExecutionEvidence['evidenceItems']> {
   const assertionById = new Map(assertions.map((assertion) => [assertion.assertionId, assertion]));
   const observedAt = new Date().toISOString();
   return (testCase.evidenceRequirements ?? []).filter((requirement) => requirement.required).map((requirement) => {
@@ -388,7 +388,7 @@ function materializeEvidenceItems(
 function materializeOracleResult(
   testCase: TestCase,
   assertions: readonly AcceptanceAssertionEvidence[],
-  evidenceItems: AcceptanceExecutionEvidence['evidenceItems'],
+  evidenceItems: NonNullable<AcceptanceExecutionEvidence['evidenceItems']>,
 ): NonNullable<AcceptanceExecutionEvidence['oracleResult']> {
   const expectedAssertionIds = testCase.schemaVersion === 'TEST_CASE_V2'
     ? testCase.oracle?.assertionIds ?? []

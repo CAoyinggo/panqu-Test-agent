@@ -3,13 +3,13 @@
 // prompt name 与 ModelRouter TaskKind 一致（runtime.generate 按 task 名查询）。
 import type { PromptDefinition } from './registry.js';
 import { promptRegistry } from './registry.js';
-import { REQUIREMENT_PROMPT_V1 } from './requirement.js';
-import { TEST_DESIGN_SYSTEM_PROMPT } from '../test-design/test-design-agent.js';
+import { REQUIREMENT_PROMPT_V1, REQUIREMENT_PROMPT_V2 } from './requirement.js';
+import { TEST_DESIGN_SYSTEM_PROMPT, TEST_DESIGN_SYSTEM_PROMPT_V1 } from '../test-design/test-design-agent.js';
 import { DATA_SYSTEM_PROMPT } from '../data/data-agent.js';
 import { RISK_SYSTEM_PROMPT } from '../risk/risk-agent.js';
 import { TEST_SELECTION_SYSTEM_PROMPT } from '../test-selection/test-selection-agent.js';
 import { COVERAGE_SYSTEM_PROMPT } from '../coverage/coverage-agent.js';
-import { ANALYSIS_SYSTEM_PROMPT } from '../analysis/analysis-agent.js';
+import { ANALYSIS_SYSTEM_PROMPT, ANALYSIS_SYSTEM_PROMPT_V1 } from '../analysis/analysis-agent.js';
 import { ROOT_CAUSE_SYSTEM_PROMPT } from '../analysis/root-cause-agent.js';
 import { DEFECT_SYSTEM_PROMPT } from '../defect/defect-agent.js';
 import { HEALING_SYSTEM_PROMPT } from '../self-healing/self-healing-agent.js';
@@ -41,12 +41,17 @@ function v1(name: string, purpose: string, system: string, outputSchema: unknown
 /** 全部内置 Prompt（requirement.v1 已由 prompts/requirement.ts 提供） */
 const BUILTIN_PROMPTS: PromptDefinition[] = [
   REQUIREMENT_PROMPT_V1,
-  v1('test-design', '根据结构化需求生成测试用例', TEST_DESIGN_SYSTEM_PROMPT, TESTCASE_JSON_SCHEMA, 'medium', 0),
+  REQUIREMENT_PROMPT_V2,
+  v1('test-design', '根据结构化需求生成测试用例（历史兼容）', TEST_DESIGN_SYSTEM_PROMPT_V1, TESTCASE_JSON_SCHEMA, 'medium', 0),
+  { ...v1('test-design', '按适用维度生成可执行、可验证、可追溯的开发验收用例', TEST_DESIGN_SYSTEM_PROMPT, TESTCASE_JSON_SCHEMA, 'medium', 0),
+    key: 'test-design.v2', version: 'v2' },
   v1('data', '规划测试数据准备方案', DATA_SYSTEM_PROMPT, DATA_PLAN_JSON_SCHEMA, 'medium'),
   v1('risk', '评估执行风险', RISK_SYSTEM_PROMPT, RISK_JSON_SCHEMA, 'small'),
   v1('test-selection', '智能选择本次执行的测试集', TEST_SELECTION_SYSTEM_PROMPT, SELECTION_JSON_SCHEMA, 'small'),
   v1('coverage', '分析覆盖缺口', COVERAGE_SYSTEM_PROMPT, COVERAGE_JSON_SCHEMA, 'small'),
-  v1('analysis', '汇总分析测试结果', ANALYSIS_SYSTEM_PROMPT, { type: 'object' }, 'high'),
+  v1('analysis', '汇总分析测试结果（历史兼容）', ANALYSIS_SYSTEM_PROMPT_V1, { type: 'object' }, 'high'),
+  { ...v1('analysis', '基于真实执行、Oracle 与 Evidence 解释并分类结果', ANALYSIS_SYSTEM_PROMPT, { type: 'object' }, 'high'),
+    key: 'analysis.v2', version: 'v2' },
   v1('rca', '失败根因分析（证据链推断）', ROOT_CAUSE_SYSTEM_PROMPT, ROOT_CAUSE_JSON_SCHEMA, 'high'),
   v1('defect', '生成缺陷草稿', DEFECT_SYSTEM_PROMPT, DEFECT_JSON_SCHEMA, 'high'),
   v1('healing', '自愈建议分析', HEALING_SYSTEM_PROMPT, HEALING_JSON_SCHEMA, 'medium'),

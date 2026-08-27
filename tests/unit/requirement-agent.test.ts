@@ -28,6 +28,14 @@ function makeContext(llm: MockLLMProvider): AgentContext {
   });
 }
 
+function understanding(source: string) {
+  return {
+    facts: [{ id: 'F-1', category: 'ACTION', statement: source, knowledge: 'EXPLICIT', source, confidence: 1 }],
+    ambiguities: [],
+    unknowns: [],
+  };
+}
+
 describe('requirement - 规则解析器（确定性兜底）', () => {
   it('解析功能模块/能力/输入', () => {
     const r = parseRequirement(DEMO_REQ);
@@ -62,6 +70,7 @@ describe('requirement - 规则解析器（确定性兜底）', () => {
     expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
     expect(r1.confidence).toBeGreaterThan(0);
     expect(r1.confidence).toBeLessThanOrEqual(1);
+    expect(r1.understanding?.facts[0]).toEqual(expect.objectContaining({ knowledge: 'EXPLICIT', source: DEMO_REQ }));
   });
 });
 
@@ -101,6 +110,23 @@ describe('requirement - Schema 校验与归一化', () => {
   it('Schema 定义包含 feature 必填', () => {
     expect(REQUIREMENT_JSON_SCHEMA.required).toContain('feature');
   });
+
+  it('归一化 EXPLICIT / INFERRED / UNKNOWN 事实与待确认清单', () => {
+    const r = normalizeRequirement({
+      feature: 'order',
+      understanding: {
+        facts: [
+          { id: 'F-1', category: 'ACTOR', statement: '用户创建订单', knowledge: 'EXPLICIT', source: '用户创建订单', confidence: 1 },
+          { id: 'F-2', category: 'STATE', statement: '支付后可能进入已支付', knowledge: 'INFERRED', confidence: 0.6 },
+          { id: 'F-3', category: 'PERMISSION', statement: '取消权限未知', knowledge: 'UNKNOWN' },
+        ],
+        ambiguities: [{ id: 'Q-1', question: '谁可以取消订单？', impactedFacts: ['F-3'], owner: '产品' }],
+        unknowns: ['取消角色权限'],
+      },
+    });
+    expect(r.understanding?.facts.map((fact) => fact.knowledge)).toEqual(['EXPLICIT', 'INFERRED', 'UNKNOWN']);
+    expect(r.understanding?.ambiguities[0]).toEqual(expect.objectContaining({ id: 'Q-1', impactedFacts: ['F-3'] }));
+  });
 });
 
 describe('requirement - RequirementAgent 全链路', () => {
@@ -113,6 +139,7 @@ describe('requirement - RequirementAgent 全链路', () => {
         requirements: [{ name: 'resolution', values: ['720P', '1080P'] }],
         businessRules: ['积分正确扣除'],
         dependencies: ['模型服务', '积分服务'],
+        understanding: understanding('测试文生视频功能'),
       })],
     });
     const agent = new RequirementAgent();
@@ -126,7 +153,7 @@ describe('requirement - RequirementAgent 全链路', () => {
 
   it('LLM 输出被 ```json 围栏包裹也能解析', async () => {
     const llm = new MockLLMProvider({
-      scripted: ['```json\n{"feature":"wan3","inputs":["prompt"]}\n```'],
+      scripted: [`\`\`\`json\n${JSON.stringify({ feature: 'wan3', inputs: ['prompt'], understanding: understanding('文生视频') })}\n\`\`\``],
     });
     const r = await new RequirementAgent().execute('测试文生视频', makeContext(llm));
     expect(r.feature).toBe('wan3');
@@ -162,7 +189,7 @@ describe('requirement - RequirementAgent 全链路', () => {
 
   it('LLM 返回的对象形态 requirements 被归一化', async () => {
     const llm = new MockLLMProvider({
-      scripted: [JSON.stringify({ feature: 'wan3', requirements: { duration: { values: [5, 10] } } })],
+      scripted: [JSON.stringify({ feature: 'wan3', requirements: { duration: { values: [5, 10] } }, understanding: understanding('5 秒和 10 秒视频') })],
     });
     const r = await new RequirementAgent().execute('支持 5 秒和 10 秒视频', makeContext(llm));
     expect(r.requirements).toContainEqual({ name: 'duration', values: [5, 10] });
@@ -174,9 +201,44 @@ describe('requirement - RequirementAgent 全链路', () => {
   });
 
   it('支持 hintFeature 提示', async () => {
-    const llm = new MockLLMProvider({ scripted: ['{"feature":"user","inputs":["prompt"]}'] });
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({ feature: 'user', inputs: ['prompt'], understanding: understanding('测试登录流程') })] });
     const r = await new RequirementAgent().execute({ text: '测试登录流程', hintFeature: 'user' }, makeContext(llm));
     expect(r.feature).toBe('user');
     expect(llm.getLastCall()!.messages[1].content).toContain('user');
+  });
+
+  it('v2 Prompt 强制事实认知边界，EXPLICIT source 必须来自原文', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({
+      feature: 'wan3',
+      understanding: {
+        facts: [{ id: 'F-1', category: 'BUSINESS_RULE', statement: '积分正确扣除', knowledge: 'EXPLICIT', source: '积分正确扣除' }],
+        ambiguities: [], unknowns: [],
+      },
+    })] });
+    const r = await new RequirementAgent().execute(DEMO_REQ, makeContext(llm));
+    expect(r.understanding?.facts[0]).toEqual(expect.objectContaining({ knowledge: 'EXPLICIT', source: '积分正确扣除' }));
+    expect(llm.getLastCall()!.messages[0].content).toContain('EXPLICIT / INFERRED / UNKNOWN');
+  });
+
+  it('伪造的 EXPLICIT source 触发确定性回退，不进入 Requirement', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({
+      feature: 'wan3',
+      understanding: {
+        facts: [{ id: 'F-X', category: 'PERMISSION', statement: '管理员可删除', knowledge: 'EXPLICIT', source: '管理员可以任意删除所有资源' }],
+        ambiguities: [], unknowns: [],
+      },
+    })] });
+    const r = await new RequirementAgent().execute(DEMO_REQ, makeContext(llm));
+    expect(r.understanding?.facts.some((fact) => fact.id === 'F-X')).toBe(false);
+    expect(r.understanding?.facts[0]).toEqual(expect.objectContaining({ source: DEMO_REQ }));
+    expect(r.businessRules).toContain('积分正确扣除');
+  });
+
+  it('v2 LLM 省略 understanding 时拒绝该输出并使用可追溯规则回退', async () => {
+    const llm = new MockLLMProvider({ scripted: [JSON.stringify({ feature: 'wan3', inputs: ['prompt'] })] });
+    const r = await new RequirementAgent().execute(DEMO_REQ, makeContext(llm));
+    expect(r.understanding).toBeDefined();
+    expect(r.understanding?.facts[0].source).toBe(DEMO_REQ);
+    expect(r.confidence).toBeLessThan(0.9);
   });
 });

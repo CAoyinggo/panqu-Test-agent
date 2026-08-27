@@ -7,6 +7,7 @@ import {
   promptRegistry,
   registerRequirementPrompts,
   REQUIREMENT_PROMPT_V1,
+  REQUIREMENT_PROMPT_V2,
 } from '../../src/agents/index.js';
 
 const p1: PromptDefinition = {
@@ -85,5 +86,15 @@ describe('prompt-registry - Requirement Prompt 注册', () => {
     registerRequirementPrompts();
     registerRequirementPrompts(); // 再次调用不覆盖
     expect(promptRegistry.get('requirement.v1')?.key).toBe('requirement.v1');
+    expect(promptRegistry.get('requirement.v2')?.key).toBe('requirement.v2');
+    expect(promptRegistry.getVersion('requirement')?.version).toBe('v2');
+    expect(REQUIREMENT_PROMPT_V2.system).toContain('EXPLICIT / INFERRED / UNKNOWN');
+  });
+
+  it('Test Design 与 Analysis 默认使用 evidence-first v2 Prompt', () => {
+    expect(promptRegistry.getVersion('test-design')?.version).toBe('v2');
+    expect(promptRegistry.getVersion('test-design')?.system).toContain('不设最低条数');
+    expect(promptRegistry.getVersion('analysis')?.version).toBe('v2');
+    expect(promptRegistry.getVersion('analysis')?.system).toContain('LLM 不是 Oracle');
   });
 });

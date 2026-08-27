@@ -19,6 +19,7 @@
 
 - [项目简介](#项目简介)
 - [快速开始](#快速开始)
+- [智能体 v2](#智能体-v2)
 - [Developer Self-Test](#developer-self-test)
 - [执行链路](#执行链路)
 - [核心能力](#核心能力)
@@ -35,12 +36,14 @@
 
 test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务功能在 `src/cases/{feature}/` 中独立维护，用例加载器会递归发现测试，无需修改核心框架。
 
-平台包含两条相互衔接的主链路：
+平台包含三条相互衔接的主链路：
 
 1. **测试执行链路**：需求与 DSL → Canonical Scene → Processor
    → Runner → Assertion → Result → Report。
 2. **质量治理链路**：真实执行结果 → AI Evaluation → Feedback
    → Improvement → Shadow / Canary → Release Gate。
+3. **智能体认知链路**：Requirement Agent v2 → Risk / Test Design v2
+   → Runtime / Evidence → Analysis Agent v2；LLM 负责理解和解释，确定性代码负责执行状态、Oracle 与发布结论。
 
 > [!IMPORTANT]
 > 执行结果采用 fail-closed 语义：未匹配 Processor、`executed=false`、
@@ -49,15 +52,16 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 ### 当前验证基线
 
-以下数据来自 2026-08-26 的当前代码验证：
+以下数据来自 2026-08-27 的当前代码验证：
 
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 266 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 2573 项通过，19 项跳过 |
-| Acceptance 回归 | 33 个测试文件、306 项测试通过 |
-| DevTest 回归 | 15 个测试文件、111 项测试通过 |
+| 全量 Vitest | 268 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2609 项通过，19 项跳过 |
+| 智能体回归 | 36 个测试文件、497 项测试通过 |
+| Acceptance 回归 | 33 个测试文件、310 项测试通过 |
+| DevTest 回归 | 17 个测试文件、133 项测试通过 |
 | Markdown 本地链接 | 191 个文档、0 个失效链接 |
 
 ## 快速开始
@@ -81,11 +85,19 @@ npm run devtest -- requirements/new-feature.md --summary
 npm run devtest -- requirements/new-feature.md --deep
 ```
 
-默认 `mode=SAFE`、最多 20 条风险优先 Case，目标地址读取 `TESTFLOW_BASE_URL`
-或使用本机 `127.0.0.1:3000`。POST/PUT/PATCH/DELETE 即使是预期被拒绝的负向探针，
+默认 `mode=SAFE`、最多 20 条风险优先 Case。目标地址来自 `--base-url`、专用环境变量
+或项目测试配置；没有候选地址时进入静态设计模式，不猜测 `127.0.0.1/localhost`，也不发送网络请求。
+POST/PUT/PATCH/DELETE 即使是预期被拒绝的负向探针，
 也只有显式传入 `--confirm-mutations`，且目标为本机 Sandbox 或具备 Cleanup/Rollback 时
 才可能执行；DELETE、真实扣费、Provider、发布和消息副作用仍默认阻断。
 使用 `--mode dry-run` 可保证零 HTTP 请求。
+
+> [!WARNING]
+> 除 `--plan`、`--preflight`、`--mode dry-run` 外，DevTest CLI 会在测试前同步
+> `/Users/mac/agents/panqu-ai` 下所有 Git 子仓库：先全部 `fetch --prune`，再逐仓库执行
+> `reset --hard <upstream>` 与 `clean -fd`。这会丢弃 tracked 本地改动、本地领先提交和非 ignored
+> 未跟踪文件；任一仓库同步失败时测试不会启动。`--project-root` 只缩小源码发现范围，不改变同步根目录。
+
 DevTest 会先建立 AC Coverage Matrix、提取业务不变量，再构建 Business Flow Graph，校验
 Response/Database/Task/Billing/Audit/Resource 状态一致性，并做 Case 去重与核心 Case 识别；
 问题按根因聚类，首次异常为 LIKELY，复现后才可 CONFIRMED。问题 ID 与生命周期跨 Baseline 保持稳定，
@@ -95,8 +107,9 @@ v8 使用 Requirement + Contract + Invariant + Observed State + Historical Basel
 Oracle，并以历史失败、Bug 密度、代码变化、Contract Drift、回归和成本做自适应选择。日常默认
 Tier 0 + Tier 1；`--deep` 才执行 Tier 2。Flaky、环境错误与 Test Pollution 会进入独立可靠性分类，
 不会伪装成产品 Bug。
-固定产物写入 `devtest-results/<runId>/`：`report.html`、`report.json`、
-`cases.csv`、`problems.md`、`acceptance-summary.md`。完整说明见 [DevTest Mode](docs/devtest.md)。
+固定产物写入 `devtest-results/<runId>/`：面向开发者的 `测试用例.md`、
+`开发自测测试报告.md`，以及 `report.html`、`report.json`、`cases.csv`、`problems.md`、
+`acceptance-summary.md` 审计附件；执行模式还会生成 `source-sync.json`。完整说明见 [DevTest Mode](docs/devtest.md)。
 
 ### 开发需求一键验收
 
@@ -166,6 +179,21 @@ npm run platform -- serve
 ```bash
 node dist/bin/run-test.js --help
 ```
+
+## 智能体 v2
+
+最新智能体采用“认知边界 + 证据优先”的统一约束：
+
+| 智能体/能力 | 当前行为 |
+| --- | --- |
+| Requirement Agent v2 | 将事实标记为 `EXPLICIT / INFERRED / UNKNOWN`，保留原文来源、置信度、歧义问题和未知项；缺失信息不再按常见规则补全 |
+| Test Design Agent v2 | 生成 `TEST_CASE_V2`，按需求、契约和风险动态选择维度；用例回链 Fact、Step、Assertion、Oracle 与 Evidence，不追求固定数量 |
+| Runtime Claim Gate | 设计模型无权声明 Executor/Observer 已就绪；所有用例先回收为设计态，再由确定性 Preflight 绑定真实能力 |
+| Analysis Agent v2 | LLM 只解释逐 Case 证据；统计、`PASS/FAIL/BLOCKED/NOT_EXECUTED`、缺陷分类和最终建议由确定性分析器重建 |
+| Prompt Registry | Requirement、Test Design、Analysis 同时保留 v1 回放版本和 v2 默认版本，便于审计、比较和回滚 |
+
+关键原则：HTTP 500、超时、空响应或浏览器错误不会直接成为产品缺陷；只有真实执行、明确 Expected、
+失败的确定性业务断言和完整 Evidence 同时成立时，才允许输出高置信产品问题。
 
 ## Developer Self-Test
 
@@ -258,6 +286,7 @@ Case DSL
 | --- | --- | --- |
 | 契约治理 | 统一 Contract Registry、Resolver、版本/冲突/漂移门禁 | `src/contracts/` |
 | 变更发现 | Route、Controller、OpenAPI、Frontend、Runtime 候选发现 | `src/discovery/` |
+| 源码同步 | 工蜂仓库两阶段 fetch/覆盖同步、SHA 校验与 `source-sync.json` 审计 | `src/devtest/source-sync.ts` |
 | 开发自测 | 变更分析、P0 Pack、执行门禁、证据收敛与报告 | `src/self-test/` |
 | 证据观察 | State、Database、Task、Billing、Audit、Browser Observer | `src/observers/` |
 | 场景路由 | Canonical Scene、Processor 能力声明与插件加载 | `src/core/`、`src/plugins/` |
@@ -320,7 +349,7 @@ Case DSL
 | `src/assertions` | 业务断言和适配器 |
 | `src/integrations` | HTTP、计费、素材、通知等外部集成 |
 | `src/reports` | HTML、JSON、JUnit 报告器 |
-| `src/agents` | 需求、设计、执行、覆盖率、RCA 等智能体能力 |
+| `src/agents` | Requirement/Test Design/Analysis v2、执行、覆盖率、RCA 与版本化 Prompt |
 | `src/platform` | Project、Run、Scheduler、Worker、RBAC、API 与运维能力 |
 | `src/ai-quality` | Evaluation、Feedback、改进提案与持续评测 |
 | `src/cost` | 成本归因、预算、模型路由和容量治理 |

@@ -3,6 +3,7 @@
 // 定位：LLM 不可用 / 返回非法 JSON / 校验失败时使用，保证需求解析链路始终可产出结构化结果。
 
 import { buildRequirement, Requirement } from './requirement-schema.js';
+import type { RequirementUnderstanding } from './requirement-schema.js';
 
 // ── 关键词表（顺序优先） ──
 
@@ -52,16 +53,11 @@ const BUSINESS_RULE_MAP: Array<[RegExp, string]> = [
   [/扣费/i, '积分正确扣除'],
   [/任务.*提交|提交.*成功/i, '任务提交成功'],
   [/状态.*成功|任务.*成功|最终.*成功/i, '任务状态最终成功'],
-  [/并发/i, '并发执行正常'],
-  [/超时/i, '超时处理正常'],
-  [/重试/i, '重试机制正常'],
+  [/并发.{0,12}(?:正常|成功|正确|安全|一致)/i, '并发执行正常'],
   // Phase 20.8 增强：扩展业务规则识别（下载 / 历史 / 取消 / 去重 / 安全 / 鉴权 / 幂等 / 限流 / 错误码等）
   [/余额不足|余额.*不足/i, '余额不足拒绝'],
   [/未登录|未授权/i, '未登录拒绝'],
-  [/下载|url|链接/i, '下载链接可用'],
-  [/历史|列表|倒序/i, '历史记录查询'],
-  [/取消/i, '取消处理正常'],
-  [/去重|重复/i, '重复提交去重'],
+  [/去重|重复.{0,12}(?:只能|仅能|不得|不能|只创建一个)/i, '重复提交去重'],
   [/幂等|request\s?[-_]?id/i, '幂等处理正常'],
   [/鉴权分级|会员|分级/i, '鉴权分级校验'],
   [/阶梯|单价/i, '阶梯单价校验'],
@@ -113,6 +109,49 @@ const RISK_MAP: Array<[RegExp, string]> = [
 
 function unique(list: string[]): string[] {
   return Array.from(new Set(list));
+}
+
+function buildUnderstanding(text: string, businessRules: string[]): RequirementUnderstanding {
+  const facts: RequirementUnderstanding['facts'] = [{
+    id: 'RF-001',
+    category: 'ACTION',
+    statement: text,
+    knowledge: 'EXPLICIT',
+    source: text,
+    confidence: 1,
+  }];
+  for (const [index, rule] of businessRules.entries()) {
+    if (rule === text) continue;
+    const explicit = text.includes(rule);
+    facts.push({
+      id: `RF-${String(index + 2).padStart(3, '0')}`,
+      category: 'BUSINESS_RULE',
+      statement: rule,
+      knowledge: explicit ? 'EXPLICIT' : 'INFERRED',
+      source: explicit ? rule : undefined,
+      confidence: explicit ? 1 : 0.6,
+    });
+  }
+  const unknowns = [
+    /并发/i.test(text) && !/(?:并发.{0,24}(?:必须|应当|只能|不得|不能|成功|失败|冲突|一致|数量)|(?:必须|应当|只能|不得|不能).{0,24}并发)/i.test(text)
+      ? '并发请求的确定性预期与冲突处理未明确' : undefined,
+    /超时/i.test(text) && !/(?:超时.{0,24}(?:返回|失败|重试|回滚|状态|错误码)|(?:返回|失败|重试|回滚).{0,24}超时)/i.test(text)
+      ? '超时后的响应、状态与副作用预期未明确' : undefined,
+    /重试/i.test(text) && !/(?:重试.{0,24}(?:只能|不得|保持|成功|失败|创建|扣费)|(?:只能|不得|保持).{0,24}重试)/i.test(text)
+      ? '重试的幂等、状态与副作用预期未明确' : undefined,
+    /取消/i.test(text) && !/(?:取消.{0,24}(?:成功|失败|状态|退款|恢复|不可|允许)|(?:成功|失败|允许|不可).{0,24}取消)/i.test(text)
+      ? '取消操作的角色、状态与副作用预期未明确' : undefined,
+  ].filter((item): item is string => Boolean(item));
+  return {
+    facts,
+    ambiguities: unknowns.map((question, index) => ({
+      id: `RQ-${String(index + 1).padStart(3, '0')}`,
+      question,
+      impactedFacts: ['RF-001'],
+      owner: '产品/需求负责人',
+    })),
+    unknowns,
+  };
 }
 
 function matchAll(text: string, map: Array<[RegExp, string]>): string[] {
@@ -171,6 +210,7 @@ export function parseRequirement(text: string, source?: string): Requirement {
     dependencies,
     constraints: matchAll(t, CONSTRAINT_MAP),
     risks: extractRisks(t, dependencies),
+    understanding: buildUnderstanding(t, businessRules),
     version: 'v1',
     source,
     confidence,

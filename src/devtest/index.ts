@@ -33,6 +33,8 @@ export { buildDevTestFeatureModel } from './feature-model.js';
 export { appendDiscoveredContracts, discoverDevTestProject } from './project-discovery.js';
 export { discoverDevTestEnvironment } from './environment-discovery.js';
 export { executeDevTestUiCases } from './ui-executor.js';
+export { synchronizeDevTestSource } from './source-sync.js';
+export type { DevTestSourceSyncOptions, DevTestSourceSyncResult, DevTestSourceRepositorySync } from './source-sync.js';
 export {
   SafeMutationHoldProcessor,
   buildOperationPolicies,
@@ -48,6 +50,8 @@ export {
   renderDevTestHtml,
   renderProblemsMarkdown,
   renderAcceptanceSummary,
+  renderDeveloperSelfTestCases,
+  renderDeveloperSelfTestReport,
   type DevTestRenderInput,
   type DevTestRenderMeta,
 } from './artifacts.js';

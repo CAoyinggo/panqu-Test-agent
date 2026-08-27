@@ -43,6 +43,55 @@ describe('Acceptance Requirement IR', () => {
     expect(requirement.apis[0].pathParams[0]).toMatchObject({ name: 'id', location: 'path', required: true });
   });
 
+  it('只把行首 AC 声明解析为验收标准，并支持 AC 标题后的正文', () => {
+    const requirement = parseAcceptanceRequirement(`# 创建任务
+## Acceptance Criteria
+### AC-001
+上传成功返回 uploadId。
+### AC-002
+创建任务返回 taskId。
+## API Contract
+| Method | Path | AC |
+| --- | --- | --- |
+| POST | /uploads | AC-001, AC-002 |
+| POST | /tasks | AC-002 |`);
+
+    expect(requirement.acceptanceCriteria.map((criterion) => [criterion.criterionId, criterion.objective])).toEqual([
+      ['AC-001', '上传成功返回 uploadId。'],
+      ['AC-002', '创建任务返回 taskId。'],
+    ]);
+    expect(requirement.acceptanceCriteria.some((criterion) => criterion.objective === ',')).toBe(false);
+  });
+
+  it('解析分节 Actor/Authentication，并将单一全局 Actor 应用于 AC', () => {
+    const requirement = parseAcceptanceRequirement(`# 创建任务
+## Actor
+- Type: USER
+- ID: actor-a
+## Role
+MEMBER
+## Tenant
+- ID: tenant-a
+## Authentication
+- Type: TOKEN
+- Reference: actor-a-token
+## API
+POST /tasks
+## Acceptance Criteria
+AC-1 POST /tasks 返回 HTTP 201 和非空 taskId。`);
+
+    expect(requirement.actors).toEqual([expect.objectContaining({
+      id: 'actor-a', role: 'MEMBER', tenantId: 'tenant-a', tokenRef: 'actor-a-token',
+    })]);
+    expect(requirement.apis[0].authPolicy).toBe('AUTH_REQUIRED');
+    const acFact = requirement.factLedger.find((fact) => fact.statement.includes('返回 HTTP 201'));
+    expect(acFact?.canonical).toMatchObject({
+      actor: { id: 'actor-a', role: 'MEMBER', source: 'CONFIGURED' },
+      expected: { kind: 'STATUS', status: 201, explicit: true },
+      normalizationStatus: 'COMPLETE',
+    });
+  });
+
   it('不把 AC 中引用的操作当成 ApiSpec，并显式报告无法归属的参数', () => {
     const requirement = parseAcceptanceRequirement(`# 多接口
 GET /users/{id}
