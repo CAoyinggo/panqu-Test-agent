@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "panqu-test-mcp": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/mcp-bridge/trae-test-mcp-stdio.js"
+      ],
+      "env": {
+        "TESTFLOW_ALLOWED_TARGET_ORIGINS": "https://test.panqu.com"
+      }
+    }
+  }
+}
