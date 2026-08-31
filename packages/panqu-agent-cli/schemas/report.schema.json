@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/CAoyinggo/panqu-Test-agent/packages/panqu-agent-cli/schemas/report.schema.json",
+  "title": "PanquLocalValidatorReport",
+  "description": "panqu-Test-agent 本地验证报告（report.json）结构。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "agent",
+    "workspace",
+    "environment",
+    "analysis",
+    "checks",
+    "api",
+    "totals",
+    "limitations",
+    "overall_status",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "run_id": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "integer" },
+    "agent": {
+      "type": "object",
+      "required": ["name", "version", "distribution_source", "source_commit_or_tag", "model_runtime"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "distribution_source": { "type": "string" },
+        "source_commit_or_tag": { "type": "string" },
+        "model_runtime": { "const": "traecli" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["workspace_id", "git_head", "branch", "dirty", "snapshot_path", "excluded_files"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "workspace_basename": { "type": "string" },
+        "git_head": { "type": "string" },
+        "branch": { "type": "string" },
+        "dirty": { "type": "boolean" },
+        "snapshot_path": { "type": ["string", "null"] },
+        "excluded_files": { "type": "array", "items": { "type": "object" } },
+        "snapshot_cleanup": { "type": ["object", "null"] }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os", "node", "package_manager", "traecli_version", "trae_login_status"],
+      "properties": {
+        "os": { "type": "string" },
+        "node": { "type": "string" },
+        "package_manager": { "type": ["string", "null"] },
+        "traecli_version": { "type": ["string", "null"] },
+        "trae_login_status": { "type": "string" }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["PASSED", "BLOCKED", "ERROR", "SKIPPED"] },
+        "reason": { "type": ["string", "null"] },
+        "architecture_summary": { "type": ["string", "null"] },
+        "changed_areas": { "type": ["array", "null"] },
+        "risks": { "type": ["array", "null"] },
+        "recommended_checks": { "type": ["array", "null"] },
+        "execution_evidence": { "type": ["string", "null"] },
+        "unverified_content": { "type": ["array", "null"] },
+        "overall_interpretation": { "type": ["string", "null"] }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "command", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "command": { "type": ["string", "null"] },
+          "status": { "enum": ["PASSED", "FAILED", "SKIPPED", "BLOCKED", "TIMEOUT", "ERROR"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "signal": { "type": ["string", "null"] },
+          "duration_ms": { "type": "integer" },
+          "stdout_log": { "type": ["string", "null"] },
+          "stderr_log": { "type": ["string", "null"] },
+          "summary": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "required": ["requested", "executed", "origin", "status", "cases"],
+      "properties": {
+        "requested": { "type": "boolean" },
+        "executed": { "type": "boolean" },
+        "origin": { "type": ["string", "null"] },
+        "status": { "type": "string" },
+        "reason": { "type": ["string", "null"] },
+        "plan": { "type": ["object", "null"] },
+        "cases": { "type": "array" }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "required": ["passed", "failed", "skipped", "blocked", "timeout", "error"],
+      "properties": {
+        "passed": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "skipped": { "type": "integer" },
+        "blocked": { "type": "integer" },
+        "timeout": { "type": "integer" },
+        "error": { "type": "integer" },
+        "total": { "type": "integer" }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } },
+    "overall_status": { "enum": ["PASSED", "FAILED", "SKIPPED", "BLOCKED", "ERROR"] },
+    "overall_explanation": { "type": "string" },
+    "dry_run": { "type": "boolean" },
+    "artifacts": {
+      "type": "object",
+      "required": ["report_json", "report_md", "analysis_json", "logs_dir"],
+      "properties": {
+        "report_json": { "type": "string" },
+        "report_md": { "type": "string" },
+        "analysis_json": { "type": "string" },
+        "logs_dir": { "type": "string" },
+        "log_files": { "type": "object" }
+      }
+    }
+  }
+}

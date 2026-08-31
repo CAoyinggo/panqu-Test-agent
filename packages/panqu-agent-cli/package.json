@@ -1,0 +1,39 @@
+{
+  "name": "panqu-test-agent-cli",
+  "version": "0.1.0",
+  "description": "panqu-Test-agent 单命令本地代码验证 CLI：TraeCode CLI 内置模型做结构/变更/风险分析，确定性执行 typecheck/lint/test/build 并输出 Markdown+JSON 报告",
+  "type": "module",
+  "bin": {
+    "panqu-test-agent": "bin/panqu-test-agent.mjs"
+  },
+  "main": "src/cli.mjs",
+  "exports": {
+    ".": "./src/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "prompts/",
+    "schemas/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\""
+  },
+  "keywords": [
+    "panqu",
+    "test",
+    "trae",
+    "traecli",
+    "cli",
+    "validation",
+    "code-review"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

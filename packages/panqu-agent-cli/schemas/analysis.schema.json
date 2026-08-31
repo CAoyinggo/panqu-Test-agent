@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/CAoyinggo/panqu-Test-agent/packages/panqu-agent-cli/schemas/analysis.schema.json",
+  "title": "PanquLocalValidatorAnalysis",
+  "description": "panqu-Test-agent 本地验证：Trae 内置模型结构化分析输出。模型只读分析，不执行命令。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "architecture_summary",
+    "changed_areas",
+    "risks",
+    "recommended_checks",
+    "execution_evidence",
+    "unverified_content",
+    "overall_interpretation"
+  ],
+  "properties": {
+    "architecture_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "项目结构与技术栈概述"
+    },
+    "changed_areas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "impact"],
+        "properties": {
+          "path": { "type": "string" },
+          "impact": { "type": "string" }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "level", "category", "description"],
+        "properties": {
+          "id": { "type": "string" },
+          "level": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+          "category": { "type": "string" },
+          "description": { "type": "string" },
+          "mitigation": { "type": "string" }
+        }
+      }
+    },
+    "recommended_checks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "execution_evidence": {
+      "type": "string",
+      "description": "引用确定性检查的真实执行证据（非模型推测）"
+    },
+    "unverified_content": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "模型推断但未经验证的内容"
+    },
+    "overall_interpretation": {
+      "type": "string",
+      "description": "对整体验证结论的简要解读"
+    }
+  }
+}
