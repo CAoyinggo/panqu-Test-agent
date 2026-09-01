@@ -1,0 +1,121 @@
+# panqu-agent-cli 专用 CI
+# 仅当 CLI 源码、CLI 配置或本 workflow 变化时触发；与根项目已知失败测试解耦。
+# 最小权限：默认 contents: read；不引入外部 LLM / API Key / npm registry Token。
+
+name: panqu-agent-cli CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/panqu-agent-cli/**'
+      - '.github/workflows/cli.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/contracts.test.mjs'
+      - 'deploy/docker/Dockerfile'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/panqu-agent-cli/**'
+      - '.github/workflows/cli.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/contracts.test.mjs'
+      - 'deploy/docker/Dockerfile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CLI_DIR: packages/panqu-agent-cli
+
+jobs:
+  cli-verify:
+    name: panqu-agent-cli verify (install/build/test/pack/hash)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Workflow/Dockerfile contract tests (expect 17/17)
+        run: node --test .github/workflows/contracts.test.mjs
+
+      - name: Install CLI dependencies
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: CLI build
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          if node -e "process.exit(require('./package.json').scripts && require('./package.json').scripts.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "no build script; CLI is plain Node.js ESM (no compile step) — skip"
+          fi
+
+      - name: CLI tests (expect 66/66)
+        working-directory: packages/panqu-agent-cli
+        run: node --test "tests/*.test.mjs"
+
+      - name: npm pack (real tgz name)
+        id: pack
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cli-tgz"
+          TGZ=$(npm pack --pack-destination "$RUNNER_TEMP/cli-tgz" | tail -n1 | tr -d '[:space:]')
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+          echo "tgz_path=$RUNNER_TEMP/cli-tgz/$TGZ" >> "$GITHUB_OUTPUT"
+
+      - name: Tarball content contract (no tests/.env/node_modules)
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          TGZ_PATH="${{ steps.pack.outputs.tgz_path }}"
+          LIST=$(tar -tzf "$TGZ_PATH")
+          echo "$LIST"
+          if echo "$LIST" | grep -E '(^|/)(tests?|__tests__|node_modules|\.env|coverage|\.git)/' ; then
+            echo "ERROR: tarball contains forbidden entries"; exit 1
+          fi
+          echo "tarball content contract OK"
+
+      - name: SHA256 generate and re-verify
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          TGZ_PATH="${{ steps.pack.outputs.tgz_path }}"
+          SHA_FILE="$RUNNER_TEMP/cli-tgz/$(basename "$TGZ_PATH").sha256"
+          (cd "$RUNNER_TEMP/cli-tgz" && shasum -a 256 "$(basename "$TGZ_PATH")" > "$(basename "$SHA_FILE")")
+          (cd "$RUNNER_TEMP/cli-tgz" && shasum -a 256 -c "$(basename "$SHA_FILE")")
+          cat "$SHA_FILE"
+
+      - name: No external LLM / API key in CLI package
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          if grep -RniE "LLM_API_KEY|OPENAI_API_KEY|DEEPSEEK|MockLLM|openai|anthropic" \
+            --exclude-dir=node_modules .; then
+            echo "ERROR: external LLM / API key reference found in CLI package"; exit 1
+          fi
+          echo "no external LLM / API key references in CLI package"
+
+      - name: Upload CLI tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panqu-agent-cli-tgz
+          path: ${{ runner.temp }}/cli-tgz/
+          retention-days: 14
+          if-no-files-found: error

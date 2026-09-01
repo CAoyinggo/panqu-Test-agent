@@ -82,14 +82,32 @@ jobs:
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
       image-digest: ${{ steps.build.outputs.digest }}
+      image-ref: ${{ steps.imgref.outputs.image_ref }}
+      digest-ref: ${{ steps.digestref.outputs.digest_ref }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Normalize GHCR image reference
+        id: imgref
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 容器镜像引用必须为小写；统一规范化一次，build/push/SBOM/Trivy/部署全部复用。
+          IMAGE_LC=$(printf '%s' "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          REF="${{ env.REGISTRY }}/${IMAGE_LC}"
+          if [[ ! "$REF" =~ ^ghcr\.io/[a-z0-9._-]+(/[a-z0-9._-]+)*$ ]]; then
+            echo "::error::normalized image ref is not a valid lowercase container reference: $REF"
+            exit 1
+          fi
+          echo "image_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "image_lc=$IMAGE_LC" >> "$GITHUB_OUTPUT"
+          echo "normalized GHCR image ref: $REF"
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.imgref.outputs.image_lc }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -118,17 +136,37 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Resolve digest reference
+        id: digestref
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 用本次 build 的真实 digest 构造精确引用（image@sha256:...），与 :latest 解耦，
+          # 保证 SBOM/Trivy 扫描的就是刚推送的镜像（tag 事件不生成 latest 时也成立）。
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::build digest is empty"
+            exit 1
+          fi
+          if ! printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::build digest has unexpected format: $DIGEST"
+            exit 1
+          fi
+          DIGEST_REF="${{ steps.imgref.outputs.image_ref }}@${DIGEST}"
+          echo "digest_ref=$DIGEST_REF" >> "$GITHUB_OUTPUT"
+          echo "digest reference: $DIGEST_REF"
+
       - name: Generate SBOM
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          image-ref: ${{ steps.digestref.outputs.digest_ref }}
           format: cyclonedx
           output: security-reports/sbom.json
 
       - name: Save image info
         run: |
           mkdir -p security-reports
-          echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}" > security-reports/published-image.txt
+          echo "${{ steps.digestref.outputs.digest_ref }}" > security-reports/published-image.txt
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -136,12 +174,92 @@ jobs:
           name: release-artifacts-${{ github.run_id }}
           path: security-reports/
           retention-days: 30
+          if-no-files-found: error
+
+  # ════════════════════════════════════════════
+  # CLI 发布资产：打包 packages/panqu-agent-cli 并校验 SHA256
+  # 与根镜像发布解耦（独立 job），失败原因独立显示；不影响 deploy-test。
+  # ════════════════════════════════════════════
+  cli-assets:
+    needs: security-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install CLI dependencies
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: CLI build (if present)
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          if node -e "process.exit(require('./package.json').scripts && require('./package.json').scripts.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "no build script; plain Node.js ESM — skip"
+          fi
+
+      - name: CLI tests
+        working-directory: packages/panqu-agent-cli
+        run: node --test "tests/*.test.mjs"
+
+      - name: npm pack (capture real tgz name)
+        id: pack
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cli-assets"
+          TGZ=$(npm pack --pack-destination "$RUNNER_TEMP/cli-assets" | tail -n1 | tr -d '[:space:]')
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+          echo "tgz_path=$RUNNER_TEMP/cli-assets/$TGZ" >> "$GITHUB_OUTPUT"
+
+      - name: Generate and verify SHA256
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          TGZ_PATH="${{ steps.pack.outputs.tgz_path }}"
+          BASE=$(basename "$TGZ_PATH")
+          (cd "$RUNNER_TEMP/cli-assets" && shasum -a 256 "$BASE" > "$BASE.sha256")
+          (cd "$RUNNER_TEMP/cli-assets" && shasum -a 256 -c "$BASE.sha256")
+          cat "$RUNNER_TEMP/cli-assets/$BASE.sha256"
+
+      - name: Tarball content contract
+        working-directory: packages/panqu-agent-cli
+        run: |
+          set -euo pipefail
+          TGZ_PATH="${{ steps.pack.outputs.tgz_path }}"
+          if tar -tzf "$TGZ_PATH" | grep -E '(^|/)(tests?|__tests__|node_modules|\.env|coverage|\.git)/'; then
+            echo "ERROR: tarball contains forbidden entries"; exit 1
+          fi
+          echo "tarball content contract OK"
+
+      - name: Upload CLI release assets (tgz + sha256)
+        uses: actions/upload-artifact@v4
+        with:
+          name: panqu-agent-cli-release-assets
+          path: ${{ runner.temp }}/cli-assets/
+          retention-days: 30
+          if-no-files-found: error
 
   # ════════════════════════════════════════════
   # 部署到测试环境 + 冒烟测试
   # ════════════════════════════════════════════
   deploy-test:
-    needs: release-image
+    needs: [release-image, cli-assets]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment:
@@ -223,7 +341,8 @@ jobs:
         env:
           FEISHU_WEBHOOK: ${{ secrets.TESTFLOW_FEISHU_WEBHOOK }}
           RELEASE_STATUS: ${{ needs.deploy-test.result }}
-          RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          CLI_ASSETS_STATUS: ${{ needs.cli-assets.result }}
+          RELEASE_IMAGE: ${{ needs.release-image.outputs.digest-ref }}
           RELEASE_TAG: ${{ needs.release-image.outputs.image-tag }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
