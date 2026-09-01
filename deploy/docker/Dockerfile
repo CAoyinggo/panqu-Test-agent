@@ -4,15 +4,16 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 # 修复 OpenSSL CVE-2026-14456（HIGH）：libcrypto3/libssl3 须 >= 3.5.8-r0（Alpine 基础镜像层，非 Node 依赖）。
-# 仅最小升级所需包；用 Alpine 原生 apk version -t 比较（读取输出，=/> 通过，</?/空值 fail），POSIX sh。
+# 仅最小升级所需包；版本提取用 apk list --manifest（机器可读 "<name> <version>"，apk2/apk3 均稳定；
+# apk-tools v3（Alpine 3.23+）已把 apk info 的版本行输出改为多行描述格式，无法再用于提取版本），
+# 再用 Alpine 原生 apk version -t 比较（=/> 通过，</?/空值 fail），POSIX sh。
 RUN set -eu; \
     apk upgrade --no-cache libcrypto3 libssl3; \
     MIN_VER="3.5.8-r0"; \
     for pkg in libcrypto3 libssl3; do \
-      line=$(apk info -v "$pkg" 2>/dev/null || true); \
-      ver=$(printf '%s' "$line" | sed -n "s/^$pkg-\([0-9][0-9.r-]*\).*/\1/p" | head -1); \
+      ver=$(apk list --installed --manifest "$pkg" 2>/dev/null | awk -v p="$pkg" '$1==p {print $2; exit}'); \
       if [ -z "$ver" ]; then \
-        echo "ERROR: $pkg not installed or version empty (line='$line')"; exit 1; \
+        echo "ERROR: $pkg not installed or version empty"; exit 1; \
       fi; \
       rel=$(apk version -t "$ver" "$MIN_VER" 2>/dev/null || true); \
       case "$rel" in \
@@ -39,14 +40,14 @@ FROM node:24-alpine AS runtime
 WORKDIR /app
 
 # 修复 OpenSSL CVE-2026-14456（HIGH）：libcrypto3/libssl3 须 >= 3.5.8-r0。
+# 版本提取用 apk list --manifest（apk3 的 apk info 版本行已改为多行描述输出，无法再用于提取版本）。
 RUN set -eu; \
     apk upgrade --no-cache libcrypto3 libssl3; \
     MIN_VER="3.5.8-r0"; \
     for pkg in libcrypto3 libssl3; do \
-      line=$(apk info -v "$pkg" 2>/dev/null || true); \
-      ver=$(printf '%s' "$line" | sed -n "s/^$pkg-\([0-9][0-9.r-]*\).*/\1/p" | head -1); \
+      ver=$(apk list --installed --manifest "$pkg" 2>/dev/null | awk -v p="$pkg" '$1==p {print $2; exit}'); \
       if [ -z "$ver" ]; then \
-        echo "ERROR: $pkg not installed or version empty (line='$line')"; exit 1; \
+        echo "ERROR: $pkg not installed or version empty"; exit 1; \
       fi; \
       rel=$(apk version -t "$ver" "$MIN_VER" 2>/dev/null || true); \
       case "$rel" in \

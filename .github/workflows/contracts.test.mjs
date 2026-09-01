@@ -95,6 +95,15 @@ test('Dockerfile 未削弱 Trivy 门禁（无 ignore-unfixed / 降低 severity /
   assert.ok(!/trivyignore/.test(dockerfile), '不得引用 .trivyignore');
 });
 
+test('Dockerfile 版本提取用 apk list --manifest，禁用 apk info -v（apk3 多行输出回归锁）', () => {
+  const stages = dockerfile.split(/^FROM /m).slice(1);
+  assert.ok(stages.length >= 2, '至少两个 stage');
+  for (const s of stages) {
+    assert.match(s, /apk list --installed --manifest "\$pkg"/, '使用 apk list --manifest 提取版本');
+  }
+  assert.ok(!/apk info -v/.test(dockerfile), '不得再用 apk info -v（apk-tools v3 已改为多行描述输出）');
+});
+
 // ── 5. SBOM/Trivy 使用本次构建 digest，不再用 :latest；deploy/notify 同引用 ──
 test('release-image 构建 step 有稳定 id 并导出 digest reference', () => {
   assert.match(releaseYml, /- name: Build and push\n\s+id: build/, 'build step 有稳定 id=build');

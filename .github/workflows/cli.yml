@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Workflow/Dockerfile contract tests (expect 17/17)
+      - name: Workflow/Dockerfile contract tests (expect 18/18)
         run: node --test .github/workflows/contracts.test.mjs
 
       - name: Install CLI dependencies
