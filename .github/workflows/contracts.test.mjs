@@ -158,3 +158,34 @@ test('CLI 包为零外部依赖（无 npm Token 发布需求）', () => {
   assert.deepEqual(cliPkg.dependencies ?? {}, {}, 'CLI 无外部运行时依赖');
   assert.ok(cliPkg.version, 'CLI 有版本号');
 });
+
+// ── 9. 发布安全门禁：禁止 push main 自动发布，部署仅手动且 fail closed ──
+test('Release 仅由 v* tag 与 workflow_dispatch 触发，禁止 push main 自动发布', () => {
+  const onBlock = releaseYml.slice(0, releaseYml.indexOf('\njobs:'));
+  assert.ok(!/branches:\s*\[main\]/.test(onBlock), '不得再对 push main 自动触发 Release');
+  assert.match(onBlock, /tags:\s*\['v\*'\]/, '保留 v* tag 触发');
+  assert.match(onBlock, /workflow_dispatch:/, '保留 workflow_dispatch');
+  assert.match(onBlock, /deploy_test:/, 'workflow_dispatch 提供 deploy_test 输入');
+  assert.match(onBlock, /default:\s*false/, 'deploy_test 默认 false（不部署）');
+});
+
+test('deploy-test 仅在手动触发且明确选择部署时运行', () => {
+  const section = releaseYml.slice(releaseYml.indexOf('deploy-test:'));
+  assert.match(
+    section,
+    /if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.deploy_test == 'true'/,
+    'deploy-test 仅 workflow_dispatch + deploy_test=true 时运行'
+  );
+});
+
+test('deploy-test SSH 前 fail closed 校验部署 secret 非空', () => {
+  const start = releaseYml.indexOf('deploy-test:');
+  const end = releaseYml.indexOf('notify:', start);
+  const section = releaseYml.slice(start, end);
+  assert.match(section, /Validate deploy configuration/, '存在部署配置校验步骤');
+  assert.match(section, /DEPLOY_HOST/, '校验 DEPLOY_HOST');
+  assert.match(section, /DEPLOY_USER/, '校验 DEPLOY_USER');
+  assert.match(section, /DEPLOY_SSH_KEY/, '校验 DEPLOY_SSH_KEY');
+  assert.match(section, /fail closed/, 'fail closed 语义');
+  assert.match(section, /exit 1/, '缺失即退出');
+});

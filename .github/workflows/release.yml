@@ -2,9 +2,14 @@ name: Release
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      deploy_test:
+        description: 'Deploy the published image to the test environment'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -260,6 +265,7 @@ jobs:
   # ════════════════════════════════════════════
   deploy-test:
     needs: [release-image, cli-assets]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_test == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment:
@@ -273,6 +279,22 @@ jobs:
         with:
           name: release-artifacts-${{ github.run_id }}
           path: security-reports/
+
+      - name: Validate deploy configuration (fail closed)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          missing=""
+          [ -n "${DEPLOY_HOST}" ] || missing="${missing} DEPLOY_HOST"
+          [ -n "${DEPLOY_USER}" ] || missing="${missing} DEPLOY_USER"
+          [ -n "${DEPLOY_SSH_KEY}" ] || missing="${missing} DEPLOY_SSH_KEY"
+          if [ -n "${missing}" ]; then
+            echo "::error::deploy secrets not configured (fail closed):${missing}"
+            exit 1
+          fi
+          echo "deploy configuration present (fail closed check passed)"
 
       - name: Deploy to test server
         id: deploy
