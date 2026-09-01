@@ -197,3 +197,26 @@ exit 0
   assert.equal(res.attempts, 2);
   assert.match(res.reason, /仍失败/);
 });
+
+test('子进程极速退出 + 大 prompt → stdin EPIPE 被吞掉，进程不崩溃、不伪造 PASSED', async () => {
+  const dir = tmpDir();
+  const fake = join(dir, 'traecli');
+  const outPath = join(dir, 'analysis-out.json');
+  write(fake, `#!/bin/sh
+exit 0
+`);
+  run('chmod', ['+x', fake]);
+  const res = await runTraeAnalysis({
+    snapshotPath: dir,
+    promptTemplate: 'x'.repeat(1024 * 1024), // 1MB，远超 pipe 缓冲，确定性触发 EPIPE
+    schemaPath: join(dir, 'schema.json'),
+    outputJsonPath: outPath,
+    traecliPath: fake,
+    loginStatus: 'logged_in',
+    timeoutMs: 10000,
+    maxAttempts: 1,
+  });
+  // fake 直接退出、无输出文件 → 输出校验失败 → ERROR；关键是调用进程未因 EPIPE 崩溃
+  assert.equal(res.status, 'ERROR');
+  assert.equal(res.attempts, 1);
+});

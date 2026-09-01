@@ -66,7 +66,7 @@ jobs:
             echo "no build script; CLI is plain Node.js ESM (no compile step) — skip"
           fi
 
-      - name: CLI tests (expect 66/66)
+      - name: CLI tests (expect 67/67)
         working-directory: packages/panqu-agent-cli
         run: node --test "tests/*.test.mjs"
 

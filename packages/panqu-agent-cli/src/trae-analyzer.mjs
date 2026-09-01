@@ -160,6 +160,8 @@ export async function runTraeAnalysis(opts) {
 
       child.stdout.on('data', (d) => out.push(d));
       child.stderr.on('data', (d) => err.push(d));
+      // 子进程可能极速退出，写 stdin 触发 EPIPE；流错误在此吞掉，统一由 close/error 事件裁决（fail-closed 语义不变）
+      child.stdin.on('error', () => {});
       child.stdin.end(promptTemplate); // 模板即最终 prompt
 
       let settled = false;
