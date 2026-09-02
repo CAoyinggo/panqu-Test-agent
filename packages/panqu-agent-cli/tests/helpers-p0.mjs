@@ -10,7 +10,7 @@ import {
   mkdtempSync, mkdirSync, writeFileSync, cpSync, chmodSync, existsSync, realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, write, hashTree, PACKAGE_ROOT } from './helpers.mjs';
 
@@ -27,13 +27,18 @@ const FAKE_ANALYSIS = {
 };
 
 /**
- * 创建 fake traecli（PATH 前置注入）。
- * findTraecli 按 PATH 探测 traecli，将 fake 目录前置即可确定性命中；
- * 不改 HOME（真 traecli 登录态存于真实 HOME，避免误伤）。
- * 返回 { binDir, env, cleanup }，env() 返回带 PATH 前置的子进程环境。
+ * 创建 fake traecli（临时 HOME 注入，CI 与本地均确定性命中）。
+ * findTraecli 先用 `command -v traecli` 探测 PATH（spawnSync 无 shell 时该探测不可用），
+ * 再回退到 `<HOME>/.local/bin/traecli` 与 `<HOME>/bin/traecli`。
+ * 因此 fake 必须创建在 `<temporary-home>/.local/bin/traecli`，且被测 CLI 子进程的
+ * HOME 必须指向该临时 HOME——PATH 前置仅作双保险，不能只依赖 PATH。
+ * 不读取开发机真实 HOME，不依赖真实 traecli 登录态。
+ * 返回 { binDir, env, cleanup }，env() 返回覆盖 HOME + PATH 前置的子进程环境。
  */
 export function makeFakeTraecliRoot() {
-  const binDir = mkdtempSync(join(tmpdir(), 'panqu-p0-faketrae-'));
+  const tempHome = mkdtempSync(join(tmpdir(), 'panqu-p0-fakehome-'));
+  const binDir = join(tempHome, '.local', 'bin');
+  mkdirSync(binDir, { recursive: true });
   const fake = join(binDir, 'traecli');
   write(fake, `#!/bin/sh
 if [ "$1" = "login" ]; then
@@ -59,8 +64,12 @@ exit 0
   chmodSync(fake, 0o755);
   return {
     binDir,
-    env: () => ({ ...process.env, PATH: `${binDir}:${process.env.PATH}` }),
-    cleanup: () => run('rm', ['-rf', binDir]),
+    env: () => ({
+      ...process.env,
+      HOME: tempHome,
+      PATH: `${binDir}${delimiter}${process.env.PATH}`,
+    }),
+    cleanup: () => run('rm', ['-rf', tempHome]),
   };
 }
 

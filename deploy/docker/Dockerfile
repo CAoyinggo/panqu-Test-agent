@@ -22,15 +22,16 @@ RUN set -eu; \
       esac; \
     done
 
-# 复制依赖清单，安装全部依赖（含 devDependencies 用于编译）
+# 复制依赖清单与 scripts/（npm ci 会执行根 prepare=node scripts/prepare.mjs，
+# 必须在安装前就位，否则 MODULE_NOT_FOUND）
 COPY package.json package-lock.json ./
+COPY scripts/ ./scripts/
 RUN npm ci
 
-# 复制源码 + 配置 + 脚本，编译
+# 复制源码 + 配置 + 其余内容，编译
 COPY tsconfig.json ./
 COPY src/ ./src/
 COPY bin/ ./bin/
-COPY scripts/ ./scripts/
 COPY tests/ ./tests/
 RUN npm run build
 

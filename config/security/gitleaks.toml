@@ -53,7 +53,11 @@ description = "阿里云 OSS 凭证泄露"
 regex = '''(LTAI[0-9A-Za-z]{12,20})|([0-9a-zA-Z]{30})'''
 tags = ["aliyun", "oss"]
   [rules.allowlist]
+  # 仅精确放行本次已确认的误报：32 字符普通函数标识符 validateMaterializedDependencies
+  # （gitleaks 的 secret 是其被 {30} 规则命中的 30 字符子串窗口，allowlist 为子串匹配，
+  #   故使用该标识符的唯一前缀，可同时覆盖子串窗口与完整标识符；不影响任何真实凭据检测）
   regexes = [
     '''LTAI[0-9A-Za-z]*placeholder''',
     '''TESTFLOW_OSS_ACCESS_KEY''',
+    '''validateMaterializedDependenc''',
   ]
