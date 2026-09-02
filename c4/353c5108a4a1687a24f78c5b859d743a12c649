@@ -1,0 +1,77 @@
+packages/panqu-agent-cli/tests/p0-git-one-command.test.mjs
+  s_fbbef9be49529a::t_d4aacf04d6be20 7
+  s_fbbef9be49529a::t_4bb73997ac5aa8 1-6,8-26
+packages/panqu-agent-cli/tests/report-writer.test.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 58-64,139
+packages/panqu-agent-cli/tests/dependency-isolation.test.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-81
+packages/panqu-agent-cli/tests/p0-cleanup.test.mjs
+  s_fbbef9be49529a::t_8b33f831bae8b7 66-70
+  s_fbbef9be49529a::t_cb639e3a2aa0f7 1-7,9-10,12-24,26-45,51-65,71-98,103-112,126-130,132-133
+  s_fbbef9be49529a::t_a4e34a78261f9c 11
+  s_fbbef9be49529a::t_794c5bf0d38562 25
+  s_fbbef9be49529a::t_b6be231691c1df 99-102,113-125,131
+  s_fbbef9be49529a::t_ad2c5d7e42c10e 8
+  s_fbbef9be49529a::t_f84a232c0cfca1 46-50
+packages/panqu-agent-cli/src/workspace-snapshot.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 17,134-142
+  s_fbbef9be49529a::t_39b7e4be699ab4 143-144
+packages/panqu-agent-cli/tests/final-acceptance-extra.test.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-113
+packages/panqu-agent-cli/tests/p0-real-checks.test.mjs
+  s_fbbef9be49529a::t_a0a007cb7cf348 1-33,35-89
+  s_fbbef9be49529a::t_e97bc19e18b509 34
+packages/panqu-agent-cli/schemas/report.schema.json
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 32,36-40
+packages/panqu-agent-cli/src/report-writer.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 76,115-119,242-245
+packages/panqu-agent-cli/tests/helpers-p0.mjs
+  s_fbbef9be49529a::t_6ed1e48cc6afac 15
+  s_fbbef9be49529a::t_de6d2127071769 99
+  s_fbbef9be49529a::t_11c230897487fd 30-33,36-37,60-64
+  s_fbbef9be49529a::t_09acda883e5a87 1-14,16-29,34-35,38-59,65-98,100-209
+packages/panqu-agent-cli/tests/symlink-isolation.test.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-104
+scripts/prepare.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-40
+packages/panqu-agent-cli/tests/provenance.test.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-67
+package.json
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 7-9,209
+packages/panqu-agent-cli/src/validate.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 42,54,59-67,249,329,380
+packages/panqu-agent-cli/src/project-discovery.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 73-80
+packages/panqu-agent-cli/src/dependency-copy.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-325
+packages/panqu-agent-cli/src/provenance.mjs
+  s_fbbef9be49529a::t_d7cf71a3f9dd47 1-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "c4353c5108a4a1687a24f78c5b859d743a12c649",
+  "prompts": {},
+  "sessions": {
+    "s_fbbef9be49529a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a92bdc5482db4396f7ae073",
+        "model": "glm-5.3-flash__max"
+      },
+      "human_author": "CAoyinggo <Caoyinggo@gmail.com>",
+      "custom_attributes": {
+        "external_session_id": "6a92bdc5482db4396f7ae073",
+        "session_id": "6a92bdc5482db4396f7ae073",
+        "operation_id": "6a97c80135feaa5675da3ecf",
+        "tool_use_id": "6a97c80135feaa5675da3ecf",
+        "source_scene": "agent",
+        "client_type": "ide",
+        "tool_name": "Edit",
+        "display_model_name": "GLM-5.3-Flash",
+        "edit_kind": "file_edit",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
