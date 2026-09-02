@@ -1,0 +1,36 @@
+deploy/docker/Dockerfile
+  s_fbbef9be49529a::t_89a5becc1b4c54 25-26,28,31
+packages/panqu-agent-cli/tests/helpers-p0.mjs
+  s_fbbef9be49529a::t_f93898fbf49980 13
+  s_fbbef9be49529a::t_a320fdeef5d061 30-36,39-41,67-72
+config/security/gitleaks.toml
+  s_fbbef9be49529a::t_a6d07cd3bbb704 56-58,62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "e316d03f204b86fece2a561dc6a171c7eac68abf",
+  "prompts": {},
+  "sessions": {
+    "s_fbbef9be49529a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a92bdc5482db4396f7ae073",
+        "model": "glm-5.3-flash__max"
+      },
+      "human_author": "CAoyinggo <Caoyinggo@gmail.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "operation_id": "6a97e9c9e95042687b0c5b9b",
+        "tool_name": "Edit",
+        "source_scene": "agent",
+        "external_session_id": "6a92bdc5482db4396f7ae073",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_use_id": "6a97e9c9e95042687b0c5b9b",
+        "session_id": "6a92bdc5482db4396f7ae073",
+        "display_model_name": "GLM-5.3-Flash",
+        "edit_kind": "file_edit"
+      }
+    }
+  }
+}
