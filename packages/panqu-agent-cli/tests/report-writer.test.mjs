@@ -55,8 +55,13 @@ function sampleReport(overallOverride = null) {
     startedAt: new Date('2026-01-01T00:00:00.000Z'),
     finishedAt: new Date('2026-01-01T00:00:01.000Z'),
     agentVersion: '0.1.0',
-    sourceCommitOrTag: 'abc123',
-    distributionSource: 'https://github.com/CAoyinggo/panqu-Test-agent',
+    agentProvenance: {
+      source: 'https://github.com/CAoyinggo/panqu-Test-agent',
+      source_spec: 'embedded',
+      source_commit_or_tag: 'abc123',
+      provenance_status: 'DECLARED',
+      provenance_detail: null,
+    },
     workspaceInfo: {
       workspaceId: 'ws123', basename: 'demo', gitHead: 'abc123', branch: 'main', dirty: false,
       snapshotPath: '/tmp/panqu-snapshot-x/wt', excludedFiles: [], snapshotCleanup: { cleaned: [], errors: [] },
@@ -131,5 +136,5 @@ test('Markdown 报告与 JSON 一致：状态与数字一致，不产生两套�
     assert.ok(md.includes(`**${c.status}**`), `markdown 应包含 ${c.name} 的状态 ${c.status}`);
   }
   assert.ok(md.includes(`passed=${json.totals.passed}`), 'markdown totals 应与 JSON 一致');
-  assert.ok(md.includes(json.agent.distribution_source));
+  assert.ok(md.includes(json.agent.source));
 });

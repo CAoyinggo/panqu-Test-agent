@@ -73,8 +73,7 @@ export function buildReport(input) {
     startedAt,
     finishedAt,
     agentVersion,
-    sourceCommitOrTag,
-    distributionSource,
+    agentProvenance,
     workspaceInfo,
     environment,
     discovery,
@@ -113,8 +112,11 @@ export function buildReport(input) {
     agent: {
       name: AGENT_NAME,
       version: agentVersion,
-      distribution_source: distributionSource,
-      source_commit_or_tag: sourceCommitOrTag,
+      source: agentProvenance.source,
+      source_spec: agentProvenance.source_spec,
+      source_commit_or_tag: agentProvenance.source_commit_or_tag,
+      provenance_status: agentProvenance.provenance_status,
+      provenance_detail: agentProvenance.provenance_detail,
       model_runtime: 'traecli',
     },
     workspace: {
@@ -237,8 +239,10 @@ export function renderMarkdown(report) {
   L.push('');
   L.push(`- name: ${report.agent.name}`);
   L.push(`- version: ${report.agent.version}`);
-  L.push(`- distribution_source: ${report.agent.distribution_source}`);
-  L.push(`- source_commit_or_tag: ${report.agent.source_commit_or_tag || '-'}`);
+  L.push(`- source: ${report.agent.source}`);
+  L.push(`- source_spec: ${report.agent.source_spec || '-'}`);
+  L.push(`- source_commit_or_tag: ${report.agent.source_commit_or_tag || 'null'}`);
+  L.push(`- provenance_status: ${report.agent.provenance_status}`);
   L.push(`- model_runtime: ${report.agent.model_runtime}`);
   L.push('');
   L.push('## Workspace');

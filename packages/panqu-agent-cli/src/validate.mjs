@@ -39,6 +39,7 @@ import {
   planChecks,
   hasDependencyDeclared,
   hasNodeModules,
+  dependencyBlockReason,
 } from './project-discovery.mjs';
 import { runCheck, commandDisplay } from './check-runner.mjs';
 import { runTraeAnalysis, composePrompt } from './trae-analyzer.mjs';
@@ -50,9 +51,19 @@ import {
   workspaceId,
 } from './report-writer.mjs';
 import { fileURLToPath } from 'node:url';
+import { computeProvenance } from './provenance.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DISTRIBUTION_SOURCE = 'https://github.com/CAoyinggo/panqu-Test-agent';
+
+/** 计算 agent provenance（source / source_spec / source_commit_or_tag / provenance_status）。 */
+function computeAgentProvenance(agentVersion) {
+  return computeProvenance({
+    agentVersion,
+    distributionSource: DISTRIBUTION_SOURCE,
+    pkgDir: join(__dirname, '..'),
+  });
+}
 
 function exitCodeFor(overall) {
   switch (overall) {
@@ -235,10 +246,7 @@ export async function runValidate(opts) {
         });
         continue;
       }
-      let blocked = null;
-      if (depsDeclared && !nodeModulesPresent) {
-        blocked = '依赖已声明但 node_modules 缺失；请先人工安装依赖（npm install / npm ci / pnpm install / yarn install），本工具不自动安装';
-      }
+      const blocked = dependencyBlockReason(depsDeclared, nodeModulesPresent);
       const res = await runCheck({
         name: item.name,
         scriptName: item.scriptName,
@@ -318,8 +326,7 @@ export async function runValidate(opts) {
     startedAt,
     finishedAt: new Date(),
     agentVersion,
-    sourceCommitOrTag: gitCtx.gitHead,
-    distributionSource: DISTRIBUTION_SOURCE,
+    agentProvenance: computeAgentProvenance(agentVersion),
     workspaceInfo: {
       workspaceId: workspaceId(workspacePath),
       basename: gitCtx.basename,
@@ -370,8 +377,7 @@ async function finishEarly(input) {
     startedAt,
     finishedAt: new Date(),
     agentVersion,
-    sourceCommitOrTag: gitCtx ? gitCtx.gitHead : '',
-    distributionSource: DISTRIBUTION_SOURCE,
+    agentProvenance: computeAgentProvenance(agentVersion),
     workspaceInfo: {
       workspaceId: workspaceId(workspacePath),
       basename: gitCtx ? gitCtx.basename : basename(workspacePath),

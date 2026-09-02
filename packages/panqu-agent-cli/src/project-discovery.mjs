@@ -70,6 +70,14 @@ export function hasNodeModules(snapshotPath) {
   }
 }
 
+/** 依赖已声明但（快照内）无 node_modules 时的阻塞原因；否则返回 null（fail closed）。 */
+export function dependencyBlockReason(depsDeclared, nodeModulesPresent) {
+  if (depsDeclared && !nodeModulesPresent) {
+    return '依赖已声明但 node_modules 缺失；请先人工安装依赖（npm install / npm ci / pnpm install / yarn install），本工具不自动安装';
+  }
+  return null;
+}
+
 /**
  * 规划检查。
  * @param requested 白名单内的 check 名数组
