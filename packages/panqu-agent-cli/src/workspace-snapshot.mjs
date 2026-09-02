@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, basename, resolve, sep, dirname, normalize } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { copyNodeModulesSafe } from './dependency-copy.mjs';
 
 export const SNAPSHOT_PREFIX = 'panqu-snapshot-';
 
@@ -128,6 +129,17 @@ export function createSnapshot(workspacePath, { maxUntrackedBytes = DEFAULT_MAX_
         excluded.push({ path: rel, reason: `复制失败: ${String(err)}` });
       }
     }
+  }
+
+  // 4) 隔离复用被测项目已安装的 node_modules：安全依赖复制（普通文件递归复制 + symlink 安全映射 + 二次验证）。
+  //    任何不安全/逃逸链接或特殊文件 → 整块拒绝，不提供 node_modules，下游按「依赖缺失」fail closed。
+  const srcNodeModules = join(workspacePath, 'node_modules');
+  if (existsSync(srcNodeModules)) {
+    copyNodeModulesSafe({
+      srcNodeModules,
+      workspaceRoot: workspacePath,
+      snapshotRoot: worktree,
+    });
   }
 
   const head = runGit(worktree, ['rev-parse', 'HEAD']);

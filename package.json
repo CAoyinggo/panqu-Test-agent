@@ -4,6 +4,9 @@
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "dist/bin/run-test.js",
+  "bin": {
+    "panqu-test-agent": "packages/panqu-agent-cli/bin/panqu-test-agent.mjs"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "start": "node dist/bin/run-test.js",
@@ -203,7 +206,7 @@
     "docker:build": "docker build -f deploy/docker/Dockerfile -t test-flow:latest .",
     "docker:run": "docker run --rm -v $(pwd)/output:/app/output -v $(pwd)/src/cases:/app/src/cases:ro --env-file .env test-flow:latest",
     "docker:test": "docker run --rm -v $(pwd)/output:/app/output --env-file .env test-flow:latest --task src/cases --ci --upload-reports",
-    "prepare": "husky",
+    "prepare": "node scripts/prepare.mjs",
     "security:audit": "bash scripts/security/audit.sh",
     "security:semgrep": "semgrep --config config/security/semgrep.yml --json --output security-reports/semgrep.json .",
     "security:gitleaks": "gitleaks detect --config config/security/gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source .",

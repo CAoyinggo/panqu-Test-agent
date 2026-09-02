@@ -29,12 +29,15 @@
     "duration_ms": { "type": "integer" },
     "agent": {
       "type": "object",
-      "required": ["name", "version", "distribution_source", "source_commit_or_tag", "model_runtime"],
+      "required": ["name", "version", "source", "source_commit_or_tag", "provenance_status", "model_runtime"],
       "properties": {
         "name": { "type": "string" },
         "version": { "type": "string" },
-        "distribution_source": { "type": "string" },
-        "source_commit_or_tag": { "type": "string" },
+        "source": { "type": "string" },
+        "source_spec": { "type": ["string", "null"] },
+        "source_commit_or_tag": { "type": ["string", "null"] },
+        "provenance_status": { "enum": ["VERIFIED", "DECLARED", "UNKNOWN", "MISMATCH"] },
+        "provenance_detail": { "type": ["object", "null"] },
         "model_runtime": { "const": "traecli" }
       }
     },
