@@ -9,7 +9,7 @@
  *   4. git ls-files --others --exclude-standard -z 枚举未跟踪文件，
  *      安全复制参与测试的源码（敏感/大文件/构建产物默认排除）
  */
-import { mkdtempSync, rmSync, copyFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, mkdirSync, existsSync, statSync, openSync, closeSync, writeSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, resolve, sep, dirname, normalize } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -17,6 +17,12 @@ import { randomBytes } from 'node:crypto';
 import { copyNodeModulesSafe } from './dependency-copy.mjs';
 
 export const SNAPSHOT_PREFIX = 'panqu-snapshot-';
+
+/** git apply 内部硬超时（毫秒）：正常大 diff 足够完成，同时保证快照步骤有界。 */
+export const GIT_APPLY_TIMEOUT_MS = 30_000;
+
+/** git apply stdout/stderr 捕获上限（字节）。 */
+export const GIT_APPLY_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 /** 敏感路径段（任意层级命中即排除）。 */
 const SENSITIVE_SEGMENTS = new Set([
@@ -52,11 +58,86 @@ export function isExcludedUntracked(relPath, { maxBytes = DEFAULT_MAX_UNTracked_
 }
 
 /**
+ * 把 dirty patch 应用到快照 worktree。
+ *
+ * P0 修复（V12 事故：TTY 环境下 spawnSync({input}) 的同步 pump 让 `git apply -`
+ * 永久等待 stdin，CLI 挂死且无清理）：
+ *   - patch 先写入受管快照根内的 0600 临时文件，再把该文件的 fd 作为
+ *     子进程 stdin 直接交给 `git apply -`；
+ *   - EOF 由文件末尾结构性保证：快照 patch 步骤不再依赖父进程 stdin
+ *     （TTY / pipe / 保持打开）的任何状态，也不会因同步 pump 停滞而死锁；
+ *   - spawnSync timeout 兜底：超时向子进程发送 SIGTERM，快照步骤有界；
+ *   - stdout/stderr 有限捕获；非零退出 / spawn 错误 / 超时一律 fail closed。
+ *
+ * @returns {{ ok:true } | { ok:false, code:'WORKSPACE_PATCH_FAILED'|'WORKSPACE_PATCH_TIMEOUT', reason:string }}
+ */
+function applyWorkspacePatch(worktree, patch, snapshotRoot, timeoutMs) {
+  const patchPath = join(snapshotRoot, 'workspace.patch');
+  let patchWriteFd = -1;
+  let patchReadFd = -1;
+  try {
+    patchWriteFd = openSync(patchPath, 'w', 0o600);
+    writeSync(patchWriteFd, Buffer.from(patch, 'utf8'));
+  } finally {
+    if (patchWriteFd >= 0) closeSync(patchWriteFd);
+  }
+
+  try {
+    patchReadFd = openSync(patchPath, 'r');
+    const apply = spawnSync('git', ['apply', '--binary', '--whitespace=nowarn', '-'], {
+      cwd: worktree,
+      // 子进程 stdin = patch 文件 fd（EOF 由文件末尾保证），stdout/stderr = 独立 pipe
+      stdio: [patchReadFd, 'pipe', 'pipe'],
+      shell: false,
+      timeout: timeoutMs,
+      killSignal: 'SIGTERM',
+      maxBuffer: GIT_APPLY_MAX_OUTPUT_BYTES,
+      encoding: 'utf8',
+    });
+
+    if (apply.error && apply.error.code === 'ETIMEDOUT') {
+      return {
+        ok: false,
+        code: 'WORKSPACE_PATCH_TIMEOUT',
+        reason: `WORKSPACE_PATCH_TIMEOUT: git apply 超过 ${timeoutMs}ms，已发送 SIGTERM 终止`,
+      };
+    }
+    if (apply.error) {
+      return {
+        ok: false,
+        code: 'WORKSPACE_PATCH_FAILED',
+        reason: `WORKSPACE_PATCH_FAILED: spawn git apply 失败: ${String(apply.error)}`,
+      };
+    }
+    if (apply.status !== 0) {
+      const detail = String(apply.stderr || apply.stdout || '').trim() || '未知原因';
+      return {
+        ok: false,
+        code: 'WORKSPACE_PATCH_FAILED',
+        reason: `WORKSPACE_PATCH_FAILED: 快照内应用工作区补丁失败(exit=${apply.status} signal=${apply.signal ?? '-'}): ${detail}`,
+      };
+    }
+    return { ok: true };
+  } finally {
+    if (patchReadFd >= 0) closeSync(patchReadFd);
+    try {
+      unlinkSync(patchPath);
+    } catch {
+      /* patch 文件清理失败不影响结果判定 */
+    }
+  }
+}
+
+/**
  * 创建快照。
+ * @param {object} [options]
+ * @param {number} [options.maxUntrackedBytes] 未跟踪文件大小上限
+ * @param {string|null} [options.snapshotRoot] 指定快照根（默认 mkdtemp）
+ * @param {number} [options.gitApplyTimeoutMs] git apply 硬超时（仅内部/测试注入，不暴露 CLI 参数）
  * @returns {{ ok:true, snapshotRoot, worktree, excluded:Array<{path,reason}> }
  *        | { ok:false, status:'BLOCKED'|'ERROR', reason }}
  */
-export function createSnapshot(workspacePath, { maxUntrackedBytes = DEFAULT_MAX_UNTracked_FILE_BYTES, snapshotRoot = null } = {}) {
+export function createSnapshot(workspacePath, { maxUntrackedBytes = DEFAULT_MAX_UNTracked_FILE_BYTES, snapshotRoot = null, gitApplyTimeoutMs = GIT_APPLY_TIMEOUT_MS } = {}) {
   const root = snapshotRoot || mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX));
   const worktree = join(root, 'wt');
 
@@ -70,16 +151,14 @@ export function createSnapshot(workspacePath, { maxUntrackedBytes = DEFAULT_MAX_
   const diff = runGit(workspacePath, ['diff', '--binary', 'HEAD']);
   const patch = diff.stdout;
   if (patch && patch.trim().length > 0) {
-    const apply = spawnSync('git', ['apply', '--binary', '--whitespace=nowarn', '-'], {
-      cwd: worktree,
-      input: patch,
-      encoding: 'utf8',
-    });
-    if (apply.status !== 0) {
+    const applied = applyWorkspacePatch(worktree, patch, root, gitApplyTimeoutMs);
+    if (!applied.ok) {
+      // 失败即清理本次已创建的部分快照（worktree remove + 受管快照根删除），不留残留
+      cleanupSnapshot({ snapshotRoot: root, worktree, workspacePath });
       return {
         ok: false,
         status: 'BLOCKED',
-        reason: `快照内应用工作区补丁失败: ${String(apply.stderr || '').trim() || '未知原因'}`,
+        reason: `快照内应用工作区补丁失败: ${applied.reason}`,
       };
     }
   }
@@ -186,6 +265,8 @@ export function cleanupSnapshot({ snapshotRoot, worktree, workspacePath }) {
         // git worktree remove 失败时记录错误，但不要递归删除用户目录
         errors.push(`git worktree remove 失败: ${rm.stderr.trim()}`);
       }
+      // 兜底 prune：清理失效的 worktree 注册（§八.2），best-effort
+      runGit(repoDir, ['worktree', 'prune']);
     } else {
       errors.push('worktree 路径与快照根不匹配，跳过清理');
     }
