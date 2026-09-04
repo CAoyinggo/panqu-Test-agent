@@ -6,6 +6,7 @@ export const SENSITIVE_KEYS = [
   'password', 'passwd', 'token', 'secret', 'authorization', 'cookie',
   'api_key', 'apikey', 'access_key', 'private_key', 'credential', 'auth',
   'session', 'cvv', 'card',
+  'account', 'username', 'nickname',
   'email', 'phone', 'mobile',
 ];
 
@@ -33,17 +34,17 @@ const TEXT_REDACTIONS: ReadonlyArray<{ pattern: RegExp; replacement: string }> =
   { pattern: /(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g, replacement: '***' },
   { pattern: /([a-z][a-z0-9+.-]*:\/\/[^:\s/@]+:)[^@\s/]+(@)/gi, replacement: '$1***$2' },
   {
-    pattern: /(["']?(?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|authorization|cookie|credential|session)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2).)*\2/gi,
+    pattern: /(["']?(?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|authorization|cookie|credential|session|account|username|nickname)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2).)*\2/gi,
     replacement: '$1$2***$2',
   },
   { pattern: /\b(Authorization\s*[:=]\s*)[^\r\n]+/gi, replacement: '$1***' },
   { pattern: /\b(Cookie\s*[:=]\s*)[^\r\n]+/gi, replacement: '$1***' },
   {
-    pattern: /\b((?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|credential|session)\s*[:=]\s*)(?!["'])(.*?)(?=\s+[A-Za-z][A-Za-z0-9_.-]*\s*[:=]|[,;}\]]\s*|$)/gim,
+    pattern: /\b((?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|credential|session|account|username|nickname)\s*[:=]\s*)(?!["'])(.*?)(?=\s+[A-Za-z][A-Za-z0-9_.-]*\s*[:=]|[,;}\]]\s*|$)/gim,
     replacement: '$1***',
   },
   {
-    pattern: /(["']?(?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|authorization|cookie|credential|session)["']?\s*[:=]\s*["']?)([^"'\s,;}\]]+)/gi,
+    pattern: /(["']?(?:password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|token|secret|authorization|cookie|credential|session|account|username|nickname)["']?\s*[:=]\s*["']?)([^"'\s,;}\]]+)/gi,
     replacement: '$1***',
   },
   { pattern: /\b(?:\d[ -]*?){13,19}\b/g, replacement: '***' },

@@ -4,7 +4,7 @@
  * 实战经验（继承自旧测试智能体 runner/fetch-feishu.js）：
  * - raw_content 接口才返回全文（含表格），blocks 接口经常返回空，禁止改回 blocks；
  * - wiki 链接必须先经 get_node 解析出 obj_token，再走 docx raw_content；
- * - 凭证只从显式路径或环境变量读取，secret 不得出现在日志与产物中。
+ * - 凭证只从进程环境读取，secret 不得出现在日志与产物中。
  */
 
 export interface FeishuCredentials {
@@ -25,35 +25,19 @@ export function parseFeishuUrl(url: string): { type: 'wiki' | 'docx' | 'doc'; id
   return null;
 }
 
-/** 凭证解析顺序：显式路径 > FEISHU_CREDENTIALS 环境变量路径 > FEISHU_APP_ID/SECRET 环境变量。 */
+/** 凭证仅允许由环境变量注入；禁止读取仓库内或本机凭证文件。 */
 export async function loadFeishuCredentials(explicitPath?: string): Promise<FeishuCredentials> {
-  const candidates: string[] = [];
-  if (explicitPath) candidates.push(explicitPath);
-  if (process.env.FEISHU_CREDENTIALS) candidates.push(process.env.FEISHU_CREDENTIALS);
-  for (const path of candidates) {
-    const file = tryReadFile(path);
-    if (file !== undefined) {
-      const parsed = JSON.parse(file) as FeishuCredentials;
-      if (!parsed.app_id || !parsed.app_secret) {
-        throw new Error(`FEISHU_CREDENTIALS_INVALID：${path} 缺少 app_id/app_secret`);
-      }
-      return parsed;
-    }
+  if (explicitPath || process.env.FEISHU_CREDENTIALS) {
+    throw new Error('FEISHU_CREDENTIALS_FILE_FORBIDDEN：凭证文件不允许使用，请注入 FEISHU_APP_ID/FEISHU_APP_SECRET');
   }
   if (process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) {
-    return { app_id: process.env.FEISHU_APP_ID, app_secret: process.env.FEISHU_APP_SECRET };
+    return {
+      app_id: process.env.FEISHU_APP_ID,
+      app_secret: process.env.FEISHU_APP_SECRET,
+      api_base_url: process.env.FEISHU_API_BASE_URL,
+    };
   }
-  throw new Error('FEISHU_CREDENTIALS_MISSING：请通过 --feishu-credentials <文件> 或环境变量 FEISHU_APP_ID/FEISHU_APP_SECRET 提供自建应用凭证');
-}
-
-import { readFileSync } from 'node:fs';
-
-function tryReadFile(path: string): string | undefined {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
-  }
+  throw new Error('FEISHU_CREDENTIALS_MISSING：请通过环境变量 FEISHU_APP_ID/FEISHU_APP_SECRET 提供自建应用凭证');
 }
 
 async function feishuRequest<T>(url: string, init: RequestInit & { body?: string }): Promise<T> {

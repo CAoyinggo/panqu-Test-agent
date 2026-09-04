@@ -1,6 +1,7 @@
 /** DevTest thin adapter：两次都调用 Acceptance Pipeline，第一次规划，第二次按授权子集执行。 */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { runAcceptancePipeline } from '../acceptance/acceptance-pipeline.js';
@@ -11,6 +12,7 @@ import { contractDependency } from '../contracts/dependency-index.js';
 import { resolveDiscoveredOperations } from '../discovery/api/api-discovery.js';
 import {
   buildDevTestReportEnvelope,
+  artifactSafe,
   buildDevTestUnknowns,
   renderCasesCsv,
   renderDevTestHtml,
@@ -55,10 +57,180 @@ import {
   buildDevTestRequirementModel,
 } from './delivery-acceptance.js';
 import type { DevTestEnvironmentSnapshot, DevTestMode, DevTestOptions, DevTestRunResult } from './types.js';
+import { createAcceptanceHttpScenarioProcessor } from '../acceptance/scenario-runner.js';
+import type { ScenarioHookHandler, ScenarioProcessor } from '../acceptance/scenario-runner.js';
+import { createConcurrentScenarioProcessor } from '../acceptance/test-case-scenario-adapter.js';
+import type { EvidenceEnvelope, ScenarioEvidenceKind } from '../acceptance/scenario-contract.js';
+import type { TestCase } from '../agents/test-design/testcase-schema.js';
 
 const STATIC_BASE_URL = 'http://devtest.invalid';
 const DEFAULT_ENVIRONMENT = 'local';
 const DEFAULT_MAX_CASES = 20;
+
+function observationOnly(operation: Parameters<ScenarioProcessor['supports']>[0]): boolean {
+  if (operation.channel === 'API') return ['GET', 'HEAD', 'OPTIONS'].includes(operation.method ?? '');
+  return /(?:capture|observe|verify|snapshot|read|query|poll|采集|观察|验证|查询|轮询)/i.test(operation.description);
+}
+
+/** 项目 Processor 同样受 CLI/Environment 写门禁约束，不能绕过 SAFE Mutation Hold。 */
+function policyBoundScenarioProcessor(processor: ScenarioProcessor, mutationsAllowed: boolean): ScenarioProcessor {
+  return {
+    name: processor.name,
+    supportsAbort: true,
+    supportedEvidenceKinds: processor.supportedEvidenceKinds,
+    supports: (operation) => processor.supports(operation),
+    supportsEvidence: (operation, kind) => processor.supportsEvidence?.(operation, kind)
+      ?? processor.supportedEvidenceKinds.includes(kind),
+    execute: async (operation, context) => {
+      if (!mutationsAllowed && !observationOnly(operation)) {
+        return {
+          status: 'BLOCKED',
+          executed: false,
+          evidence: [],
+          blockedReasons: [{
+            code: 'POLICY_BLOCKED', stage: 'POLICY', recoverable: true,
+            message: 'SAFE_MODE_MUTATION_HOLD：项目运行时写操作未在 test/sandbox 显式授权',
+            details: { operationId: operation.id, channel: operation.channel, method: operation.method },
+          }],
+        };
+      }
+      return processor.execute(operation, context);
+    },
+  };
+}
+
+function snapshotFingerprint(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
+}
+
+/** DevTest Snapshot capability is exposed as an ordinary Scenario Processor/Hook. */
+function createSnapshotScenarioRuntime(input: {
+  testCases: readonly TestCase[];
+  observer: NonNullable<DevTestOptions['caseSnapshotObserver']>;
+  records: DevTestEnvironmentSnapshot[];
+  cleanup?: DevTestOptions['caseCleanup'];
+  prepare?: DevTestOptions['casePrepare'];
+}): {
+  processor: ScenarioProcessor;
+  wrapHttpProcessor: (processor: ScenarioProcessor) => ScenarioProcessor;
+  cleanupHooks: ReadonlyMap<string, ScenarioHookHandler>;
+  availablePreflights: ReadonlySet<string>;
+  availableDependencies: ReadonlySet<string>;
+} {
+  const values = new Map<string, Partial<Record<DevTestEnvironmentSnapshot['phase'], unknown>>>();
+  const prepared = new Set<string>();
+  const caseIdOf = (scenarioId: string, metadata: Record<string, unknown> | undefined): string =>
+    String(metadata?.testCaseId ?? scenarioId.replace(/^SCN-/, ''));
+  const capture = async (caseId: string, phase: DevTestEnvironmentSnapshot['phase']): Promise<unknown> => {
+    const existing = input.records.find((item) => item.caseId === caseId && item.phase === phase);
+    if (existing && !existing.error) return existing.value;
+    try {
+      const value = await input.observer({ caseId, phase });
+      input.records.push({ caseId, phase, value, fingerprint: snapshotFingerprint(value), capturedAt: new Date().toISOString() });
+      const state = values.get(caseId) ?? {};
+      state[phase] = value;
+      values.set(caseId, state);
+      return value;
+    } catch (error) {
+      input.records.push({ caseId, phase, capturedAt: new Date().toISOString(), error: (error as Error).message });
+      throw error;
+    }
+  };
+  const kinds: ScenarioEvidenceKind[] = [
+    'STATE_BEFORE', 'STATE_AFTER', 'DATABASE', 'RESOURCE', 'EVENT', 'QUEUE_MESSAGE',
+    'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD', 'LOG', 'OTHER',
+  ];
+  const processor: ScenarioProcessor = {
+    name: 'devtest.snapshot-observer',
+    supportsAbort: true,
+    supportedEvidenceKinds: kinds,
+    supports: (operation) => operation.channel !== 'API' && operation.channel !== 'UI',
+    supportsEvidence: (_operation, kind) => kinds.includes(kind),
+    execute: async (operation, context) => {
+      const caseId = caseIdOf(context.scenario.id, context.scenario.metadata);
+      const requirements = context.scenario.evidenceRequirements.filter((item) => item.operationId === operation.id);
+      const before = requirements.some((item) => item.kind === 'STATE_BEFORE')
+        || /before|操作前|执行前|基线/i.test(operation.description);
+      if (before && input.prepare && !prepared.has(caseId)) {
+        await input.prepare(caseId);
+        prepared.add(caseId);
+      }
+      const phase: DevTestEnvironmentSnapshot['phase'] = before ? 'BEFORE' : 'AFTER_EXECUTE';
+      const value = await capture(caseId, phase);
+      const baseline = values.get(caseId)?.BEFORE;
+      const changed = phase === 'AFTER_EXECUTE' && snapshotFingerprint(baseline) !== snapshotFingerprint(value);
+      const data = {
+        ...(value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : { value }),
+        state: value,
+        count: changed ? 1 : 0,
+      };
+      const evidence = requirements.map((requirement): EvidenceEnvelope => ({
+        id: requirement.id,
+        requirementId: requirement.id,
+        scenarioId: context.scenario.id,
+        operationId: operation.id,
+        acceptanceCriteriaIds: context.scenario.acceptanceCriteriaIds,
+        kind: requirement.kind,
+        channel: requirement.channel,
+        source: 'devtest.snapshot-observer',
+        observedAt: new Date().toISOString(),
+        data,
+        verified: true,
+      }));
+      return { status: 'PASS', executed: true, output: data, evidence };
+    },
+  };
+  const cleanupHooks = new Map<string, ScenarioHookHandler>();
+  if (input.cleanup) cleanupHooks.set('runtime.caseCleanup', async (context: { scenario: { id: string; metadata?: Record<string, unknown> } }) => {
+    const caseId = caseIdOf(context.scenario.id, context.scenario.metadata);
+    await input.cleanup!(caseId);
+    await capture(caseId, 'AFTER_CLEANUP');
+  });
+  const wrapHttpProcessor = (delegate: ScenarioProcessor): ScenarioProcessor => ({
+    name: delegate.name,
+    supportsAbort: true,
+    supportedEvidenceKinds: delegate.supportedEvidenceKinds,
+    supports: (operation) => delegate.supports(operation),
+    supportsEvidence: (operation, kind) => delegate.supportsEvidence?.(operation, kind)
+      ?? delegate.supportedEvidenceKinds.includes(kind),
+    execute: async (operation, context) => {
+      // 带显式 DATA/State Observer 的 Case 已由 Scenario Operations 和 Hook
+      // 采集完整快照；这里只为纯 HTTP Case 补充跨 Case 污染治理快照。
+      const explicitlyObserved = context.scenario.operations.some((item) => item.channel !== 'API' && item.channel !== 'UI');
+      if (explicitlyObserved) return delegate.execute(operation, context);
+      const caseId = caseIdOf(context.scenario.id, context.scenario.metadata);
+      if (input.prepare && !prepared.has(caseId)) {
+        await input.prepare(caseId);
+        prepared.add(caseId);
+      }
+      await capture(caseId, 'BEFORE');
+      try {
+        return await delegate.execute(operation, context);
+      } finally {
+        await capture(caseId, 'AFTER_EXECUTE');
+        // Scenario 已声明 Cleanup 时由统一 Runner finally 调用上面的 Hook，
+        // 这样 AFTER_CLEANUP 一定发生在真实 Cleanup 之后。
+        if (!context.scenario.cleanup.some((hook) => hook.handler === 'runtime.caseCleanup')) {
+          await input.cleanup?.(caseId);
+          await capture(caseId, 'AFTER_CLEANUP');
+        }
+      }
+    },
+  });
+  const availablePreflights = new Set<string>(['runtime.statePreflight']);
+  for (const testCase of input.testCases) {
+    if (testCase.actor?.id) availablePreflights.add(testCase.actor.id);
+    if (testCase.actor?.tokenRef) availablePreflights.add(testCase.actor.tokenRef);
+    if (testCase.businessScenario?.resourceContext.idRef) availablePreflights.add(testCase.businessScenario.resourceContext.idRef);
+  }
+  return {
+    processor,
+    wrapHttpProcessor,
+    cleanupHooks,
+    availablePreflights,
+    availableDependencies: new Set(input.cleanup ? ['runtime.caseCleanup'] : []),
+  };
+}
 
 async function resolveMarkdown(options: DevTestOptions): Promise<{ markdown: string; docSource: string }> {
   if (options.markdown !== undefined) {
@@ -284,6 +456,21 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   });
 
   const rawPolicies = buildOperationPolicies(requirement.apis, markdown);
+  if (mode === 'SAFE') {
+    const costlyCaseIds = selection.selected
+      .filter((testCase) => selectedCaseIds.includes(testCase.id))
+      .filter((testCase) => {
+        const key = testCase.source?.apiOperationKey;
+        return key && ['BILLABLE', 'EXTERNAL_SIDE_EFFECT'].includes(rawPolicies[key]?.effect ?? '');
+      })
+      .map((testCase) => testCase.id);
+    if (costlyCaseIds.length) syntheticBlocks.push({
+      code: 'OPERATION_EFFECT_BLOCKED',
+      message: 'SAFE 模式禁止 BILLABLE/EXTERNAL_SIDE_EFFECT Operation；已在任何业务 HTTP 请求前阻断',
+      affectedCases: costlyCaseIds,
+      dimension: 'EXECUTION',
+    });
+  }
   const safetyPolicy: AcceptanceExecutionSafetyPolicy = {
     environment,
     allowedOrigins: environment === 'local' ? undefined : [new URL(baseUrl).origin],
@@ -294,13 +481,14 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   const pipelineMode = mode === 'DRY_RUN' || options.preflight === true || options.plan === true
     || environmentPreflight.status === 'BLOCKED' || !selectedCaseIds.length || executionEstimate.exceeded.length > 0 ? 'dry-run' : 'execute';
   const environmentSnapshots: DevTestEnvironmentSnapshot[] = [];
+  const selectedCases = selection.selected.filter((testCase) => selectedCaseIds.includes(testCase.id));
   const safeProcessor = pipelineMode === 'dry-run'
     ? undefined
     : new SafeMutationHoldProcessor({
       confirmMutations: confirmedMutation,
       inner: options.processor ?? undefined,
     });
-  const processor = safeProcessor && options.caseSnapshotObserver ? new SnapshottingProcessor({
+  const legacySnapshotProcessor = safeProcessor && options.caseSnapshotObserver ? new SnapshottingProcessor({
     inner: safeProcessor,
     observer: options.caseSnapshotObserver,
     records: environmentSnapshots,
@@ -308,7 +496,6 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     cleanup: options.caseCleanup,
   }) : safeProcessor;
 
-  const selectedCases = selection.selected.filter((testCase) => selectedCaseIds.includes(testCase.id));
   const hasMutation = selectedCases.some((testCase) => testCase.steps.some((step) =>
     step.type === 'HTTP_REQUEST' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(step.method ?? '')));
   let prepareStatus: DevTestRunResult['dataLifecycle']['prepareStatus'] = hasMutation ? 'NOT_CONFIGURED' : 'NOT_REQUIRED';
@@ -326,10 +513,51 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     if (!wrappedCleanup) cleanupStatus = 'NOT_REQUIRED';
   }
 
+  const snapshotRuntime = options.caseSnapshotObserver && safeProcessor ? createSnapshotScenarioRuntime({
+    testCases: selectedCases,
+    observer: options.caseSnapshotObserver,
+    records: environmentSnapshots,
+    cleanup: options.caseCleanup,
+    prepare: options.casePrepare,
+  }) : undefined;
+  const baseHttpScenarioProcessor = safeProcessor ? createAcceptanceHttpScenarioProcessor({
+    baseUrl,
+    actorHeaders: options.actorHeaders,
+    apiSpecs: requirement.apis,
+    contractResolver,
+    lifecycleReady: Boolean(options.caseCleanup || options.sandbox || options.lifecycleCleanup),
+    executionEnabled: true,
+    runId: undefined,
+    apiProcessor: safeProcessor,
+  }) : undefined;
+  const httpScenarioProcessor = snapshotRuntime && baseHttpScenarioProcessor
+    ? snapshotRuntime.wrapHttpProcessor(baseHttpScenarioProcessor) : undefined;
+  const projectScenarioProcessors = (options.scenarioRuntime?.processors ?? [])
+    .map((processor) => policyBoundScenarioProcessor(processor, confirmedMutation));
+  const scenarioDelegates = [
+    ...projectScenarioProcessors,
+    ...(httpScenarioProcessor ? [httpScenarioProcessor] : baseHttpScenarioProcessor ? [baseHttpScenarioProcessor] : []),
+    ...(snapshotRuntime ? [snapshotRuntime.processor] : []),
+  ];
+  const scenarioRuntimeEnabled = Boolean(snapshotRuntime || options.scenarioRuntime);
+  const concurrentScenarioProcessor = scenarioRuntimeEnabled && scenarioDelegates.length
+    ? createConcurrentScenarioProcessor(scenarioDelegates) : undefined;
+  const prepareHooks = new Map<string, ScenarioHookHandler>(options.scenarioRuntime?.prepareHooks ?? []);
+  const cleanupHooks = new Map<string, ScenarioHookHandler>(options.scenarioRuntime?.cleanupHooks ?? []);
+  for (const [name, hook] of snapshotRuntime?.cleanupHooks ?? []) cleanupHooks.set(name, hook);
+  const availablePreflights = new Set<string>([
+    ...(options.scenarioRuntime?.availablePreflights ?? []),
+    ...(snapshotRuntime?.availablePreflights ?? []),
+  ]);
+  const availableDependencies = new Set<string>([
+    ...(options.scenarioRuntime?.availableDependencies ?? []),
+    ...(snapshotRuntime?.availableDependencies ?? []),
+  ]);
+
   const result = selectedCaseIds.length
     ? await runAcceptancePipeline({
       markdown, project, documentId: options.documentId, baseUrl, environment,
-      safetyPolicy, mode: pipelineMode, processor,
+      safetyPolicy, mode: pipelineMode, processor: snapshotRuntime ? safeProcessor : legacySnapshotProcessor,
       actorHeaders: options.actorHeaders, maxCases,
       caseIds: selectedCaseIds,
       expectedExecutionPlan: pipelineMode === 'execute' ? preview.executionPlan : undefined,
@@ -344,6 +572,18 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
       } : undefined,
       contractResolver,
       additionalContractDependencies,
+      scenarioRunnerOptions: scenarioRuntimeEnabled && concurrentScenarioProcessor ? {
+        processors: [concurrentScenarioProcessor, ...scenarioDelegates],
+        environmentAvailable: environmentPreflight.status !== 'BLOCKED',
+        policyAllowed: true,
+        prepareHooks,
+        cleanupHooks,
+        variables: options.scenarioRuntime?.variables,
+        additionalEvidenceKinds: options.scenarioRuntime?.additionalEvidenceKinds,
+        availablePreflights,
+        availableTestData: options.scenarioRuntime?.availableTestData,
+        availableDependencies,
+      } : undefined,
     })
     : preview;
 
@@ -681,6 +921,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     reportJson: path.join(dir, 'report.json'),
     casesCsv: path.join(dir, 'cases.csv'),
     problemsMd: path.join(dir, 'problems.md'),
+    evidenceJson: path.join(dir, 'evidence.json'),
     acceptanceSummaryMd: path.join(dir, 'acceptance-summary.md'),
     testCasesMd: path.join(dir, '测试用例.md'),
     developerSelfTestReportMd: path.join(dir, '开发自测测试报告.md'),
@@ -692,11 +933,31 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     writeFile(artifacts.reportJson, `${JSON.stringify(buildDevTestReportEnvelope(renderInput), null, 2)}\n`, 'utf8'),
     writeFile(artifacts.casesCsv, renderCasesCsv(renderInput), 'utf8'),
     writeFile(artifacts.problemsMd, renderProblemsMarkdown(problems, { conclusion, unknowns }), 'utf8'),
+    writeFile(artifacts.evidenceJson, `${JSON.stringify(artifactSafe({
+      runId: result.runId,
+      acceptanceTraces: acceptanceTraces.map((trace) => ({
+        caseId: trace.caseId,
+        execution: trace.execution,
+        evidence: trace.evidence,
+        oracle: trace.oracle,
+        result: trace.result,
+      })),
+      executions: result.results.map((execution) => ({
+        caseId: execution.caseId,
+        status: execution.status,
+        executed: execution.executed,
+        processorInvoked: execution.processorInvoked,
+        evidence: execution.evidence,
+      })),
+      stateConsistency: flowEvaluation.consistency,
+      pollutionFindings,
+      dataLifecycle,
+    }), null, 2)}\n`, 'utf8'),
     writeFile(artifacts.acceptanceSummaryMd, renderAcceptanceSummary(renderInput), 'utf8'),
     writeFile(artifacts.testCasesMd, renderDeveloperSelfTestCases(renderInput), 'utf8'),
     writeFile(artifacts.developerSelfTestReportMd, renderDeveloperSelfTestReport(renderInput), 'utf8'),
     ...(artifacts.sourceSyncJson && sourceSync
-      ? [writeFile(artifacts.sourceSyncJson, `${JSON.stringify(sourceSync, null, 2)}\n`, 'utf8')]
+      ? [writeFile(artifacts.sourceSyncJson, `${JSON.stringify(artifactSafe(sourceSync), null, 2)}\n`, 'utf8')]
       : []),
   ]);
   if (!options.preflight && !options.plan && (!reproduction || reproduction.status === 'REPRODUCED')) {

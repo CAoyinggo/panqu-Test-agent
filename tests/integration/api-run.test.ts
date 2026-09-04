@@ -8,10 +8,15 @@ import type { PlatformBundle } from '../../src/platform/service/index.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
 import type { PlatformHttpServer } from '../../src/platform/api/index.js';
 import { createPlatformAgentWorkerExecutor } from '../../src/integrations/platform-agent-worker.js';
-import { computeOutcome } from '../../src/agents/execution/execution-schema.js';
+import { fixtureScenarioProcessor } from '../helpers/scenario-runtime.js';
 
 const FIXED_ISO = '2026-08-18T00:00:00.000Z';
 const TOKEN = 'api-test-token';
+const EXECUTABLE_REQUIREMENT = `# Resource Query
+GET /resources
+无需认证
+返回 200
+AC-1 GET /resources 查询资源返回 200`;
 
 interface Api {
   request(method: string, path: string, opts?: { token?: string; body?: unknown; headers?: Record<string, string> }): Promise<{ status: number; data: unknown }>;
@@ -31,21 +36,12 @@ async function makeApi(opts?: { registerWorker?: boolean }): Promise<{ api: Api;
       }),
       pipelineOptions: {
         executionApproval: { id: 'api-run-approval', status: 'APPROVED', approvedBy: 'qa-reviewer' },
+        scenarioRunnerOptions: {
+          processors: [fixtureScenarioProcessor('api-contract-processor')],
+          environmentAvailable: true,
+          policyAllowed: true,
+        },
       },
-      runner: async (cases) => computeOutcome('wan3', cases.map((item) => ({
-        caseId: String(item.def.extra?.agentTestCaseId ?? item.name),
-        name: item.name,
-        feature: item.feature,
-        scene: item.def.scene,
-        processor: 'api-contract-processor',
-        processorInvoked: true,
-        requestId: `api-${String(item.def.extra?.agentTestCaseId ?? item.name)}`,
-        executed: true,
-        status: 'PASS' as const,
-        pass: true,
-        passRate: 100,
-        checks: [{ name: 'API 业务断言', pass: true, detail: 'verified', kind: 'BUSINESS' as const }],
-      })), { executed: true }),
     }));
   }
   const server = createPlatformServer({ service: bundle.service, token: TOKEN, now: () => FIXED_ISO });
@@ -102,7 +98,11 @@ describe('API + Worker 全链路', () => {
     const created = await api.request('POST', '/runs', {
       token: TOKEN,
       headers: { 'X-Actor': 'qa', 'X-Role': 'QA' },
-      body: { projectId: 'wan3', environment: 'test', trigger: 'autonomous', change: { type: 'model', target: 'wan3/text-to-video' } },
+      body: {
+        projectId: 'wan3', environment: 'test', trigger: 'autonomous',
+        change: { type: 'model', target: 'wan3/text-to-video' },
+        requirementText: EXECUTABLE_REQUIREMENT,
+      },
     });
     expect(created.status).toBe(200);
     const runId = (created.data as { runId: string }).runId;

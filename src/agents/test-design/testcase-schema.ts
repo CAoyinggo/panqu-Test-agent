@@ -97,6 +97,7 @@ export interface TestBusinessActorContext {
   id?: string;
   role?: string;
   tenantId?: string;
+  projectId?: string;
   relation: 'SUBJECT' | 'OWNER' | 'TARGET' | 'OTHER_USER' | 'OTHER_TENANT';
   provenance: TestProvenance;
 }
@@ -140,6 +141,14 @@ export interface TestBusinessScenario {
   kind: TestBusinessScenarioKind;
   /** Subject/Owner/Target 分离，避免把 Actor ID 当成业务 Resource ID。 */
   actors: TestBusinessActorContext[];
+  /** Projection 中命中的全部资源，resourceContext 仅保留首资源兼容旧消费方。 */
+  resources?: Array<{
+    id: string;
+    type: string;
+    identifiers: Record<string, string>;
+    provenance: TestProvenance;
+    factIds: string[];
+  }>;
   resourceContext: {
     type: string;
     idRef?: string;
@@ -152,6 +161,18 @@ export interface TestBusinessScenario {
     projectId?: string;
     provenance: TestProvenance;
   };
+  /** 多资源、多 Scope 场景的完整归属关系。 */
+  ownerships?: Array<{
+    resourceId: string;
+    ownerActorId?: string;
+    subjectActorId?: string;
+    tenantId?: string;
+    projectId?: string;
+    relation: 'SELF' | 'OTHER_USER' | 'SAME_TENANT' | 'CROSS_TENANT' | 'SAME_PROJECT' | 'CROSS_PROJECT' | 'UNKNOWN';
+    scopes: Array<{ dimension: string; relation: string; expression: string }>;
+    factIds: string[];
+  }>;
+  scopes?: Array<{ dimension: string; relation: string; expression: string; factIds: string[] }>;
   state: {
     status: 'KNOWN' | 'UNKNOWN' | 'NOT_APPLICABLE';
     before?: string;
@@ -201,6 +222,30 @@ export interface TestCaseReadiness {
   status: 'READY' | 'BLOCKED' | 'NEED_CONFIRMATION';
   reasons: string[];
   missingCapabilities: string[];
+  /** 首次运行时解析前保存生成态快照。 */
+  generated?: {
+    status: 'READY' | 'BLOCKED' | 'NEED_CONFIRMATION';
+    reasons: string[];
+    missingCapabilities: string[];
+  };
+  runtime?: TestRuntimeReadiness;
+  effective?: TestRuntimeReadiness;
+}
+
+export interface TestRuntimeCapabilityResolution {
+  kind: 'EXECUTOR' | 'PROCESSOR' | 'OBSERVER' | 'HOOK' | 'ENVIRONMENT' | 'TEST_DATA' | 'DEPENDENCY' | 'PREFLIGHT';
+  ref: string;
+  required: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+export interface TestRuntimeReadiness {
+  status: 'EXECUTABLE' | 'BLOCKED' | 'NOT_EXECUTED' | 'DESIGNED_ONLY';
+  reasons: string[];
+  missingCapabilities: string[];
+  capabilities: TestRuntimeCapabilityResolution[];
+  resolvedAt: string;
 }
 
 export type TestExecutorKind = 'HTTP' | 'BROWSER' | 'DATA' | 'COMPOSITE' | 'FUNCTIONAL' | 'NONE';
@@ -263,6 +308,7 @@ export interface TestActor {
   userId?: string;
   role?: string;
   tenantId?: string;
+  projectId?: string;
   tokenRef?: string;
   /** 区分需求明示身份、配置身份与设计阶段占位身份。 */
   provenance?: TestProvenance;
@@ -320,6 +366,8 @@ export interface AssertionDefinition {
   operator?: AssertionOperator;
   /** 期望值 */
   expected?: unknown;
+  /** 多步骤 Scenario 可引用前序捕获值，不建立新的 Oracle 协议。 */
+  expectedFrom?: string | { operationId?: string; evidenceId?: string; testDataId?: string; path?: string };
   message?: string;
   /** 设计态的人类可判定期望；DESIGN_EXPECTATION 不得交给 Runner 当作执行证据。 */
   description?: string;
@@ -380,7 +428,13 @@ export type TestEvidenceChannel =
   | 'LOG'
   | 'STATE_CHANGE'
   | 'DATA_DIFF'
-  | 'LIFECYCLE_HOOK';
+  | 'LIFECYCLE_HOOK'
+  | 'RESOURCE_STATE'
+  | 'EVENT'
+  | 'QUEUE_MESSAGE'
+  | 'PROVIDER_CALL'
+  | 'BILLING_RECORD'
+  | 'AUDIT_RECORD';
 
 export interface TestEvidenceRequirement {
   id?: string;
@@ -759,7 +813,7 @@ export const TESTCASE_JSON_SCHEMA = {
         required: ['channel', 'phase', 'required', 'description', 'factIds'],
         properties: {
           id: { type: 'string' },
-          channel: { enum: ['API_REQUEST', 'API_RESPONSE', 'UI_STATE', 'UI_SCREENSHOT', 'DATABASE_STATE', 'LOG', 'STATE_CHANGE', 'DATA_DIFF', 'LIFECYCLE_HOOK'] },
+          channel: { enum: ['API_REQUEST', 'API_RESPONSE', 'UI_STATE', 'UI_SCREENSHOT', 'DATABASE_STATE', 'LOG', 'STATE_CHANGE', 'DATA_DIFF', 'LIFECYCLE_HOOK', 'RESOURCE_STATE', 'EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD'] },
           phase: { enum: ['BEFORE', 'DURING', 'AFTER'] },
           required: { type: 'boolean' },
           expectation: { enum: ['PRESENT', 'UNCHANGED', 'CHANGED', 'CONSISTENT'] },
@@ -897,10 +951,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** 按 feature 推断默认场景处理器 */
-function inferScene(feature: string): CanonicalSceneId | null {
-  const f = feature.toLowerCase();
-  if (f === 'wan3' || f.includes('video')) return 'video';
+/** Processor 不能从产品或功能名称推断；由显式 scene/runtime binding 决定。 */
+function inferScene(_feature: string): CanonicalSceneId | null {
   return null;
 }
 
@@ -1132,8 +1184,7 @@ export function toTaskDef(testCase: TestCase): TaskDef {
     },
     tags: testCase.tags,
     assert,
-    // wan3 走业务适配器，其余走 default
-    adapter: inferScene(testCase.feature) === 'video' ? 'wan3' : 'default',
+    adapter: 'default',
     contractDependencies: testCase.contractDependencies,
   };
 }

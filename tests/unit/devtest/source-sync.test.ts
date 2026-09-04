@@ -20,7 +20,7 @@ async function commit(cwd: string, message: string): Promise<void> {
 }
 
 describe('DevTest source sync', () => {
-  it('force-overlays every repository with its latest tracked remote commit', async () => {
+  it('fast-forwards every clean repository to its latest tracked remote commit', async () => {
     const temp = await mkdtemp(path.join(os.tmpdir(), 'devtest-source-sync-'));
     const root = path.join(temp, 'panqu-ai');
     const remote = path.join(temp, 'worker.git');
@@ -36,28 +36,40 @@ describe('DevTest source sync', () => {
     await git(seed, 'push', '-u', 'origin', 'main');
     await execFileAsync('git', ['clone', '--branch', 'main', remote, repository]);
 
-    await writeFile(path.join(repository, 'local-only.txt'), 'discard me\n');
-    await commit(repository, 'local ahead commit');
-    await writeFile(path.join(repository, 'untracked.txt'), 'discard me too\n');
-
     await execFileAsync('git', ['clone', '--branch', 'main', remote, updater]);
     await writeFile(path.join(updater, 'version.txt'), 'v2\n');
     await commit(updater, 'remote update');
     await git(updater, 'push', 'origin', 'main');
     const remoteCommit = await git(updater, 'rev-parse', 'HEAD');
 
-    const result = await synchronizeDevTestSource({ root, cleanUntracked: true });
+    const result = await synchronizeDevTestSource({ root });
 
     expect(result.status).toBe('SYNCED');
     expect(result.repositories).toHaveLength(1);
     expect(result.repositories[0]).toMatchObject({
       name: 'worker', branch: 'main', upstream: 'origin/main', afterCommit: remoteCommit,
-      updated: true, discardedWorktreeEntries: 1,
+      updated: true, discardedWorktreeEntries: 0,
     });
     expect(await readFile(path.join(repository, 'version.txt'), 'utf8')).toBe('v2\n');
     expect(await git(repository, 'status', '--porcelain')).toBe('');
-    await expect(readFile(path.join(repository, 'local-only.txt'), 'utf8')).rejects.toThrow();
-    await expect(readFile(path.join(repository, 'untracked.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('fails closed without changing a dirty repository', async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), 'devtest-source-sync-dirty-'));
+    const remote = path.join(temp, 'remote.git');
+    const seed = path.join(temp, 'seed');
+    const repository = path.join(temp, 'repository');
+    await execFileAsync('git', ['init', '--bare', remote]);
+    await execFileAsync('git', ['clone', remote, seed]);
+    await writeFile(path.join(seed, 'version.txt'), 'v1\n');
+    await commit(seed, 'initial');
+    await git(seed, 'branch', '-M', 'main');
+    await git(seed, 'push', '-u', 'origin', 'main');
+    await execFileAsync('git', ['clone', '--branch', 'main', remote, repository]);
+    await writeFile(path.join(repository, 'local.txt'), 'keep me\n');
+
+    await expect(synchronizeDevTestSource({ root: repository })).rejects.toThrow('DEVTEST_SOURCE_SYNC_DIRTY');
+    expect(await readFile(path.join(repository, 'local.txt'), 'utf8')).toBe('keep me\n');
   });
 
   it('does not reset any repository when the read/fetch phase fails', async () => {
@@ -68,14 +80,14 @@ describe('DevTest source sync', () => {
       calls.push({ repository, args });
       if (path.basename(repository) === 'b' && args[0] === 'fetch') throw Object.assign(new Error('network'), { stderr: 'offline' });
       const stdout = args[0] === 'symbolic-ref' ? 'main\n'
-        : args[0] === 'status' ? ' M local.txt\n'
+        : args[0] === 'status' ? ''
           : args[0] === 'rev-parse' && args.includes('--abbrev-ref') ? 'origin/main\n'
             : '1111111111111111111111111111111111111111\n';
       return { stdout, stderr: '' };
     };
 
     await expect(synchronizeDevTestSource({ root: temp }, runner)).rejects.toThrow('DEVTEST_SOURCE_SYNC_GIT_FAILED：b git fetch 失败');
-    expect(calls.some((call) => call.args[0] === 'reset' || call.args[0] === 'clean')).toBe(false);
+    expect(calls.some((call) => ['reset', 'clean', 'stash'].includes(call.args[0]))).toBe(false);
   });
 
   it('fails closed when the configured root contains no git repository', async () => {

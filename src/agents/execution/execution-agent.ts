@@ -8,6 +8,7 @@ import type { AgentContext } from '../core/agent-context.js';
 import type { TestCase } from '../test-design/testcase-schema.js';
 import { toLoadedCase } from '../test-design/testcase-schema.js';
 import type { LoadedCase } from '../../cases/loader.js';
+import type { TestCaseScenarioAdapterOptions } from '../../acceptance/test-case-scenario-adapter.js';
 import type { DataSession } from '../../core/data-session.js';
 import type { UsageMeter } from '../observability/usage-meter.js';
 import {
@@ -43,6 +44,8 @@ export interface ExecutionAgentInput {
     meter?: UsageMeter;
     /** Worker/调用方取消信号；必须贯穿 Tool → Runner → Engine → HTTP。 */
     signal?: AbortSignal;
+    /** TEST_CASE_V2 的运行时 Processor/Observer/Hook 能力；由 Scenario Adapter 动态重算 Readiness。 */
+    scenarioRunnerOptions?: TestCaseScenarioAdapterOptions;
     /**
      * Orchestrator 在 Policy Gate 前生成并审核的执行计划。
      * 提供后 ExecutionAgent 必须原样消费，禁止 Gate 后重新规划。
@@ -101,10 +104,8 @@ export class ExecutionAgent extends BaseAgent<ExecutionAgentInput, ExecutionOutc
     assertPlanMatchesCases(plan, input.testCases);
     context.logger.info(`执行计划：${plan.order.length} 条用例（并发 ${plan.concurrency}${plan.maxConcurrency ? `（硬顶 ${plan.maxConcurrency}）` : ''}，${plan.reason}）`);
 
-    // 2. 转 LoadedCase，接入现有执行链路
-    const loaded: LoadedCase[] = input.testCases.map(toLoadedCase);
-
-    // 3. 经 Tool 执行（未注册 Tool 时仅产出计划，标记未执行）
+    // 2. 经 Tool 执行（未注册 Tool 时仅产出计划，标记未执行）。canonical V2 Case
+    // 原样进入 Scenario Adapter；只有显式的旧 Test DSL 调用方才保留 LoadedCase 兼容路径。
     if (!context.tools.has('execution.run')) {
       context.logger.warn('未注册 execution.run Tool，跳过实际执行（仅产出执行计划）');
       return computeOutcome(feature, [], {
@@ -114,10 +115,21 @@ export class ExecutionAgent extends BaseAgent<ExecutionAgentInput, ExecutionOutc
       });
     }
 
-    const result = await context.tools.call<{ cases: LoadedCase[]; options?: unknown }, ExecutionOutcome>(
+    const allV2 = input.testCases.every((testCase) => testCase.schemaVersion === 'TEST_CASE_V2');
+    if (!allV2 && input.testCases.some((testCase) => testCase.schemaVersion === 'TEST_CASE_V2')) {
+      throw new Error('拒绝混合执行 TEST_CASE_V2 与旧 Test DSL；请在调用边界完成资产迁移');
+    }
+    const payload = allV2
+      ? { testCases: input.testCases }
+      : { cases: input.testCases.map(toLoadedCase) as LoadedCase[] };
+    const result = await context.tools.call<{
+      testCases?: TestCase[];
+      cases?: LoadedCase[];
+      options?: unknown;
+    }, ExecutionOutcome>(
       'execution.run',
       {
-        cases: loaded,
+        ...payload,
         options: {
           env: input.environment,
           autoSetup: input.options?.autoSetup === true,
@@ -126,6 +138,8 @@ export class ExecutionAgent extends BaseAgent<ExecutionAgentInput, ExecutionOutc
           dataSession: input.options?.dataSession,
           meter: input.options?.meter,
           contractResolver: context.metadata.contractResolver,
+          scenarioRunnerOptions: input.options?.scenarioRunnerOptions
+            ?? context.metadata.scenarioRunnerOptions,
           // ExecutionPlan 即控制契约：Runner 按 plan（order/maxCases/maxConcurrency/
           // dryRun/timeoutMs/policy/enableRetry）真实执行
           plan,

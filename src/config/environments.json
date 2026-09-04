@@ -1,6 +1,6 @@
 {
   "default_env": "test",
-  "session_cookies_path": "/Users/mac/agents/test-Configuration/session-cookies.json",
+  "session_cookies_path": "",
   "poll_interval_ms": 3000,
   "status_text": {
     "0": "待处理",
@@ -10,26 +10,26 @@
   },
   "environments": {
     "test": {
-      "base_url": "https://test.panqu.com/",
-      "submit_url": "aivideo/videonew/add",
-      "status_url": "aivideo/v2/task_status/apiGetStatus",
-      "detail_url": "aivideo/v2/video/getTaskDetail",
-      "billing_url": "billing/personal",
-      "csrf_page": "aivideo/v2/videohub/pipeline",
-      "project_id": 365,
-      "account": "DEL01_panqu_439",
-      "nickname": "成员D"
+      "base_url": "",
+      "submit_url": "",
+      "status_url": "",
+      "detail_url": "",
+      "billing_url": "",
+      "csrf_page": "",
+      "project_id": 0,
+      "account": "",
+      "nickname": ""
     },
     "preonline": {
-      "base_url": "https://preonline.panqu.com/",
-      "submit_url": "aivideo/videonew/add",
-      "status_url": "aivideo/v2/task_status/apiGetStatus",
-      "detail_url": "aivideo/v2/video/getTaskDetail",
-      "billing_url": "billing/personal",
-      "csrf_page": "aivideo/v2/videohub/pipeline",
-      "project_id": 27732,
-      "account": "yinh_panqu_5788",
-      "nickname": "yinh"
+      "base_url": "",
+      "submit_url": "",
+      "status_url": "",
+      "detail_url": "",
+      "billing_url": "",
+      "csrf_page": "",
+      "project_id": 0,
+      "account": "",
+      "nickname": ""
     }
   }
 }

@@ -10,6 +10,8 @@ import {
 } from './acceptance-execution-plan.js';
 import type { AcceptanceRequirement } from './requirement-ir.js';
 import type { TestDimension, TestObjective } from './test-objective.js';
+import { buildBusinessModelProjection } from './business-model.js';
+import { checkTestCaseStandardization } from './standardization-gate.js';
 
 export type TestCaseQualityIssueCode =
   | 'SOURCE_FACT_MISSING'
@@ -28,7 +30,17 @@ export type TestCaseQualityIssueCode =
   | 'EXPECTED_PROOF_MISSING'
   | 'EVIDENCE_TRACE_INCOMPLETE'
   | 'CLEANUP_PLAN_MISSING'
-  | 'DUPLICATE_SEMANTICS';
+  | 'DUPLICATE_SEMANTICS'
+  | 'BUSINESS_RELEVANCE_MISSING'
+  | 'DETERMINISM_MISSING'
+  | 'EVIDENCE_BACKING_MISSING'
+  | 'BUSINESS_RISK_DUPLICATE'
+  | 'BUSINESS_RISK_UNCOVERED'
+  | 'SCENARIO_COVERAGE_MISSING'
+  | 'BUSINESS_RELATIONSHIP_INVALID'
+  | 'RISK_JUSTIFICATION_MISSING'
+  | 'UNKNOWN_HANDLING_INVALID'
+  | 'STANDARDIZATION_VIOLATION';
 
 export interface TestCaseQualityIssue {
   code: TestCaseQualityIssueCode;
@@ -43,6 +55,15 @@ export interface TestCaseQualityAssessment {
   traceable: boolean;
   expectedOutcomeKnown: boolean;
   executable: boolean;
+  dimensions: {
+    traceable: boolean;
+    businessRelevant: boolean;
+    executable: boolean;
+    deterministic: boolean;
+    evidenceBacked: boolean;
+    nonDuplicate: boolean;
+    riskJustified: boolean;
+  };
 }
 
 export interface TestCaseQualityGateResult {
@@ -50,6 +71,7 @@ export interface TestCaseQualityGateResult {
   assessments: TestCaseQualityAssessment[];
   generatedCount: number;
   deduplicatedCount: number;
+  businessChecks: TestCaseQualityIssue[];
 }
 
 const mergeUnique = <T>(left: T[] = [], right: T[] = []): T[] => [...new Set([...left, ...right])];
@@ -236,9 +258,10 @@ function applyDisposition(
   }
   testCase.steps = testCase.schemaVersion === 'TEST_CASE_V2'
     ? testCase.steps.map((step, index) => ({
+      ...step,
       id: step.id ?? `STEP-${String(index + 1).padStart(3, '0')}`,
       channel: step.channel ?? (step.type === 'HTTP_REQUEST' ? 'API' : 'FUNCTIONAL'),
-      action: 'PLAN',
+      action: step.action ?? 'PLAN',
       description: step.description ?? (step.type === 'HTTP_REQUEST'
         ? `${step.method ?? 'UNKNOWN'} ${step.url ?? 'UNKNOWN'}` : step.action ?? '待补充执行动作'),
       execution: 'PLANNED',
@@ -461,8 +484,11 @@ function validateExpectedOracleConsistency(testCase: TestCase): TestCaseQualityI
       : new Set<NonNullable<NonNullable<TestCase['evidenceRequirements']>[number]['expectation']>>(['UNCHANGED']);
     const tokens = [effect.kind, effect.action].map((item) => item.toLowerCase());
     const proven = matchingProof(
-      new Set(['SIDE_EFFECT', 'AUDIT']),
-      new Set(['LOG', 'DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF']),
+      new Set(['SIDE_EFFECT', 'AUDIT', 'QUEUE', 'PROVIDER']),
+      new Set([
+        'EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD',
+        'LOG', 'DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF',
+      ]),
       expectedEvidence,
       (assertion) => {
         const text = [assertion.target, assertion.path, assertion.message, assertion.description]
@@ -492,12 +518,18 @@ export function applyTestCaseQualityGate(input: {
   const factIds = new Set(input.requirement.factLedger.map((fact) => fact.id));
   const factById = new Map(input.requirement.factLedger.map((fact) => [fact.id, fact]));
   const objectiveById = new Map(input.objectives.map((objective) => [objective.id, objective]));
+  const businessModel = buildBusinessModelProjection(input.requirement);
   const assessments: TestCaseQualityAssessment[] = [];
 
   for (const testCase of deduplicated.cases) {
     const issues: TestCaseQualityIssue[] = [
       ...validateV2Template(testCase),
       ...validateExpectedOracleConsistency(testCase),
+      ...checkTestCaseStandardization(testCase).map((violation): TestCaseQualityIssue => ({
+        code: 'STANDARDIZATION_VIOLATION',
+        disposition: 'BLOCKED',
+        message: `${violation.kind}：${violation.message}`,
+      })),
     ];
     const sourceFacts = testCase.source?.factIds ?? [];
     const sourceObjectives = testCase.source?.objectiveIds ?? [];
@@ -513,6 +545,30 @@ export function applyTestCaseQualityGate(input: {
       .map((id) => objectiveById.get(id))
       .filter((objective): objective is TestObjective => Boolean(objective));
     const linkedFacts = sourceFacts.map((id) => factById.get(id)).filter(Boolean);
+    const businessFlow = businessModel.flows.find((flow) => flow.factIds.some((id) => sourceFacts.includes(id)));
+    const scenarioResources = new Set(testCase.businessScenario?.resources?.map((resource) => resource.id) ?? []);
+    const scenarioActors = new Set(testCase.businessScenario?.actors.map((actor) => actor.id).filter(Boolean) ?? []);
+    const relationshipProblems = (testCase.businessScenario?.ownerships ?? []).flatMap((ownership) => [
+      !scenarioResources.has(ownership.resourceId) && `resource=${ownership.resourceId}`,
+      ownership.ownerActorId && !scenarioActors.has(ownership.ownerActorId) && `owner=${ownership.ownerActorId}`,
+      ownership.tenantId && ownership.ownerActorId
+        && businessModel.actors.find((actor) => actor.id === ownership.ownerActorId)?.tenantId !== ownership.tenantId
+        && `tenant=${ownership.tenantId}`,
+    ].filter((item): item is string => Boolean(item)));
+    if (testCase.schemaVersion === 'TEST_CASE_V2'
+      && (!businessFlow || !testCase.businessScenario?.factIds.some((id) => sourceFacts.includes(id)))) issues.push({
+      code: 'BUSINESS_RELEVANCE_MISSING', disposition: 'BLOCKED',
+      message: 'Case 没有从 Business Model Flow 派生出可追溯 Business Scenario',
+    });
+    if (testCase.schemaVersion === 'TEST_CASE_V2'
+      && (!testCase.source?.scenarioId || testCase.businessScenario?.flow.id === undefined)) issues.push({
+      code: 'SCENARIO_COVERAGE_MISSING', disposition: 'DESIGNED_ONLY',
+      message: 'Case 没有闭合到 Business Scenario/Test Scenario',
+    });
+    if (testCase.schemaVersion === 'TEST_CASE_V2' && relationshipProblems.length) issues.push({
+      code: 'BUSINESS_RELATIONSHIP_INVALID', disposition: 'BLOCKED',
+      message: `Actor/Owner/Tenant/Resource 关系错误：${relationshipProblems.join(', ')}`,
+    });
     const invalidAuthorityFacts = linkedFacts.filter((fact) => fact
       && (fact.epistemicType !== 'FACT' || fact.provenance === 'INFERRED' || fact.provenance === 'UNKNOWN'));
     const forgedRequirementAuthority = testCase.source?.sourceType === 'REQUIREMENT'
@@ -528,6 +584,36 @@ export function applyTestCaseQualityGate(input: {
     });
     const dimensions = dimensionsFor(testCase, objectiveById);
     const expectedOutcomeKnown = hasKnownExpected(testCase, linkedObjectives);
+    const riskJustified = typeof testCase.metadata?.riskJustification === 'string'
+      && testCase.metadata.riskJustification.trim().length > 0;
+    if (testCase.schemaVersion === 'TEST_CASE_V2' && !riskJustified) issues.push({
+      code: 'RISK_JUSTIFICATION_MISSING', disposition: 'BLOCKED',
+      message: 'TEST_CASE_V2 缺少 Test Strategy/Risk 推导依据',
+    });
+    if (testCase.schemaVersion === 'TEST_CASE_V2'
+      && testCase.requirementStatus !== 'CONFIRMED'
+      && (!isDesignedOnlyCase(testCase) || testCase.oracle?.status === 'READY')) issues.push({
+      code: 'UNKNOWN_HANDLING_INVALID', disposition: 'BLOCKED',
+      message: 'UNKNOWN/NEED_CONFIRMATION Case 被错误标记为可执行或 Oracle READY',
+    });
+    const designReason = `${String(testCase.design?.reason ?? '')}；${String(testCase.metadata?.reason ?? '')}`;
+    const proofRequirements = testCase.evidenceRequirements ?? [];
+    const proofAssertions = testCase.assertions.filter((assertion) => assertion.type !== 'DESIGN_EXPECTATION');
+    const hasDeclaredNonMutationProof = proofAssertions.some((assertion) => assertion.expectedFrom !== undefined
+      || /unchanged|未修改|未变化|一致/i.test(assertion.description ?? assertion.message ?? ''))
+      && proofRequirements.some((evidence) => evidence.required && evidence.phase === 'BEFORE'
+        && ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(evidence.channel))
+      && proofRequirements.some((evidence) => evidence.required && evidence.phase === 'AFTER'
+        && ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(evidence.channel))
+      && proofAssertions.some((assertion) => ['SIDE_EFFECT', 'AUDIT', 'QUEUE', 'PROVIDER'].includes(assertion.channel ?? ''))
+      && proofRequirements.some((evidence) => evidence.required
+        && ['EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD', 'LOG'].includes(evidence.channel));
+    if (testCase.schemaVersion === 'TEST_CASE_V2'
+      && designReason.includes('NON_MUTATION_EVIDENCE_UNAVAILABLE')
+      && !hasDeclaredNonMutationProof) issues.push({
+      code: 'EVIDENCE_BACKING_MISSING', disposition: 'BLOCKED',
+      message: 'Operation Contract 的负向写路径缺少 Non-Mutation/Side Effect Evidence，不能只验证拒绝响应',
+    });
     if (!expectedOutcomeKnown) issues.push({
       code: 'EXPECTED_OUTCOME_UNKNOWN', disposition: 'DESIGNED_ONLY',
       message: '来源 Fact/Objectives 没有可判定 Expected Outcome，禁止自动补默认结果',
@@ -562,13 +648,51 @@ export function applyTestCaseQualityGate(input: {
       ? 'BLOCKED'
       : issues.length || isDesignedOnlyCase(testCase) ? 'DESIGNED_ONLY' : 'READY';
     applyDisposition(testCase, status, issues);
+    const traceable = !issues.some((issue) => issue.code === 'SOURCE_FACT_MISSING' || issue.code === 'SOURCE_OBJECTIVE_MISSING');
+    const deterministic = testCase.oracle?.deterministic === true && expectedOutcomeKnown
+      && testCase.assertions.some((assertion) => assertion.type !== 'DESIGN_EXPECTATION');
+    const evidenceBacked = (testCase.evidenceRequirements ?? []).some((evidence) => evidence.required)
+      && testCase.assertions.filter((assertion) => assertion.type !== 'DESIGN_EXPECTATION')
+        .every((assertion) => Boolean(assertion.evidenceRequirementIds?.length));
     assessments.push({
       caseId: testCase.id,
       status,
       issues,
-      traceable: !issues.some((issue) => issue.code === 'SOURCE_FACT_MISSING' || issue.code === 'SOURCE_OBJECTIVE_MISSING'),
+      traceable,
       expectedOutcomeKnown,
       executable: status === 'READY',
+      dimensions: {
+        traceable,
+        businessRelevant: testCase.schemaVersion !== 'TEST_CASE_V2'
+          || Boolean(businessFlow) && !issues.some((issue) => issue.code === 'BUSINESS_RELATIONSHIP_INVALID'),
+        executable: status === 'READY',
+        deterministic,
+        evidenceBacked,
+        nonDuplicate: true,
+        riskJustified,
+      },
+    });
+  }
+
+  const businessChecks: TestCaseQualityIssue[] = [];
+  const riskKeys = new Map<string, string>();
+  for (const testCase of deduplicated.cases) {
+    for (const risk of testCase.businessScenario?.risks ?? []) {
+      const key = JSON.stringify({ category: risk.category, description: risk.description, factIds: [...(testCase.source?.factIds ?? [])].sort() });
+      const existing = riskKeys.get(key);
+      if (existing && existing !== testCase.id) businessChecks.push({
+        code: 'BUSINESS_RISK_DUPLICATE', disposition: 'DEDUPLICATED',
+        message: `业务风险 ${risk.category} 在 ${existing} 与 ${testCase.id} 重复`,
+      });
+      else riskKeys.set(key, testCase.id);
+    }
+  }
+  for (const risk of businessModel.risks) {
+    const covered = deduplicated.cases.some((testCase) => testCase.source?.factIds?.some((id) => risk.factIds.includes(id))
+      && testCase.businessScenario?.risks.some((candidate) => candidate.category === risk.category));
+    if (!covered) businessChecks.push({
+      code: 'BUSINESS_RISK_UNCOVERED', disposition: 'BLOCKED',
+      message: `Business Risk ${risk.id}/${risk.category} 缺少可追溯 Case 覆盖`,
     });
   }
 
@@ -579,5 +703,6 @@ export function applyTestCaseQualityGate(input: {
     assessments,
     generatedCount,
     deduplicatedCount: deduplicated.count,
+    businessChecks,
   };
 }

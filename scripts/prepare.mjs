@@ -36,5 +36,18 @@ function runHusky() {
   spawnSync(huskyBin, [], { cwd: repoRoot, stdio: 'inherit' });
 }
 
+function ensureDevTestDist() {
+  const source = join(repoRoot, 'bin', 'run-devtest.ts');
+  const built = join(repoRoot, 'dist', 'bin', 'run-devtest.js');
+  if (!existsSync(source) || existsSync(built)) return;
+  const npmCli = process.env.npm_execpath;
+  const command = npmCli ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const args = npmCli ? [npmCli, 'run', 'build'] : ['run', 'build'];
+  const result = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`DevTest build failed during prepare (exit ${result.status ?? 'unknown'})`);
+}
+
+ensureDevTestDist();
 runHusky();
 process.exit(0);

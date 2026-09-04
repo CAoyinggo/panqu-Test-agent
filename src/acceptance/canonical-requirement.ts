@@ -170,7 +170,9 @@ function explicitStatus(statement: string): number | undefined {
 }
 
 function resourceFromPath(path: string): CanonicalResource | undefined {
-  const part = path.split('/').filter((item) => item && !item.startsWith('{') && item.toLowerCase() !== 'api').at(-1);
+  const parts = path.split('/').filter((item) => item && !item.startsWith('{') && item.toLowerCase() !== 'api');
+  const actionSuffix = /^(?:pay|payment|cancel|transition|submit|recover|retry|approve|reject)$/i;
+  const part = actionSuffix.test(parts.at(-1) ?? '') && parts.length > 1 ? parts.at(-2) : parts.at(-1);
   if (!part) return undefined;
   const singular = part.replace(/ies$/i, 'y').replace(/s$/i, '');
   return { kind: singular.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase() || 'UNKNOWN', expression: part, identifiers: {} };
@@ -187,10 +189,24 @@ function resource(statement: string, operation: ApiSpec | undefined, permission:
     if (schemaToken || /^\s*=/.test(remainder)) continue;
     identifiers[match[1]] = match[2];
   }
+  // An explicit business identifier is stronger than a scope word.  In a
+  // sentence such as “Resource resourceId=resource-a in tenant/project”,
+  // tenant and project describe isolation scope; they are not the resource
+  // under test.  Resolve the identifier before scanning generic nouns so the
+  // API binding remains attached to the real business entity.
+  const identifierKind = Object.keys(identifiers).map((name) => name.replace(/Id$/i, '').toUpperCase()).find((kind) => (
+    ['USER', 'ORDER', 'RESOURCE', 'TASK', 'DOCUMENT', 'PROJECT', 'TENANT', 'PAYMENT', 'ACCOUNT', 'RECORD'].includes(kind)
+  ));
+  if (identifierKind) return { kind: identifierKind, expression: statement, identifiers };
+  const explicitlyNamed = RESOURCE_PATTERNS.find(([, pattern]) => pattern.test(statement));
+  if (explicitlyNamed && !['DATA', 'PAGE'].includes(explicitlyNamed[0])) {
+    return { kind: explicitlyNamed[0], expression: statement, identifiers };
+  }
   const pathResource = operation ? resourceFromPath(operation.path) : permission?.resource.startsWith('/')
     ? resourceFromPath(permission.resource.split('#')[0]) : undefined;
   if (pathResource) return { ...pathResource, identifiers };
-  const matched = RESOURCE_PATTERNS.find(([, pattern]) => pattern.test(statement));
+  if (/(?:\bresources?\b|资源)/i.test(statement)) return { kind: 'RESOURCE', expression: statement, identifiers };
+  const matched = explicitlyNamed ?? RESOURCE_PATTERNS.find(([, pattern]) => pattern.test(statement));
   return { kind: matched?.[0] ?? 'UNKNOWN', expression: matched?.[0] ? statement : undefined, identifiers };
 }
 
@@ -267,8 +283,13 @@ function scopes(statement: string, isolation: IsolationRule | undefined, permiss
   ];
   for (const [dimension, pattern] of dimensions) {
     if (!pattern.test(statement)) continue;
-    const relation = /(?:跨|不同|other|cross)/i.test(statement) ? 'CROSS'
-      : /(?:同一|相同|same|属于|belong)/i.test(statement) ? 'SAME' : 'UNKNOWN';
+    const explicitIds = dimension === 'TENANT'
+      ? [...statement.matchAll(/\btenant[-_][A-Za-z0-9_-]+\b/gi)].map((match) => match[0].toLowerCase())
+      : dimension === 'PROJECT'
+        ? [...statement.matchAll(/\bproject[-_][A-Za-z0-9_-]+\b/gi)].map((match) => match[0].toLowerCase())
+        : [];
+    const relation = /(?:跨|不同|other|cross)/i.test(statement) || new Set(explicitIds).size > 1 ? 'CROSS'
+      : /(?:同一|相同|same|属于|belong)/i.test(statement) || explicitIds.length === 1 ? 'SAME' : 'UNKNOWN';
     // 只出现资源名或 Path（例如 /tenants/{id}）不是隔离约束。
     if (relation !== 'UNKNOWN') result.push({ dimension, relation, expression: statement });
   }
@@ -277,23 +298,27 @@ function scopes(statement: string, isolation: IsolationRule | undefined, permiss
 
 function sideEffects(statement: string): CanonicalSideEffect[] {
   const result: CanonicalSideEffect[] = [];
+  const nonMutation = /(?:不得|不能|不应|不(?:再)?(?:扣减|扣除|产生|创建|发送|修改)|未(?:扣减|扣除|产生|创建|发送|修改)|保持不变|must\s+not|should\s+not|without\s+(?:creating|sending|changing))/i;
   if (/(?:库存|inventory|stock)/i.test(statement)) result.push({
-    kind: 'INVENTORY', action: /(?:不得|不能|不应|must\s+not|should\s+not).*(?:库存|inventory|stock)/i.test(statement)
+    kind: 'INVENTORY', action: nonMutation.test(statement)
       ? 'UNCHANGED' : /(?:回滚|恢复|rollback|restore)/i.test(statement)
         ? 'ROLLBACK' : /(?:扣减|扣除|decrease|deduct)/i.test(statement) ? 'DECREASE' : 'UPDATE',
     expression: statement, observation: 'DATA',
   });
   if (/(?:邮件|短信|消息|通知|webhook|email|sms|message|notify)/i.test(statement)) result.push({
-    kind: 'MESSAGE', action: /(?:不得|不能|不应|must\s+not|should\s+not).*(?:邮件|短信|消息|通知|webhook|email|sms|message|notify)/i.test(statement)
+    kind: 'MESSAGE', action: nonMutation.test(statement)
       ? 'UNCHANGED' : 'SEND', expression: statement, observation: 'EVENT',
   });
-  if (/(?:扣费|扣款|计费|收费|扣除积分|billing|charge|payment)/i.test(statement)) result.push({
-    kind: 'BILLING', action: /(?:不得|不能|不应|失败.{0,12}(?:不|免)|must\s+not|should\s+not).*(?:扣费|扣款|计费|收费|扣除积分|billing|charge|payment)/i.test(statement)
+  if (/(?:扣费|扣款|计费|收费|金额|扣除积分|billing|charge|payment|amount)/i.test(statement)) result.push({
+    kind: 'BILLING', action: nonMutation.test(statement) || /失败.{0,12}(?:不|免)/i.test(statement)
       ? 'UNCHANGED' : /(?:退款|退回|回退|回滚|refund|rollback)/i.test(statement)
         ? 'ROLLBACK' : /(?:扣|charge)/i.test(statement) ? 'DECREASE' : 'UPDATE', expression: statement, observation: 'EXTERNAL',
   });
   if (/(?:审计记录|audit\s+(?:record|log))/i.test(statement)) result.push({
     kind: 'AUDIT', action: 'CREATE', expression: statement, observation: 'DATA',
+  });
+  if (/(?:任务|jobs?|tasks?)/i.test(statement) && nonMutation.test(statement)) result.push({
+    kind: 'OTHER', action: 'UNCHANGED', expression: statement, observation: 'DATA',
   });
   return result;
 }
@@ -312,7 +337,17 @@ function explicitResponseFields(statement: string): Record<string, unknown> | un
 function expectedOutcome(input: RequirementNormalizationContext, response: ResponseSpec | undefined, permission: PermissionSpec | undefined, isolation: IsolationRule | undefined): CanonicalExpectedOutcome {
   const declaredStatus = response?.status ?? explicitStatus(input.statement);
   const fields = explicitResponseFields(input.statement);
-  const value = fields ? { fields } : undefined;
+  const transition = input.statement.match(/(?:从\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)\s*(?:变为|变成|转为|转换到|流转到|到)\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)|(?:transition(?:s|ed)?\s+from\s+([^,.;\s]+)\s+to\s+([^,.;\s]+)))/i);
+  const stateMentions = [...input.statement.matchAll(/(?:最终状态(?:为|是)?|终态(?:为|是)?|保持|恢复到|重试成功后(?:变为|转为|到))\s*([A-Z][A-Z0-9_]{1,})/gi)];
+  const terminalStateValue = stateMentions.at(-1)?.[1];
+  const valueParts: Record<string, unknown> = {};
+  if (fields) valueParts.fields = fields;
+  if (transition) {
+    valueParts.from = transition[1] ?? transition[3];
+    valueParts.to = transition[2] ?? transition[4];
+  }
+  if (!transition && terminalStateValue) valueParts.to = terminalStateValue;
+  const value = Object.keys(valueParts).length ? valueParts : undefined;
   if (permission) return { kind: permission.effect, status: declaredStatus, value, expression: input.statement, explicit: true };
   if (isolation) return { kind: isolation.expected, status: declaredStatus, value, expression: input.statement, explicit: true };
   // “不得返回过期报表”描述错误响应的禁止结果，不是 Actor 权限拒绝。
@@ -335,18 +370,18 @@ function expectedOutcome(input: RequirementNormalizationContext, response: Respo
   if (/(?:无需|不需要|免)(?:鉴权|认证|登录)|公开接口|auth(?:entication)?\s+not\s+required|without\s+(?:auth|authentication|token|credentials)/i.test(input.statement)) {
     return { kind: 'ALLOW', value, expression: input.statement, explicit: true };
   }
-  if (/(?:保持不变|不得改变|unchanged|must\s+not\s+change)/i.test(input.statement)) return { kind: 'UNCHANGED', value, expression: input.statement, explicit: true };
-  const transition = input.statement.match(/(?:从\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)\s*(?:变为|变成|转为|转换到|流转到|到)\s*(?:[^，。；]*?\s的\s)?([^，。；\s]+)|(?:transition(?:s|ed)?\s+from\s+([^,.;\s]+)\s+to\s+([^,.;\s]+)))/i);
-  if (transition && status === undefined) return {
+  if (/(?:保持不变|不得改变|unchanged|must\s+not\s+change|保持\s*[A-Z][A-Z0-9_]{1,})/i.test(input.statement)) return { kind: 'UNCHANGED', status, value, expression: input.statement, explicit: true };
+  if (transition) return {
     kind: 'STATE_CHANGED',
-    value: { from: transition[1] ?? transition[3], to: transition[2] ?? transition[4] },
+    status,
+    value,
     expression: input.statement,
     explicit: true,
   };
-  const terminalState = input.category === 'STATE'
-    ? input.statement.match(/(?:返回|达到|终态(?:为)?)[^，。；]*?\b([A-Z][A-Z0-9_]{2,})\b/) : undefined;
-  if (terminalState && status === undefined) return {
-    kind: 'STATE_CHANGED', value: { to: terminalState[1] }, expression: input.statement, explicit: true,
+  const terminalState = terminalStateValue ?? (input.category === 'STATE'
+    ? input.statement.match(/(?:返回|达到|终态(?:为)?)[^，。；]*?\b([A-Z][A-Z0-9_]{2,})\b/)?.[1] : undefined);
+  if (terminalState) return {
+    kind: 'STATE_CHANGED', status, value: { ...(value as Record<string, unknown> | undefined), to: terminalState }, expression: input.statement, explicit: true,
   };
   if (/(?:显示|展示|可见|display|show|visible)/i.test(input.statement)) return { kind: 'VISIBLE', value, expression: input.statement, explicit: true };
   if (/(?:失败|错误|异常|拒绝|fail|error|exception|reject)/i.test(input.statement)) return { kind: 'FAILURE', status, value, expression: input.statement, explicit: true };
@@ -369,6 +404,13 @@ function conditions(statement: string): CanonicalCondition[] {
   for (const [kind, pattern] of patterns) {
     const match = statement.match(pattern);
     if (match) result.push({ kind, expression: match[0].trim(), explicit: true });
+  }
+  // Keep an explicitly stated current state as a precondition without
+  // translating it into a product-specific enum.  The runtime state preflight
+  // resolves the expression; the generator never assumes the state is true.
+  const state = statement.match(/(?:处于|状态为)\s*([A-Z][A-Z0-9_]{1,}|[\p{Script=Han}]{1,8})|已\s*([A-Z][A-Z0-9_]{1,}|[\p{Script=Han}]{1,8})(?=\s*(?:User|Resource|Order|Task|Document|Project|Payment|用户|资源|订单|任务|文档|项目|支付))/iu);
+  if (state && !result.some((item) => item.kind === 'STATE')) {
+    result.push({ kind: 'STATE', expression: state[0].trim(), explicit: true });
   }
   return result;
 }

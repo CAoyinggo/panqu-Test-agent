@@ -6,12 +6,12 @@ Processor、Assertion、Evidence 和 Acceptance Report 组织成一条可审计�
 
 ```text
 Requirement
-  → 工蜂源码强制同步（/Users/mac/agents/panqu-ai 下所有 Git 子仓库）
+  → 可选 Source Snapshot / Contract Discovery
   → Requirement Model（EXPLICIT / DERIVED / UNKNOWN）
   → Feature Model（Actor/Resource/Operation/UI/State/Constraint/Side Effect）
   → Route/Controller/OpenAPI/Frontend/UI 只读发现
   → Acceptance dry-run / Contract Preflight
-  → Requirement + Risk + Contract 五维适用性
+  → Requirement + Business Model + Risk 驱动的测试能力适用性
   → Test Value Score 风险优先选择（默认最多 20）
   → 同一 Acceptance Execution Plan 的授权子集
   → Executable Test Contract / SAFE Runner / Evidence Plan
@@ -30,59 +30,53 @@ Requirement
 最小命令：
 
 ```bash
-npm run devtest -- requirements/new-feature.md
+npx devtest run --requirement requirements/new-feature.md --env test
 
 # 修复后优先复测上一轮失败、阻断和受影响 Case
-npm run devtest -- requirements/new-feature.md --rerun
+npx devtest run --requirement requirements/new-feature.md --env test --rerun
 
 # 只检查环境与当前可执行能力
-npm run devtest -- requirements/new-feature.md --preflight
+npx devtest run --requirement requirements/new-feature.md --env test --preflight
 
 # 只生成测试计划，不执行业务请求、不覆盖 Baseline
-npm run devtest -- requirements/new-feature.md --plan
+npx devtest run --requirement requirements/new-feature.md --env test --plan
 
 # 定向复现和复测
-npm run devtest -- requirements/new-feature.md --repro P001
-npm run devtest -- requirements/new-feature.md --rerun P001
-npm run devtest -- requirements/new-feature.md --rerun failed
-npm run devtest -- requirements/new-feature.md --rerun blocked
-npm run devtest -- requirements/new-feature.md --rerun regression
+npx devtest run --requirement requirements/new-feature.md --env test --repro P001
+npx devtest run --requirement requirements/new-feature.md --env test --rerun P001
+npx devtest run --requirement requirements/new-feature.md --env test --rerun failed
+npx devtest run --requirement requirements/new-feature.md --env test --rerun blocked
+npx devtest run --requirement requirements/new-feature.md --env test --rerun regression
 
 # 完整最终验收
-npm run devtest -- requirements/new-feature.md --final
+npx devtest run --requirement requirements/new-feature.md --env test --final
 
 # 默认 P0/Critical 失败即停；只读无共享状态 Case 最多 4 并发
-npm run devtest -- requirements/new-feature.md --final --concurrency 4
+npx devtest run --requirement requirements/new-feature.md --env test --final --concurrency 4
 
 # 调试时关闭 fail-fast，并限制单请求、总运行时间和估算成本
-npm run devtest -- requirements/new-feature.md --final --no-fail-fast \
+npx devtest run --requirement requirements/new-feature.md --env test --final --no-fail-fast \
   --timeout 10000 --max-runtime 120000 --budget 30
 
 # 终端只看一页结论；日常默认 Tier 0 + Tier 1，--deep 才执行 Tier 2
-npm run devtest -- requirements/new-feature.md --summary
-npm run devtest -- requirements/new-feature.md --deep
+npx devtest run --requirement requirements/new-feature.md --env test --summary
+npx devtest run --requirement requirements/new-feature.md --env test --deep
 ```
 
 常用参数：
 
 ```bash
-npm run devtest -- requirements/new-feature.md \
+npx devtest run --requirement requirements/new-feature.md \
   --env test \
   --mode safe \
-  --base-url https://test.example.com \
   --output ./devtest-results \
   --max-cases 20
 ```
 
 可用 `--no-ui`、`--no-api`、`--no-data-isolation`、
 `--no-parameter-validation` 显式关闭维度。关闭决定会进入报告，不会静默丢失。
-CLI 源码发现默认以 `/Users/mac/agents/panqu-ai` 为项目根；可用 `--project-root` 缩小发现范围。
-除 `--plan`、`--preflight`、`--mode dry-run` 外，每次测试执行前都会先对该目录下所有工蜂
-Git 子仓库执行两阶段强制同步：全部仓库先成功 `fetch --prune`，随后逐仓库
-`reset --hard <upstream>` 与 `clean -fd`。这会覆盖 tracked 本地修改/本地领先提交并删除
-非 ignored 未跟踪文件；任一仓库 fetch、upstream 解析或最终 SHA 校验失败时，测试零执行并
-fail-closed。每个仓库的 branch、upstream、同步前后 commit SHA 和覆盖计数进入
-`report.json`、`acceptance-summary.md` 与独立 `source-sync.json`。
+源码发现根目录必须由调用方通过 `--project-root` 显式提供。源码同步策略属于运行环境配置，
+不进入通用测试模板；启用时必须在任何测试副作用前完成并记录审计结果，失败时 fail-close。
 
 发现结果只有在
 Route/Controller/OpenAPI 等后端权威来源优先精确或高置信映射；后端没有可映射契约时，
@@ -104,7 +98,7 @@ Validation、Authorization、Persistence、Data Isolation 五类核心 Case。�
 `--plan` 会输出 Feature、Risk、五维适用性、预计 Case/执行/BLOCKED 数、核心 Case、
 副作用、去重结果、Git 影响范围与缓存状态。
 
-## 五维测试
+## 动态测试能力
 
 | 维度 | 生成依据 | Fail-closed 边界 |
 | --- | --- | --- |
@@ -114,10 +108,10 @@ Validation、Authorization、Persistence、Data Isolation 五类核心 Case。�
 | DATA_ISOLATION | User/Tenant/Project/Role/Resource | 无独立后置状态证据时 BLOCKED |
 | PARAMETER_VALIDATION | required/null/type/enum/format/min/max/length | 只保留高信息量确定性边界 |
 
-`dimensionApplicability` 会记录每一维为何 REQUIRED、RECOMMENDED、OPTIONAL 或
-NOT_APPLICABLE。DevTest 不为凑齐五维而猜测需求。
+`dimensionApplicability` 会记录每项能力为何 REQUIRED、OPTIONAL 或 NOT_APPLICABLE。
+DevTest 不为凑齐类型而猜测需求。
 
-五维不是固定模板。仅当 Requirement、Risk 或提取出的业务不变量明确要求时，计划才会
+能力清单不是固定用例模板。仅当 Requirement、Business Model、Risk 或业务不变量明确要求时，计划才会
 标记 `IDEMPOTENCY / STATE_MACHINE / BILLING / PROVIDER / AUDIT` 扩展维度；否则明确记录
 `NOT_APPLICABLE`，不会为增加 Case 数量而生成。
 
@@ -135,7 +129,7 @@ UNCOVERED / AMBIGUOUS / BLOCKED`，所有核心 AC 都进入覆盖率分母。
 ## SAFE 规则
 
 默认 `SAFE`，只读请求可直接进入执行门禁；任何 POST/PUT/PATCH/DELETE（包括预期 4xx 的
-负向探针）都不能因为“理论上会被拒绝”而绕过 Mutation Guard。写路径默认挂起；只有本机 Sandbox、隔离测试租户、Cleanup/Rollback
+负向探针）都不能因为“理论上会被拒绝”而绕过 Mutation Guard。写路径默认挂起；只有隔离 Sandbox、隔离测试租户、Cleanup/Rollback
 等条件满足时才具备放行资格。以下类型默认在 HTTP/Data Prepare 前阻断：
 
 - production 或未知环境；
@@ -153,7 +147,7 @@ UNCOVERED / AMBIGUOUS / BLOCKED`，所有核心 AC 都进入覆盖率分母。
 ## Environment Preflight
 
 每次运行先检查 Base URL、Health、API、Authentication、Browser 与 Database。
-候选来源依次为开发者显式 `--base-url`、专用环境变量和项目测试配置。默认不猜测
+候选来源只能是项目配置引用的专用环境变量（默认 `DEVTEST_BASE_URL`）。默认不猜测
 `127.0.0.1/localhost`；没有任何候选地址时输出 `ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY`，全程零网络请求，
 执行结果保持 `BLOCKED/NOT_EXECUTED`。只有一个候选可访问时才自动选择；多个可访问候选会输出
 `AMBIGUOUS_ENVIRONMENT`，要求开发者显式选择。Preflight 只使用 GET/HEAD 探针，
@@ -182,6 +176,8 @@ Minimal Reproduction。
 两份开发者 Markdown 和五份机器审计附件始终先完整落盘。CLI 退出码同样 fail-closed：只有 `READY` 返回 `0`；
 `NOT_READY`、`BLOCKED` 返回 `1`；输入或配置错误返回 `2`。`--preflight` 在环境
 READY/PARTIAL 时返回 `0`，环境 BLOCKED 时返回 `1`。
+
+正式执行前，仅在项目配置明确要求时对目标 Git 仓库执行安全源码同步：先检查工作树、分支和上游，再 `fetch --prune`，最后只允许 fast-forward。存在本地修改、未跟踪文件、本地未推送提交、分支分叉、无上游或网络/认证失败时 fail-close；生成器不会执行 `reset --hard`、`clean`、`checkout` 或 `stash`。未完成所需同步的 plan/preflight/dry-run 不能作为正式测试结论。
 
 ## 固定产物
 

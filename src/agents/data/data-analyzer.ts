@@ -61,8 +61,15 @@ export function analyzeDataPlan(input: DataAnalyzerInput): DataPlan {
   const billingIds = testCases
     .filter((c) => c.assertions.some((a) => a.target === 'billing'))
     .map((c) => c.id);
-  if (billingIds.length) {
-    setupActions.push({ type: 'balance', desc: '准备积分余额快照用于计费断言', targetCases: billingIds });
+  const billingDeclared = requirement.businessRules.some((rule) => /金额|余额|扣费|计费|billing/i.test(rule))
+    || requirement.dependencies.some((dependency) => /金额|余额|扣费|计费|billing/i.test(dependency))
+    || (requirement.risks ?? []).some((risk) => /billing|financial/i.test(risk));
+  if (billingIds.length || billingDeclared) {
+    setupActions.push({
+      type: 'balance',
+      desc: '准备 Requirement 声明的账目状态快照',
+      targetCases: billingIds.length ? billingIds : testCases.map((testCase) => testCase.id),
+    });
   }
 
   const concurrentIds = testCases.filter((c) => c.tags.includes('concurrency')).map((c) => c.id);

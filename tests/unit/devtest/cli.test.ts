@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { devTestExitCode, main, parseDevTestArgs } from '../../../bin/run-devtest.js';
 
 describe('DevTest CLI', () => {
+  it('从 package metadata 输出产品版本', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    await expect(main(['--version'])).resolves.toBe(0);
+    expect(log).toHaveBeenCalledWith('4.29.2');
+    log.mockRestore();
+  });
+
   it('支持一条命令位置 Requirement 与规范参数', () => {
     expect(parseDevTestArgs([
       'requirements/demo.md', '--env=test', '--mode', 'safe', '--output', './custom',
@@ -11,6 +18,15 @@ describe('DevTest CLI', () => {
       enabledDimensions: { UI: false, DATA_ISOLATION: false },
       preflight: true,
     });
+  });
+
+  it('支持产品化 --requirement，并且只允许 test/sandbox', () => {
+    expect(parseDevTestArgs(['--requirement', 'requirements/demo.md', '--env', 'sandbox']))
+      .toMatchObject({ doc: 'requirements/demo.md', env: 'sandbox' });
+    expect(parseDevTestArgs(['--requirement', 'requirements/demo.md'])).toMatchObject({ env: 'test' });
+    expect(() => parseDevTestArgs(['--requirement', 'a.md', '--doc', 'b.md'])).toThrow('DEVTEST_ARG_DUPLICATE');
+    expect(() => parseDevTestArgs(['a.md', '--env', 'local'])).toThrow('DEVTEST_ARG_INVALID');
+    expect(() => parseDevTestArgs(['a.md', '--env', 'integration'])).toThrow('DEVTEST_ARG_INVALID');
   });
 
   it('缺 Requirement、缺参数值、未知参数、重复参数均拒绝', () => {

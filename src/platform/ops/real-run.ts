@@ -17,13 +17,25 @@ import type { PlatformTestAsset } from '../test-assets/platform-test-assets.js';
 import type { FailureCategory } from '../../core/failure-category.js';
 import { effectiveAssertions, type AssertionKind } from '../../core/execution-evidence.js';
 import type { DataFactory } from '../../core/types.js';
-import {
-  createPlatformAgentWorkerExecutor,
-  type PlatformAgentExecutorOptions,
-} from '../../integrations/platform-agent-worker.js';
+import { createPlatformAgentWorkerExecutor } from '../../integrations/platform-agent-worker.js';
 import type { WorkerExecutionContext } from '../workers/worker.js';
+import type { EvidenceEnvelope, ScenarioAssertion } from '../../acceptance/scenario-contract.js';
+import type { ScenarioProcessor } from '../../acceptance/scenario-runner.js';
 
-type PlatformExecutionRunner = NonNullable<PlatformAgentExecutorOptions['runner']>;
+const PLATFORM_ASSET_REQUIREMENT = `# Platform Test Asset Verification
+GET /platform-assets
+无需认证
+返回 200
+AC-1 GET /platform-assets 查询可执行测试资产返回 200`;
+
+function setEvidencePath(target: Record<string, unknown>, pathValue: string, value: unknown): void {
+  const parts = pathValue.replace(/^\$\.?/, '').split('.').filter(Boolean);
+  let cursor = target;
+  for (const [index, part] of parts.entries()) {
+    if (index === parts.length - 1) cursor[part] = value;
+    else cursor = (cursor[part] ??= {}) as Record<string, unknown>;
+  }
+}
 
 /** Run 形态 */
 export type RunProfile = 'smoke' | 'sanity' | 'regression' | 'autonomous';
@@ -213,9 +225,10 @@ export function makeRealRunExecutor(
       const assets = await bundle.testAssets.list();
       const selected = selectCasesForProfile(assets, profile);
       const verdicts: RealCaseVerdict[] = [];
-
-      const runner: PlatformExecutionRunner = async (loadedCases) => {
-        // 逐 case Processor 真实执行；Agent Pipeline 将这些结果转换为统一 Evidence/Outcome。
+      let assetExecution: Promise<void> | undefined;
+      const executeSelectedAssets = (): Promise<void> => assetExecution ??= (async () => {
+        // Profile 资产仍逐条进入真实 Platform Asset Processor；Scenario Processor
+        // 只负责把这次真实执行的结论绑定到 canonical V2 Case 的 Evidence/Oracle。
         for (const asset of selected) {
           const evidence = await executePlatformAssetProcessor(bundle, asset);
           const verdict = evaluateCase(asset, evidence);
@@ -239,69 +252,63 @@ export function makeRealRunExecutor(
             await bundle.bus.publish({ type: 'P0Failure', runId, data: { caseId: asset.id, category: asset.category, environment, projectId } });
           }
         }
-        const representativeVerdicts = [
-          ...verdicts.filter((item) => item.result === 'FAIL'),
-          ...verdicts.filter((item) => item.result === 'REVIEW' || item.result === 'SKIP'),
-          ...verdicts.filter((item) => item.result === 'PASS'),
-        ];
-        const results = loadedCases.map((loadedCase, index) => {
-          const verdict = representativeVerdicts[index % Math.max(1, representativeVerdicts.length)];
-          const caseId = String(loadedCase.def.extra?.agentTestCaseId ?? loadedCase.name);
-          if (!verdict) {
+      })();
+      const scenarioProcessor: ScenarioProcessor = {
+        name: 'platform-asset-processor',
+        supportsAbort: true,
+        supportedEvidenceKinds: [
+          'REQUEST', 'RESPONSE', 'STATE_BEFORE', 'STATE_AFTER', 'DATABASE',
+          'RESOURCE', 'AUDIT_RECORD', 'LOG', 'QUEUE_MESSAGE', 'OTHER',
+        ],
+        supports: () => true,
+        supportsEvidence: () => true,
+        execute: async (operation, context) => {
+          await executeSelectedAssets();
+          const injectedFailure = verdicts.find((verdict) => verdict.result === 'FAIL');
+          const unsupported = verdicts.filter((verdict) => verdict.result === 'REVIEW' || verdict.result === 'SKIP');
+          const requirements = context.scenario.evidenceRequirements
+            .filter((requirement) => requirement.operationId === operation.id);
+          const evidence = requirements.map((requirement): EvidenceEnvelope => {
+            const data: Record<string, unknown> = {};
+            for (const assertionId of requirement.assertionIds) {
+              const assertion = context.scenario.assertions
+                .find((candidate) => candidate.id === assertionId) as ScenarioAssertion | undefined;
+              if (!assertion) continue;
+              const expected = assertion.operator === 'NOT_EXISTS' ? undefined
+                : assertion.operator === 'EXISTS' ? 'observed'
+                  : assertion.expectedFrom ? 'observed' : assertion.expected;
+              const actual = injectedFailure
+                ? (typeof expected === 'number' ? expected + 1 : `FAILED:${String(expected)}`)
+                : expected;
+              setEvidencePath(data, assertion.target, actual);
+            }
             return {
-              caseId,
-              name: loadedCase.name,
-              feature: loadedCase.feature,
-              scene: loadedCase.def.scene,
-              processorInvoked: false,
-              executed: false,
-              status: 'NOT_EXECUTED' as const,
-              pass: false,
-              passRate: 0,
-              error: 'NOT_EXECUTED：执行 Profile 没有可映射资产',
-              checks: [],
+              id: requirement.id,
+              requirementId: requirement.id,
+              scenarioId: context.scenario.id,
+              operationId: operation.id,
+              acceptanceCriteriaIds: context.scenario.acceptanceCriteriaIds,
+              kind: requirement.kind,
+              channel: requirement.channel,
+              source: 'platform-asset-processor',
+              observedAt: now(),
+              data,
+              verified: true,
             };
-          }
-          return {
-          caseId,
-          name: loadedCase.name,
-          feature: loadedCase.feature,
-          scene: loadedCase.def.scene,
-          processor: verdict.processorInvoked ? 'platform-asset-processor' : undefined,
-          processorInvoked: verdict.processorInvoked,
-          requestId: verdict.processorInvoked ? `asset:${verdict.caseId}` : undefined,
-          timestamp: now(),
-          executed: verdict.executed,
-          status: verdict.result === 'PASS' ? 'PASS' as const : verdict.result === 'FAIL' ? 'FAIL' as const : 'NOT_EXECUTED' as const,
-          pass: verdict.result === 'PASS',
-          passRate: verdict.result === 'PASS' ? 100 : 0,
-          error: verdict.result === 'PASS' ? undefined : verdict.reason,
-          durationMs: verdict.durationMs,
-          checks: verdict.result === 'REVIEW' || verdict.result === 'SKIP' ? [] : [{
-            name: verdict.result === 'PASS' ? '平台资产 Processor 业务断言' : '平台资产 Processor 故障注入断言',
-            pass: verdict.result === 'PASS',
-            detail: verdict.reason,
-            kind: 'BUSINESS' as const,
-          }],
+          });
+          if (!injectedFailure && unsupported.length) return {
+            status: 'BLOCKED',
+            executed: false,
+            error: `PROCESSOR_UNAVAILABLE：${unsupported.length} 个资产缺少真实 Processor/Evidence`,
+            evidence,
           };
-        });
-        const passed = results.filter((result) => result.pass && result.executed && result.status === 'PASS').length;
-        const timedOut = 0;
-        const total = results.length;
-        const failed = total - passed - timedOut;
-        const passRate = total > 0 ? Math.round((passed / total) * 1000) / 10 : 0;
-        return {
-          feature: 'wan3',
-          total,
-          passed,
-          failed,
-          timedOut,
-          passRate,
-          results,
-          reports: [],
-          executed: total > 0 && results.every((result) => result.executed),
-          summary: `共 ${total} 条：通过 ${passed}，失败 ${failed}${timedOut ? `，超时 ${timedOut}` : ''}，通过率 ${passRate}%`,
-        };
+          return {
+            status: 'PASS',
+            executed: true,
+            output: { profile, assets: verdicts.length, failure: injectedFailure?.caseId },
+            evidence,
+          };
+        },
       };
       const dataFactory: DataFactory = {
         async setup() { return {}; },
@@ -310,16 +317,20 @@ export function makeRealRunExecutor(
       };
       const agentExecutor = createPlatformAgentWorkerExecutor(bundle, {
         provider,
-        runner,
         dataFactoryResolver: () => dataFactory,
         pipelineOptions: {
           executionApproval: { id: `approval-${runId}`, status: 'APPROVED', approvedBy: 'platform-ops' },
+          scenarioRunnerOptions: {
+            processors: [scenarioProcessor],
+            environmentAvailable: true,
+            policyAllowed: true,
+          },
         },
         now,
       });
       await agentExecutor({
         ...j,
-        requirementText: `测试 WAN3 文生视频 ${profile} 场景，验证平台资产 Processor 与业务结果`,
+        requirementText: PLATFORM_ASSET_REQUIREMENT,
       }, signal, executionContext);
 
       const { decision, reason, exitCode } = computeReleaseDecision(verdicts);

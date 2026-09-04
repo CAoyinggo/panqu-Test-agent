@@ -12,14 +12,12 @@ import {
   scoreScenarioQuality,
 } from '../../src/acceptance/scenario-quality.js';
 import { runScenario, type ScenarioProcessor } from '../../src/acceptance/scenario-runner.js';
+import { materializeScenarioTemplate } from './helpers/scenario-template.js';
 
 const template = readFileSync(fileURLToPath(new URL('./templates/scenario.md', import.meta.url)), 'utf8');
 
 function executableScenario(): Scenario {
-  const markdown = template
-    .replace('SCN-<domain>-<intent>', 'SCN-generic-persistence')
-    .replace('- <按风险选择 PERSISTENCE / NON_MUTATION / IDEMPOTENCY / AUTHORIZATION / ...>', '- PERSISTENCE')
-    .replace('- <环境、服务、Processor、Evidence Provider；无则写 NONE>', '- NONE');
+  const markdown = materializeScenarioTemplate(template);
   const parsed = parseScenarioMarkdown(markdown);
   if (!parsed.valid) throw new Error(`Invalid Scenario fixture: ${JSON.stringify(parsed.issues)}`);
   return parsed.scenario;

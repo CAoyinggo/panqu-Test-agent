@@ -12,6 +12,16 @@ import {
   type TestStrategyDecision,
   type TestStrategyKind,
 } from './test-strategy-engine.js';
+import { buildBusinessModelProjection, businessFlowForFacts, type BusinessModelProjection } from './business-model.js';
+import {
+  buildBusinessScenarioCandidates,
+  buildBusinessUnderstanding,
+  buildRiskDrivenTestStrategy,
+  businessGoalForFact,
+  type BusinessScenarioCandidate,
+  type BusinessUnderstanding,
+  type RiskDrivenTestStrategy,
+} from './test-design-intelligence.js';
 
 export type TestDimension =
   | 'UI'
@@ -88,8 +98,13 @@ export interface TestScenario {
 }
 
 export interface AcceptanceTestDesign {
+  businessModel: BusinessModelProjection;
+  businessUnderstanding: BusinessUnderstanding;
+  testStrategy: RiskDrivenTestStrategy;
   dimensionDecisions: TestDimensionDecision[];
   objectives: TestObjective[];
+  scenarioCandidates: BusinessScenarioCandidate[];
+  scenarioDeduplicatedCount: number;
   scenarios: TestScenario[];
 }
 
@@ -135,12 +150,18 @@ function resolveApiContext(
 
 function makeObjective(
   requirement: AcceptanceRequirement,
+  businessModel: BusinessModelProjection,
   fact: RequirementFact,
   strategy: TestStrategyDecision,
   related: { apiSpecIds: string[]; parameterNames: string[] },
 ): TestObjective {
+  // 纯 Contract Operation 没有用户目标时保留契约语义，不能伪造 Actor/Goal。
+  const businessGoal = fact.provenance === 'CONTRACT' && fact.category === 'API'
+    ? fact.statement : businessGoalForFact(fact, businessModel);
+  // 保留原始 Fact statement 作为生成期上下文，避免业务目标替代 Requirement trace。
+  const scenario = businessGoal === fact.statement ? fact.statement : `${businessGoal}；需求依据：${fact.statement}`;
   const value = {
-    factId: fact.id, dimension: strategy.dimension, scenario: fact.statement,
+    factId: fact.id, dimension: strategy.dimension, scenario,
     sourceType: strategy.sourceType, strategyIds: strategy.policyRuleIds,
   };
   return {
@@ -148,7 +169,7 @@ function makeObjective(
     requirementId: requirement.id,
     factIds: [fact.id],
     dimension: strategy.dimension,
-    scenario: fact.statement,
+    scenario,
     expectedOutcome: strategy.expectedOutcome,
     outcomeStatus: strategy.outcomeStatus,
     sourceType: strategy.sourceType,
@@ -177,27 +198,30 @@ function scenarioAction(objective: TestObjective): TestScenarioAction {
   };
 }
 
-function buildScenarios(objectives: TestObjective[]): TestScenario[] {
-  const byFact = new Map<string, TestObjective[]>();
-  for (const objective of objectives) {
-    const group = byFact.get(objective.factIds[0]) ?? [];
-    group.push(objective);
-    byFact.set(objective.factIds[0], group);
-  }
+function buildScenarios(
+  objectives: TestObjective[],
+  businessModel: BusinessModelProjection,
+  candidates: BusinessScenarioCandidate[],
+): TestScenario[] {
   const scenarios: TestScenario[] = [];
-  for (const [factId, group] of byFact) {
+  for (const candidate of candidates) {
+    const objectiveIds = new Set(candidate.objectiveIds);
+    const group = objectives.filter((objective) => objectiveIds.has(objective.id));
+    if (!group.length) continue;
     const channels = new Set(group.map((objective) => scenarioAction(objective).channel));
     const isHybrid = channels.has('UI') && (channels.has('API') || channels.has('DATA') || channels.has('FUNCTIONAL'));
-    const id = stableId('SCN', { factId, objectiveIds: group.map((item) => item.id).sort() });
+    const id = stableId('SCN', { candidateId: candidate.id, objectiveIds: group.map((item) => item.id).sort() });
+    const businessFlow = businessFlowForFacts(businessModel, candidate.factIds);
     const scenario: TestScenario = {
       id,
-      title: group[0].scenario,
-      kind: isHybrid ? 'HYBRID' : 'SINGLE',
-      factIds: [factId],
+      title: candidate.title,
+      kind: isHybrid || candidate.factIds.length > 1 || (businessFlow?.steps.length ?? 0) > 1 ? 'HYBRID' : 'SINGLE',
+      factIds: candidate.factIds,
       objectiveIds: group.map((item) => item.id),
       actions: group.map(scenarioAction),
       expectedOutcomes: [...new Set(group.map((item) => item.expectedOutcome))],
-      executionMode: group.every((item) => item.executionTarget === 'API' && item.outcomeStatus === 'KNOWN') ? 'EXECUTABLE' : 'DESIGNED_ONLY',
+      executionMode: candidate.status === 'READY_FOR_CASE'
+        && group.every((item) => item.executionTarget === 'API' && item.outcomeStatus === 'KNOWN') ? 'EXECUTABLE' : 'DESIGNED_ONLY',
     };
     for (const objective of group) objective.scenarioId = id;
     scenarios.push(scenario);
@@ -262,6 +286,7 @@ function deduplicateObjectives(input: TestObjective[]): TestObjective[] {
 
 /** Canonical Fact Ledger → Dimension Matrix → Test Objective → Scenario。 */
 export function buildAcceptanceTestDesign(requirement: AcceptanceRequirement): AcceptanceTestDesign {
+  const businessModel = buildBusinessModelProjection(requirement);
   const dimensionDecisions: TestDimensionDecision[] = [];
   const objectives: TestObjective[] = [];
   for (const fact of requirement.factLedger) {
@@ -293,7 +318,7 @@ export function buildAcceptanceTestDesign(requirement: AcceptanceRequirement): A
               : '该 Fact 没有触发此维度',
       });
     }
-    for (const strategy of plan.decisions) objectives.push(makeObjective(requirement, fact, strategy, related));
+    for (const strategy of plan.decisions) objectives.push(makeObjective(requirement, businessModel, fact, strategy, related));
     fact.status = required.size ? 'CONSUMED' : 'UNVERIFIED';
     fact.statusReason = required.size ? undefined : '无法从规范性语句确定可靠测试维度';
   }
@@ -301,7 +326,19 @@ export function buildAcceptanceTestDesign(requirement: AcceptanceRequirement): A
   for (const fact of requirement.factLedger) {
     fact.linkedObjectiveIds = deduplicated.filter((item) => item.factIds.includes(fact.id)).map((item) => item.id);
   }
-  return { dimensionDecisions, objectives: deduplicated, scenarios: buildScenarios(deduplicated) };
+  const businessUnderstanding = buildBusinessUnderstanding(requirement, businessModel);
+  const testStrategy = buildRiskDrivenTestStrategy(requirement, businessModel, deduplicated);
+  const scenarioDesign = buildBusinessScenarioCandidates(requirement, businessModel, deduplicated);
+  return {
+    businessModel,
+    businessUnderstanding,
+    testStrategy,
+    dimensionDecisions,
+    objectives: deduplicated,
+    scenarioCandidates: scenarioDesign.scenarios,
+    scenarioDeduplicatedCount: scenarioDesign.deduplicatedCount,
+    scenarios: buildScenarios(deduplicated, businessModel, scenarioDesign.scenarios),
+  };
 }
 
 /**

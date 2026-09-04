@@ -4,6 +4,8 @@
  */
 
 import type { ApiProcessor } from '../acceptance/api-processor.js';
+import type { ScenarioHookHandler, ScenarioProcessor } from '../acceptance/scenario-runner.js';
+import type { ScenarioEvidenceKind } from '../acceptance/scenario-contract.js';
 import type { AcceptanceReport } from '../acceptance/acceptance-report.js';
 import type { ContractResolver } from '../contracts/resolver.js';
 import type { ContractPreflight } from '../contracts/contract-gate.js';
@@ -722,7 +724,7 @@ export interface DevTestOptions {
   enabledDimensions?: Partial<Record<DevTestCaseDimension, boolean>>;
   /** 默认当前工作目录；用于只读发现 Route/Controller/OpenAPI/前端页面。 */
   projectRoot?: string;
-  /** CLI 执行前强制把工蜂仓库覆盖为远端跟踪分支最新代码。 */
+  /** CLI 执行前强制安全同步远端最新代码；仅允许 clean worktree 上 fast-forward。 */
   sourceSync?: DevTestSourceSyncOptions & { enabled: boolean };
   /** false 可完全关闭源码发现；不影响 Requirement 中显式 Contract。 */
   discoverProject?: boolean;
@@ -765,6 +767,20 @@ export interface DevTestOptions {
   caseSnapshotObserver?: (input: { caseId: string; phase: 'BEFORE' | 'AFTER_EXECUTE' | 'AFTER_CLEANUP' }) => Promise<unknown>;
   casePrepare?: (caseId: string) => Promise<void>;
   caseCleanup?: (caseId: string) => Promise<void>;
+  /**
+   * 项目侧运行时只注入现有 Scenario Processor/Hook/Evidence 能力；不会定义
+   * 新 Case 或 Runner 协议。CLI 仅从 DEVTEST_RUNTIME_MODULE 指向的仓库内模块加载。
+   */
+  scenarioRuntime?: {
+    processors: readonly ScenarioProcessor[];
+    prepareHooks?: ReadonlyMap<string, ScenarioHookHandler>;
+    cleanupHooks?: ReadonlyMap<string, ScenarioHookHandler>;
+    variables?: Record<string, unknown>;
+    availableDependencies?: ReadonlySet<string>;
+    additionalEvidenceKinds?: ReadonlySet<ScenarioEvidenceKind>;
+    availablePreflights?: ReadonlySet<string>;
+    availableTestData?: ReadonlySet<string>;
+  };
   /** 平台/测试注入点；普通 CLI 不暴露，不改变默认 SAFE 门禁。 */
   processor?: ApiProcessor | null;
   contractResolver?: ContractResolver;
@@ -776,6 +792,7 @@ export interface DevTestArtifacts {
   reportJson: string;
   casesCsv: string;
   problemsMd: string;
+  evidenceJson: string;
   acceptanceSummaryMd: string;
   /** 面向开发交接的完整结构化测试用例。 */
   testCasesMd: string;
