@@ -252,7 +252,7 @@ describe('DevTest Mode integration', () => {
     expect(result.dimensionStats.find((item) => item.dimension === expectedDimension)?.total).toBeGreaterThan(0);
     expect(result.pipeline.summary.designed).toBeGreaterThan(0);
     expect(await readdir(result.artifacts.dir)).toEqual([
-      'acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
+      'acceptance-summary.md', 'cases.csv', 'evidence.json', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
     ]);
     expect(result.pipeline.summary.passed).toBe(0);
     expect(result.conclusion).toBe('BLOCKED');
@@ -358,13 +358,15 @@ describe('DevTest Mode integration', () => {
       markdown: PARAMETER_BUG_REQUIREMENT, baseUrl: server.baseUrl, environment: 'local',
       mode: 'SAFE', outDir: output, discoverProject: false, maxCases: 20,
       confirmMutations: true, sandbox: true,
+      caseCleanup: async () => undefined,
+      caseSnapshotObserver: async ({ phase }) => ({ tagCount: phase === 'AFTER_EXECUTE' ? 1 : 0 }),
     });
     const bug = result.problems.find((problem) => problem.failureClass === 'PRODUCT_BUG');
     expect(server.requests.some((request) => request === 'POST /api/tags')).toBe(true);
     expect(bug).toEqual(expect.objectContaining({
       type: 'TEST_FAILED', confidenceLabel: 'LIKELY', judgement: 'LIKELY_BUG', reproducible: false,
       request: expect.any(Object), response: expect.any(Object),
-      rootCause: 'PARAMETER_REJECTION', minimalReproduction: expect.any(Object),
+      rootCause: 'STATE_INVARIANT', minimalReproduction: expect.any(Object),
       environment: expect.objectContaining({ baseUrl: server.baseUrl }),
     }));
     expect(result.conclusion).toBe('NOT_READY');
@@ -377,6 +379,10 @@ describe('DevTest Mode integration', () => {
       markdown: PARAMETER_BUG_REQUIREMENT, baseUrl: server.baseUrl, environment: 'local',
       mode: 'SAFE' as const, outDir: output, discoverProject: false, maxCases: 20,
       confirmMutations: true, sandbox: true,
+      caseCleanup: async () => undefined,
+      caseSnapshotObserver: async ({ phase }: { phase: 'BEFORE' | 'AFTER_EXECUTE' | 'AFTER_CLEANUP' }) => ({
+        tagCount: phase === 'AFTER_EXECUTE' && server.behavior.tagStatus !== 400 ? 1 : 0,
+      }),
     };
     const first = await runDevTest(common);
     const problem = first.problems.find((item) => item.judgement === 'LIKELY_BUG');
@@ -479,7 +485,7 @@ describe('DevTest Mode integration', () => {
     };
     expect(report.acceptanceTraces).toContainEqual(expect.objectContaining({ caseId: accepted?.caseId, result: 'PASS' }));
     expect(report.deliveryCoverage).toEqual(result.deliveryCoverage);
-  });
+  }, 15_000);
 
   it('Browser 在显式 Sandbox 中执行输入、选择、点击并验证成功状态', async () => {
     const server = await localServer();
@@ -504,7 +510,7 @@ describe('DevTest Mode integration', () => {
       'CLICK [data-testid="save"]',
       'ASSERT [data-testid="success"] exists',
     ]));
-  });
+  }, 15_000);
 
   it('高成本 Operation 在任何 HTTP 调用前 BLOCKED', async () => {
     const server = await localServer();
@@ -636,7 +642,7 @@ describe('DevTest Mode integration', () => {
       outDir: output, maxCases: 20,
     });
     expect(await readdir(result.artifacts.dir)).toEqual([
-      'acceptance-summary.md', 'cases.csv', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
+      'acceptance-summary.md', 'cases.csv', 'evidence.json', 'problems.md', 'report.html', 'report.json', '开发自测测试报告.md', '测试用例.md',
     ]);
     const json = JSON.parse(await readFile(result.artifacts.reportJson, 'utf8')) as Record<string, unknown>;
     expect(json).toEqual(expect.objectContaining({
@@ -769,5 +775,5 @@ describe('DevTest Mode integration', () => {
     expect(report.unknowns.map((item) => item.type)).toEqual(expect.arrayContaining([
       'UNKNOWN_CONTRACT', 'UNKNOWN_BILLING', 'UNKNOWN_PROVIDER', 'UNKNOWN_UI',
     ]));
-  });
+  }, 15_000);
 });

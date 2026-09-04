@@ -2,8 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { createPlatformService } from '../../src/platform/service/index.js';
 import { createPlatformAgentWorkerExecutor } from '../../src/integrations/platform-agent-worker.js';
 import { createPlatformServer } from '../../src/platform/api/index.js';
-import { computeOutcome } from '../../src/agents/execution/execution-schema.js';
 import type { DataFactory } from '../../src/core/types.js';
+import { fixtureScenarioProcessor } from '../helpers/scenario-runtime.js';
+
+const EXECUTABLE_REQUIREMENT = `# Resource Query
+GET /resources
+无需认证
+返回 200
+AC-1 GET /resources 查询资源返回 200`;
 
 function deferred() {
   let resolve!: () => void;
@@ -31,29 +37,15 @@ describe('Platform Worker execution safety contract', () => {
         return { account: { id: 'platform-agent', nickname: 'qa', project_id: 1 } };
       },
     };
-    const runner = async (cases: Parameters<import('../../src/agents/execution/execution-run-tool.js').ExecutionRunner>[0]) => {
-      const results = cases.map((item) => ({
-        caseId: String(item.def.extra?.agentTestCaseId ?? item.name),
-        name: item.name,
-        feature: item.feature,
-        scene: item.def.scene,
-        processor: 'contract-video-processor',
-        processorInvoked: true,
-        requestId: `request-${String(item.def.extra?.agentTestCaseId ?? item.name)}`,
-        timestamp: '2026-08-23T00:00:00.000Z',
-        executed: true,
-        status: 'PASS' as const,
-        pass: true,
-        passRate: 100,
-        checks: [{ name: '真实业务响应符合预期', pass: true, detail: 'processor response verified', kind: 'BUSINESS' as const }],
-      }));
-      return computeOutcome('wan3', results, { executed: true });
-    };
     bundle.registerWorkerExecutor('agent-pipeline-worker', createPlatformAgentWorkerExecutor(bundle, {
-      runner,
       dataFactoryResolver: () => dataFactory,
       pipelineOptions: {
         executionApproval: { id: 'platform-contract-approval', status: 'APPROVED', approvedBy: 'qa-reviewer' },
+        scenarioRunnerOptions: {
+          processors: [fixtureScenarioProcessor('contract-video-processor')],
+          environmentAvailable: true,
+          policyAllowed: true,
+        },
       },
     }));
 
@@ -62,7 +54,7 @@ describe('Platform Worker execution safety contract', () => {
       environment: 'test',
       trigger: 'manual',
       feature: 'wan3',
-      requirementText: '测试 WAN3 文生视频功能，验证任务提交成功',
+      requirementText: EXECUTABLE_REQUIREMENT,
       actor: 'qa',
       role: 'QA',
     });
@@ -94,22 +86,12 @@ describe('Platform Worker execution safety contract', () => {
       dataFactoryResolver: () => dataFactory,
       pipelineOptions: {
         executionApproval: { id: 'http-contract-approval', status: 'APPROVED', approvedBy: 'qa-reviewer' },
+        scenarioRunnerOptions: {
+          processors: [fixtureScenarioProcessor('http-video-processor')],
+          environmentAvailable: true,
+          policyAllowed: true,
+        },
       },
-      runner: async (cases) => computeOutcome('wan3', cases.map((item) => ({
-        caseId: String(item.def.extra?.agentTestCaseId ?? item.name),
-        name: item.name,
-        feature: item.feature,
-        scene: item.def.scene,
-        processor: 'http-video-processor',
-        processorInvoked: true,
-        requestId: `http-${String(item.def.extra?.agentTestCaseId ?? item.name)}`,
-        timestamp: '2026-08-23T00:00:00.000Z',
-        executed: true,
-        status: 'PASS' as const,
-        pass: true,
-        passRate: 100,
-        checks: [{ name: 'HTTP 主链业务断言', pass: true, detail: 'verified', kind: 'BUSINESS' as const }],
-      })), { executed: true }),
     }));
     const server = createPlatformServer({ service: bundle.service, token: 'http-contract-token' });
     const { url } = await server.listen();
@@ -127,7 +109,7 @@ describe('Platform Worker execution safety contract', () => {
           environment: 'test',
           trigger: 'manual',
           feature: 'wan3',
-          requirementText: '测试 WAN3 文生视频功能，验证任务提交成功',
+          requirementText: EXECUTABLE_REQUIREMENT,
         }),
       });
       expect(response.status).toBe(200);

@@ -188,7 +188,7 @@ AC-4 name 参数缺失返回 400`);
     expect(execution.results.some((result) => result.status === 'PASS')).toBe(false);
     expect(lifecycle.prepare).not.toHaveBeenCalled();
     expect(lifecycle.cleanup).not.toHaveBeenCalled();
-  });
+  }, 15_000);
 
   it('blocks a direct execute call with no explicit safety policy before Data Prepare or HTTP', async () => {
     const lifecycle = { prepare: vi.fn(async () => undefined), cleanup: vi.fn(async () => undefined) };

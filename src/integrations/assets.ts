@@ -6,7 +6,7 @@ import type { Http } from './http.js';
 import type { AssetScan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
-export const ASSETS_ROOT = process.env.TESTFLOW_ASSETS_DIR || '/Users/mac/agents/Test-panqu';
+export const ASSETS_ROOT = process.env.TESTFLOW_ASSETS_DIR || path.resolve('test-assets');
 const SUBDIRS = ['audio', 'photo', 'video', 'txt'];
 
 const EXT_TYPE: Record<string, string> = {

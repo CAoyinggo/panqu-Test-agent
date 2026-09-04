@@ -20,6 +20,8 @@ import { createAgentContext, NoopMemory, ToolRegistry } from '../../src/agents/i
 import { MockLLMProvider } from '../../src/llm/index.js';
 import type { AgentContext } from '../../src/agents/core/agent-context.js';
 import type { ExecutionOutcome } from '../../src/agents/execution/execution-schema.js';
+import type { ScenarioProcessorContext } from '../../src/acceptance/scenario-runner.js';
+import { fixtureScenarioProcessor } from '../helpers/scenario-runtime.js';
 
 /** 追踪调用的工厂（setup/generate 产出可识别数据；teardown 记录收到的上下文） */
 function trackingFactory(opts: { setupThrows?: boolean; teardownThrows?: boolean } = {}) {
@@ -282,20 +284,31 @@ describe('Runner 层：会话贯穿与归属', () => {
 });
 
 describe('Agent Pipeline 端到端：Data Agent 数据 → Execution → teardown 必达', () => {
-  const DEMO = '测试文生视频功能，支持 720P、1080P 分辨率，验证任务提交成功、积分正确扣除。';
+  const DEMO = `# Resource Query
+GET /resources
+无需认证
+返回 200
+AC-1 GET /resources 查询资源返回 200`;
   const APPROVED_EXECUTION = { id: 'approval-ds-test', status: 'APPROVED' as const, approvedBy: 'ds-test-reviewer' };
 
   /** 共享追踪（beforeEach 重新注册 wan3 工厂并重置计数） */
   let shared = { setup: 0, teardown: 0, generate: 0, teardownContexts: [] as Array<DataContext | undefined> };
 
-  function makeContext(runner: (cases: unknown[], options: Record<string, unknown>) => Promise<ExecutionOutcome>) {
+  function makeContext(beforeExecute?: (context: ScenarioProcessorContext) => void | Promise<void>) {
     const tools = new ToolRegistry();
     tools.register(createDataPrepareTool()); // 默认解析器 → 全局注册表（下方注册 wan3 追踪工厂）
-    tools.register(createExecutionRunTool(runner as never));
+    tools.register(createExecutionRunTool());
     const ctx = createAgentContext({
       taskId: 'ds-pipe', feature: 'wan3', environment: 'test',
       tools, memory: new NoopMemory(), llm: new MockLLMProvider(),
-      metadata: { executionApproval: APPROVED_EXECUTION },
+      metadata: {
+        executionApproval: APPROVED_EXECUTION,
+        scenarioRunnerOptions: {
+          processors: [fixtureScenarioProcessor('data-session-fixture-processor', beforeExecute)],
+          environmentAvailable: true,
+          policyAllowed: true,
+        },
+      },
     });
     return ctx;
   }
@@ -310,53 +323,33 @@ describe('Agent Pipeline 端到端：Data Agent 数据 → Execution → teardow
   it('准备的数据以 DataSession 直达 execution.run，执行完成后编排层 teardown（必达）', async () => {
     const seen: Array<Record<string, unknown>> = [];
     let runnerSawAccountId: string | undefined;
-    const runner = async (_cases: unknown[], options: Record<string, unknown>): Promise<ExecutionOutcome> => {
-      seen.push(options);
-      // 执行时（teardown 前）会话必须 ready 且携带准备好的数据
-      runnerSawAccountId = (options.dataSession as DataSession).context?.account?.id;
-      return {
-        feature: 'wan3', total: 1, passed: 1, failed: 0, timedOut: 0, passRate: 100,
-        results: [{
-          caseId: 'tc-01',
-          name: 'n',
-          processor: 'data-session-fixture-processor',
-          processorInvoked: true,
-          pass: true,
-          passRate: 100,
-          executed: true,
-          status: 'PASS',
-          checks: [{ name: '数据上下文断言', pass: true, detail: 'fixture verified', kind: 'BUSINESS' }],
-        }],
-        reports: [], executed: true,
-      };
-    };
-    const ctx = makeContext(runner);
+    const ctx = makeContext((context) => {
+      seen.push({ ...context.variables });
+      runnerSawAccountId = (context.variables.account as DataContext['account'] | undefined)?.id;
+    });
     const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
 
     expect(r.dataPlan.needsSetup).toBe(true);
     expect(r.dataContext.account?.id).toBe('acct-gen');
-    // 数据以 DataSession（非裸对象）传给 execution.run，且执行时数据就绪
-    expect(seen[0]?.dataSession).toBeInstanceOf(DataSession);
+    // DataSession 中的数据经 V2 Adapter 变量上下文传给 Scenario Processor。
+    expect((seen[0]?.account as DataContext['account'] | undefined)?.id).toBe('acct-gen');
     expect(runnerSawAccountId).toBe('acct-gen');
-    // teardown 必达：runAgentPipeline 返回后会话已被编排层清理（context 归空）
-    expect((seen[0]?.dataSession as DataSession).currentState).toBe('torn-down');
     expect(shared.generate).toBe(1); // data.prepare 只准备一次
     expect(shared.teardown).toBe(1);
   });
 
   it('执行失败（runner 抛错被 Tool 捕获为失败结果）→ teardown 仍然执行（无数据残留）', async () => {
     const seen: Array<Record<string, unknown>> = [];
-    const runner = async (_cases: unknown[], options: Record<string, unknown>): Promise<ExecutionOutcome> => {
-      seen.push(options);
+    const ctx = makeContext((context) => {
+      seen.push({ ...context.variables });
       throw new Error('执行引擎崩溃');
-    };
-    const ctx = makeContext(runner);
+    });
     const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
     // Tool 层把 runner 异常转为失败结果（不向 Agent 抛出），执行未真正完成
     expect(r.outcome.executed).toBe(false);
     // 但数据清理不受影响：teardown 依然执行
     expect(shared.teardown).toBeGreaterThanOrEqual(1);
-    expect((seen[0]?.dataSession as DataSession | undefined)?.currentState).toBe('torn-down');
+    expect((seen[0]?.account as DataContext['account'] | undefined)?.id).toBe('acct-gen');
   });
 
   it('并发 Pipeline 使用各自 DataFactory/DataContext，互不覆盖且分别 teardown', async () => {
@@ -376,32 +369,7 @@ describe('Agent Pipeline 端到端：Data Agent 数据 → Execution → teardow
       };
       const tools = new ToolRegistry();
       tools.register(createDataPrepareTool(() => factory));
-      tools.register(createExecutionRunTool(async (cases, options) => {
-        observed.set(label, options.dataSession?.context?.account?.id);
-        return {
-          feature: 'wan3',
-          total: cases.length,
-          passed: cases.length,
-          failed: 0,
-          timedOut: 0,
-          passRate: 100,
-          reports: [],
-          executed: true,
-          results: cases.map((item) => ({
-            caseId: String(item.def.extra?.agentTestCaseId ?? item.name),
-            name: item.name,
-            feature: item.feature,
-            scene: item.def.scene,
-            processor: 'data-isolation-fixture-processor',
-            processorInvoked: true,
-            executed: true,
-            status: 'PASS' as const,
-            pass: true,
-            passRate: 100,
-            checks: [{ name: '并发数据隔离断言', pass: true, detail: label, kind: 'BUSINESS' as const }],
-          })),
-        };
-      }));
+      tools.register(createExecutionRunTool());
       const context = createAgentContext({
         taskId: `concurrent-${label}`,
         feature: 'wan3',
@@ -409,7 +377,16 @@ describe('Agent Pipeline 端到端：Data Agent 数据 → Execution → teardow
         tools,
         memory: new NoopMemory(),
         llm: new MockLLMProvider(),
-        metadata: { executionApproval: { id: `approval-${label}`, status: 'APPROVED', approvedBy: 'qa' } },
+        metadata: {
+          executionApproval: { id: `approval-${label}`, status: 'APPROVED', approvedBy: 'qa' },
+          scenarioRunnerOptions: {
+            processors: [fixtureScenarioProcessor('data-isolation-fixture-processor', (scenarioContext) => {
+              observed.set(label, (scenarioContext.variables.account as DataContext['account'] | undefined)?.id);
+            })],
+            environmentAvailable: true,
+            policyAllowed: true,
+          },
+        },
       });
       return runAgentPipeline({ requirementText: DEMO, environment: 'test' }, context);
     };

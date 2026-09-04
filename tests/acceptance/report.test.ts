@@ -305,6 +305,13 @@ describe('AcceptanceReport', () => {
     });
     const json = JSON.parse(renderAcceptanceReportJson(report));
     expect(json.cases[0].expected.response.status).toBe(200);
+    expect(report.businessCoverage).toEqual({
+      businessFlowCoverage: expect.objectContaining({ total: expect.any(Number), generated: expect.anything(), executable: expect.anything(), executed: expect.anything(), verified: expect.anything() }),
+      stateCoverage: expect.objectContaining({ total: expect.any(Number), generated: expect.anything(), executable: expect.anything(), executed: expect.anything(), verified: expect.anything() }),
+      permissionCoverage: expect.objectContaining({ total: expect.any(Number), generated: expect.anything(), executable: expect.anything(), executed: expect.anything(), verified: expect.anything() }),
+      isolationCoverage: expect.objectContaining({ total: expect.any(Number), generated: expect.anything(), executable: expect.anything(), executed: expect.anything(), verified: expect.anything() }),
+      sideEffectCoverage: expect.objectContaining({ total: expect.any(Number), generated: expect.anything(), executable: expect.anything(), executed: expect.anything(), verified: expect.anything() }),
+    });
     const markdown = renderAcceptanceReportMarkdown(report);
     for (const label of [
       'Schema Version', 'Test Aspects', 'Requirement Status', 'Business Scenario',
@@ -314,6 +321,8 @@ describe('AcceptanceReport', () => {
     for (const id of ['STEP-001', 'AS-001', 'EV-REQ-001', 'EV-RES-001', 'DEP-ENV-API']) {
       expect(markdown).toContain(id);
     }
+    expect(markdown).toContain('| 一级业务覆盖 | Targets | GENERATED | EXECUTABLE | EXECUTED | VERIFIED |');
+    expect(markdown).toContain('### Business Quality Gate');
   });
 
   it('preserves structural AUTH statistics while still redacting authentication secrets', () => {

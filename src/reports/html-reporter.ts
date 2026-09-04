@@ -258,7 +258,7 @@ footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--rule); co
 
   ${d.debugProducts ? `<h2>九、Debug 产物</h2><div class="callout"><strong>调试目录：</strong><code>${esc(d.debugProducts)}</code><br><span class="muted">包含中间产物（HTTP 请求/响应、上下文快照、断言输入等），需 --debug --debug-level verbose/full 模式生成</span></div>` : ''}
 
-  <footer><p>由 test-flow 一键执行脚本自动生成 ｜ 数据来源：test.panqu.com API 实测</p></footer>
+  <footer><p>由 test-flow 一键执行脚本自动生成 ｜ 数据来源：当前显式配置的测试环境</p></footer>
 </div>
 </body>
 </html>

@@ -68,6 +68,24 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 ### 需求驱动开发自测
 
+发布前可从本地 tarball 验收安装（本仓库不会自动执行 npm publish）：
+
+```bash
+npm install --save-dev ./test-flow-4.29.2.tgz
+npx devtest --version
+npx devtest init
+npx devtest init --github
+npx devtest doctor
+npx devtest run --requirement requirements/feature.md --env test
+npx devtest status --run RUN_ID
+```
+
+`init` 只写通用 `.devtest.json`；`init --github` 另生成通用
+`.github/workflows/devtest.yml`，不会生成项目专属 Case 或第二套协议。Runtime Module、URL、账号、
+Token、Cookie 和数据库连接只通过环境变量、GitHub Variables 或 Secrets 引用。业务写操作仅允许在
+显式声明的 `test`/`sandbox` 环境中启用，Fork PR 始终 fail closed。没有 Runtime、Observer、Cleanup
+或完整 Evidence/确定性 Oracle 时，结论保持 `BLOCKED`、`NOT_EXECUTED` 或 `DESIGNED_ONLY`。
+
 需要从需求文档直接完成“五维设计 → SAFE 初步执行 → 问题分级 → 固定报告”时，
 使用 DevTest 入口：
 
@@ -91,12 +109,6 @@ POST/PUT/PATCH/DELETE 即使是预期被拒绝的负向探针，
 也只有显式传入 `--confirm-mutations`，且目标为本机 Sandbox 或具备 Cleanup/Rollback 时
 才可能执行；DELETE、真实扣费、Provider、发布和消息副作用仍默认阻断。
 使用 `--mode dry-run` 可保证零 HTTP 请求。
-
-> [!WARNING]
-> 除 `--plan`、`--preflight`、`--mode dry-run` 外，DevTest CLI 会在测试前同步
-> `/Users/mac/agents/panqu-ai` 下所有 Git 子仓库：先全部 `fetch --prune`，再逐仓库执行
-> `reset --hard <upstream>` 与 `clean -fd`。这会丢弃 tracked 本地改动、本地领先提交和非 ignored
-> 未跟踪文件；任一仓库同步失败时测试不会启动。`--project-root` 只缩小源码发现范围，不改变同步根目录。
 
 DevTest 会先建立 AC Coverage Matrix、提取业务不变量，再构建 Business Flow Graph，校验
 Response/Database/Task/Billing/Audit/Resource 状态一致性，并做 Case 去重与核心 Case 识别；

@@ -1,6 +1,12 @@
 # DevTest TestCase V2 字段与生成规则
 
+> 生成前的 Business Understanding、Risk-driven Test Strategy、Business Scenario 和生成后 Test Design Review 见 [test-design-intelligence.md](./test-design-intelligence.md)。这些能力只扩展现有生成链，不改变 TEST_CASE_V2 或 Scenario Runner 核心协议。
+
+> P0 Runtime 补充：统一 Business Model Projection、V2→Scenario Adapter、Generated/Runtime/Effective Readiness、负向 Non-Mutation/Side Effect Oracle 以及五项业务覆盖，见 [devtest-p0-business-runtime.md](./devtest-p0-business-runtime.md)。
+
 > **权威入口**：本文是 DevTest 自动生成 `TestCase` 的唯一字段和生成规则说明。代码类型以 [`src/agents/test-design/testcase-schema.ts`](../../src/agents/test-design/testcase-schema.ts) 为准；需要编辑 Markdown Scenario 资产时，使用 [`tests/acceptance/templates/scenario.md`](../../tests/acceptance/templates/scenario.md)。两者共用 canonical Scenario primitives，不是两套测试协议。
+
+默认 Test Design 入口的 LLM 路径与确定性回退必须消费同一 canonical Business Model 和 Risk-driven Test Strategy；回退不得降级生成 Legacy Case。
 
 DevTest 从 Requirement 生成 Case 时必须保留以下链路：
 
@@ -369,7 +375,7 @@ businessScenario:
         action: UPDATE
         actorRef: tenant-b-user
         resourceRef: fixture.resourceA.id
-        operationRef: PATCH /api/resources/{id}
+        operationRef: <operation-contract-ref>
         fromState: ACTIVE
         toState: ACTIVE
         dependsOn: []
@@ -474,7 +480,7 @@ executionContract:
     kind: COMPOSITE
     ref: acceptance.scenarioRunner
     status: UNAVAILABLE
-    supports: ['PATCH /api/resources/{id}', DATABASE_STATE, DATA_DIFF]
+    supports: ['<operation-contract-ref>', DATABASE_STATE, DATA_DIFF]
   observers:
     - {channel: DATABASE_STATE, ref: observer.resource-snapshot, phase: BEFORE, required: true, status: RUNTIME_REQUIRED}
     - {channel: DATA_DIFF, ref: observer.resource-snapshot, phase: AFTER, required: true, status: RUNTIME_REQUIRED}
@@ -512,4 +518,4 @@ AND no unresolved required dependency
 
 ## 8. Legacy 边界
 
-[`02-模板合集.md`](../02-模板合集.md) 中的单行用例表、`tasks/*.json`、“浏览器=人工”和手填结果列只作为 **LEGACY 盘点资料**。只有显式转换为 TestCase V2/canonical Scenario，并通过 Requirement Trace、Executable、Evidence、Oracle 和 Readiness Gate 后，才可进入当前 DevTest 主链。
+任何非 TEST_CASE_V2 输入都必须先转换为 Requirement Fact、Business Scenario、可执行 Step、Oracle、Evidence 与 Readiness；非标准输入不能直接进入当前 DevTest 主链。

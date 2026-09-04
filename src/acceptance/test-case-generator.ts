@@ -12,6 +12,11 @@ import type {
 import type { AcceptanceRequirement, ActorSpec, ApiSpec, ParameterSpec } from './requirement-ir.js';
 import type { TestPoint } from './test-point.js';
 import { assignStableAcceptanceCaseIds } from './acceptance-execution-plan.js';
+import {
+  buildBusinessModelProjection,
+  businessFlowForFacts,
+  type BusinessModelProjection,
+} from './business-model.js';
 
 interface ParameterVector {
   kind: 'MISSING' | 'MIN_MINUS' | 'MIN' | 'MIN_PLUS' | 'MAX_MINUS' | 'MAX' | 'MAX_PLUS' | 'EMPTY' | 'NULL' | 'INVALID_TYPE' | 'DECIMAL' | 'EXTREME' | 'FORMAT_INVALID' | 'ENUM_INVALID';
@@ -31,6 +36,7 @@ function actorOf(actor: ActorSpec | undefined): TestActor | undefined {
     userId: actor.userId,
     role: actor.role,
     tenantId: actor.tenantId,
+    projectId: actor.projectId,
     tokenRef: actor.tokenRef,
     provenance: 'CONFIGURED',
   } : undefined;
@@ -433,7 +439,7 @@ function traceOf(requirement: AcceptanceRequirement, point: TestPoint): NonNulla
 }
 
 /** Canonical Fact/Objective → Evidence Plan；不从自然语言补充新的产品规则。 */
-function evidenceRequirementsFor(point: TestPoint): TestEvidenceRequirement[] {
+function evidenceRequirementsFor(point: TestPoint, negativeMutationOverride?: boolean): TestEvidenceRequirement[] {
   const requirements: TestEvidenceRequirement[] = [];
   const add = (
     channel: TestEvidenceRequirement['channel'],
@@ -455,6 +461,10 @@ function evidenceRequirementsFor(point: TestPoint): TestEvidenceRequirement[] {
     add('API_RESPONSE', 'AFTER', '保存真实 Status、Headers 与 Response Body');
   }
   const canonical = point.canonicalFact;
+  const expectedValue = canonical.expected.value;
+  const responseFieldsObservable = Boolean(expectedValue && typeof expectedValue === 'object'
+    && !Array.isArray(expectedValue) && 'fields' in expectedValue
+    && expectedValue.fields && typeof expectedValue.fields === 'object');
   const constraintKinds = new Set(canonical.constraints.map((item) => item.kind));
   const mutatingOperation = Boolean((point.apiBinding?.method
     && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(point.apiBinding.method))
@@ -467,15 +477,21 @@ function evidenceRequirementsFor(point: TestPoint): TestEvidenceRequirement[] {
   const deniedMutation = mutatingOperation
     && ['DATA_ISOLATION', 'PERMISSION'].includes(point.category)
     && point.canonicalFact.expected.kind === 'DENY';
-  // Do not mechanically require a database observer for every 4xx/5xx write.
-  // Non-mutation is a required Case oracle only when the Requirement gives us
-  // that rule (permission deny, unchanged/rollback/atomicity). DevTest's
-  // cross-case snapshots can still detect unexpected side effects independently.
-  const nonMutationProofRequired = deniedMutation
+  const negativeMutation = mutatingOperation && (negativeMutationOverride ?? (
+    point.canonicalFact.expected.kind === 'DENY'
+    || point.canonicalFact.expected.kind === 'FAILURE'
+    || point.canonicalFact.expected.kind === 'INVALID'
+    || (point.canonicalFact.expected.status ?? 0) >= 400));
+  // Any rejected write must prove response + state + non-mutation + side effect.
+  // The generic audit requirement proves that no write was emitted; product-
+  // specific effects are added only when the Requirement declares them.
+  const nonMutationProofRequired = negativeMutation || deniedMutation
     || canonical.expected.kind === 'UNCHANGED'
     || canonical.sideEffects.some((item) => item.action === 'UNCHANGED' || item.action === 'ROLLBACK')
     || canonical.constraints.some((item) => item.kind === 'ATOMIC');
-  const requiresState = ['BUSINESS_RULE', 'STATE', 'SIDE_EFFECT', 'CLEANUP', 'HYBRID'].includes(point.category)
+  const requiresState = (!responseFieldsObservable
+    && ['BUSINESS_RULE', 'STATE', 'SIDE_EFFECT', 'CLEANUP', 'HYBRID'].includes(point.category))
+    || nonMutationProofRequired
     || deniedMutation
     || canonical.expected.kind === 'UNCHANGED'
     || canonical.expected.kind === 'STATE_CHANGED'
@@ -495,7 +511,17 @@ function evidenceRequirementsFor(point: TestPoint): TestEvidenceRequirement[] {
   if (requiresDiff) add('DATA_DIFF', 'AFTER', '比较请求前后数据并证明失败路径无意外写入',
     'UNCHANGED');
   if (canonical.sideEffects.some((item) => item.observation === 'EVENT')) {
-    add('LOG', 'AFTER', '采集事件、审计或处理日志');
+    add('QUEUE_MESSAGE', 'AFTER', '采集需求声明的消息/事件副作用', canonical.sideEffects
+      .some((item) => item.observation === 'EVENT' && item.action === 'UNCHANGED') ? 'UNCHANGED' : 'PRESENT');
+  }
+  if (canonical.sideEffects.some((item) => item.kind === 'BILLING')) add(
+    'BILLING_RECORD', 'AFTER', '采集需求声明的账务副作用',
+    canonical.sideEffects.some((item) => item.kind === 'BILLING' && item.action === 'UNCHANGED') ? 'UNCHANGED' : 'PRESENT',
+  );
+  if (canonical.sideEffects.some((item) => item.kind === 'AUDIT')) add('AUDIT_RECORD', 'AFTER', '采集需求声明的审计记录');
+  if (negativeMutation) add('AUDIT_RECORD', 'AFTER', '采集写操作审计并证明拒绝路径没有产生持久化写入', 'UNCHANGED');
+  if (canonical.scopes.some((scope) => ['TENANT', 'PROJECT'].includes(scope.dimension) && scope.relation === 'CROSS')) {
+    add('RESOURCE_STATE', 'BEFORE', '采集目标资源 Owner 与 Tenant/Project 归属，证明跨域访问上下文');
   }
   if (constraintKinds.has('FRONTEND_BACKEND_CONSISTENCY')) {
     add('UI_STATE', 'AFTER', '采集 Requirement 绑定的前端显示值');
@@ -532,8 +558,8 @@ function testAspectsFor(point: TestPoint, testCase: TestCase): TestAspect[] {
   }
 
   if (scopes.some((scope) => scope.dimension === 'USER')) aspects.add('USER_ISOLATION');
-  if (scopes.some((scope) => scope.dimension === 'TENANT')) aspects.add('TENANT_ISOLATION');
-  if (scopes.some((scope) => scope.dimension === 'PROJECT')) aspects.add('PROJECT_ISOLATION');
+  if (scopes.some((scope) => scope.dimension === 'TENANT' && scope.relation === 'CROSS')) aspects.add('TENANT_ISOLATION');
+  if (scopes.some((scope) => scope.dimension === 'PROJECT' && scope.relation === 'CROSS')) aspects.add('PROJECT_ISOLATION');
   if (constraints.has('STATE_TRANSITION') || point.dimension === 'STATE') aspects.add('STATE_TRANSITION');
   if (constraints.has('IDEMPOTENT')) {
     aspects.add('IDEMPOTENCY');
@@ -546,7 +572,7 @@ function testAspectsFor(point: TestPoint, testCase: TestCase): TestAspect[] {
     || constraints.has('ATOMIC') || point.dimension === 'STATE') aspects.add('DATA_CONSISTENCY');
   if (point.canonicalFact.sideEffects.length || point.dimension === 'SIDE_EFFECT') aspects.add('SIDE_EFFECT');
   if (point.dimension === 'CLEANUP') aspects.add('CROSS_CASE_SIDE_EFFECT');
-  if (point.preconditions.length || ['STATE', 'SIDE_EFFECT', 'CLEANUP'].includes(point.dimension)
+  if (['STATE', 'SIDE_EFFECT', 'CLEANUP'].includes(point.dimension)
     || ['UNCHANGED', 'STATE_CHANGED'].includes(point.canonicalFact.expected.kind)) {
     aspects.add('PRE_POST_CONDITION');
   }
@@ -571,7 +597,12 @@ function evidenceChannelForAssertion(assertion: AssertionDefinition): TestEviden
   if (channel === 'RESPONSE' || channel === 'API') return ['API_RESPONSE'];
   if (channel === 'UI') return ['UI_STATE', 'UI_SCREENSHOT'];
   if (channel === 'STATE' || channel === 'DATA') return ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF'];
-  if (channel === 'SIDE_EFFECT' || channel === 'AUDIT') return ['LOG', 'DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF'];
+  if (channel === 'QUEUE') return ['QUEUE_MESSAGE', 'EVENT', 'LOG'];
+  if (channel === 'PROVIDER') return ['PROVIDER_CALL', 'BILLING_RECORD', 'LOG'];
+  if (channel === 'SIDE_EFFECT' || channel === 'AUDIT') return [
+    'EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD',
+    'LOG', 'DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF',
+  ];
   return [];
 }
 
@@ -599,14 +630,187 @@ function structuredExpected(point: TestPoint, testCase: TestCase): NonNullable<T
       expectation: stateRequirement.expectation ?? 'PRESENT',
       description: stateRequirement.description,
     } : undefined,
-    sideEffects: point.canonicalFact.sideEffects.map((item) => ({
+    sideEffects: [
+      ...point.canonicalFact.sideEffects.map((item) => ({
       kind: item.kind,
       action: item.action,
       description: item.expression,
       expectation: item.action === 'UNKNOWN' ? 'UNKNOWN'
         : item.action === 'UNCHANGED' || item.action === 'ROLLBACK' ? 'UNCHANGED' : 'REQUIRED',
-    })),
+      } as const)),
+      ...(testCase.steps.some((step) => step.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(step.method))
+        && (testCase.parameterContext?.expectedOutcome === 'REJECT'
+          || point.canonicalFact.expected.kind === 'DENY' || point.canonicalFact.expected.kind === 'FAILURE'
+          || point.canonicalFact.expected.kind === 'INVALID' || (point.canonicalFact.expected.status ?? 0) >= 400)
+        ? [{
+          kind: 'DATA_MUTATION', action: 'UNCHANGED',
+          description: '拒绝的写操作不得产生持久化写入或派生写副作用', expectation: 'FORBIDDEN' as const,
+        }] : []),
+    ],
   };
+}
+
+function proofTrace(point: TestPoint): Pick<AssertionDefinition,
+  'factIds' | 'objectiveId' | 'objectiveIds' | 'sourceType' | 'provenance' | 'severity'> {
+  return {
+    factIds: [...point.factIds], objectiveId: point.objectiveId, objectiveIds: [point.objectiveId],
+    sourceType: point.sourceType, provenance: point.provenance, severity: point.priority,
+  };
+}
+
+/**
+ * 将 canonical State / Non-Mutation / Side Effect 证明义务编译为普通 Scenario
+ * Operation + Assertion。这里只消费已经标准化的 Fact，不再次解释业务文本。
+ */
+function attachBusinessProofOperations(point: TestPoint, testCase: TestCase): void {
+  const requirements = testCase.evidenceRequirements ?? [];
+  const request = testCase.steps.find((step) => step.type === 'HTTP_REQUEST');
+  const mutates = Boolean(request?.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method));
+  const negativeMutation = mutates && (testCase.parameterContext?.expectedOutcome === 'REJECT'
+    || point.canonicalFact.expected.kind === 'DENY'
+    || point.canonicalFact.expected.kind === 'FAILURE'
+    || point.canonicalFact.expected.kind === 'INVALID'
+    || (point.canonicalFact.expected.status ?? 0) >= 400);
+  const stateValue = point.canonicalFact.expected.value;
+  const stateObject = stateValue && typeof stateValue === 'object' && !Array.isArray(stateValue)
+    ? stateValue as Record<string, unknown> : {};
+  const nonMutation = negativeMutation || point.canonicalFact.expected.kind === 'UNCHANGED'
+    || point.canonicalFact.sideEffects.some((item) => item.action === 'UNCHANGED' || item.action === 'ROLLBACK')
+    || point.canonicalFact.constraints.some((item) => item.kind === 'ATOMIC');
+  const stateEvidence = requirements.some((item) => ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(item.channel));
+  const afterStateEvidence = requirements.some((item) => item.phase === 'AFTER'
+    && ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(item.channel));
+
+  const findStep = (phase: 'BEFORE' | 'AFTER'): TestStep | undefined => testCase.steps.find((step) => (
+    phase === 'BEFORE'
+      ? /(?:BEFORE|PREPARE_OWNED_RESOURCE)/.test(step.action ?? '')
+      : /(?:AFTER|FINAL_STATE|RECOVERED_STATE|NO_CROSS_SCOPE_MUTATION)/.test(step.action ?? '')
+  ) && ['DATA', 'QUEUE', 'PROVIDER'].includes(step.channel ?? ''));
+  let before = findStep('BEFORE');
+  if (stateEvidence && (nonMutation || requirements.some((item) => item.phase === 'BEFORE')) && !before) {
+    before = {
+      id: 'STEP-OBSERVE-BEFORE', channel: 'DATA', action: 'OBSERVE_STATE_BEFORE',
+      description: '通过独立 State/DB Observer 采集操作前业务状态', execution: 'PLANNED',
+      dependsOn: [], acceptanceCriteriaIds: testCase.source?.acceptanceCriteriaIds ?? [], factIds: [...point.factIds],
+    };
+    testCase.steps.unshift(before);
+    if (request?.id) request.dependsOn = [...new Set([...(request.dependsOn ?? []), before.id!])];
+  }
+  let after = findStep('AFTER');
+  if (afterStateEvidence && !after) {
+    after = {
+      id: 'STEP-OBSERVE-AFTER', channel: 'DATA', action: 'OBSERVE_STATE_AFTER',
+      description: '通过独立 State/DB Observer 采集操作后业务状态', execution: 'PLANNED',
+      dependsOn: request?.id ? [request.id] : before?.id ? [before.id] : [],
+      acceptanceCriteriaIds: testCase.source?.acceptanceCriteriaIds ?? [], factIds: [...point.factIds],
+    };
+    testCase.steps.push(after);
+  }
+
+  if (before && stateEvidence && !testCase.assertions.some((assertion) => assertion.channel === 'STATE'
+    && /操作前|baseline/i.test(assertion.description ?? ''))) {
+    testCase.assertions.push({
+      channel: 'STATE', path: 'state', operator: stateObject.from !== undefined ? 'equals' : 'exists',
+      expected: stateObject.from,
+      description: '操作前业务状态必须由独立 Observer 成功采集', ...proofTrace(point),
+    });
+  }
+
+  if (after && !testCase.assertions.some((assertion) => assertion.channel === 'STATE'
+    && !/操作前|baseline/i.test(assertion.description ?? ''))) {
+    if (nonMutation && before?.id) testCase.assertions.push({
+      channel: 'STATE', path: 'state', operator: 'equals',
+      expectedFrom: { operationId: before.id, path: 'output.state' },
+      description: '写操作被拒绝或回滚后业务状态必须与操作前一致', ...proofTrace(point),
+    });
+    else if (stateObject.to !== undefined) testCase.assertions.push({
+      channel: 'STATE', path: 'state', operator: 'equals', expected: stateObject.to,
+      description: `业务状态必须流转到 ${String(stateObject.to)}`, ...proofTrace(point),
+    });
+  }
+
+  const effects = [
+    ...point.canonicalFact.sideEffects,
+    ...(negativeMutation ? [{
+      kind: 'DATA_MUTATION' as const, action: 'UNCHANGED' as const,
+      expression: '拒绝的写操作不得产生持久化写入', observation: 'DATA' as const,
+    }] : []),
+  ].filter((effect, index, all) => all.findIndex((candidate) => candidate.kind === effect.kind) === index);
+  for (const [index, effect] of effects.entries()) {
+    const channel: NonNullable<TestStep['channel']> = effect.kind === 'MESSAGE' ? 'QUEUE'
+      : effect.kind === 'BILLING' ? 'PROVIDER' : 'DATA';
+    const evidenceChannel: TestEvidenceRequirement['channel'] = effect.kind === 'MESSAGE' ? 'QUEUE_MESSAGE'
+      : effect.kind === 'BILLING' ? 'BILLING_RECORD'
+        : effect.kind === 'AUDIT' || effect.kind === 'DATA_MUTATION' ? 'AUDIT_RECORD' : 'DATABASE_STATE';
+    // 状态终态和库存/关联数据副作用都可能使用 DATABASE_STATE，但它们是不同
+    // 的证明义务，不能共享并改写同一个 sourceStepId。
+    let requirement = requirements.find((item) => item.channel === evidenceChannel && item.phase === 'AFTER'
+      && (evidenceChannel !== 'DATABASE_STATE'
+        || item.description.includes(effect.kind) || item.description.includes(effect.expression)));
+    if (!requirement) {
+      requirement = {
+        channel: evidenceChannel, phase: 'AFTER', required: true,
+        expectation: effect.action === 'UNCHANGED' || effect.action === 'ROLLBACK' ? 'UNCHANGED' : 'PRESENT',
+        description: `通过独立 Observer 采集 ${effect.kind} 副作用`, factIds: [...point.factIds],
+      };
+      requirements.push(requirement);
+    }
+    const id = `STEP-EFFECT-${String(index + 1).padStart(3, '0')}`;
+    let observer = testCase.steps.find((step) => (requirement.sourceStepId !== undefined && step.id === requirement.sourceStepId)
+      || step.action === `OBSERVE_${effect.kind}`);
+    if (!observer) {
+      observer = {
+        id, channel, action: `OBSERVE_${effect.kind}`,
+        description: `通过独立 Observer 采集 ${effect.kind} 副作用`, execution: 'PLANNED',
+        dependsOn: request?.id ? [request.id] : after?.id ? [after.id] : [],
+        acceptanceCriteriaIds: testCase.source?.acceptanceCriteriaIds ?? [], factIds: [...point.factIds],
+      };
+      testCase.steps.push(observer);
+    }
+    requirement.sourceStepId = observer.id;
+    const unchanged = effect.action === 'UNCHANGED' || effect.action === 'ROLLBACK';
+    const exactOnce = /(?:仅|只|各)?(?:发生|执行|调用|产生|扣减|扣费)?\s*一次|exactly\s+once|one\s+time/i.test(effect.expression);
+    if (!testCase.assertions.some((assertion) => assertion.channel === (channel === 'QUEUE' ? 'QUEUE' : channel === 'PROVIDER' ? 'PROVIDER' : 'SIDE_EFFECT')
+      && assertion.path === 'count' && assertion.description?.includes(effect.kind))) {
+      testCase.assertions.push({
+        channel: channel === 'QUEUE' ? 'QUEUE' : channel === 'PROVIDER' ? 'PROVIDER' : 'SIDE_EFFECT',
+        path: 'count', operator: unchanged || exactOnce ? 'equals' : 'gte', expected: unchanged ? 0 : 1,
+        description: `${effect.kind} 副作用${unchanged ? '不得产生' : exactOnce ? '必须且只能发生一次' : '必须可观察'}`,
+        ...proofTrace(point),
+      });
+    }
+  }
+
+  if (after && point.canonicalFact.constraints.some((constraint) => constraint.kind === 'IDEMPOTENT')
+    && !testCase.assertions.some((assertion) => assertion.channel === 'DATA'
+      && assertion.path === 'count' && assertion.description?.includes('幂等'))) {
+    testCase.assertions.push({
+      channel: 'DATA', path: 'count', operator: 'length', expected: 1,
+      description: '幂等重复操作后目标业务实体仍只有一份', ...proofTrace(point),
+    });
+  }
+
+  if (point.canonicalFact.expected.kind === 'DENY'
+    && point.canonicalFact.scopes.some((scope) => ['TENANT', 'PROJECT'].includes(scope.dimension) && scope.relation === 'CROSS')
+    && !testCase.assertions.some((assertion) => assertion.channel === 'RESPONSE'
+      && ['notExists', 'notContains'].includes(assertion.operator ?? ''))) {
+    const protectedResourceId = Object.values(point.canonicalFact.resource.identifiers)[0];
+    testCase.assertions.push(protectedResourceId && request && !Object.keys(request.pathParams ?? {}).length ? {
+      channel: 'RESPONSE', target: 'body', operator: 'notContains', expected: protectedResourceId,
+      description: '跨 Tenant/Project 列表响应不得包含目标资源标识', ...proofTrace(point),
+    } : {
+      channel: 'RESPONSE', path: 'resource', operator: 'notExists',
+      description: '跨 Tenant/Project 拒绝响应不得泄露目标资源内容', ...proofTrace(point),
+    });
+  }
+
+  for (const requirement of requirements) {
+    if (['API_REQUEST', 'API_RESPONSE'].includes(requirement.channel)) requirement.sourceStepId ??= request?.id;
+    else if (requirement.phase === 'BEFORE') requirement.sourceStepId ??= before?.id;
+    else if (['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(requirement.channel)) {
+      requirement.sourceStepId ??= after?.id;
+    }
+  }
 }
 
 function businessScenarioKind(point: TestPoint, aspects: readonly TestAspect[]): TestBusinessScenario['kind'] {
@@ -646,8 +850,20 @@ function configuredActorForCanonical(
   return undefined;
 }
 
+function businessGoalOf(point: TestPoint): string {
+  return point.objective.split('；需求依据：', 1)[0]?.trim() || point.objective;
+}
+
+function designOriginOf(point: TestPoint): 'REQUIREMENT_DERIVED' | 'RULE_DERIVED' | 'RISK_DERIVED' | 'EXPLORATORY' {
+  if (point.sourceType === 'HEURISTIC') return 'EXPLORATORY';
+  if (point.strategies.some((item) => ['CONCURRENT_REQUEST', 'REPEAT', 'RECOVERY_CHECK', 'PARTIAL_FAILURE', 'SAME_CROSS_SCOPE'].includes(item))) return 'RISK_DERIVED';
+  if (['BUSINESS_RULE', 'STATE', 'PERMISSION', 'DATA_ISOLATION', 'SIDE_EFFECT'].includes(point.dimension)) return 'RULE_DERIVED';
+  return 'REQUIREMENT_DERIVED';
+}
+
 function buildBusinessScenario(
   requirement: AcceptanceRequirement,
+  businessModel: BusinessModelProjection,
   point: TestPoint,
   testCase: TestCase,
   provenance: NonNullable<TestCase['source']>['provenance'] & string,
@@ -658,14 +874,28 @@ function buildBusinessScenario(
   const aspects = testCase.testAspects ?? [];
   const subject = configuredActorForCanonical(requirement, canonical.actor);
   const target = configuredActorForCanonical(requirement, canonical.targetActor);
-  const scope = canonical.scopes[0];
-  const owner = scope?.relation === 'OTHER' || scope?.relation === 'CROSS' ? target : subject;
+  const projectedFlow = businessFlowForFacts(businessModel, factIds);
+  const businessGoal = businessGoalOf(point);
+  const projectedResourceIds = new Set(projectedFlow?.resourceIds ?? []);
+  const projectedResources = businessModel.resources.filter((resource) => projectedResourceIds.has(resource.id)
+    || resource.factIds.some((id) => factIds.includes(id)));
+  const projectedOwnerships = businessModel.ownerships.filter((ownership) => ownership.factIds.some((id) => factIds.includes(id)));
+  const projectedScopes = projectedOwnerships.flatMap((ownership) => ownership.scopes.map((scope) => ({ ...scope, factIds: ownership.factIds })));
+  const projectedDependencies = businessModel.dependencies.filter((dependency) => dependency.factIds.some((id) => factIds.includes(id))
+    || Boolean(dependency.resourceId && projectedResourceIds.has(dependency.resourceId)));
+  const projectedRisks = businessModel.risks.filter((risk) => risk.factIds.some((id) => factIds.includes(id))
+    || risk.resourceIds.some((id) => projectedResourceIds.has(id)));
+  const scope = projectedScopes[0];
+  const projectedOwnerId = projectedOwnerships.map((item) => item.ownerActorId).find(Boolean);
+  const owner = requirement.actors.find((actor) => actor.id === projectedOwnerId)
+    ?? (scope?.relation === 'OTHER' || scope?.relation === 'CROSS' ? target : subject);
   const actorLabel = canonical.actor?.id ?? canonical.actor?.role
-    ?? (canonical.actor?.kind !== 'UNKNOWN' ? canonical.actor?.kind : undefined);
+    ?? (canonical.actor?.kind && canonical.actor.kind !== 'UNKNOWN' ? canonical.actor.kind : undefined);
   const actionLabel = canonical.action.kind !== 'UNKNOWN' ? canonical.action.kind : undefined;
   const resourceLabel = canonical.resource.kind !== 'UNKNOWN' ? canonical.resource.kind : 'UNKNOWN';
+  const targetId = testCase.data?.targetId === undefined ? undefined : String(testCase.data.targetId);
   const idRef = Object.values(canonical.resource.identifiers)[0]
-    ?? (testCase.data?.targetId === undefined ? undefined : String(testCase.data.targetId));
+    ?? (targetId === 'no-target' ? undefined : targetId);
   const stateRule = requirement.stateRules.find((rule) => {
     const linkedFacts = requirement.factLedger.filter((fact) => factIds.includes(fact.id));
     return linkedFacts.some((fact) => fact.entityRefs.items.some((ref) => ref.type === 'STATE_RULE' && ref.id === rule.id));
@@ -676,7 +906,7 @@ function buildBusinessScenario(
     : canonical.expected.kind === 'DENY' ? 'DENY'
       : aspects.some((item) => ['ROLE_PERMISSION', 'USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION'].includes(item))
         ? 'UNKNOWN' : 'NOT_APPLICABLE';
-  const permissionScope = canonical.scopes.map((item) => `${item.dimension}:${item.relation}`).join(', ') || undefined;
+  const permissionScope = projectedScopes.map((item) => `${item.dimension}:${item.relation}`).join(', ') || undefined;
   const relation: TestBusinessScenario['ownership']['relation'] = scope?.dimension === 'TENANT' && scope.relation === 'CROSS'
     ? 'CROSS_TENANT' : scope?.dimension === 'TENANT' && scope.relation === 'SAME'
       ? 'SAME_TENANT' : scope?.relation === 'OTHER' ? 'OTHER_USER'
@@ -688,16 +918,17 @@ function buildBusinessScenario(
     id: subject?.id ?? canonical.actor?.id,
     role: subject?.role ?? canonical.actor?.role,
     tenantId: subject?.tenantId,
+    projectId: subject?.projectId,
     relation: 'SUBJECT',
     provenance: subject ? 'CONFIGURED' : provenance,
   });
   if (target && target.id !== subject?.id) actorContexts.push({
-    id: target.id, role: target.role, tenantId: target.tenantId,
+    id: target.id, role: target.role, tenantId: target.tenantId, projectId: target.projectId,
     relation: scope?.dimension === 'TENANT' && scope.relation === 'CROSS' ? 'OTHER_TENANT' : 'TARGET',
     provenance: 'CONFIGURED',
   });
   if (owner && !actorContexts.some((item) => item.id === owner.id && item.relation === 'OWNER')) actorContexts.push({
-    id: owner.id, role: owner.role, tenantId: owner.tenantId, relation: 'OWNER', provenance: 'CONFIGURED',
+    id: owner.id, role: owner.role, tenantId: owner.tenantId, projectId: owner.projectId, relation: 'OWNER', provenance: 'CONFIGURED',
   });
   const mode: TestBusinessScenario['flow']['mode'] = testCase.steps.some((step) => step.concurrencyGroup)
     ? 'PARALLEL' : aspects.includes('ROLLBACK_RECOVERY') && testCase.steps.length > 1 ? 'RECOVERY'
@@ -707,25 +938,43 @@ function buildBusinessScenario(
     id: step.id ?? `STEP-${String(index + 1).padStart(3, '0')}`,
     action: step.action ?? step.type ?? 'PLANNED',
     actorRef: step.actor?.id ?? testCase.actor?.id,
-    resourceRef: idRef,
+    resourceRef: projectedFlow?.steps[index]?.resourceId ?? idRef,
     operationRef: step.method && step.url ? `${step.method} ${step.url}` : step.action,
     fromState: index === 0 ? stateRule?.from : undefined,
     toState: index === testCase.steps.length - 1 ? stateRule?.to : undefined,
-    dependsOn: step.dependsOn ?? [],
+    dependsOn: step.dependsOn ?? projectedFlow?.steps[index]?.dependsOn ?? [],
   }));
   return {
-    title: point.objective,
-    goal: `${actorLabel ?? '需求指定的业务参与者'} ${actionLabel ?? '执行已声明动作'} ${resourceLabel}，业务结果必须满足已声明的验收条件`,
+    title: businessGoal,
+    goal: businessGoal,
     actor: actorLabel,
     action: actionLabel,
     resource: resourceLabel,
     kind: businessScenarioKind(point, aspects),
     actors: actorContexts,
+    resources: projectedResources.map((resource) => ({
+      id: resource.id,
+      type: resource.type,
+      identifiers: { ...resource.identifiers },
+      provenance: resource.conflict ? 'UNKNOWN' : provenance,
+      factIds: [...resource.factIds],
+    })),
     resourceContext: { type: resourceLabel, idRef, provenance: resourceLabel === 'UNKNOWN' ? 'UNKNOWN' : provenance },
     ownership: {
-      relation, ownerActorId: owner?.id, tenantId: owner?.tenantId,
+      relation, ownerActorId: owner?.id, tenantId: owner?.tenantId, projectId: owner?.projectId,
       provenance: relation === 'UNKNOWN' ? 'UNKNOWN' : relation === 'NOT_APPLICABLE' ? provenance : provenance,
     },
+    ownerships: projectedOwnerships.map((ownership) => ({
+      resourceId: ownership.resourceId,
+      ownerActorId: ownership.ownerActorId,
+      subjectActorId: ownership.subjectActorId,
+      tenantId: ownership.tenantId,
+      projectId: ownership.projectId,
+      relation: ownership.relation,
+      scopes: ownership.scopes.map((item) => ({ ...item })),
+      factIds: [...ownership.factIds],
+    })),
+    scopes: projectedScopes,
     state: {
       status: stateRule || stateExpression ? 'KNOWN' : aspects.includes('STATE_TRANSITION') ? 'UNKNOWN' : 'NOT_APPLICABLE',
       before: stateRule?.from, after: stateRule?.to, expression: stateExpression ?? stateRule?.action,
@@ -737,13 +986,19 @@ function buildBusinessScenario(
       provenance: permissionDecision === 'UNKNOWN' ? 'UNKNOWN' : provenance,
     },
     flow: {
-      id: point.scenarioId ?? `FLOW-${point.id}`,
-      name: point.objective,
-      mode,
+      id: projectedFlow?.id ?? point.scenarioId ?? `FLOW-${point.id}`,
+      name: businessGoal,
+      mode: projectedFlow?.mode ?? mode,
       steps: flowSteps.length ? flowSteps : [{ id: 'STEP-001', action: 'PLANNED', dependsOn: [] }],
     },
-    dependencies: [],
-    risks: point.risk || point.priority === 'P0' || aspects.some((item) => [
+    dependencies: projectedDependencies.map((dependency) => dependency.description),
+    risks: projectedRisks.length ? projectedRisks.map((risk) => ({
+      id: risk.id,
+      level: risk.level,
+      category: risk.category,
+      description: risk.description,
+      source: 'REQUIREMENT' as const,
+    })) : point.risk || point.priority === 'P0' || aspects.some((item) => [
       'ROLE_PERMISSION', 'USER_ISOLATION', 'TENANT_ISOLATION', 'PROJECT_ISOLATION', 'STATE_TRANSITION',
       'DATA_CONSISTENCY', 'IDEMPOTENCY', 'CONCURRENCY', 'ROLLBACK_RECOVERY', 'SIDE_EFFECT',
     ].includes(item)) ? [{
@@ -825,6 +1080,7 @@ function buildExecutionContract(testCase: TestCase, point: TestPoint): TestExecu
  */
 function completeGeneratedCase(
   requirement: AcceptanceRequirement,
+  businessModel: BusinessModelProjection,
   point: TestPoint,
   testCase: TestCase,
   api?: ApiSpec,
@@ -839,6 +1095,13 @@ function completeGeneratedCase(
   testCase.requirementStatus = point.outcomeStatus === 'UNKNOWN'
     ? (provenance === 'UNKNOWN' ? 'UNKNOWN' : 'NEED_CONFIRMATION')
     : point.sourceType === 'HEURISTIC' ? 'NEED_CONFIRMATION' : 'CONFIRMED';
+  testCase.metadata = {
+    ...(testCase.metadata ?? {}),
+    designOrigin: designOriginOf(point),
+    riskJustification: point.risk
+      ?? `由 Test Strategy ${point.strategyIds.join(', ') || 'canonical-business-flow'} 激活；优先级 ${point.priority}`,
+    strategyIds: [...point.strategyIds],
+  };
 
   if (!testCase.steps.length) {
     const plannedActions = testCase.design?.actions?.length ? testCase.design.actions : [point.objective];
@@ -872,8 +1135,20 @@ function completeGeneratedCase(
   const mutates = Boolean((request?.method ?? api?.method)
     && ['POST', 'PUT', 'PATCH', 'DELETE'].includes((request?.method ?? api?.method)!));
   testCase.testAspects = [...new Set(relatedPoints.flatMap((related) => testAspectsFor(related, testCase)))];
+  // Permission 与 Isolation 可能从同一 Fact 派生多个 Objective，但同一请求/同一 Oracle
+  // 只执行一次。合并后的主类型回到 canonical Fact 分类，而非取决于 Objective 顺序。
+  const sourceFactCategories = new Set(requirement.factLedger
+    .filter((fact) => factIds.includes(fact.id)).map((fact) => fact.category));
+  if (testCase.testType === 'PERMISSION' || testCase.testType === 'DATA_ISOLATION') {
+    const scopedBusinessResource = point.canonicalFact.scopes.some((scope) => scope.dimension === 'TENANT'
+      || scope.dimension === 'PROJECT'
+      || scope.dimension === 'USER' && !['USER', 'USER_PROFILE', 'ACCOUNT'].includes(point.canonicalFact.resource.kind));
+    if (sourceFactCategories.has('DATA_ISOLATION') || scopedBusinessResource) testCase.testType = 'DATA_ISOLATION';
+    else if (sourceFactCategories.has('PERMISSION')) testCase.testType = 'PERMISSION';
+  }
   testCase.businessScenario = buildBusinessScenario(
     requirement,
+    businessModel,
     point,
     testCase,
     provenance,
@@ -929,6 +1204,29 @@ function completeGeneratedCase(
     cleanupHookId: mutates ? 'CLEANUP-001' : undefined,
   }];
 
+  const canonicalValue = point.canonicalFact.expected.value;
+  const hasExplicitResponseFields = Boolean(canonicalValue && typeof canonicalValue === 'object'
+    && !Array.isArray(canonicalValue) && 'fields' in canonicalValue
+    && canonicalValue.fields && typeof canonicalValue.fields === 'object');
+  // 响应字段可以独立闭合它所属的 Business Rule Case；真实库存/消息/账务
+  // 仍由另行生成的 Side Effect Case 要求 Observer，不用响应布尔值代替。
+  const requestMutates = Boolean(request?.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method));
+  const stateValueForProof = point.canonicalFact.expected.value;
+  const hasStateTransitionProof = Boolean(stateValueForProof && typeof stateValueForProof === 'object'
+    && !Array.isArray(stateValueForProof) && ('from' in stateValueForProof || 'to' in stateValueForProof));
+  const requiresIndependentProofOperations = requestMutates || hasStateTransitionProof
+    || point.canonicalFact.sideEffects.length > 0
+    || point.canonicalFact.expected.kind === 'DENY'
+      && point.canonicalFact.scopes.some((scope) => ['TENANT', 'PROJECT'].includes(scope.dimension)
+        && scope.relation === 'CROSS')
+    || point.canonicalFact.constraints.some((constraint) => [
+      'ATOMIC', 'IDEMPOTENT', 'CONCURRENCY', 'CONSISTENCY', 'RECOVERY', 'STATE_TRANSITION',
+    ].includes(constraint.kind));
+  if (request && requiresIndependentProofOperations
+    && !(point.dimension === 'BUSINESS_RULE' && hasExplicitResponseFields)) {
+    attachBusinessProofOperations(point, testCase);
+  }
+
   testCase.assertions = testCase.assertions.map((assertion, index) => ({
     ...assertion,
     id: assertion.id ?? `AS-${String(index + 1).padStart(3, '0')}`,
@@ -942,16 +1240,45 @@ function completeGeneratedCase(
     sourceStepId: evidence.sourceStepId
       ?? testCase.steps.find((step) => step.execution === 'EXECUTABLE')?.id
       ?? testCase.steps[0]?.id,
-    assertionIds: evidence.assertionIds ?? testCase.assertions
-      .filter((assertion) => evidenceChannelForAssertion(assertion).includes(evidence.channel)
-        && (!assertion.factIds?.length || assertion.factIds.some((id) => evidence.factIds.includes(id))))
-      .map((assertion) => assertion.id!)
-      .filter(Boolean),
+    assertionIds: evidence.assertionIds ?? [],
   }));
+  const beforeObserverId = testCase.steps.find((step) => /(?:BEFORE|PREPARE_OWNED_RESOURCE)/.test(step.action ?? '')
+    && ['DATA', 'QUEUE', 'PROVIDER'].includes(step.channel ?? ''))?.id;
+  const afterObserverId = testCase.steps.find((step) => /(?:AFTER|FINAL_STATE|RECOVERED_STATE|NO_CROSS_SCOPE_MUTATION)/.test(step.action ?? '')
+    && ['DATA', 'QUEUE', 'PROVIDER'].includes(step.channel ?? ''))?.id;
   for (const assertion of testCase.assertions) {
-    assertion.evidenceRequirementIds = assertion.evidenceRequirementIds ?? testCase.evidenceRequirements
-      .filter((evidence) => evidence.assertionIds?.includes(assertion.id!))
+    if (assertion.type === 'DESIGN_EXPECTATION') {
+      assertion.evidenceRequirementIds = [];
+      continue;
+    }
+    // “与操作前一致”描述的是 AFTER 非变更结论，不能因为包含“操作前”而
+    // 错绑到 BEFORE 快照。只有显式的基线采集断言才消费 BEFORE evidence。
+    const baseline = assertion.channel === 'STATE' && /^(?:操作前|.*baseline)/i.test(assertion.description ?? '');
+    assertion.evidenceRequirementIds = testCase.evidenceRequirements
+      .filter((evidence) => {
+        if (assertion.type === 'STATUS_CODE' || assertion.channel === 'RESPONSE') {
+          return evidence.channel === 'API_RESPONSE' || evidence.channel === 'API_REQUEST';
+        }
+        if (assertion.channel === 'STATE' || assertion.channel === 'DATA') {
+          return ['DATABASE_STATE', 'STATE_CHANGE', 'DATA_DIFF', 'RESOURCE_STATE'].includes(evidence.channel)
+            && (baseline ? evidence.sourceStepId === beforeObserverId : evidence.sourceStepId === afterObserverId);
+        }
+        if (['SIDE_EFFECT', 'QUEUE', 'PROVIDER'].includes(assertion.channel ?? '')) {
+          const effectKind = testCase.steps
+            .filter((step) => step.action?.startsWith('OBSERVE_'))
+            .map((step) => ({ step, kind: step.action!.slice('OBSERVE_'.length) }))
+            .find(({ kind }) => assertion.description?.includes(kind));
+          if (effectKind) return evidence.sourceStepId === effectKind.step.id;
+        }
+        return evidenceChannelForAssertion(assertion).includes(evidence.channel);
+      })
       .map((evidence) => evidence.id!)
+      .filter(Boolean);
+  }
+  for (const evidence of testCase.evidenceRequirements) {
+    evidence.assertionIds = testCase.assertions
+      .filter((assertion) => assertion.evidenceRequirementIds?.includes(evidence.id!))
+      .map((assertion) => assertion.id!)
       .filter(Boolean);
   }
 
@@ -1031,9 +1358,19 @@ function completeGeneratedCase(
     && missingCapabilities.length === 0;
   const readinessReason = testCase.design?.reason ?? testCase.metadata?.reason;
   const needsConfirmation = testCase.requirementStatus !== 'CONFIRMED';
-  const blockedReason = missingCapabilities.length
+  const negativeMutation = mutates && (testCase.parameterContext?.expectedOutcome === 'REJECT'
+    || point.canonicalFact.expected.kind === 'DENY'
+    || point.canonicalFact.expected.kind === 'FAILURE'
+    || point.canonicalFact.expected.kind === 'INVALID'
+    || (point.canonicalFact.expected.status ?? 0) >= 400);
+  const runtimeEvidenceReason = negativeMutation
+    ? 'NON_MUTATION_EVIDENCE_UNAVAILABLE：负向写操作必须由运行时 State/DB/Side Effect Observer 证明未修改'
+    : point.dimension === 'SIDE_EFFECT' || point.canonicalFact.sideEffects.length
+      ? 'EXTERNAL_EVIDENCE_UNAVAILABLE：真实副作用必须由运行时 Event/DB/Provider Observer 证明'
+      : undefined;
+  const blockedReason = runtimeEvidenceReason ?? (missingCapabilities.length
     ? `缺少 Executor/Observer/Preflight 能力：${missingCapabilities.join(', ')}`
-    : String(readinessReason ?? '确定性 Assertion/Evidence/Executor 契约不完整');
+    : String(readinessReason ?? '确定性 Assertion/Evidence/Executor 契约不完整'));
   testCase.oracle = {
     mode: 'ALL',
     deterministic: true,
@@ -1193,8 +1530,13 @@ function buildRiskCombinationCase(input: {
   // A composite plan cannot cure a missing business oracle. Preserve the
   // earliest blocking reason so every derived Case tells users which
   // requirement/evidence gap must be closed first.
+  const value = point.canonicalFact.expected.value;
+  const stateTargetKnown = value && typeof value === 'object' && !Array.isArray(value)
+    && 'to' in value && (value as Record<string, unknown>).to !== undefined;
   const businessOracleMissing = ['BUSINESS_RULE', 'STATE', 'HYBRID'].includes(point.category)
-    && explicitFieldAssertions(requirement, point).length === 0;
+    && explicitFieldAssertions(requirement, point).length === 0
+    && !stateTargetKnown
+    && point.canonicalFact.expected.kind !== 'UNCHANGED';
   const reason = businessOracleMissing
     ? 'BUSINESS_OBSERVABILITY_MISSING：需求没有声明可执行的状态探针、字段或后置查询，禁止用 HTTP Status 代替业务验证'
     : `COMPOSITE_EXECUTION_REQUIRED：${kind} 为高风险组合场景，必须绑定 Scenario Runner、所需 Observer 与逐步 Evidence 后执行`;
@@ -1472,6 +1814,24 @@ export function deduplicateAcceptanceCases(input: TestCase[]): TestCase[] {
       expected: testCase.executionMode === 'EXECUTABLE'
         ? { status: testCase.expected?.status, fields: testCase.expected?.fields }
         : testCase.expected,
+      // 相同 Operation/Status 仍可能证明完全不同的业务结论（例如首次支付
+      // 与重复支付）。只合并同一 AC 内的 Contract/Parameter 投影，不跨 AC
+      // 吞掉 State/Idempotency/Side Effect Oracle。
+      businessOracle: testCase.assertions.filter((assertion) => assertion.type !== 'STATUS_CODE'
+          && assertion.type !== 'DESIGN_EXPECTATION').map((assertion) => ({
+          channel: assertion.channel,
+          type: assertion.type,
+          target: assertion.target,
+          path: assertion.path,
+          operator: assertion.operator,
+          expected: assertion.expected,
+          expectedFrom: assertion.expectedFrom,
+        })),
+      businessConclusion: !testCase.parameterContext
+        && !['API', 'PARAMETER', 'AUTH'].includes(testCase.testType ?? '')
+        ? testCase.design?.expectedOutcome ?? testCase.expected?.description : undefined,
+      riskDimension: ['SIDE_EFFECT']
+        .includes(testCase.testType ?? '') ? testCase.testType : undefined,
       // A parameter label is trace metadata, not an execution difference. The
       // same Actor/HTTP input/oracle is one execution; this is safety-critical
       // for mutations and also avoids redundant reads.
@@ -1560,6 +1920,7 @@ export function deduplicateAcceptanceCases(input: TestCase[]): TestCase[] {
 
 /** Test Point → 可执行 HTTP TestCase；不能落到 API 操作的点明确保留为 DESCRIPTIVE_ONLY。 */
 export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, points: TestPoint[]): TestCase[] {
+  const businessModel = buildBusinessModelProjection(requirement);
   const apiById = new Map(requirement.apis.map((api) => [api.id, api]));
   let sequence = 0;
   const nextId = (): string => `API-${String(++sequence).padStart(3, '0')}`;
@@ -1617,7 +1978,10 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
         && candidate.path === assertion.path && candidate.header === assertion.header
         && JSON.stringify(candidate.expected) === JSON.stringify(assertion.expected)) === index),
       expected: { status: String(input.status), description: input.point.expectedOutcome },
-      evidenceRequirements: evidenceRequirementsFor(input.point),
+      evidenceRequirements: evidenceRequirementsFor(
+        input.point,
+        input.parameter ? input.parameter.vector.expectedOutcome === 'REJECT' : undefined,
+      ),
       design: {
         objectiveIds: [input.point.objectiveId],
         factIds: input.point.factIds,
@@ -1736,21 +2100,6 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
       continue;
     }
 
-    // Business/state semantics need a state probe, not an HTTP status. Resolve
-    // this before status binding so “任一失败时全部回滚” cannot be downgraded
-    // to a generic BINDING_INCOMPLETE merely because no failure status exists.
-    if (['BUSINESS_RULE', 'STATE', 'HYBRID'].includes(point.category)
-      && explicitFieldAssertions(requirement, point).length === 0) {
-      cases.push(designedOnlyCase(
-        requirement,
-        point,
-        nextId(),
-        'BUSINESS_OBSERVABILITY_MISSING：需求没有声明可执行的状态探针、字段或后置查询，禁止用 HTTP Status 代替业务验证',
-        [`执行 ${api.operationKey}`, `验证业务后置条件：${point.expectedOutcome}`],
-      ));
-      continue;
-    }
-
     const defaultStatus = statusFrom(point, api);
     if (defaultStatus === undefined) {
       point.bindingIssue = {
@@ -1770,20 +2119,12 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
       continue;
     }
 
-    if (['SIDE_EFFECT', 'CLEANUP'].includes(point.category)) {
-      cases.push(designedOnlyCase(
-        requirement,
-        point,
-        nextId(),
-        'EXTERNAL_EVIDENCE_UNAVAILABLE：HTTP 响应字段只能证明响应契约，不能证明邮件、扣费、库存、消息或清理等真实副作用已经发生',
-        [`执行 ${api.operationKey}`, `通过 Event/DB/Provider Connector 验证真实副作用：${point.expectedOutcome}`],
-      ));
-      continue;
-    }
-
     if (['BUSINESS_RULE', 'STATE', 'HYBRID'].includes(point.category)) {
       const semanticAssertions = explicitFieldAssertions(requirement, point);
-      if (!semanticAssertions.length) {
+      const stateValue = point.canonicalFact.expected.value;
+      const hasStateOracle = Boolean(stateValue && typeof stateValue === 'object' && !Array.isArray(stateValue)
+        && ('to' in stateValue || 'from' in stateValue));
+      if (!semanticAssertions.length && !hasStateOracle) {
         cases.push(designedOnlyCase(
           requirement,
           point,
@@ -2063,12 +2404,6 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ISOLATION_CONTEXT_INCOMPLETE：需要至少两个 EXPLICIT/CONFIGURED Actor/Scope 与资源归属，禁止硬编码 A/B'));
       } else if (api.pathParams.length && !targetResourceId) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：缺少归属于目标 Actor/Tenant 的显式业务资源 ID，禁止用用户 ID 代替订单/项目/通用资源 ID'));
-      } else if (denial
-        && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(api.method)) {
-        const designed = designedOnlyCase(requirement, point, nextId(), 'NON_MUTATION_EVIDENCE_UNAVAILABLE：隔离写操作不能只断言拒绝状态；缺少后置状态证据证明未发生跨范围修改');
-        designed.actor = actorOf(sourceActor);
-        designed.data = { targetId: targetResourceId! };
-        cases.push(designed);
       } else {
         cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 跨数据范围`, actor: sourceActor, targetId: targetResourceId ?? 'no-target', body, status: defaultStatus }));
       }
@@ -2094,18 +2429,26 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
         cases.push(designedOnlyCase(requirement, point, nextId(), 'ACTOR_CONTEXT_INCOMPLETE：拒绝语义缺少明确 Subject/Target Actor 与资源归属'));
       } else if (api.pathParams.length && !targetResourceId) {
         cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：权限拒绝场景缺少归属目标 Actor 的显式业务资源 ID'));
-      } else if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(api.method)) {
-        const designed = designedOnlyCase(requirement, point, nextId(), 'NON_MUTATION_EVIDENCE_UNAVAILABLE：拒绝写操作不能只断言 403；缺少后置查询/DB/Event 证据证明资源未被修改');
-        designed.actor = actorOf(sourceActor);
-        designed.data = { targetId: targetResourceId! };
-        cases.push(designed);
       } else {
         cases.push(buildCase({ point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 无权限`, actor: sourceActor, targetId: targetResourceId ?? 'no-target', body, status: defaultStatus }));
       }
     } else if (point.canonicalFact.expected.status === 403) {
       cases.push(designedOnlyCase(requirement, point, nextId(), 'AUTH_SCENARIO_AMBIGUOUS：403 未说明角色、Scope、Tenant 或目标资源，禁止推断身份场景'));
     } else if (defaultStatus >= 400) {
-      cases.push(designedOnlyCase(requirement, point, nextId(), `ERROR_SCENARIO_UNSUPPORTED：期望 ${defaultStatus}，但需求没有提供当前 Runner 可确定性准备的错误前置条件`));
+      const explicitErrorPrecondition = point.canonicalFact.conditions.some((condition) =>
+        ['IF', 'WHEN', 'BEFORE', 'STATE'].includes(condition.kind));
+      if (!explicitErrorPrecondition) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), `ERROR_SCENARIO_UNSUPPORTED：期望 ${defaultStatus}，但需求没有提供当前 Runner 可确定性准备的错误前置条件`));
+      } else if (apiRequiresActor(api) && !configuredActor) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'ACTOR_CONTEXT_INCOMPLETE：错误业务场景没有明确 Actor'));
+      } else if (api.pathParams.length && !configuredTarget) {
+        cases.push(designedOnlyCase(requirement, point, nextId(), 'TEST_DATA_UNAVAILABLE：错误业务场景缺少显式目标资源 ID'));
+      } else {
+        cases.push(buildCase({
+          point, api, name: `${point.acceptanceCriteriaIds[0] ?? point.id} ${api.method} ${api.path} 业务拒绝`,
+          actor: configuredActor, targetId: configuredTarget ?? 'no-target', body, status: defaultStatus,
+        }));
+      }
     } else {
       const ownerOnly = point.canonicalFact.scopes.some((scope) => scope.relation === 'OWNER_ONLY');
       const ownedTarget = ownerOnly ? actorOwnedPathTarget(api, point, configuredActor) : undefined;
@@ -2129,23 +2472,51 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
     if (!point) continue;
     const objectiveIds = new Set(testCase.source?.objectiveIds ?? []);
     const relatedPoints = points.filter((candidate) => objectiveIds.has(candidate.objectiveId));
-    completeGeneratedCase(requirement, point, testCase,
+    completeGeneratedCase(requirement, businessModel, point, testCase,
       point.apiBinding ? apiById.get(point.apiBinding.apiSpecId) : undefined,
       relatedPoints.length ? relatedPoints : [point]);
   }
-  const generatedCombinationKeys = new Set<string>();
+  const generatedCombinations = new Map<string, TestCase>();
   for (const point of points) {
     const kind = riskCombinationKind(point);
-    if (!kind || point.priority !== 'P0') continue;
+    // P0 与 P1 都是业务风险范围：P1 的幂等、并发、恢复不能因为不是 P0
+    // 就退化成单步占位；只有普通 P2 参数/边界不进入组合场景。
+    if (!kind || point.priority === 'P2') continue;
     const key = `${kind}:${[...point.factIds].sort().join(',')}`;
-    if (generatedCombinationKeys.has(key)) continue;
-    generatedCombinationKeys.add(key);
     const sameObjective = (candidate: TestCase): boolean => Boolean(
       candidate.source?.objectiveIds?.includes(point.objectiveId),
     );
     const sameFact = (candidate: TestCase): boolean => Boolean(
       candidate.source?.factIds?.some((id) => point.factIds.includes(id)),
     );
+    const existingCombination = generatedCombinations.get(key);
+    if (existingCombination) {
+      if (existingCombination.source) {
+        existingCombination.source.factIds = mergeUnique(existingCombination.source.factIds, point.factIds);
+        existingCombination.source.objectiveIds = mergeUnique(existingCombination.source.objectiveIds, [point.objectiveId]);
+        existingCombination.source.acceptanceCriteriaIds = mergeUnique(
+          existingCombination.source.acceptanceCriteriaIds,
+          point.acceptanceCriteriaIds,
+        );
+      }
+      if (existingCombination.design) {
+        existingCombination.design.factIds = mergeUnique(existingCombination.design.factIds, point.factIds);
+        existingCombination.design.objectiveIds = mergeUnique(existingCombination.design.objectiveIds, [point.objectiveId]);
+      }
+      for (const assertion of existingCombination.assertions) {
+        assertion.factIds = mergeUnique(assertion.factIds, point.factIds);
+        assertion.objectiveIds = mergeUnique(
+          assertion.objectiveIds ?? (assertion.objectiveId ? [assertion.objectiveId] : []),
+          [point.objectiveId],
+        );
+      }
+      const redundant = finalized.findIndex((candidate) => candidate !== existingCombination
+        && sameObjective(candidate)
+        && candidate.executionMode === 'DESIGNED_ONLY'
+        && !candidate.steps.some((step) => step.type === 'HTTP_REQUEST'));
+      if (redundant >= 0) finalized.splice(redundant, 1);
+      continue;
+    }
     const anchor = finalized.find((candidate) => sameObjective(candidate)
       && candidate.steps.some((step) => step.type === 'HTTP_REQUEST'))
       ?? finalized.find(sameObjective)
@@ -2163,12 +2534,54 @@ export function generateAcceptanceApiCases(requirement: AcceptanceRequirement, p
     const apiSpecId = anchor?.source?.apiSpecId ?? point.apiBinding?.apiSpecId;
     completeGeneratedCase(
       requirement,
+      businessModel,
       point,
       combination,
       apiSpecId ? apiById.get(apiSpecId) : undefined,
       relatedPoints.length ? relatedPoints : [point],
     );
+    // 同一 Objective 已有更完整的组合设计时，删除没有真实执行动作的单步
+    // DESIGNED_ONLY 占位，保留高价值场景并避免业务语义重复。
+    const superseded = finalized.findIndex((candidate) =>
+      candidate.businessScenario?.goal === combination.businessScenario?.goal
+      && candidate.executionMode === 'DESIGNED_ONLY'
+      && !candidate.steps.some((step) => step.type === 'HTTP_REQUEST')
+      && (candidate.testAspects ?? []).every((aspect) => combination.testAspects?.includes(aspect))
+      && candidate.businessScenario?.expectedBusinessOutcome === combination.businessScenario?.expectedBusinessOutcome);
+    if (superseded >= 0) {
+      const replaced = finalized[superseded];
+      if (combination.source && replaced.source) {
+        combination.source.factIds = mergeUnique(combination.source.factIds, replaced.source.factIds);
+        combination.source.objectiveIds = mergeUnique(combination.source.objectiveIds, replaced.source.objectiveIds);
+        combination.source.acceptanceCriteriaIds = mergeUnique(
+          combination.source.acceptanceCriteriaIds,
+          replaced.source.acceptanceCriteriaIds,
+        );
+      }
+      if (combination.design && replaced.design) {
+        combination.design.factIds = mergeUnique(combination.design.factIds, replaced.design.factIds);
+        combination.design.objectiveIds = mergeUnique(combination.design.objectiveIds, replaced.design.objectiveIds);
+      }
+      for (const assertion of combination.assertions) {
+        assertion.factIds = mergeUnique(assertion.factIds, replaced.source?.factIds);
+        assertion.objectiveIds = mergeUnique(
+          assertion.objectiveIds ?? (assertion.objectiveId ? [assertion.objectiveId] : []),
+          replaced.source?.objectiveIds,
+        );
+      }
+      const priorReason = replaced.metadata?.reason;
+      if (priorReason) combination.metadata = {
+        ...combination.metadata,
+        reason: `${String(combination.metadata?.reason ?? '')}；${String(priorReason)}`,
+        supersededDesignReasons: [priorReason],
+      };
+      if (priorReason && combination.design) {
+        combination.design.reason = `${combination.design.reason ?? ''}；${String(priorReason)}`;
+      }
+      finalized.splice(superseded, 1);
+    }
     finalized.push(combination);
+    generatedCombinations.set(key, combination);
   }
   return assignStableAcceptanceCaseIds(finalized);
 }

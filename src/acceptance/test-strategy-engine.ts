@@ -146,9 +146,21 @@ function matches(rule: TestStrategyPolicyRule, fact: RequirementFact): boolean {
   return clauses.length > 0 && clauses.every(Boolean);
 }
 
-function priority(dimension: TestDimension): TestObjective['priority'] {
-  if (['AUTH', 'PERMISSION', 'DATA_ISOLATION', 'BUSINESS_RULE', 'STATE', 'SECURITY', 'SIDE_EFFECT'].includes(dimension)) return 'P0';
-  if (['FUNCTIONAL', 'API', 'PARAMETER_VALIDATION', 'ERROR', 'BOUNDARY', 'CLEANUP'].includes(dimension)) return 'P1';
+function priority(
+  fact: RequirementFact,
+  dimension: TestDimension,
+  strategies: readonly TestStrategyKind[],
+): TestObjective['priority'] {
+  if (['AUTH', 'PERMISSION', 'DATA_ISOLATION', 'STATE', 'SECURITY'].includes(dimension)) return 'P0';
+  if (['FUNCTIONAL', 'API'].includes(dimension)) return 'P0';
+  if (dimension === 'BUSINESS_RULE') {
+    const criticalRule = fact.canonical.constraints.some((constraint) => ['ATOMIC', 'CONSISTENCY'].includes(constraint.kind));
+    if (criticalRule) return 'P0';
+    if (strategies.some((item) => ['REPEAT', 'CONCURRENT_REQUEST', 'RECOVERY_CHECK', 'PARTIAL_FAILURE'].includes(item))) return 'P1';
+    return 'P1';
+  }
+  if (['SIDE_EFFECT', 'ERROR', 'CLEANUP'].includes(dimension)) return 'P1';
+  if (['PARAMETER_VALIDATION', 'BOUNDARY'].includes(dimension)) return 'P2';
   return 'P2';
 }
 
@@ -217,15 +229,16 @@ export function buildFactTestStrategy(fact: RequirementFact, apiSpecIds: string[
   }
   const decisions = [...byDimension].map(([dimension, rules]): TestStrategyDecision => {
     const oracle = expected(fact, dimension);
+    const strategies = [...new Set(rules.flatMap((rule) => rule.strategies))];
     return {
       id: `STRATEGY-${fact.id}-${dimension}`,
       factId: fact.id,
       dimension,
       policyRuleIds: rules.map((rule) => rule.id),
-      strategies: [...new Set(rules.flatMap((rule) => rule.strategies))],
+      strategies,
       expectedOutcome: oracle.value,
       outcomeStatus: oracle.known ? 'KNOWN' : 'UNKNOWN',
-      priority: priority(dimension),
+      priority: priority(fact, dimension, strategies),
       risk: risk(dimension),
       executionTarget: executionTarget(dimension, apiSpecIds),
       sourceType: sourceType(fact),

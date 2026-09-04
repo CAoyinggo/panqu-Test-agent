@@ -91,9 +91,13 @@ describe('prompt-registry - Requirement Prompt 注册', () => {
     expect(REQUIREMENT_PROMPT_V2.system).toContain('EXPLICIT / INFERRED / UNKNOWN');
   });
 
-  it('Test Design 与 Analysis 默认使用 evidence-first v2 Prompt', () => {
-    expect(promptRegistry.getVersion('test-design')?.version).toBe('v2');
+  it('Test Design 默认使用 business-first v3 Prompt，Analysis 保持 evidence-first v2', () => {
+    expect(promptRegistry.getVersion('test-design')?.version).toBe('v3');
+    expect(promptRegistry.getVersion('test-design')?.system).toContain('业务理解');
+    expect(promptRegistry.getVersion('test-design')?.system).toContain('测试策略');
+    expect(promptRegistry.getVersion('test-design')?.system).toContain('Review');
     expect(promptRegistry.getVersion('test-design')?.system).toContain('不设最低条数');
+    expect(promptRegistry.getVersion('test-design')?.system).not.toContain('生成 8~20 条');
     expect(promptRegistry.getVersion('analysis')?.version).toBe('v2');
     expect(promptRegistry.getVersion('analysis')?.system).toContain('LLM 不是 Oracle');
   });

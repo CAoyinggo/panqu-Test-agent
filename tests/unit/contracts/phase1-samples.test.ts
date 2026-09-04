@@ -6,8 +6,8 @@ import {
   createPhase1ContractResolver,
   registerKnowledgeFact,
 } from '../../../src/contracts/index.js';
-import { TestDesignAgent, createAgentContext, NoopMemory, ToolRegistry, toTaskDef } from '../../../src/agents/index.js';
-import { MockLLMProvider } from '../../../src/llm/index.js';
+import { generateTestCasesWithBusiness, toTaskDef } from '../../../src/agents/index.js';
+import { contractDependency } from '../../../src/contracts/dependency-index.js';
 
 const NOW = '2026-08-24T00:00:00.000Z';
 
@@ -44,17 +44,14 @@ describe('Phase 1 Wan3 contract sample', () => {
   it('injects resolved model values into Agent TaskDef instead of using the legacy type=6 default', async () => {
     const resolver = createPhase1ContractResolver();
     const model = resolver.resolve({ id: 'model.wan3' }).contract!;
-    const context = createAgentContext({
-      taskId: 'phase1-agent-design', feature: 'wan3', environment: 'test',
-      tools: new ToolRegistry(), memory: new NoopMemory(), llm: new MockLLMProvider(), metadata: {},
-    });
-    const cases = await new TestDesignAgent().execute({
-      requirement: {
+    const cases = generateTestCasesWithBusiness({
         feature: 'wan3', capabilities: ['text-to-video'], inputs: ['prompt'], requirements: [],
         businessRules: ['任务提交成功'], dependencies: ['模型服务'], version: 'v1',
-      },
-      contracts: [model],
-    }, context);
+    }).cases;
+    cases.forEach((testCase) => {
+      testCase.contractDependencies = [contractDependency(model)];
+      testCase.metadata = { ...(testCase.metadata ?? {}), resolvedContractValue: model.value };
+    });
     const task = toTaskDef(cases[0]);
     expect(task).toMatchObject({ type: 10, model_id: 84, task_type: 'qnck_to_video' });
     expect(task.extra?.workflow_type).toBe('qnck');

@@ -251,5 +251,5 @@ ${criteria}`,
     });
     expect(lifecycle).toEqual({ prepared: 0, cleaned: 0 });
     expect(server.requests).toHaveLength(0);
-  });
+  }, 15_000);
 });

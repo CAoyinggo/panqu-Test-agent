@@ -266,6 +266,7 @@ export interface ActorSpec {
   userId?: string;
   role: string;
   tenantId?: string;
+  projectId?: string;
   /** 仅保存运行时凭据引用，不在需求 IR 中保存真实 Token。 */
   tokenRef?: string;
   source?: RequirementSource;
@@ -325,7 +326,7 @@ export interface ApiSpec {
   source?: RequirementSource;
 }
 
-export type ApiBindingStrategy = 'SINGLE_API' | 'EXACT_METHOD_PATH';
+export type ApiBindingStrategy = 'SINGLE_API' | 'EXACT_METHOD_PATH' | 'ACTION_RESOURCE';
 
 /** AC/Test Point 与一个确定 API Operation 的编译期绑定。 */
 export interface ApiOperationBinding {
@@ -406,7 +407,7 @@ export interface RequirementParseWarning {
   blocking?: boolean;
 }
 
-/** 通用开发验收的内部需求模型；与历史 Requirement 并存，不改变 WAN3 输入契约。 */
+/** 通用开发验收的内部需求模型；与历史 Requirement 兼容层并存。 */
 export interface AcceptanceRequirement {
   id: string;
   title: string;

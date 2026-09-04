@@ -3,12 +3,71 @@
   "version": "4.29.2",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
-  "main": "dist/bin/run-test.js",
+  "main": "./dist/src/devtest/index.js",
+  "types": "./dist/src/devtest/index.d.ts",
   "bin": {
-    "panqu-test-agent": "packages/panqu-agent-cli/bin/panqu-test-agent.mjs"
+    "panqu-test-agent": "packages/panqu-agent-cli/bin/panqu-test-agent.mjs",
+    "devtest": "./dist/bin/run-devtest.js"
+  },
+  "files": [
+    "dist/bin/run-devtest.js",
+    "dist/bin/run-devtest.d.ts",
+    "dist/src/devtest/**/*.js",
+    "dist/src/devtest/**/*.d.ts",
+    "dist/src/acceptance/**/*.js",
+    "dist/src/acceptance/**/*.d.ts",
+    "dist/src/contracts/**/*.js",
+    "dist/src/contracts/**/*.d.ts",
+    "dist/src/core/**/*.js",
+    "dist/src/core/**/*.d.ts",
+    "dist/src/discovery/**/*.js",
+    "dist/src/discovery/**/*.d.ts",
+    "dist/src/utils/run-id.js",
+    "dist/src/utils/run-id.d.ts",
+    "dist/src/agents/execution/execution-schema.js",
+    "dist/src/agents/execution/execution-schema.d.ts",
+    "dist/src/agents/test-design/testcase-schema.js",
+    "dist/src/agents/test-design/testcase-schema.d.ts",
+    "dist/src/agents/analysis/root-cause-schema.d.ts",
+    "dist/src/agents/defect/defect-schema.d.ts",
+    "dist/src/agents/requirement/requirement-schema.d.ts",
+    "dist/src/cases/loader.d.ts",
+    "packages/panqu-agent-cli/bin/**/*.mjs",
+    "packages/panqu-agent-cli/src/**/*.mjs",
+    "packages/panqu-agent-cli/prompts/**/*.md",
+    "packages/panqu-agent-cli/schemas/**/*.json",
+    "packages/panqu-agent-cli/package.json",
+    "packages/panqu-agent-cli/README.md",
+    "packages/panqu-agent-cli/LICENSE",
+    "scripts/prepare.mjs",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/src/devtest/index.d.ts",
+      "import": "./dist/src/devtest/index.js"
+    },
+    "./devtest": {
+      "types": "./dist/src/devtest/index.d.ts",
+      "import": "./dist/src/devtest/index.js"
+    },
+    "./acceptance": {
+      "types": "./dist/src/acceptance/index.d.ts",
+      "import": "./dist/src/acceptance/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CAoyinggo/panqu-Test-agent.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "prepack": "npm run build",
     "start": "node dist/bin/run-test.js",
     "dev": "node dist/bin/run-test.js --watch --debug",
     "dev:ts": "tsc -p tsconfig.json --watch",
@@ -17,7 +76,10 @@
     "acceptance:test": "vitest run tests/acceptance",
     "acceptance": "npm run build --silent && node dist/bin/run-acceptance.js",
     "devtest": "npm run build --silent && node dist/bin/run-devtest.js",
-    "devtest:test": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts",
+    "devtest:test": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts tests/integration/devtest-github.test.ts",
+    "test:standardization": "vitest run tests/acceptance/standardization-governance.test.ts tests/acceptance/standardization-reusability.test.ts",
+    "test:devtest-v8": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts",
+    "test:npm-acceptance": "vitest run tests/integration/npm-package-acceptance.test.ts",
     "self-test": "npm run build --silent && node dist/bin/run-self-test.js",
     "self-test:test": "vitest run tests/unit/discovery tests/unit/observers tests/unit/self-test tests/integration/developer-self-test.test.ts",
     "test:p0": "vitest run tests/contract/execution-evidence-contract.test.ts tests/contract/execution-safety-contract.test.ts tests/contract/real-e2e-limit-contract.test.ts tests/legacy/run-completion-contract.test.ts tests/integration/platform-execution-safety-contract.test.ts tests/unit/execution-contract.test.ts tests/unit/execution-abort.test.ts tests/unit/policy-gate.test.ts tests/unit/agent-pipeline.test.ts",

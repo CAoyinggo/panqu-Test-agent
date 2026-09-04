@@ -65,6 +65,7 @@ import { contractDependency } from '../../contracts/dependency-index.js';
 import { preflightContracts, registerRequirementContract, type ContractPreflight } from '../../contracts/contract-gate.js';
 import { createPhase1ContractResolver } from '../../contracts/seed-contracts.js';
 import type { ContractResolver } from '../../contracts/resolver.js';
+import type { TestCaseScenarioAdapterOptions } from '../../acceptance/test-case-scenario-adapter.js';
 
 /** Pipeline 输入 */
 export interface AgentPipelineInput {
@@ -85,6 +86,8 @@ export interface AgentPipelineInput {
     timeoutMs?: number;
     /** 上层 Worker/HTTP 取消信号，贯穿 Data Prepare 与 Execution Tool。 */
     signal?: AbortSignal;
+    /** TEST_CASE_V2 的 Processor/Observer/Hook 能力，由 Adapter 动态计算 Runtime Readiness。 */
+    scenarioRunnerOptions?: TestCaseScenarioAdapterOptions;
     /** 首个失败用例后停止调度后续（ExecutionPlan.policy.stopOnFailure） */
     stopOnFailure?: boolean;
     /** 跳过实际执行（仅产出计划与预分析） */
@@ -453,9 +456,15 @@ export async function runAgentPipeline(input: AgentPipelineInput, context: Agent
   const testDesignAgent = new TestDesignAgent();
   const testCases = (await runStage(
     sctx, 'test-design', 'testDesign', true,
-    () => testDesignAgent.execute({ requirement, contracts: resolvedContracts }, context),
+    () => testDesignAgent.execute({
+      requirement,
+      contracts: resolvedContracts,
+    }, context),
     stages,
   )) as TestCase[];
+  if (testCases.some((testCase) => testCase.schemaVersion !== 'TEST_CASE_V2')) {
+    throw new Error('AGENT_PIPELINE_V2_REQUIRED：Test Design 只能向 Scenario Adapter 提交 TEST_CASE_V2');
+  }
   context.logger.info(`[Pipeline] Test Design：${testCases.length} 条用例`);
 
   // 3. Risk（含历史失败补充）
@@ -662,6 +671,14 @@ export async function runAgentPipeline(input: AgentPipelineInput, context: Agent
     } else if (opts.dryRun) {
       outcome = nonExecutedOutcome(requirement.feature, execCases, 'NOT_EXECUTED', 'dry-run 不调用真实 Runner');
       context.logger.info('[Pipeline] dry-run：未调用 execution.run');
+    } else if (execCases.length === 0) {
+      outcome = nonExecutedOutcome(
+        requirement.feature,
+        testCases,
+        'BLOCKED',
+        'NO_TEST_CASE：Generator / Quality Gate 未产出可执行或可设计 Case，禁止调用 Runner',
+      );
+      context.logger.warn('[Pipeline] Generator / Quality Gate 未产出 Case，按 BLOCKED 关闭执行，不调用 Runner');
     } else if (dataPlan.needsSetup && dataPreparation.status !== 'READY') {
       outcome = nonExecutedOutcome(
         requirement.feature,
@@ -684,14 +701,15 @@ export async function runAgentPipeline(input: AgentPipelineInput, context: Agent
               meter,
               signal: opts.signal,
               plan: executionPlan,
+              scenarioRunnerOptions: opts.scenarioRunnerOptions,
             },
           },
           context,
         ),
         stages,
       )) as ExecutionOutcome;
-      if (!outcome.executed) {
-        context.logger.warn('[Pipeline] 执行未真正运行（execution.run Tool 未注册），产出基于执行计划');
+      if (!outcome.results.some((result) => result.executed && result.processorInvoked)) {
+        context.logger.warn('[Pipeline] 没有 Case 完成真实 Processor 执行，产出仅包含阻断/设计结果');
       }
     }
   } finally {
@@ -704,7 +722,9 @@ export async function runAgentPipeline(input: AgentPipelineInput, context: Agent
   // 9. Deterministic Outcome：按 Plan 重新计算，不信任 Runner 自报 totals/passRate。
   outcome = deterministicExecutionOutcome(requirement.feature, execCases, outcome, executionPlan);
   stages.deterministicOutcome = true;
-  stages.execution = outcome.executed;
+  const hasActualExecution = outcome.results.some((result) => result.executed === true
+    && result.processorInvoked === true && Boolean(result.processor));
+  stages.execution = hasActualExecution;
 
   // 10. Analysis（含记忆 flaky 标记）
   const flakyCaseIds = historicalRisks
@@ -808,7 +828,7 @@ export async function runAgentPipeline(input: AgentPipelineInput, context: Agent
   }
 
   // 15. Memory 写入（执行摘要 + 失败记录）
-  if (outcome.executed) {
+  if (hasActualExecution) {
     const stats = await storeAnalysisToMemory(memory, report, outcome);
     context.logger.info(`[Pipeline] Memory：写入 ${stats.saved} 条（${stats.types.join(', ')}）`);
   }

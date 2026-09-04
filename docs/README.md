@@ -1,31 +1,43 @@
-# 项目文档索引
+# DevTest 通用测试标准
 
-项目根目录只保留运行、构建、容器和 CI 工具需要自动发现的文件；设计说明、操作手册和历史报告统一收录在本目录。
+本目录的当前标准只服务于需求驱动生成，不绑定产品、项目、功能、接口或技术实现。
 
-## 主题文档
+## 唯一标准入口
 
-- **TestCase 唯一权威入口**：[DevTest TestCase V2 字段与生成规则](testing/testcase-v2-schema.md)
-- **开发自测**：[用例与报告模板](02-测试用例模板.md) + [智能体 Prompt](prompts/dev-selftest-agent.prompt.md)
-- **交接与发布**：[开发交接、发布与报告输出检查清单](testing/developer-handoff-release-checklist.md)
-- [DevTest Mode：需求驱动·开发者自助测试](devtest.md)
-- [Acceptance 测试流程 SOP](01-%E6%B5%8B%E8%AF%95%E6%B5%81%E7%A8%8BSOP.md)
-- [版本变更记录](CHANGELOG.md)
-- [Legacy 断言 DSL 兼容说明](assertion-dsl.md)
-- [环境策略边界](environment-policy-boundaries.md)
-- [Memory 存储与迁移](operations/memory-storage.md)
-- [运维与部署](operations/)
-- [产品工作流](product/)
-- [AI 质量治理](ai-quality/)
-- [评测体系](evaluation/)
-- [成本与容量治理](cost/)
+1. [通用测试流程 SOP](01-测试流程SOP.md)
+2. [通用测试用例模板](02-测试用例模板.md)
+3. [通用测试数据需求清单](03-数据需求清单模板.md)
+4. [通用任务启动检查清单](04-新任务启动检查清单模板.md)
+5. [通用测试实施说明](05-项目说明模板.md)
+6. [TEST_CASE_V2 Schema 与生成规则](testing/testcase-v2-schema.md)
+7. [Business Model、Adapter 与 Runtime Readiness](testing/devtest-p0-business-runtime.md)
+8. [标准化治理与资产分类](testing/standardization-governance.md)
+9. [测试设计智能标准](testing/test-design-intelligence.md)
+10. [开发自测智能体 Prompt](prompts/dev-selftest-agent.prompt.md)
+11. [DevTest 持续优化 Prompt](prompts/devtest-implementation-agent.prompt.md)
 
-## Current 与 Legacy 边界
+## 标准链
 
-- 当前自动生成链只以 TestCase V2/canonical Scenario 为执行契约。Markdown Scenario 可复制 [`tests/acceptance/templates/scenario.md`](../tests/acceptance/templates/scenario.md)。
-- [`02-模板合集.md`](02-%E6%A8%A1%E6%9D%BF%E5%90%88%E9%9B%86.md)、`tasks/*.json`、旧式单行用例表和手填结果只作为 **LEGACY** 盘点/迁移输入，不能直接证明已执行或已验证。
-- `docs/phases/`、`docs/reports/` 和带日期的 audit/report 是历史记录，不得作为当前字段定义或生成规则。
+```text
+通用测试标准
+↓
+Requirement Model
+↓
+Business Model
+↓
+Business Scenario
+↓
+动态测试维度
+↓
+TEST_CASE_V2
+↓
+Execution
+↓
+Evidence
+↓
+Oracle
+↓
+Report
+```
 
-## 报告与历史
-
-- [DevOps 验证报告](reports/devops/)
-- Phase 里程碑、验收和演练报告统一存放在 [phases/](phases/)，按阶段编号检索。
+标准字段、生成器、Execution Contract 和 Report 必须保持同源。历史报告、演练记录和项目资产不构成当前标准，也不得被 Generator、Schema、Quality Gate、Report 或开发者入口引用。

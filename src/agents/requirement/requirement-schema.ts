@@ -53,13 +53,13 @@ export interface RequirementUnderstanding {
 
 /** 结构化测试需求 */
 export interface Requirement {
-  /** 功能模块（如 wan3 / user / order / payment） */
+  /** 需求明确的功能模块或业务对象；未知时为 unknown。 */
   feature: string;
-  /** 测试目标（一句话，如 验证文生视频完整链路） */
+  /** 原需求支持的一句话业务目标。 */
   goal?: string;
-  /** 能力标签（如 text-to-video / image-to-video） */
+  /** 需求明确的业务能力或风险能力标签。 */
   capabilities: string[];
-  /** 输入参数名（如 prompt / resolution / duration） */
+  /** 需求明确的输入参数名。 */
   inputs: string[];
   /** 参数取值组合需求 */
   requirements: RequirementItem[];

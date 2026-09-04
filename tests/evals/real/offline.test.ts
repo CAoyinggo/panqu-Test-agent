@@ -28,6 +28,12 @@ function makeContext() {
 }
 
 describe('Eval-Offline：离线确定性档', () => {
+  const EXECUTABLE_REQUIREMENT = `# Resource Query
+GET /resources
+无需认证
+返回 200
+AC-1 GET /resources 查询资源返回 200`;
+
   it('MockLLM 往返返回预期内容', async () => {
     const { llm } = makeContext();
     const res = await llm.generate({ messages: [{ role: 'user', content: 'hi' }] });
@@ -39,7 +45,7 @@ describe('Eval-Offline：离线确定性档', () => {
     const { context } = makeContext();
     const result = await runAgentPipeline(
       {
-        requirementText: '测试 WAN3 文生视频：720P/1080P 分辨率、任务状态 SUCCESS、积分正确扣除',
+        requirementText: EXECUTABLE_REQUIREMENT,
         environment: 'test',
         options: { skipExecution: true },
       },
@@ -65,7 +71,7 @@ describe('Eval-Offline：离线确定性档', () => {
     });
     const result = await runAgentPipeline(
       {
-        requirementText: '测试 WAN3 文生视频：720P 分辨率、任务状态 SUCCESS',
+        requirementText: EXECUTABLE_REQUIREMENT,
         environment: 'test',
         options: { skipExecution: true },
       },

@@ -2,14 +2,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseScenarioMarkdown } from '../../src/acceptance/scenario-markdown-parser.js';
+import { materializeScenarioTemplate } from './helpers/scenario-template.js';
 
 const template = readFileSync(fileURLToPath(new URL('./templates/scenario.md', import.meta.url)), 'utf8');
 
 function executableMarkdown(): string {
-  return template
-    .replace('SCN-<domain>-<intent>', 'SCN-generic-persistence')
-    .replace('- <按风险选择 PERSISTENCE / NON_MUTATION / IDEMPOTENCY / AUTHORIZATION / ...>', '- PERSISTENCE')
-    .replace('- <环境、服务、Processor、Evidence Provider；无则写 NONE>', '- NONE');
+  return materializeScenarioTemplate(template);
 }
 
 describe('Scenario Markdown Parser contract', () => {

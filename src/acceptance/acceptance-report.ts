@@ -34,11 +34,20 @@ import {
   type FactBasedRegressionPlan,
 } from './acceptance-regression.js';
 import type { TestCaseQualityGateResult } from './test-case-quality-gate.js';
+import { buildBusinessModelProjection } from './business-model.js';
 
 /** INITIAL_VALIDATION 的总体结论；不等同于正式验收或发布证明。 */
 export type AcceptanceConclusion = 'PASS' | 'FAIL' | 'BLOCKED' | 'PARTIAL';
 export type AcceptanceResultStatus = 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_EXECUTED' | 'TIMEOUT' | 'CANCELLED';
 export type AcceptanceCoverageValue = number | 'NOT_AVAILABLE';
+
+export interface AcceptanceBusinessCoverage {
+  total: number;
+  generated: AcceptanceCoverageValue;
+  executable: AcceptanceCoverageValue;
+  executed: AcceptanceCoverageValue;
+  verified: AcceptanceCoverageValue;
+}
 
 export interface AcceptanceTypeStatistics {
   total: number;
@@ -217,6 +226,7 @@ export interface AcceptanceReport {
     ready: number;
     designedOnly: number;
     blocked: number;
+    businessChecks?: TestCaseQualityGateResult['businessChecks'];
   };
   summary: {
     /** 兼容 CLI/既有消费方；等于 designed。 */
@@ -263,6 +273,13 @@ export interface AcceptanceReport {
     uncoveredFacts: RequirementFactReportItem[];
     unverifiedFacts: RequirementFactReportItem[];
   };
+  businessCoverage: {
+    businessFlowCoverage: AcceptanceBusinessCoverage;
+    stateCoverage: AcceptanceBusinessCoverage;
+    permissionCoverage: AcceptanceBusinessCoverage;
+    isolationCoverage: AcceptanceBusinessCoverage;
+    sideEffectCoverage: AcceptanceBusinessCoverage;
+  };
   /** 兼容已有消费者；新增类型使用 camelCase key。 */
   byType: Record<string, number>;
   typeResults: Record<string, AcceptanceTypeStatistics>;
@@ -279,6 +296,8 @@ export interface AcceptanceReport {
     timestamp?: string;
     durationMs?: number;
     requestId?: string;
+    error?: string;
+    blockedReason?: AcceptanceCaseExecutionResult['blockedReason'];
     classification: AcceptanceExecutionClassification;
     attribution: AcceptanceCaseExecutionResult['attribution'];
     evidence: AcceptanceExecutionEvidence;
@@ -792,6 +811,39 @@ export function buildAcceptanceReport(input: {
     ? 'COMPLETE'
     : evidenceResults.length > 0 ? 'PARTIAL' : 'NONE';
 
+  const businessModel = buildBusinessModelProjection(input.requirement);
+  const verifiedCaseIds = new Set(input.testCases.flatMap((testCase) => {
+    const result = resultByCase.get(testCase.id);
+    return reportStatus(result, testCase) === 'PASS' && result?.executed === true
+      && passIntegrityProblems(result, testCase).length === 0 ? [testCase.id] : [];
+  }));
+  const stageCoverage = (
+    targets: readonly string[],
+    matches: (testCase: TestCase, target: string) => boolean,
+  ): AcceptanceBusinessCoverage => {
+    const covered = (predicate: (testCase: TestCase) => boolean): number => targets.filter((target) =>
+      input.testCases.some((testCase) => matches(testCase, target) && predicate(testCase))).length;
+    return {
+      total: targets.length,
+      generated: percentage(covered(() => true), targets.length),
+      executable: percentage(covered((testCase) => !reportDesignedOnly(testCase)), targets.length),
+      executed: percentage(covered((testCase) => resultByCase.get(testCase.id)?.executed === true), targets.length),
+      verified: percentage(covered((testCase) => verifiedCaseIds.has(testCase.id)), targets.length),
+    };
+  };
+  const factTargets = (categories: readonly RequirementFactCategory[], extra?: (fact: RequirementFact) => boolean): string[] =>
+    normativeFacts.filter((fact) => categories.includes(fact.category) || extra?.(fact)).map((fact) => fact.id);
+  const factMatch = (testCase: TestCase, factId: string): boolean => testCase.source?.factIds?.includes(factId) === true;
+  const businessCoverage: AcceptanceReport['businessCoverage'] = {
+    businessFlowCoverage: stageCoverage(businessModel.flows.map((flow) => flow.id),
+      (testCase, flowId) => testCase.businessScenario?.flow.id === flowId
+        || businessModel.flows.find((flow) => flow.id === flowId)?.factIds.some((id) => testCase.source?.factIds?.includes(id)) === true),
+    stateCoverage: stageCoverage(factTargets(['STATE']), factMatch),
+    permissionCoverage: stageCoverage(factTargets(['AUTH', 'PERMISSION']), factMatch),
+    isolationCoverage: stageCoverage(factTargets(['DATA_ISOLATION']), factMatch),
+    sideEffectCoverage: stageCoverage(factTargets(['SIDE_EFFECT'], (fact) => fact.canonical.sideEffects.length > 0), factMatch),
+  };
+
   const acceptanceCriteriaResults = input.requirement.acceptanceCriteria.map((criterion) => {
     const points = input.testPoints.filter((point) => point.acceptanceCriteriaIds.includes(criterion.criterionId));
     const cases = input.testCases.filter((testCase) => testCase.source?.acceptanceCriteriaIds.includes(criterion.criterionId));
@@ -1032,6 +1084,8 @@ export function buildAcceptanceReport(input: {
       timestamp: result?.timestamp,
       durationMs: result?.durationMs,
       requestId: result?.requestId,
+      error: result?.error,
+      blockedReason: result?.blockedReason,
       classification: integrityViolation ? 'SYSTEM_ERROR' as const : result?.classification ?? 'NOT_EXECUTED',
       attribution: integrityViolation ? {
         classification: 'SYSTEM_ERROR' as const,
@@ -1109,6 +1163,7 @@ export function buildAcceptanceReport(input: {
     ready: assessedQuality.filter((assessment) => assessment.status === 'READY').length,
     designedOnly: assessedQuality.filter((assessment) => assessment.status === 'DESIGNED_ONLY').length,
     blocked: assessedQuality.filter((assessment) => assessment.status === 'BLOCKED').length,
+    businessChecks: input.caseQuality?.businessChecks ?? [],
   };
 
   return redactAcceptanceArtifact({
@@ -1180,6 +1235,7 @@ export function buildAcceptanceReport(input: {
       uncoveredFacts,
       unverifiedFacts,
     },
+    businessCoverage,
     byType,
     typeResults,
     acceptanceCriteriaResults,
@@ -1367,6 +1423,9 @@ ${safeCode(testCase.evidence)}
 | --- | --- | --- | --- | --- |
 ${report.regression.plan.selections.map((selection) => `| ${selection.caseId} | ${selection.reasons.join(' + ')} | ${selection.factIds.join(', ') || '-'} | ${selection.objectiveIds.join(', ') || '-'} | ${selection.policies.join(', ') || '-'} |`).join('\n')}`
     : `不可生成自动回归范围：${report.regression.reason ?? '原因未知'}`;
+  const businessQualityRows = (report.caseQuality.businessChecks ?? [])
+    .map((issue) => `| ${issue.code} | ${issue.disposition} | ${issue.message} |`)
+    .join('\n');
 
   return `# 智能测试报告
 
@@ -1470,6 +1529,20 @@ ${markdownList(unverified)}
 - Execution Coverage：${coverageText(report.coverage.executionCoverage)}
 - Evidence Coverage：${coverageText(report.coverage.evidenceCoverage)}
 - Operation Contract Evidence Coverage：${coverageText(report.coverage.operationContractEvidenceCoverage)}
+
+| 一级业务覆盖 | Targets | GENERATED | EXECUTABLE | EXECUTED | VERIFIED |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Business Flow Coverage | ${report.businessCoverage.businessFlowCoverage.total} | ${coverageText(report.businessCoverage.businessFlowCoverage.generated)} | ${coverageText(report.businessCoverage.businessFlowCoverage.executable)} | ${coverageText(report.businessCoverage.businessFlowCoverage.executed)} | ${coverageText(report.businessCoverage.businessFlowCoverage.verified)} |
+| State Coverage | ${report.businessCoverage.stateCoverage.total} | ${coverageText(report.businessCoverage.stateCoverage.generated)} | ${coverageText(report.businessCoverage.stateCoverage.executable)} | ${coverageText(report.businessCoverage.stateCoverage.executed)} | ${coverageText(report.businessCoverage.stateCoverage.verified)} |
+| Permission Coverage | ${report.businessCoverage.permissionCoverage.total} | ${coverageText(report.businessCoverage.permissionCoverage.generated)} | ${coverageText(report.businessCoverage.permissionCoverage.executable)} | ${coverageText(report.businessCoverage.permissionCoverage.executed)} | ${coverageText(report.businessCoverage.permissionCoverage.verified)} |
+| Isolation Coverage | ${report.businessCoverage.isolationCoverage.total} | ${coverageText(report.businessCoverage.isolationCoverage.generated)} | ${coverageText(report.businessCoverage.isolationCoverage.executable)} | ${coverageText(report.businessCoverage.isolationCoverage.executed)} | ${coverageText(report.businessCoverage.isolationCoverage.verified)} |
+| Side Effect Coverage | ${report.businessCoverage.sideEffectCoverage.total} | ${coverageText(report.businessCoverage.sideEffectCoverage.generated)} | ${coverageText(report.businessCoverage.sideEffectCoverage.executable)} | ${coverageText(report.businessCoverage.sideEffectCoverage.executed)} | ${coverageText(report.businessCoverage.sideEffectCoverage.verified)} |
+
+### Business Quality Gate
+
+| Check | Disposition | Detail |
+| --- | --- | --- |
+${businessQualityRows || '| PASS | - | 未发现业务风险重复、场景覆盖缺口或 Actor/Owner/Tenant/Resource 关系错误 |'}
 
 ## 10. 建议开发修复顺序
 
