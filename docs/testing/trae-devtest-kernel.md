@@ -16,7 +16,9 @@ npx --no-install devtest init --github --trae
 npx --no-install devtest doctor
 ```
 
-初始化产生 `.devtest.json`、`.github/workflows/devtest.yml`、`.trae/mcp.json` 和 `.trae/skills/devtest/SKILL.md`。保留已有其他 MCP 配置和团队修改过的 Skill。相同名字但内容不同的 MCP 配置需要先处理冲突。npm 公共发布不属于本次交付；不能假设同名 npm 包就是本项目。
+初始化产生 `.devtest.json`、`.github/workflows/devtest.yml`、`.trae/mcp.json` 和 `.trae/skills/` 下的 `devtest`、`panqu-canvas`、`panqu-video-models`、`panqu-image-models`。三个专项 Skill 各含 `references/code-map.md`，用于定位当前宿主的真实实现。保留已有其他 MCP 配置和团队修改过的 Skill（含参考文件）。相同名字但内容不同的 MCP 配置需要先处理冲突。npm 公共发布不属于本次交付；不能假设同名 npm 包就是本项目。
+
+Panqu 任务在计划前按功能语义读取所有相关专项 Skill：画布组件更新读取画布，视频/图片模型接入读取对应媒体，画布媒体节点变更组合读取。新模型不依赖封闭名称名单；普通图片展示不触发图片生成检查。专项指导不会改变内核门禁，也不代表已执行付费生成或通过业务验收。已有主 Skill 被保留时，需要人工合并新版的“Panqu 功能专项路由”；若单独打开某个子仓库，在那个根目录执行初始化。自动发现及实际读取依赖 Trae 配置和入口模型，安装测试不证明模型每次都会正确选用。
 
 在 Trae 启用项目 `devtest` MCP 和生成的 Skill，输入：
 

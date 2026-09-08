@@ -21,7 +21,7 @@
     "packages/panqu-agent-cli/LICENSE",
     "dist/bin/devtest-mcp.js",
     "dist/bin/devtest-mcp.d.ts",
-    "dist/src/devtest/assets/devtest/SKILL.md",
+    "dist/src/devtest/assets/",
     "dist/bin/run-devtest.js",
     "dist/bin/run-devtest.d.ts",
     "dist/src/devtest/**/*.js",

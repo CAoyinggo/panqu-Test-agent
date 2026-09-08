@@ -1,4 +1,4 @@
-// 构建辅助：把非 TS 资源（environments.json）复制到 dist，保证 dist 可独立运行
+// 构建辅助：复制非 TS 配置和完整 Skill 包，保证 dist 可独立运行。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const pairs = [
   ['src/config/environments.json', 'dist/src/config/environments.json'],
-  ['src/devtest/assets/devtest/SKILL.md', 'dist/src/devtest/assets/devtest/SKILL.md'],
 ];
 
 for (const [srcRel, dstRel] of pairs) {
@@ -20,3 +19,6 @@ for (const [srcRel, dstRel] of pairs) {
   fs.copyFileSync(src, dst);
   console.log(`[copy-assets] ${srcRel} -> ${dstRel}`);
 }
+
+fs.cpSync(path.join(root, 'src/devtest/assets'), path.join(root, 'dist/src/devtest/assets'), { recursive: true });
+console.log('[copy-assets] DevTest and Panqu specialist skills copied');

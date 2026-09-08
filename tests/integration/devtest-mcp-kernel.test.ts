@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { promisify } from 'node:util';
@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DevTestMcpService } from '../../src/devtest/mcp-service.js';
 import { initializeDevTestProject } from '../../src/devtest/cli-config.js';
-import { initializeDevTestTrae } from '../../src/devtest/trae-setup.js';
+import { initializeDevTestTrae, DEVTEST_BUNDLED_SKILLS } from '../../src/devtest/trae-setup.js';
 
 const execFileAsync = promisify(execFile);
 const directories: string[] = [];
@@ -231,11 +231,21 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     const { root } = await fixture();
     await mkdir(path.join(root, '.trae'));
     await writeFile(path.join(root, '.trae', 'mcp.json'), JSON.stringify({ mcpServers: { team: { command: 'team-tool' } } }));
-    await initializeDevTestTrae(root);
+    const added = await initializeDevTestTrae(root);
+    expect(added).toHaveLength(8);
+    for (const name of DEVTEST_BUNDLED_SKILLS) {
+      for (const resource of name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md']) {
+        expect(await readFile(path.join(root, '.trae', 'skills', name, resource), 'utf8'))
+          .toBe(await readFile(path.resolve('src/devtest/assets', name, resource), 'utf8'));
+      }
+    }
     const skillFile = path.join(root, '.trae', 'skills', 'devtest', 'SKILL.md');
     await writeFile(skillFile, 'team custom instructions');
+    const specialist = path.join(root, '.trae', 'skills', 'panqu-video-models', 'references', 'code-map.md');
+    await writeFile(specialist, 'team model entry points');
     expect(await initializeDevTestTrae(root)).toEqual([]);
     expect(await readFile(skillFile, 'utf8')).toBe('team custom instructions');
+    expect(await readFile(specialist, 'utf8')).toBe('team model entry points');
     const config = JSON.parse(await readFile(path.join(root, '.trae', 'mcp.json'), 'utf8'));
     expect(Object.keys(config.mcpServers).sort()).toEqual(['devtest', 'team']);
   });
@@ -249,6 +259,29 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     await symlink(outsideFile, path.join(root, '.trae', 'mcp.json'));
     await expect(initializeDevTestTrae(root)).rejects.toThrow('DEVTEST_TRAE_PATH');
     expect(await readFile(outsideFile, 'utf8')).toBe('{}');
+  });
+
+  it.each(['skills', 'skills/panqu-canvas', 'skills/panqu-canvas/references'])('rejects a symlinked %s before creating children outside the project', async (relative) => {
+    const { root } = await fixture();
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'devtest-skill-outside-'));
+    directories.push(outside);
+    const target = path.join(root, '.trae', relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(outside, target);
+    await expect(initializeDevTestTrae(root)).rejects.toThrow('DEVTEST_TRAE_PATH');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('preserves a symlink target instead of writing a specialist resource through it', async () => {
+    const { root } = await fixture();
+    const { root: outside } = await fixture();
+    const outsideFile = path.join(outside, 'custom-skill.md');
+    await writeFile(outsideFile, 'keep this file');
+    const target = path.join(root, '.trae', 'skills', 'panqu-image-models', 'SKILL.md');
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(outsideFile, target);
+    await expect(initializeDevTestTrae(root)).rejects.toThrow('DEVTEST_TRAE_PATH');
+    expect(await readFile(outsideFile, 'utf8')).toBe('keep this file');
   });
 
   it('exposes only the kernel tool over stdio and flushes responses after stdin closes', async () => {
