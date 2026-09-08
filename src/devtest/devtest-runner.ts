@@ -40,6 +40,7 @@ import {
 import { fetchFeishuDoc, loadFeishuCredentials } from './feishu-fetch.js';
 import { buildDevTestProblems, deriveDevTestConclusion } from './problem-engine.js';
 import { SafeMutationHoldProcessor, buildOperationPolicies } from './safe-mode.js';
+import { ReadFailureConfirmingProcessor } from './read-failure-confirmation.js';
 import { buildDevTestInvariants, buildRequirementCoverageMatrix, extendedDimensionsOf } from './requirement-intelligence.js';
 import { buildVersionComparison, computeDevConfidence } from './final-assessment.js';
 import { buildBusinessFlowGraph, buildBusinessLevelProblems, evaluateBusinessFlows, evaluateCrossCaseInvariants } from './business-flow-engine.js';
@@ -403,7 +404,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
       current: executionPlan, requestedCaseIds: selectedCaseIds });
     if (!checked.valid) throw new Error(checked.reason);
   }
+  const confirmReadFailures = mode === 'SAFE' && !options.processor && !options.caseSnapshotObserver;
   const executionEstimate = buildExecutionEstimate({ testCases: selectedForEstimate, timeoutMs: options.timeoutMs ?? 10_000,
+    confirmReadFailures,
     maxRuntimeMs: options.maxRuntimeMs, budget: options.budget });
   const syntheticBlocks: Array<{ code: string; message: string; affectedCases?: string[]; dimension?: 'DATA_ISOLATION' | 'EXECUTION' }> = [];
   syntheticBlocks.push(...parameterContractConflicts);
@@ -493,7 +496,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     ? undefined
     : new SafeMutationHoldProcessor({
       confirmMutations: confirmedMutation,
-      inner: options.processor ?? undefined,
+      inner: options.processor ?? (confirmReadFailures ? new ReadFailureConfirmingProcessor() : undefined),
     });
   const legacySnapshotProcessor = safeProcessor && options.caseSnapshotObserver ? new SnapshottingProcessor({
     inner: safeProcessor,

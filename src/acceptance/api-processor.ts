@@ -42,6 +42,21 @@ export interface AcceptanceAssertionEvidence {
 }
 
 export interface AcceptanceExecutionEvidence {
+  /** First failure is retained; a repeat is evidence, never a replacement PASS. */
+  readFailureConfirmation?: {
+    status: 'REPRODUCED' | 'INCONSISTENT' | 'INCONCLUSIVE';
+    attempts: 2;
+    repeat: {
+      status?: string;
+      executed: boolean;
+      durationMs?: number;
+      error?: string;
+      request?: HttpRequestEvidence;
+      response?: HttpResponseEvidence;
+      transport?: AcceptanceExecutionEvidence['transport'];
+      assertions: AcceptanceAssertionEvidence[];
+    };
+  };
   requirementId?: string;
   acceptanceCriteriaIds: string[];
   factIds?: string[];
@@ -121,6 +136,8 @@ export type AcceptanceExecutionClassification =
   | 'UNCONFIRMED';
 
 export interface ApiProcessorOptions {
+  /** Scenario adapters can prohibit read confirmation for compound/stateful flows. */
+  allowReadFailureConfirmation?: boolean;
   baseUrl: string;
   /** actor.id/tokenRef/userId → 本次请求要使用的真实 Session/Header。 */
   actorHeaders?: Record<string, Record<string, string>>;

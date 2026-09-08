@@ -118,6 +118,7 @@ export interface DevTestRegressionGuard {
 }
 
 export interface DevTestExecutionEstimate {
+  readFailureConfirmation?: { enabled: boolean; maxExtraRequests: number; maxAttemptsPerCase: 2 };
   estimatedCases: number;
   estimatedRequests: number;
   estimatedRuntimeMs: number;
@@ -165,7 +166,7 @@ export interface DevTestOracleResult {
     semanticChecks?: Array<{ key: string; verdict: 'PASS' | 'FAIL' | 'BLOCKED'; reason: string }>;
   };
   reason: string;
-  transientSignal?: 'HTTP_5XX' | 'TIMEOUT' | 'EMPTY_RESPONSE' | 'SLOW_RESPONSE' | 'BROWSER_ERROR' | 'ENVIRONMENT' | 'AUTH' | 'TEST_DATA' | 'PROCESSOR';
+  transientSignal?: 'HTTP_5XX' | 'TIMEOUT' | 'EMPTY_RESPONSE' | 'SLOW_RESPONSE' | 'BROWSER_ERROR' | 'ENVIRONMENT' | 'AUTH' | 'TEST_DATA' | 'PROCESSOR' | 'READ_RESULT_INCONSISTENT' | 'READ_CONFIRMATION_INCOMPLETE';
 }
 
 export interface DevTestEnvironmentSnapshot {

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promis
 import path from 'node:path';
 import os from 'node:os';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DevTestMcpService } from '../../src/devtest/mcp-service.js';
 import { initializeDevTestProject } from '../../src/devtest/cli-config.js';
@@ -63,6 +64,7 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     expect(plan.ok, JSON.stringify(plan)).toBe(true);
     expect(plan.status).toBe('NOT_EXECUTED');
     expect(plan.plan).toMatchObject({ feature: expect.any(String), risk: expect.any(String) });
+    expect(plan.execution_estimate).toMatchObject({ readFailureConfirmation: { enabled: true, maxAttemptsPerCase: 2 } });
     expect((plan.selected_case_ids as string[]).length).toBeGreaterThan(0);
     expect(plan.requirement_coverage).toHaveProperty('behaviors');
     expect(plan.unknowns).toBeInstanceOf(Array);
@@ -144,6 +146,19 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     const competingProcess = new DevTestMcpService(root);
     expect((await competingProcess.call(execution(plan))).message).toContain('RUN_IN_PROGRESS');
     expect((await competingProcess.call({ action: 'status', plan_id: plan.plan_id })).status).toBe('NOT_EXECUTED');
+    expect(server.requests).toEqual([]);
+  });
+
+  it('rejects a previously confirmed plan from before the bounded-read policy upgrade', async () => {
+    const { service, root } = await fixture();
+    const server = await httpService();
+    const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
+    const file = path.join(root, 'devtest-results', '.mcp', `${plan.plan_id}.json`);
+    const { executionPolicy: _policy, planHash: _hash, preview, ...oldUnsigned } = JSON.parse(await readFile(file, 'utf8'));
+    const oldHash = createHash('sha256').update(JSON.stringify(oldUnsigned)).digest('hex');
+    await writeFile(file, JSON.stringify({ ...oldUnsigned, planHash: oldHash, preview }));
+    const result = await service.call(execution({ ...plan, plan_hash: oldHash }));
+    expect(result.message).toContain('STALE_PLAN: execution policy changed');
     expect(server.requests).toEqual([]);
   });
 

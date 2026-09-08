@@ -181,4 +181,34 @@ describe('DevTest problem aggregation', () => {
     const ready = reportOf({ statuses: [{ id: 'P0', type: 'API', priority: 'P0', status: 'PASS', executed: true }] });
     expect(deriveDevTestConclusion(ready)).toBe('READY');
   });
+
+  it('does not merge unrelated endpoints or distinct failed fields into one generic defect', () => {
+    const report = reportOf({ statuses: ['A', 'B', 'C', 'D'].map((id) => ({ id, type: 'API', status: 'FAIL', executed: true })) });
+    const results = ['A', 'B', 'C', 'D'].map((caseId, index) => ({ caseId, status: 'FAIL', executed: true,
+      error: 'FAIL：1 条业务断言失败', evidence: {
+        request: { method: 'GET', url: `http://localhost/${index === 1 ? 'projects' : 'resources'}` },
+        response: { status: 200, body: { data: {} } },
+        assertions: [{ type: 'JSON_VALUE', path: index === 2 ? 'data.count' : 'data.name',
+          expected: index === 2 ? 0 : 'demo', actual: undefined, pass: false }],
+      } }));
+    const { problems } = buildDevTestProblems({ report, results, requirementWarnings: [] });
+    const bugs = problems.filter((problem) => problem.failureClass === 'PRODUCT_BUG');
+    expect(bugs).toHaveLength(3);
+    expect(bugs.some((bug) => bug.affectedCases.join(',') === 'A,D')).toBe(true);
+    expect(bugs[0].minimalReproduction?.actual).toContain('[字段缺失/未观察到]');
+    expect(bugs[0].minimalReproduction?.expected).toContain('data.name="demo"');
+  });
+
+  it('inconsistent automatic reads stay visible as reliability issues, never confirmed or healed', () => {
+    const report = reportOf({ statuses: [{ id: 'A', type: 'API', status: 'FAIL', executed: true }] });
+    const { problems } = buildDevTestProblems({ report, requirementWarnings: [], results: [{ caseId: 'A', status: 'FAIL', executed: true,
+      evidence: { request: { method: 'GET' }, response: { status: 200 },
+        assertions: [{ type: 'JSON_VALUE', path: 'data.count', expected: 0, actual: 7, pass: false }],
+        readFailureConfirmation: { status: 'INCONSISTENT', attempts: 2, repeat: { status: 'PASS', executed: true,
+          assertions: [{ type: 'JSON_VALUE', expected: 0, actual: 0, pass: true, detail: 'observed' }] } } },
+    }] });
+    expect(problems).toContainEqual(expect.objectContaining({ type: 'FLAKY_TEST', failureClass: 'TEST_ISSUE', reproducible: false }));
+    expect(problems.some((problem) => problem.failureClass === 'PRODUCT_BUG')).toBe(false);
+    expect(problems[0].actual).toContain('7');
+  });
 });

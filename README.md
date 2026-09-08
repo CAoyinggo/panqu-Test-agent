@@ -57,11 +57,11 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 286 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 2783 项通过，19 项跳过 |
-| MCP 内核与兼容入口 | 2 个测试文件、19 项测试通过 |
+| 全量 Vitest | 288 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2823 项通过，19 项跳过 |
+| MCP 内核与兼容入口 | 2 个测试文件、20 项测试通过 |
 | Acceptance 回归 | 38 个测试文件、341 项测试通过 |
-| DevTest 回归 | 17 个测试文件、136 项测试通过 |
+| DevTest 回归 | 19 个测试文件、175 项测试通过 |
 | P0 安全契约 | 98 项通过、1 项跳过 |
 | npm 安装验收 | tarball 安装、三个命令入口、初始化和结果查询通过 |
 | GitHub 原有 CLI / 部署契约 | 104 项 / 21 项通过 |
@@ -111,7 +111,10 @@ Fork PR 默认只允许设计和只读探测，真实写操作必须在明确的
 
 DevTest 会先建立 AC Coverage Matrix、提取业务不变量，再构建 Business Flow Graph，校验
 Response/Database/Task/Billing/Audit/Resource 状态一致性，并做 Case 去重与核心 Case 识别；
-问题按根因聚类，首次异常为 LIKELY，复现后才可 CONFIRMED。问题 ID 与生命周期跨 Baseline 保持稳定，
+问题按接口与断言预期保守聚类，未经复现的异常为 LIKELY，完整证据且复现后才可 CONFIRMED。
+SAFE 内置单步骤只读失败最多自动复核一次，两次共用超时预算；不一致保持 UNKNOWN，不用第二次 PASS 覆盖失败。
+写操作、多步骤/状态流程和自定义 Processor 不自动重试。最小复现直接列出字段路径、Expected/Actual 与缺失字段。
+问题 ID 与生命周期跨 Baseline 保持稳定，
 修复后通过 Regression Guard 扩展验证相关 Contract/Invariant/Flow，并输出
 `FIXED / STILL_FAIL / REGRESSION / BLOCKED`。默认 fail-fast；可用 `--no-fail-fast` 调试。
 v8 使用 Requirement + Contract + Invariant + Observed State + Historical Baseline 组成确定性

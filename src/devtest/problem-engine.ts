@@ -1,6 +1,7 @@
 /** Acceptance 结果 → DevTest 根因问题。这里只归一/聚合，不执行第二套测试逻辑。 */
 
 import type { AcceptanceReport } from '../acceptance/acceptance-report.js';
+import type { AcceptanceExecutionEvidence } from '../acceptance/api-processor.js';
 import type { ContractPreflight } from '../contracts/contract-gate.js';
 import { devTestDimensionOf } from './dimension-selector.js';
 import type {
@@ -157,7 +158,8 @@ function calibratedConfidence(problem: DraftProblem, context: {
 
 function rootCauseOf(problem: DraftProblem): string {
   if (problem.rootCause) return problem.rootCause;
-  const value = `${problem.dimension} ${problem.category ?? ''} ${problem.reasonCode ?? ''} ${JSON.stringify(problem.evidence ?? '')}`.toUpperCase();
+  const product = (problem.failureClass ?? failureClass(problem)) === 'PRODUCT_BUG';
+  const value = `${problem.dimension} ${problem.category ?? ''} ${problem.reasonCode ?? ''} ${product ? '' : JSON.stringify(problem.evidence ?? '')}`.toUpperCase();
   if (/AUTH|PERMISSION|ISOLATION|403|401/.test(value)) return 'AUTHORIZATION_POLICY';
   if (/STATUS_CODE.*EXPECTED.?400/.test(value)) return 'PARAMETER_REJECTION';
   if (/STATE|MUTATION|UNCHANGED/.test(value)) return 'STATE_INVARIANT';
@@ -166,14 +168,26 @@ function rootCauseOf(problem: DraftProblem): string {
   return `${problem.failureClass ?? failureClass(problem)}:${problem.reasonCode ?? problem.type}`;
 }
 
+function productFailureScope(problem: DraftProblem, rootCause: string): string {
+  const request = problem.request as { method?: string; url?: string } | undefined;
+  if (request?.url) {
+    // Same category is not proof of the same defect: keep operations and distinct
+    // assertion expectations separate, while collapsing identical repeated cases.
+    let endpoint = request.url;
+    try { endpoint = new URL(request.url, 'http://scope.invalid').pathname; } catch { /* Keep exact malformed identity. */ }
+    return `${request.method ?? ''} ${endpoint}::${problem.expected ?? problem.caseId}`;
+  }
+  return rootCause.includes(':') ? problem.caseId ?? problem.affectedCases.join(',') : '';
+}
+
 function dedupe(drafts: DraftProblem[], context: { contract: number; environment: number }): DevTestProblem[] {
   const merged = new Map<string, DraftProblem>();
   for (const draft of drafts) {
     const rootCause = rootCauseOf(draft);
     const failure = draft.failureClass ?? failureClass(draft);
-    // Product assertion failures may fan out across many Cases but share one implementation root cause.
+    // Cluster duplicate observations conservatively; category alone is not a shared implementation root cause.
     // Contract/environment/test issues retain their semantic type so UNKNOWN_CONTRACT is not hidden by a conflict.
-    const key = failure === 'PRODUCT_BUG' ? `${failure}::${rootCause}` : `${failure}::${rootCause}::${draft.type}`;
+    const key = failure === 'PRODUCT_BUG' ? `${failure}::${rootCause}::${productFailureScope(draft, rootCause)}` : `${failure}::${rootCause}::${draft.type}`;
     const existing = merged.get(key);
     if (!existing) {
       merged.set(key, { ...draft, rootCause, affectedCases: [...draft.affectedCases] });
@@ -246,7 +260,8 @@ export interface DevTestProblemInput {
     assertions?: number;
     error?: string;
     attribution?: { reason?: string };
-    evidence?: { assertions?: Array<{ pass?: boolean; detail?: string; expected?: unknown; actual?: unknown }>; request?: unknown; response?: unknown };
+    evidence?: { assertions?: Array<{ assertionId?: string; type?: string; path?: string; pass?: boolean; detail?: string; expected?: unknown; actual?: unknown }>; request?: unknown; response?: unknown;
+      readFailureConfirmation?: AcceptanceExecutionEvidence['readFailureConfirmation'] };
   }>;
   requirementWarnings: Array<{ code?: string; message?: string; blocking?: boolean }>;
   syntheticBlocks?: Array<{ code: string; message: string; affectedCases?: string[]; dimension?: DevTestProblemDimension }>;
@@ -355,16 +370,22 @@ export function buildDevTestProblems(input: DevTestProblemInput): {
       continue;
     }
     if (result.status === 'FAIL') {
-      const details = (result.evidence?.assertions ?? []).filter((item) => item.pass === false)
-        .map((item) => item.detail ?? `expected=${JSON.stringify(item.expected)} actual=${JSON.stringify(item.actual)}`);
-      const errorText = `${result.error ?? ''} ${details.join(' ')}`;
+      const failedAssertions = (result.evidence?.assertions ?? []).filter((item) => item.pass === false);
+      const describeValue = (value: unknown): string => value === undefined ? '[字段缺失/未观察到]' : JSON.stringify(value);
+      const details = failedAssertions.map((item) => `${item.path ?? item.type ?? item.assertionId ?? 'Assertion'}：`
+        + `expected=${describeValue(item.expected)} actual=${describeValue(item.actual)}`);
+      // Assertion actual/expected values are business data, not infrastructure
+      // diagnostics. A customer string containing "timeout" must not erase a
+      // complete deterministic Oracle failure.
+      const errorText = result.error ?? '';
       const reliability = reliabilityByCase.get(result.caseId);
-      const environmentFailure = /timeout|timed out|ECONNREFUSED|ENOTFOUND|fetch failed|network/i.test(errorText)
+      const environmentFailure = (!oracle && /timeout|timed out|ECONNREFUSED|ENOTFOUND|fetch failed|network/i.test(errorText))
         || ['HTTP_5XX', 'TIMEOUT', 'SLOW_RESPONSE', 'BROWSER_ERROR', 'ENVIRONMENT'].includes(oracle?.transientSignal ?? '');
       const provenAssertion = result.executed === true && details.length > 0
         && result.evidence?.request !== undefined && result.evidence?.response !== undefined;
       const polluted = input.pollutedCaseIds?.has(result.caseId) === true;
-      const flaky = reliability?.status === 'FLAKY';
+      const confirmation = result.evidence?.readFailureConfirmation;
+      const flaky = reliability?.status === 'FLAKY' || confirmation?.status === 'INCONSISTENT';
       const oracleProvesProduct = oracle ? oracle.verdict === 'FAIL' && oracle.evidence.complete : provenAssertion;
       const failure: DevTestFailureClass = polluted || flaky ? 'TEST_ISSUE'
         : environmentFailure ? 'ENVIRONMENT_ISSUE' : oracleProvesProduct ? 'PRODUCT_BUG' : 'TEST_ISSUE';
@@ -373,19 +394,27 @@ export function buildDevTestProblems(input: DevTestProblemInput): {
           : oracle?.verdict === 'UNKNOWN' ? 'EVIDENCE_MISSING' : 'TEST_FAILED',
         severity: polluted || flaky ? 'MEDIUM' : result.priority === 'P0' ? 'CRITICAL' : 'HIGH', dimension,
         caseId: result.caseId, message: polluted ? '前序 Case 污染了当前 Case，禁止归因产品 Bug'
-          : flaky ? `Case 历史结果波动（flakeRate=${reliability.flakeRate.toFixed(2)}），转入 Test Reliability`
+          : flaky ? confirmation?.status === 'INCONSISTENT'
+            ? '同一只读请求两次结果不一致；保留首次失败和复核证据，不能确认稳定产品缺陷'
+            : `Case 历史结果波动（flakeRate=${reliability!.flakeRate.toFixed(2)}），转入 Test Reliability`
             : oracle?.reason ?? result.error?.replace(/^FAIL[:：]\s*/, '') ?? '确定性断言失败',
-        evidence: details, remediation: '修复产品/环境根因后单独重跑该 Case，并保留执行证据。',
+        evidence: confirmation ? [...details, { readFailureConfirmation: confirmation }] : details,
+        remediation: flaky ? '依据两次请求和断言差异排查缓存、共享状态或间歇性产品行为；不要把复核 PASS 当作修复。'
+          : confirmation?.status === 'REPRODUCED' ? '相同只读失败已自动复现；按字段级 Expected/Actual 修复，再定向复测。'
+            : '修复产品/环境根因后单独重跑该 Case，并保留执行证据。',
         affectedCases: [result.caseId], reasonCode: polluted ? 'TEST_POLLUTION' : flaky ? 'FLAKY_TEST'
           : environmentFailure ? oracle?.transientSignal ?? 'NETWORK_UNREACHABLE' : oracle?.verdict === 'UNKNOWN' ? 'ORACLE_INCOMPLETE' : 'TEST_FAILED',
         failureClass: failure,
-        reproducible: Boolean(oracleProvesProduct && input.reproductionRun && !polluted && !flaky && !environmentFailure),
+        rootCause: oracle?.evidence.semanticChecks?.some((check) => check.verdict === 'FAIL') ? 'STATE_INVARIANT' : undefined,
+        reproducible: Boolean(oracleProvesProduct && (input.reproductionRun || confirmation?.status === 'REPRODUCED') && !polluted && !flaky && !environmentFailure),
         reproduction: ['使用报告中的 Environment 与 Request 发起请求', '比较实际 Response 与确定性 Assertion', `重跑 Case：${result.caseId}`],
         request: result.evidence?.request,
         response: result.evidence?.response,
         environment: input.environment,
-        expected: oracle ? JSON.stringify(oracle.expected) : details.join('；') || '所有确定性断言通过',
-        actual: result.error ?? '断言失败',
+        expected: failedAssertions.length ? failedAssertions.map((item) => `${item.path ?? item.type ?? 'Assertion'}=${describeValue(item.expected)}`).join('；')
+          : oracle ? JSON.stringify(oracle.expected) : '所有确定性断言通过',
+        actual: failedAssertions.length ? failedAssertions.map((item) => `${item.path ?? item.type ?? 'Assertion'}=${describeValue(item.actual)}`).join('；')
+          : result.error ?? '断言失败',
       });
       continue;
     }

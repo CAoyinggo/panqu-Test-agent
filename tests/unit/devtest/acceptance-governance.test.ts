@@ -64,4 +64,12 @@ describe('DevTest acceptance governance', () => {
       estimatedRuntimeMs: 750, estimatedCost: 0.006 }));
     expect(estimate.exceeded).toEqual(['MAX_RUNTIME', 'BUDGET']);
   });
+
+  it('SAFE read confirmation is disclosed and included in pre-execution budgets', () => {
+    const estimate = buildExecutionEstimate({ testCases: [testCase('READ', 'GET'), testCase('WRITE', 'POST')],
+      timeoutMs: 1000, maxRuntimeMs: 900, budget: 0.006, confirmReadFailures: true });
+    expect(estimate).toMatchObject({ estimatedRequests: 3, estimatedRuntimeMs: 1000, estimatedCost: 0.007,
+      readFailureConfirmation: { enabled: true, maxExtraRequests: 1, maxAttemptsPerCase: 2 },
+      exceeded: ['MAX_RUNTIME', 'BUDGET'] });
+  });
 });

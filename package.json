@@ -82,7 +82,7 @@
     "devtest": "npm run build --silent && node dist/bin/run-devtest.js",
     "devtest:test": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts tests/integration/devtest-github.test.ts",
     "test:standardization": "vitest run tests/acceptance/standardization-governance.test.ts tests/acceptance/standardization-reusability.test.ts",
-    "test:devtest-v8": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts",
+    "test:devtest-v8": "vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts tests/integration/devtest-detection-regression.test.ts",
     "test:npm-acceptance": "vitest run tests/integration/npm-package-acceptance.test.ts",
     "test:mcp-kernel": "npm run build && vitest run tests/integration/devtest-mcp-kernel.test.ts tests/integration/stdio-mcp-portable.test.ts",
     "self-test": "npm run build --silent && node dist/bin/run-self-test.js",

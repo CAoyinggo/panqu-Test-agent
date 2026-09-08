@@ -80,6 +80,9 @@ function apiCollectedEvidence(input: {
 }
 
 function transientSignal(result: AcceptanceCaseExecutionResult): DevTestOracleResult['transientSignal'] | undefined {
+  const confirmation = result.evidence?.readFailureConfirmation;
+  if (confirmation?.status === 'INCONSISTENT') return 'READ_RESULT_INCONSISTENT';
+  if (confirmation?.status === 'INCONCLUSIVE') return 'READ_CONFIRMATION_INCOMPLETE';
   const text = `${result.error ?? ''} ${result.attribution?.reason ?? ''}`;
   const status = result.evidence?.response?.status;
   if (result.timedOut || /timeout|timed out/i.test(text)) return 'TIMEOUT';
@@ -91,8 +94,14 @@ function transientSignal(result: AcceptanceCaseExecutionResult): DevTestOracleRe
   if (/fixture|test.data|data prep/i.test(text)) return 'TEST_DATA';
   if (/processor/i.test(text)) return 'PROCESSOR';
   const assertions = result.evidence?.assertions ?? [];
+  // A missing JSON field in a fully received structured response is an observed
+  // contract violation, not missing transport evidence. Keep UNKNOWN only when
+  // the response itself could not be observed/decoded.
+  const body = result.evidence?.response?.body;
+  const structuredBodyObserved = body !== null && typeof body === 'object'
+    && result.evidence?.transport?.responseCompleted !== false;
   if (result.executed && result.evidence?.response && assertions.some((item) => item.pass === false
-    && item.actual === undefined)) return 'EMPTY_RESPONSE';
+    && item.actual === undefined) && !structuredBodyObserved) return 'EMPTY_RESPONSE';
   return undefined;
 }
 

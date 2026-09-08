@@ -86,7 +86,8 @@ function resultFromScenarioExecution(
   execution: TestCaseScenarioExecution,
 ): AcceptanceCaseExecutionResult {
   const result = execution.outcome.result;
-  const request = result.evidence.find((item) => item.kind === 'REQUEST')?.data;
+  const requestEvidence = result.evidence.find((item) => item.kind === 'REQUEST');
+  const request = requestEvidence?.data;
   const response = result.evidence.find((item) => item.kind === 'RESPONSE')?.data;
   const passed = result.status === 'PASS';
   const failed = result.status === 'FAIL';
@@ -168,6 +169,12 @@ function resultFromScenarioExecution(
       request: request && typeof request === 'object' ? request as NonNullable<AcceptanceCaseExecutionResult['evidence']['request']> : undefined,
       response: response && typeof response === 'object' ? response as NonNullable<AcceptanceCaseExecutionResult['evidence']['response']> : undefined,
       assertions,
+      binding: result.evidence.find((item) => item.kind === 'TRACE' && item.source === 'ApiProcessor.binding'
+        && item.verified && item.operationId === requestEvidence?.operationId)?.data as
+        AcceptanceCaseExecutionResult['evidence']['binding'],
+      readFailureConfirmation: result.evidence.find((item) => item.kind === 'TRACE'
+        && item.source === 'ApiProcessor.read-failure-confirmation' && item.verified)?.data as
+        AcceptanceCaseExecutionResult['evidence']['readFailureConfirmation'],
       evidenceItems: execution.adapted.scenario.evidenceRequirements.filter((item) => item.requiredForPass).map((requirement) => {
         const observed = result.evidence.find((item) => item.id === requirement.id || item.requirementId === requirement.id);
         return {

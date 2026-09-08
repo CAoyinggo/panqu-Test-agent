@@ -12,6 +12,7 @@ import type { DevTestRunResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const EXECUTION_POLICY = 'SAFE_READ_CONFIRMATION_V1';
 
 /** MCP is a control surface. Case schemas and execution semantics remain in TEST_CASE_V2. */
 export const DEVTEST_MCP_TOOL = {
@@ -36,6 +37,7 @@ export const DEVTEST_MCP_TOOL = {
 };
 
 interface PlanRecord {
+  executionPolicy: string;
   planId: string;
   requirement: string;
   sourceDigest: string;
@@ -107,6 +109,7 @@ function summary(result: DevTestRunResult, root: string): Record<string, unknown
     evidence: result.deliveryCoverage.evidence,
     oracle: result.oracleResults,
     plan: result.plan,
+    execution_estimate: result.executionEstimate,
     selected_case_ids: result.executionPlan.selectedCaseIds,
     requirement_coverage: result.requirementCoverage,
     unknown_fact_ids: result.requirementModel.unknownFactIds,
@@ -198,8 +201,9 @@ export class DevTestMcpService {
         const targetDigest = await this.targetDigest(root, config);
         const result = await runDevTest({ markdown, documentId: input.requirement, projectRoot: root,
           project: path.basename(root), environment: config.runtime.environment,
-          baseUrl: process.env[config.runtime.baseUrlEnv] || undefined, mode: 'DRY_RUN', plan: true, outDir: output });
+          baseUrl: process.env[config.runtime.baseUrlEnv] || undefined, mode: 'SAFE', plan: true, outDir: output });
         const unsigned = {
+          executionPolicy: EXECUTION_POLICY,
           planId: `PLAN-${randomUUID()}`, requirement: input.requirement, sourceDigest: digest(markdown),
           configDigest: digest(JSON.stringify(config)), contextDigest, targetDigest, executionPlan: result.executionPlan,
         };
@@ -212,6 +216,7 @@ export class DevTestMcpService {
       const idempotencyKey = token(input.idempotency_key, 'idempotency_key');
       const record = JSON.parse(await readFile(await within(root, path.relative(root, path.join(storage, `${planId}.json`))), 'utf8')) as PlanRecord;
       const { preview: _preview, planHash: expectedHash, ...unsigned } = record;
+      if (record.executionPolicy !== EXECUTION_POLICY) throw new Error('STALE_PLAN: execution policy changed; create a new plan');
       if (planHash(unsigned) !== expectedHash || expectedHash !== input.expected_plan_hash || record.planId !== planId) throw new Error('STALE_PLAN: confirmation does not match the saved plan');
       const runFile = await within(root, path.relative(root, path.join(storage, `${planId}.run.json`)), false);
       let previous: RunRecord | undefined;

@@ -80,25 +80,30 @@ export function buildExecutionEstimate(input: {
   timeoutMs: number;
   maxRuntimeMs?: number;
   budget?: number;
+  confirmReadFailures?: boolean;
 }): DevTestExecutionEstimate {
   const executable = input.testCases.filter((testCase) => testCase.executionMode === 'EXECUTABLE');
   const requestCases = executable.filter((testCase) => testCase.steps.some((step) => step.type === 'HTTP_REQUEST'));
-  const estimatedRuntimeMs = executable.reduce((sum, testCase) => {
+  const confirmationRequests = input.confirmReadFailures ? executable.filter((testCase) =>
+    testCase.steps.length === 1 && testCase.steps[0].type === 'HTTP_REQUEST'
+    && ['GET', 'HEAD', 'OPTIONS'].includes(testCase.steps[0].method ?? '')).length : 0;
+  const estimatedRuntimeMs = confirmationRequests * 250 + executable.reduce((sum, testCase) => {
     if (testCase.testType === 'UI') return sum + 1_500;
     const method = testCase.steps.find((step) => step.type === 'HTTP_REQUEST')?.method;
     return sum + (['GET', 'HEAD', 'OPTIONS'].includes(method ?? '') ? 250 : 500);
   }, 0);
-  const estimatedCost = Math.round(executable.reduce((sum, testCase) => {
+  const estimatedCost = Math.round((confirmationRequests * 0.001 + executable.reduce((sum, testCase) => {
     const method = testCase.steps.find((step) => step.type === 'HTTP_REQUEST')?.method;
     const text = `${testCase.name} ${testCase.tags?.join(' ')}`;
     if (/billing|charge|provider|扣费|计费|供应商/i.test(text)) return sum + 1;
     if (testCase.testType === 'UI') return sum + 0.01;
     return sum + (['GET', 'HEAD', 'OPTIONS'].includes(method ?? '') ? 0.001 : 0.005);
-  }, 0) * 1000) / 1000;
+  }, 0)) * 1000) / 1000;
   const exceeded: DevTestExecutionEstimate['exceeded'] = [];
   if (input.maxRuntimeMs !== undefined && estimatedRuntimeMs > input.maxRuntimeMs) exceeded.push('MAX_RUNTIME');
   if (input.budget !== undefined && estimatedCost > input.budget) exceeded.push('BUDGET');
-  return { estimatedCases: input.testCases.length, estimatedRequests: requestCases.length, estimatedRuntimeMs,
+  return { estimatedCases: input.testCases.length, estimatedRequests: requestCases.length + confirmationRequests, estimatedRuntimeMs,
+    readFailureConfirmation: { enabled: input.confirmReadFailures === true, maxExtraRequests: confirmationRequests, maxAttemptsPerCase: 2 },
     estimatedCost, costUnit: 'DEVTEST_UNIT', limits: { timeoutMs: input.timeoutMs, maxRuntimeMs: input.maxRuntimeMs,
       budget: input.budget }, exceeded };
 }

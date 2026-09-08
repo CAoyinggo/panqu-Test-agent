@@ -33,9 +33,17 @@ npx --no-install devtest doctor
 
 计划绑定现有 Acceptance Execution Plan Identity、需求摘要、配置、Git 索引内及未跟踪的源码内容摘要，以及操作员选择的目标环境和 Runtime 模块内容摘要。摘要记录不保存环境地址或凭证明文。执行前发生变化会返回 STALE_PLAN；生成的 Case 语义和执行范围还会在 DevTest 中再次校验。运行时 Readiness 在每次执行前重新计算。
 
+计划也绑定执行策略版本；升级到有界只读复核后，旧策略生成的计划必须重新生成、确认，不会在旧计划上静默增加请求。
+
 同一个计划重复使用相同幂等键只返回已保存结果。换一个幂等键不会重新执行该计划，需要重新生成计划。项目级排他锁防止多个 MCP 进程并发污染数据。异常退出留下 RUNNING 或锁时，先核查实际业务状态和运行进程；工具不自动重复未知结果的业务操作。
 
 本地 MCP 当前只执行 SAFE 只读用例。写操作由目标仓库的 GitHub `workflow_dispatch` 在明确的 test/sandbox 环境中显式启用；运行时通过 GitHub Secrets 和受审查的 Runtime 模块提供。Fork PR 不得执行写操作。此版本 MCP 不提供远程 Workflow dispatch，也不把本地调用自动转成 GitHub 写操作。
+
+SAFE 内置 HTTP 执行器对完整响应的确定性失败，最多自动复核一次单步骤 GET/HEAD/OPTIONS。复核计入计划 `execution_estimate` 的请求数、耗时与成本估算；两次请求共用原 Case 超时预算和取消信号。成功请求、5xx/网络错误、写操作、状态观察/多步骤流程及自定义 Processor 不自动重试。快照 Observer 启用时也不自动复核，避免重复执行准备或清理。
+
+首轮失败永远保留。相同输入、相同失败断言与实际值再次出现才标记 `REPRODUCED`，供既有完整证据门禁确认可复现；两次不一致或复核未完成保持 UNKNOWN，并保留两次证据，不能用第二次 PASS 洗掉第一次失败，也不能将间歇性问题直接认定为稳定产品缺陷。幂等键重放与这个有界复核不同：重新调用已执行计划仍不会再发请求。
+
+完整 JSON 缺失契约必需字段（包括预期为 `false`/`0` 的字段）是明确断言失败；不可观察/解析的响应仍保留 UNKNOWN。问题归因不再把业务实际值中的 `timeout`、`network` 等词当作环境故障。最小复现包含字段路径、Expected/Actual 和缺字段标记；不同接口或不同预期不会仅因同属一种错误而合并。
 
 缺少鉴权、Observer、状态预期或副作用证据时保持 BLOCKED / DESIGNED_ONLY / NOT_EXECUTED。不能通过放宽 Gate 获取 PASS。
 

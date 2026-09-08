@@ -828,12 +828,27 @@ export function createAcceptanceHttpScenarioProcessor(
       };
       const result = await apiProcessor.execute(testCase, {
         ...options,
+        allowReadFailureConfirmation: options.allowReadFailureConfirmation !== false
+          && context.scenario.operations.length === 1
+          && !context.scenario.prepare.length && !context.scenario.cleanup.length
+          && context.scenario.evidenceRequirements.every((item) => ['REQUEST', 'RESPONSE'].includes(item.kind)),
         signal: context.signal,
         timeoutMs: operation.timeoutMs,
         runId: context.runId,
       });
       const observedAt = new Date().toISOString();
       const evidence: EvidenceEnvelope[] = [];
+      if (result.evidence.binding) evidence.push({
+        id: `${operation.id}:http-binding`, scenarioId: context.scenario.id, operationId: operation.id,
+        acceptanceCriteriaIds: operation.acceptanceCriteriaIds, kind: 'TRACE', channel: 'API',
+        source: 'ApiProcessor.binding', observedAt, data: result.evidence.binding, verified: true,
+      });
+      if (result.evidence.readFailureConfirmation) evidence.push({
+        id: `${operation.id}:read-failure-confirmation`, scenarioId: context.scenario.id, operationId: operation.id,
+        acceptanceCriteriaIds: operation.acceptanceCriteriaIds, kind: 'TRACE', channel: 'API',
+        source: 'ApiProcessor.read-failure-confirmation', observedAt,
+        data: result.evidence.readFailureConfirmation, verified: true,
+      });
       for (const requirement of context.scenario.evidenceRequirements.filter((item) => item.operationId === operation.id)) {
         const requestKind = requirement.kind === 'REQUEST';
         const safeObserverRead = ['GET', 'HEAD', 'OPTIONS'].includes(operation.method ?? '');
