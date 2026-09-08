@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { TestCase, TestType } from '../agents/test-design/testcase-schema.js';
 import {
   DEVTEST_CASE_DIMENSIONS,
@@ -28,11 +29,26 @@ export function devTestDimensionOf(testType: TestType | string | undefined): Dev
 
 export function tierOf(testCase: TestCase): DevTestTier {
   if (testCase.priority === 'P0') return 'TIER_0';
+  if (testCase.testType === 'BOUNDARY' && confirmedInputBoundary(testCase)) return 'TIER_1';
   // Priority 表示业务风险，不等于默认忽略。一个 Requirement 唯一的参数/边界
   // 验证仍是 CORE_VALIDATION，必须保留至少一个代表 Case；其余非核心 P2 才进 Deep。
   if (testCase.testType !== 'BOUNDARY' && coreKindOf(testCase)) return 'TIER_0';
   if (['BOUNDARY', 'PARAMETER', 'PERFORMANCE'].includes(testCase.testType ?? '') && ['P2', 'P3'].includes(testCase.priority)) return 'TIER_2';
   return 'TIER_1';
+}
+
+/** Explicit, traceable contract edges are normal checks, not optional stress tests. */
+function confirmedInputBoundary(testCase: TestCase): boolean {
+  if (testCase.requirementStatus !== 'CONFIRMED' || !testCase.source?.factIds?.length) return false;
+  const essential = new Set(['MIN_MINUS', 'MIN', 'MIN_PLUS', 'MAX_MINUS', 'MAX', 'MAX_PLUS',
+    'MISSING', 'EMPTY', 'NULL', 'INVALID_TYPE', 'DECIMAL', 'FORMAT_INVALID', 'ENUM_INVALID', 'VALID']);
+  const coverage = testCase.parameterCoverage ?? (testCase.parameterContext ? [{
+    ...testCase.parameterContext, boundaryVectors: [testCase.parameterContext.boundaryVector ?? ''],
+  }] : []);
+  return coverage.some((item) => item.parameter && item.constraint
+    && typeof item.expectedResponse === 'number' && Number.isFinite(item.expectedResponse)
+    && ['ACCEPT', 'REJECT'].includes(item.expectedOutcome ?? '')
+    && item.boundaryVectors.some((kind) => essential.has(kind)));
 }
 
 function httpMethod(testCase: TestCase): string | undefined {
@@ -134,26 +150,11 @@ function preferredCase(left: TestCase, right: TestCase): TestCase {
   return left.id.localeCompare(right.id) <= 0 ? left : right;
 }
 
-function mergeTraceability(kept: TestCase, removed: TestCase): void {
-  if (kept.source && removed.source) {
-    kept.source.acceptanceCriteriaIds = [...new Set([...kept.source.acceptanceCriteriaIds, ...removed.source.acceptanceCriteriaIds])];
-    kept.source.factIds = [...new Set([...(kept.source.factIds ?? []), ...(removed.source.factIds ?? [])])];
-    kept.source.objectiveIds = [...new Set([...(kept.source.objectiveIds ?? []), ...(removed.source.objectiveIds ?? [])])];
-  }
-  if (kept.design && removed.design) {
-    kept.design.factIds = [...new Set([...kept.design.factIds, ...removed.design.factIds])];
-    kept.design.objectiveIds = [...new Set([...kept.design.objectiveIds, ...removed.design.objectiveIds])];
-  }
-  for (const requirement of removed.evidenceRequirements ?? []) {
-    const existing = (kept.evidenceRequirements ??= []).find((candidate) =>
-      candidate.channel === requirement.channel && candidate.phase === requirement.phase
-      && (candidate.expectation ?? 'PRESENT') === (requirement.expectation ?? 'PRESENT'));
-    if (!existing) kept.evidenceRequirements.push({ ...requirement, factIds: [...requirement.factIds] });
-    else {
-      existing.required = existing.required || requirement.required;
-      existing.factIds = [...new Set([...existing.factIds, ...requirement.factIds])];
-    }
-  }
+function executionIdentity(testCase: TestCase): Omit<TestCase, 'id' | 'name' | 'priority'> {
+  // Keep every execution, safety, traceability and evidence field, including
+  // future schema fields. Only presentation identity and scheduling rank vary.
+  const { id: _id, name: _name, priority: _priority, ...identity } = testCase;
+  return identity;
 }
 
 export function deduplicateDevTestCases(candidates: readonly TestCase[]): {
@@ -165,7 +166,7 @@ export function deduplicateDevTestCases(candidates: readonly TestCase[]): {
   for (const candidate of candidates) {
     // Acceptance 已完成精确语义去重；DevTest 只允许完全等价 Case 再合并。
     // 模糊阈值会删除输入/断言不同的 Case，并把被删 Case 的 Fact 冒充为已覆盖。
-    const duplicateIndex = retained.findIndex((item) => devTestCaseSimilarity(item, candidate) >= 0.999999);
+    const duplicateIndex = retained.findIndex((item) => isDeepStrictEqual(executionIdentity(item), executionIdentity(candidate)));
     if (duplicateIndex < 0) {
       retained.push(candidate);
       continue;
@@ -173,7 +174,7 @@ export function deduplicateDevTestCases(candidates: readonly TestCase[]): {
     const existing = retained[duplicateIndex];
     const kept = preferredCase(existing, candidate);
     const removed = kept === existing ? candidate : existing;
-    mergeTraceability(kept, removed);
+    // Traceability already matches exactly; merging it would mutate caller data.
     if (kept !== existing) retained[duplicateIndex] = kept;
     const prior = groups.get(existing.id) ?? groups.get(candidate.id) ?? [];
     groups.delete(existing.id);

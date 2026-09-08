@@ -65,11 +65,12 @@ Trae 入口使用“集中澄清 → 展示最终计划 → 一次确认 → 立
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 290 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 2856 项通过，19 项跳过 |
-| MCP 内核与兼容入口 | 2 个测试文件、28 项测试通过 |
-| Acceptance 回归 | 39 个测试文件、351 项测试通过 |
-| DevTest 回归 | 20 个测试文件、190 项测试通过 |
+| 全量 Vitest | 293 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2884 项通过，19 项跳过 |
+| MCP 内核与兼容入口 | 2 个测试文件、29 项测试通过 |
+| Acceptance 回归 | 40 个测试文件、362 项测试通过 |
+| DevTest 回归 | 21 个测试文件、202 项测试通过 |
+| 输入缺陷真实 HTTP 回归 | 4 项通过，覆盖上限多放行 1、大小写/负号损坏及健康对照 |
 | P0 安全契约 | 98 项通过、1 项跳过 |
 | npm 安装验收 | tarball 安装、三个命令入口、初始化和结果查询通过 |
 | GitHub 原有 CLI / 部署契约 | 104 项 / 21 项通过 |
@@ -127,8 +128,10 @@ SAFE 内置单步骤只读失败最多自动复核一次，两次共用超时预
 `FIXED / STILL_FAIL / REGRESSION / BLOCKED`。默认 fail-fast；可用 `--no-fail-fast` 调试。
 v8 使用 Requirement + Contract + Invariant + Observed State + Historical Baseline 组成确定性
 Oracle，并以历史失败、Bug 密度、代码变化、Contract Drift、回归和成本做自适应选择。日常默认
-Tier 0 + Tier 1；`--deep` 才执行 Tier 2。Flaky、环境错误与 Test Pollution 会进入独立可靠性分类，
+Tier 0 + Tier 1；已确认、有来源和明确预期的基础输入边界属于 Tier 1，不必额外开启 `--deep`，但仍受预算、维度开关和安全门禁限制；`--deep` 才执行 Tier 2。Flaky、环境错误与 Test Pollution 会进入独立可靠性分类，
 不会伪装成产品 Bug。
+输入去重使用结构化精确比较，不合并大小写、正负号、类型、数组顺序或断言等不同的用例。
+数值/布尔正例须满足完整显式约束；不能构造单故障负例时保留设计缺口，不把其他规则造成的拒绝冒充为目标校验通过。
 固定产物写入 `devtest-results/<runId>/`：面向开发者的 `测试用例.md`、
 `开发自测测试报告.md`，以及 `report.html`、`report.json`、`cases.csv`、`problems.md`、
 `acceptance-summary.md`、`evidence.json` 审计附件；执行模式还会生成 `source-sync.json`。完整说明见 [DevTest Mode](docs/devtest.md)。

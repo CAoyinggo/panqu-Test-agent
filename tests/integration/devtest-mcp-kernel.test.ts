@@ -189,12 +189,13 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     expect(server.requests).toEqual([]);
   });
 
-  it('rejects a previously confirmed plan from before the bounded-read policy upgrade', async () => {
+  it.each([undefined, 'NO_SILENT_REQUIREMENT_GAPS_V1'])('rejects a previously confirmed plan with old policy %s', async (oldPolicy) => {
     const { service, root } = await fixture();
     const server = await httpService();
     const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
     const file = path.join(root, 'devtest-results', '.mcp', `${plan.plan_id}.json`);
     const { executionPolicy: _policy, planHash: _hash, preview, ...oldUnsigned } = JSON.parse(await readFile(file, 'utf8'));
+    if (oldPolicy !== undefined) oldUnsigned.executionPolicy = oldPolicy;
     const oldHash = createHash('sha256').update(JSON.stringify(oldUnsigned)).digest('hex');
     await writeFile(file, JSON.stringify({ ...oldUnsigned, planHash: oldHash, preview }));
     const result = await service.call(execution({ ...plan, plan_hash: oldHash }));

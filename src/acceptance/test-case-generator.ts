@@ -19,7 +19,7 @@ import {
 } from './business-model.js';
 
 interface ParameterVector {
-  kind: 'MISSING' | 'MIN_MINUS' | 'MIN' | 'MIN_PLUS' | 'MAX_MINUS' | 'MAX' | 'MAX_PLUS' | 'EMPTY' | 'NULL' | 'INVALID_TYPE' | 'DECIMAL' | 'EXTREME' | 'FORMAT_INVALID' | 'ENUM_INVALID';
+  kind: 'VALID' | 'MISSING' | 'MIN_MINUS' | 'MIN' | 'MIN_PLUS' | 'MAX_MINUS' | 'MAX' | 'MAX_PLUS' | 'EMPTY' | 'NULL' | 'INVALID_TYPE' | 'DECIMAL' | 'EXTREME' | 'FORMAT_INVALID' | 'ENUM_INVALID';
   label: string;
   value: unknown;
   expectedStatus?: number;
@@ -148,10 +148,11 @@ function validValue(parameter: ParameterSpec): unknown {
   }
   if (parameter.type === 'string') return validStringValue(parameter);
   if (parameter.type === 'integer' || parameter.type === 'number') {
-    const candidate = parameter.min !== undefined && parameter.max !== undefined
-      ? Math.max(parameter.min, Math.min(parameter.max, 30))
-      : parameter.min ?? 1;
-    return parameter.type === 'integer' ? Math.trunc(candidate) : candidate;
+    const lower = parameter.min === undefined ? undefined : parameter.type === 'integer' ? Math.ceil(parameter.min) : parameter.min;
+    const upper = parameter.max === undefined ? undefined : parameter.type === 'integer' ? Math.floor(parameter.max) : parameter.max;
+    const candidate = lower !== undefined && upper !== undefined
+      ? Math.max(lower, Math.min(upper, 30)) : lower ?? Math.min(upper ?? 1, 1);
+    return parameterAccepts(parameter, candidate) ? candidate : undefined;
   }
   if (parameter.type === 'boolean') return true;
   if (parameter.type === 'array') return [];
@@ -203,6 +204,36 @@ function headerValues(api: ApiSpec): Record<string, string> {
 function apiRequiresActor(api: ApiSpec): boolean {
   return api.authPolicy === 'AUTH_REQUIRED' || api.headers.some((header) =>
     header.required && /^(?:authorization|cookie|x-api-key|api-key)$/i.test(header.name));
+}
+
+/** Bounded search; failure means unverified test data, never a guessed negative Oracle. */
+function scalarSingleFault(parameter: ParameterSpec, target: 'enum' | 'integer'): unknown {
+  const relaxed: ParameterSpec = target === 'enum' ? { ...parameter, enum: undefined }
+    : { ...parameter, type: 'number' };
+  const lower = parameter.min ?? -10;
+  const upper = parameter.max ?? Math.max(lower + 10, 10);
+  const numbers = [18.5, 0, 1, -1, lower, upper, lower + (upper - lower) / 2, lower + 0.5, upper - 0.5];
+  for (let index = 0; index <= Math.min((parameter.enum?.length ?? 0) + 1, 64); index++) {
+    numbers.push(Math.ceil(lower) + index, lower + (upper - lower) * (index + 1) / 67);
+  }
+  const candidates = parameter.type === 'boolean' ? [true, false] : numbers;
+  return candidates.find((value) => parameterAccepts(relaxed, value)
+    && (target === 'enum' ? !parameter.enum?.some((item) => Object.is(item, value))
+      : typeof value === 'number' && !Number.isInteger(value)));
+}
+
+function scalarAcceptsExceptTarget(parameter: ParameterSpec, vector: ParameterVector): boolean {
+  switch (vector.kind) {
+    case 'MIN_MINUS': return parameterAccepts({ ...parameter, min: undefined }, vector.value);
+    case 'MAX_PLUS':
+    case 'EXTREME': return parameterAccepts({ ...parameter, max: undefined }, vector.value);
+    case 'DECIMAL': return parameterAccepts({ ...parameter, type: 'number' }, vector.value);
+    case 'ENUM_INVALID': return parameterAccepts({ ...parameter, enum: undefined }, vector.value);
+    case 'INVALID_TYPE':
+    case 'EMPTY': return parameterAccepts({ ...parameter, type: 'unknown' }, vector.value);
+    case 'NULL': return parameterAccepts({ ...parameter, nullable: true }, vector.value);
+    default: return false;
+  }
 }
 
 function vectorsFor(parameter: ParameterSpec, successStatus?: number, invalidStatus?: number): ParameterVector[] {
@@ -259,37 +290,60 @@ function vectorsFor(parameter: ParameterSpec, successStatus?: number, invalidSta
       });
     }
   } else if (parameter.type === 'integer' || parameter.type === 'number') {
+    const min = parameter.min === undefined ? undefined : parameter.type === 'integer' ? Math.ceil(parameter.min) : parameter.min;
+    const max = parameter.max === undefined ? undefined : parameter.type === 'integer' ? Math.floor(parameter.max) : parameter.max;
     if (parameter.min !== undefined) {
       vectors.push(
-        { kind: 'MIN_MINUS', label: 'min-1', value: parameter.min - 1, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `min-1=${parameter.min - 1}` },
+        { kind: 'MIN_MINUS', label: 'min-1', value: min! - 1, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `min=${parameter.min}; type=${parameter.type}; lower-neighbor=${min! - 1}` },
       );
       if (parameter.max === undefined || parameter.min <= parameter.max) vectors.push(
-        { kind: 'MIN', label: 'min', value: parameter.min, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `min=${parameter.min}` },
+        { kind: 'MIN', label: 'min', value: min, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `min=${parameter.min}; type=${parameter.type}` },
       );
       if (parameter.max === undefined || parameter.min + 1 <= parameter.max) vectors.push(
-        { kind: 'MIN_PLUS', label: 'min+1', value: parameter.min + 1, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `min+1=${parameter.min + 1}` },
+        { kind: 'MIN_PLUS', label: 'min+1', value: min! + 1, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `min=${parameter.min}; next=${min! + 1}` },
       );
     }
     if (parameter.max !== undefined) {
       if (parameter.min === undefined || parameter.max - 1 >= parameter.min) vectors.push(
-        { kind: 'MAX_MINUS', label: 'max-1', value: parameter.max - 1, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `max-1=${parameter.max - 1}` },
+        { kind: 'MAX_MINUS', label: 'max-1', value: max! - 1, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `max=${parameter.max}; previous=${max! - 1}` },
       );
       if (parameter.min === undefined || parameter.max >= parameter.min) vectors.push(
-        { kind: 'MAX', label: 'max', value: parameter.max, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `max=${parameter.max}` },
+        { kind: 'MAX', label: 'max', value: max, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `max=${parameter.max}; type=${parameter.type}` },
       );
       vectors.push(
-        { kind: 'MAX_PLUS', label: 'max+1', value: parameter.max + 1, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `max+1=${parameter.max + 1}` },
+        { kind: 'MAX_PLUS', label: 'max+1', value: max! + 1, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `max=${parameter.max}; upper-neighbor=${max! + 1}` },
       );
     }
     vectors.push(
       { kind: 'EMPTY', label: 'empty', value: '', expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: 'empty value' },
       { kind: 'NULL', label: 'null', value: null, expectedStatus: parameter.nullable ? successStatus : invalidStatus, expectedOutcome: parameter.nullable ? 'ACCEPT' : 'REJECT', constraint: `nullable=${parameter.nullable}` },
       { kind: 'INVALID_TYPE', label: 'wrong-type', value: 'abc', expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `type=${parameter.type}` },
-      ...(parameter.type === 'integer' ? [{ kind: 'DECIMAL' as const, label: 'decimal', value: 18.5, expectedStatus: invalidStatus, expectedOutcome: 'REJECT' as const, constraint: 'integer rejects decimal' }] : []),
       { kind: 'EXTREME', label: 'extreme', value: Number.MAX_SAFE_INTEGER, expectedStatus: parameter.max !== undefined ? invalidStatus : undefined, expectedOutcome: parameter.max !== undefined ? 'REJECT' : 'ACCEPT', constraint: 'extreme numeric value' },
     );
+    if (parameter.type === 'integer') {
+      const value = scalarSingleFault(parameter, 'integer');
+      vectors.push({ kind: 'DECIMAL', label: 'decimal', value, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: 'integer rejects decimal',
+        designReason: value === undefined ? 'SINGLE_FAULT_VECTOR_UNAVAILABLE：无法生成满足范围/枚举且仅违反 integer 类型的输入' : undefined });
+    }
+  } else if (parameter.type === 'boolean') {
+    for (const value of [false, true]) if (parameterAccepts(parameter, value)) vectors.push({
+      kind: 'VALID', label: `boolean-${value}`, value, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: 'type=boolean',
+    });
+    vectors.push(
+      { kind: 'NULL', label: 'null', value: null, expectedStatus: parameter.nullable ? successStatus : invalidStatus, expectedOutcome: parameter.nullable ? 'ACCEPT' : 'REJECT', constraint: `nullable=${parameter.nullable}` },
+      { kind: 'INVALID_TYPE', label: 'wrong-type', value: parameter.location === 'body' ? 'false' : 'invalid-boolean', expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: 'type=boolean; invalid boolean representation' },
+    );
+  }
+  if (['integer', 'number', 'boolean'].includes(parameter.type) && parameter.enum?.length) {
+    for (const value of parameter.enum.filter((item) => parameterAccepts(parameter, item))) vectors.push({
+      kind: 'VALID', label: 'enum-valid', value, expectedStatus: successStatus, expectedOutcome: 'ACCEPT', constraint: `enum=${JSON.stringify(parameter.enum)}`,
+    });
+    const value = scalarSingleFault(parameter, 'enum');
+    vectors.push({ kind: 'ENUM_INVALID', label: 'enum-invalid', value, expectedStatus: invalidStatus, expectedOutcome: 'REJECT', constraint: `enum=${JSON.stringify(parameter.enum)}`,
+      designReason: value === undefined ? 'SINGLE_FAULT_VECTOR_UNAVAILABLE：无法生成满足其他约束且仅违反 enum 的输入' : undefined });
   }
   const normalized = vectors.flatMap((vector): ParameterVector[] => {
+    if (vector.designReason || vector.omit) return [vector];
     if (parameter.location === 'path' && vector.value === '') return [{
       ...vector,
       designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：空 Path segment 会改变路由而不是向同一 Operation 传递空参数',
@@ -306,6 +360,14 @@ function vectorsFor(parameter: ParameterSpec, successStatus?: number, invalidSta
       ...vector,
       designReason: 'TRANSPORT_VECTOR_UNREPRESENTABLE：HTTP path/query/header 会把数值序列化为字符串，无法证明 string wrong-type 单故障',
     }];
+    if (['integer', 'number', 'boolean'].includes(parameter.type)) {
+      if (vector.expectedOutcome === 'ACCEPT' && !parameterAccepts(parameter, vector.value)) return [{ ...vector,
+        designReason: 'INPUT_CONSTRAINT_CONFLICT：该边界输入不满足完整类型/范围/枚举/可空约束，不能期待成功' }];
+      if (vector.expectedOutcome === 'REJECT' && parameterAccepts(parameter, vector.value)) return [{ ...vector,
+        designReason: 'INPUT_CONSTRAINT_CONFLICT：该输入满足显式约束，不能期待拒绝' }];
+      if (vector.expectedOutcome === 'REJECT' && !scalarAcceptsExceptTarget(parameter, vector)) return [{ ...vector,
+        designReason: 'SINGLE_FAULT_VECTOR_UNAVAILABLE：该负例同时违反其他显式约束，不能用于证明目标规则的单独校验' }];
+    }
     if (parameter.type !== 'string' || typeof vector.value !== 'string') return [vector];
     const acceptedByFullContract = parameterAccepts(parameter, vector.value);
     if (vector.expectedOutcome === 'ACCEPT' && !acceptedByFullContract) {
@@ -327,7 +389,10 @@ function vectorsFor(parameter: ParameterSpec, successStatus?: number, invalidSta
   });
   const byInput = new Map<string, ParameterVector>();
   for (const vector of normalized) {
-    const key = `${JSON.stringify(vector.value)}:${vector.expectedOutcome}:${vector.expectedStatus ?? 'UNRESOLVED'}`;
+    // Unavailable samples are not the same request as intentional omission.
+    // Never let an unconstructable vector poison an otherwise valid MISSING case.
+    const key = JSON.stringify([vector.value, vector.omit === true, vector.expectedOutcome,
+      vector.expectedStatus, vector.designReason, vector.designReason ? vector.kind : undefined]);
     const existing = byInput.get(key);
     if (!existing) {
       byInput.set(key, { ...vector, coveredKinds: [vector.kind] });
@@ -345,6 +410,7 @@ function vectorsForStrategy(vectors: ParameterVector[], point: TestPoint): Param
   if (point.strategies.includes('VALID_INVALID')) return vectors;
   if (point.strategies.includes('REQUIRED_MISSING')) selected.add('MISSING');
   if (point.canonicalFact.constraints.some((constraint) => constraint.kind === 'TYPE')) {
+    selected.add('VALID');
     selected.add('INVALID_TYPE');
     selected.add('DECIMAL');
   }
@@ -354,7 +420,7 @@ function vectorsForStrategy(vectors: ParameterVector[], point: TestPoint): Param
       .forEach((kind) => selected.add(kind as ParameterVector['kind']));
   }
   if (point.strategies.includes('FORMAT_VALID_INVALID')) selected.add('FORMAT_INVALID');
-  if (point.strategies.includes('ENUM_VALID_INVALID')) selected.add('ENUM_INVALID');
+  if (point.strategies.includes('ENUM_VALID_INVALID')) { selected.add('ENUM_INVALID'); selected.add('VALID'); }
   if (!selected.size) return vectors;
   return vectors.flatMap((vector): ParameterVector[] => {
     const covered = vector.coveredKinds ?? [vector.kind];

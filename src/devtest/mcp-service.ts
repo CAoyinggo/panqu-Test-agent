@@ -13,7 +13,7 @@ import { devTestNextAction } from './interaction-guidance.js';
 
 const execFileAsync = promisify(execFile);
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const EXECUTION_POLICY = 'NO_SILENT_REQUIREMENT_GAPS_V1';
+const EXECUTION_POLICY = 'NO_SILENT_REQUIREMENT_GAPS_V1+EXACT_INPUT_CASES_V1';
 
 /** MCP is a control surface. Case schemas and execution semantics remain in TEST_CASE_V2. */
 export const DEVTEST_MCP_TOOL = {
