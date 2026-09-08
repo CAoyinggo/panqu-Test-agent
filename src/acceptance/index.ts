@@ -1,6 +1,8 @@
 export * from './requirement-ir.js';
+export * from './business-model.js';
 export * from './requirement-fact-ledger.js';
 export * from './test-objective.js';
+export * from './test-design-intelligence.js';
 export * from './api-operation-binding.js';
 export * from './api-binding-gate.js';
 export * from './requirement-parser.js';
@@ -22,6 +24,8 @@ export * from './test-pattern-registry.js';
 export * from './scenario-executability-gate.js';
 export * from './scenario-quality.js';
 export * from './scenario-runner.js';
+export * from './test-case-scenario-adapter.js';
+export * from './standardization-gate.js';
 export * from './scenario-report.js';
 export * from './scenario-pipeline.js';
 export * from './scenario-asset-loader.js';

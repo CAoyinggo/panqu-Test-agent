@@ -48,7 +48,7 @@ export function isOssConfigured(): boolean {
 
 /**
  * 上传 output/<日期>/ 目录下所有报告到 OSS
- * @param outputBaseDir output 根目录路径（如 /Users/mac/agents/output）
+ * @param outputBaseDir output 根目录路径（例如由 TESTFLOW_OUTPUT_DIR 指定）
  * @param config OSS 配置
  * @returns 上传结果（URL 列表）
  */

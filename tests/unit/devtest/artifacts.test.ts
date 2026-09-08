@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatReportDate, handoffProblemLevel } from '../../../src/devtest/artifacts.js';
+import { artifactSafe, formatReportDate, handoffProblemLevel } from '../../../src/devtest/artifacts.js';
 import type { DevTestProblem } from '../../../src/devtest/types.js';
 
 function problem(overrides: Partial<DevTestProblem>): DevTestProblem {
@@ -18,6 +18,22 @@ function problem(overrides: Partial<DevTestProblem>): DevTestProblem {
 }
 
 describe('DevTest developer handoff artifact', () => {
+  it('removes runtime URLs, accounts, database connections, and local paths from artifacts', () => {
+    const rendered = JSON.stringify(artifactSafe({
+      baseUrl: 'https://sandbox.example.test/api/tasks?token=runtime-token',
+      databaseUrl: 'postgres://runtime-user:runtime-password@db.internal/devtest',
+      account: 'real-account@example.test',
+      message: 'username=runtime-user nickname=runtime-name',
+      sourcePath: '/Users/private-user/workspace/requirement.md',
+    }));
+
+    expect(rendered).toContain('[ENV:DEVTEST_BASE_URL]/api/tasks');
+    expect(rendered).toContain('[ENV:DATABASE_URL]');
+    expect(rendered).toContain('[LOCAL_PATH]');
+    expect(rendered).toContain('***');
+    expect(rendered).not.toMatch(/runtime-token|runtime-user|runtime-password|real-account|runtime-name|private-user/);
+  });
+
   it.each([
     ['越权/数据隔离产品问题是 P0', problem({ category: 'Permission Error', dimension: 'DATA_ISOLATION' }), {}, 'P0'],
     ['核心主流程产品问题是 P0', problem({}), { 'CASE-1': { core: true, coreKind: 'HAPPY_PATH' } }, 'P0'],

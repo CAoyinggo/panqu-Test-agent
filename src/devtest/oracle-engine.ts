@@ -27,8 +27,12 @@ function apiCollectedEvidence(input: {
   const structured = (item: (typeof observations)[number]): boolean => typeof item.evidence !== 'string';
   const comparable = (item: (typeof observations)[number]): unknown => item.value
     ?? { resourceId: item.resourceId, state: item.state, exists: item.exists };
+  const verifiedRuntimeEvidence = new Set((input.result.evidence.evidenceItems ?? [])
+    .filter((item) => item.collected && item.verified)
+    .map((item) => item.requirementId));
   for (const requirement of input.requirements) {
     const key = evidenceKey(requirement);
+    if (requirement.id && verifiedRuntimeEvidence.has(requirement.id)) collected.add(key);
     if (requirement.channel === 'API_REQUEST' && input.result.evidence?.request) collected.add(key);
     else if (requirement.channel === 'API_RESPONSE' && input.result.evidence?.response) collected.add(key);
     else if (requirement.channel === 'DATABASE_STATE'

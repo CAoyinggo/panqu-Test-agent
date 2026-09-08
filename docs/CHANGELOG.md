@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased] - 2026-09-08
+
+### 统一内核与 Trae 入口
+
+- 将本地待同步的 Requirement/Business Model、TEST_CASE_V2 标准化、业务场景适配、交付证据和 npm/GitHub 接入合并为同一条测试链路。
+- 新增 `devtest-mcp`，提供 doctor、零网络 plan、确认后 execute、status；Trae 默认入口改为调用现有 Generator、Quality Gate、Runner 和 Oracle，保留旧 bridge 兼容文件。
+- 计划绑定需求、项目内容、配置、目标环境和运行时模块；跨进程锁与幂等键防止重复执行。模型不能通过 MCP 传入自造用例、凭证或 shell 命令。
+- 新增 `devtest init --trae` 和薄入口 Skill；保留团队其他 MCP 配置和已编辑的 Skill，拒绝路径越界。
+- 新增独立本地 HTTP fixture 验证真实响应、错误响应、UNKNOWN、证据、失效计划和重复调用；将断言派生的 Reference Scenario 明确标为模拟契约测试，不作真实业务验收证据。
+- 新增内核与安装包 CI。MCP 当前只执行本地只读测试；业务写入沿用现有受审批的 CLI/CI 流程。尚未执行客户业务环境验收，也未发布 npm 新版本。
+
 ## [4.29.2] - 2026-08-27
 
 ### 文档（GitHub 推送必做检查）

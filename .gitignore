@@ -29,6 +29,7 @@ reports/mutation/
 /acceptance.config.json
 /reports/
 /devtest-results/
+/package-artifacts/
 
 # Playwright E2E artifacts (Phase 41)
 test-results/

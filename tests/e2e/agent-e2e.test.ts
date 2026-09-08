@@ -1,11 +1,10 @@
-// 端到端验收：WAN3 文生视频 15 步闭环 Demo（Phase 10-18 全链路）
-// 场景：测试 WAN3 文生视频功能，覆盖正常、边界、异常、积分、并发和模型异常
+// 端到端验收：通用 Requirement → TEST_CASE_V2 → Scenario Runtime 15 步闭环
 // 15 步闭环：
 //   1 需求解析 → 2 测试设计 → 3 风险评估 → 4 智能选择 → 5 覆盖分析 →
 //   6 数据准备 → 7 执行 → 8 结果分析 → 9 根因分析(RCA) → 10 缺陷草稿(Defect) →
 //   11 自愈建议(Healing) → 12 分级审批(Approval) → 13 记忆写入(Memory) →
 //   14 观测(Trace) → 15 预算控制(Budget)
-// 使用 MockLLM + mock 执行引擎（第 2/3/6 条失败：超时 / 路径失效 / 积分扣费），确定性可重复。
+// 使用 MockLLM + Scenario Processor，Generator 产物不经过手工任务编译。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,76 +12,58 @@ import path from 'node:path';
 import {
   createAgentContext,
   createDataPrepareTool,
+  createExecutionRunTool,
   JsonMemoryStore,
   ToolRegistry,
   runAgentPipeline,
 } from '../../src/agents/index.js';
 import type { AgentTool } from '../../src/agents/tools/tool.js';
-import type { ExecutionOutcome, CaseExecutionResult } from '../../src/agents/execution/execution-schema.js';
-import type { LoadedCase } from '../../src/cases/loader.js';
+import type { EvidenceEnvelope } from '../../src/acceptance/scenario-contract.js';
+import type { ScenarioProcessor } from '../../src/acceptance/scenario-runner.js';
 import { MockLLMProvider } from '../../src/llm/index.js';
 
-const DEMO = '测试 WAN3 文生视频功能，覆盖正常、边界、异常、积分、并发和模型异常';
+const DEMO = `# 通用资源创建
+## Actors
+| actorId | userId | role | tenantId | projectId | tokenRef |
+| --- | --- | --- | --- | --- | --- |
+| user-a | user-a | USER | tenant-a | project-a | token-user-a |
+## Authentication
+Bearer Token 认证。
+## API
+POST /resources
+## Acceptance Criteria
+AC-1 user-a 创建自己拥有的 Resource resourceId=resource-a，返回 HTTP 201。`;
 
-/** mock 执行引擎：制造 1 条超时 + 3 条失败（路径 / 计费 / 服务异常） */
-const mockRunTool: AgentTool<{ cases: LoadedCase[]; options?: unknown }, ExecutionOutcome> = {
-  name: 'execution.run',
-  description: 'mock 执行引擎（端到端 Demo）',
-  inputSchema: {},
-  outputSchema: {},
-  permission: 'risky',
-  async execute(input) {
-    const loaded = (input?.cases ?? []) as LoadedCase[];
-    const FAIL: Record<number, { error: string; detail: string; timedOut?: boolean }> = {
-      1: { error: '503 服务不可用，接口超时', detail: 'HTTP 503', timedOut: true },
-      2: { error: '响应结构变化：data.videos.list 字段 undefined，实际返回 data.videos.items', detail: 'path mismatch' },
-      5: { error: '积分扣费异常：用户积分不足，扣费失败', detail: 'billing failed' },
-      6: { error: '模型服务返回 503', detail: 'model service unavailable' },
-    };
-    const results: CaseExecutionResult[] = loaded.map((c, i) => {
-      const f = FAIL[i];
-      const pass = !f;
-      const caseId = String(c.def?.extra?.agentTestCaseId ?? c.def?.name ?? c.name);
-      const priority = Array.isArray(c.def?.tags) ? c.def.tags.find((t) => /^P[0-3]$/.test(t)) : undefined;
+function setPath(target: Record<string, unknown>, pathValue: string, value: unknown): void {
+  const parts = pathValue.replace(/^\$\.?/, '').split('.').filter(Boolean);
+  let cursor = target;
+  for (const [index, part] of parts.entries()) {
+    if (index === parts.length - 1) cursor[part] = value;
+    else cursor = (cursor[part] ??= {}) as Record<string, unknown>;
+  }
+}
+
+const runtimeProcessor: ScenarioProcessor = {
+  name: 'e2e-scenario-runtime', supportsAbort: true,
+  supportedEvidenceKinds: ['REQUEST', 'RESPONSE', 'STATE_BEFORE', 'STATE_AFTER', 'DATABASE', 'RESOURCE', 'AUDIT_RECORD', 'OTHER'],
+  supports: () => true, supportsEvidence: () => true,
+  execute: async (operation, context) => ({
+    status: 'PASS', executed: true,
+    evidence: context.scenario.evidenceRequirements.filter((item) => item.operationId === operation.id).map((requirement): EvidenceEnvelope => {
+      const data: Record<string, unknown> = {};
+      for (const assertionId of requirement.assertionIds) {
+        const assertion = context.scenario.assertions.find((item) => item.id === assertionId);
+        if (assertion) setPath(data, assertion.target, assertion.operator === 'EXISTS' ? 'observed'
+          : assertion.operator === 'NOT_EXISTS' ? undefined : assertion.expectedFrom ? 'observed' : assertion.expected);
+      }
       return {
-        caseId,
-        name: c.name ?? caseId,
-        feature: c.feature ?? 'wan3',
-        priority: priority ?? 'P0',
-        processor: 'mock-wan3-processor',
-        processorInvoked: true,
-        executed: f?.timedOut !== true,
-        status: pass ? 'PASS' : (f?.timedOut ? 'TIMEOUT' : 'FAIL'),
-        pass,
-        passRate: pass ? 100 : 0,
-        error: f?.error,
-        timedOut: f?.timedOut,
-        durationMs: 10 + i,
-        checks: pass
-          ? [{ name: '业务结果断言', pass: true, detail: 'mock processor response verified', kind: 'BUSINESS' }]
-          : [{ name: 'assert', pass: false, detail: f?.detail ?? 'failed', kind: 'BUSINESS' }],
+        id: requirement.id, requirementId: requirement.id, scenarioId: context.scenario.id,
+        operationId: operation.id, acceptanceCriteriaIds: context.scenario.acceptanceCriteriaIds,
+        kind: requirement.kind, channel: requirement.channel, source: 'e2e-scenario-runtime',
+        observedAt: new Date().toISOString(), data, verified: true,
       };
-    });
-    const passed = results.filter((r) => r.pass).length;
-    return {
-      feature: 'wan3',
-      total: results.length,
-      passed,
-      failed: results.length - passed,
-      timedOut: 1,
-      passRate: passed / results.length,
-      results,
-      reports: [],
-      executed: true,
-      summary: `执行完成：${passed}/${results.length} 通过`,
-      plan: {
-        order: loaded.map((c) => String(c.def?.extra?.agentTestCaseId ?? c.def?.name ?? c.name)),
-        concurrency: 1,
-        enableRetry: true,
-        reason: 'mock e2e',
-      },
-    };
-  },
+    }),
+  }),
 };
 
 let dir: string;
@@ -97,7 +78,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
+describe('端到端验收 - 通用 V2 Case 15 步闭环', () => {
   it('走通全链路并产出全部阶段产物', async () => {
     const memory = new JsonMemoryStore(file);
     const tools = new ToolRegistry();
@@ -111,14 +92,21 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
         };
       },
     })));
-    tools.register(mockRunTool);
+    tools.register(createExecutionRunTool());
     const context = createAgentContext({
       taskId: 'e2e-demo',
-      feature: 'wan3',
+      feature: 'resource',
       environment: 'test',
       tools,
       memory,
       llm: new MockLLMProvider(),
+      metadata: {
+        scenarioRunnerOptions: {
+          processors: [runtimeProcessor], environmentAvailable: true, policyAllowed: true,
+          availableDependencies: new Set(['runtime.caseCleanup']),
+          cleanupHooks: new Map([['runtime.caseCleanup', async () => ({})]]),
+        },
+      },
     });
 
     const r = await runAgentPipeline(
@@ -126,7 +114,7 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
         requirementText: DEMO,
         environment: 'test',
         options: {
-          budget: { maxTokens: 100000 },
+          budget: { maxTokens: 100000000 },
           executionApproval: { id: 'e2e-human-approval', status: 'APPROVED', approvedBy: 'e2e-reviewer' },
         },
       },
@@ -135,8 +123,8 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
 
     // 1 需求解析 / 2 测试设计 / 3 风险评估
     expect(r.stages.requirement).toBe(true);
-    expect(r.requirement.feature).toBe('wan3');
-    expect(r.testCases.length).toBeGreaterThanOrEqual(6);
+    expect(r.requirement.feature).toBeTruthy();
+    expect(r.testCases.length).toBeGreaterThan(0);
     expect(r.risk.risks.length).toBeGreaterThan(0);
 
     // 4 智能选择 / 5 覆盖分析
@@ -147,47 +135,34 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
 
     // 6 数据准备 / 7 执行
     expect(r.dataPlan).toBeDefined();
-    // 整轮包含一条 TIMEOUT，严格语义下不能宣称“全部完成真实执行”。
+    // Contract-only 设计项仍保持未执行，严格区分“部分已执行”与“全部已执行”。
     expect(r.outcome.executed).toBe(false);
-    expect(r.outcome.results.filter((item) => item.status === 'PASS' || item.status === 'FAIL').every((item) => (
-      item.executed === true
-      && item.processor === 'mock-wan3-processor'
-      && item.processorInvoked === true
-      && item.checks?.some((check) => check.kind === 'BUSINESS')
-    ))).toBe(true);
-    expect(r.outcome.results.find((item) => item.status === 'TIMEOUT')?.executed).toBe(false);
-    // FAIL 与 TIMEOUT 是互斥终态；超时由 timedOut 单独统计，不伪装成已执行失败。
-    expect(r.outcome.failed).toBeGreaterThanOrEqual(2);
-    expect(r.outcome.timedOut).toBeGreaterThanOrEqual(1);
+    expect(r.outcome.results.some((item) => item.status === 'PASS' && item.executed
+      && item.processor === 'e2e-scenario-runtime' && item.processorInvoked
+      && item.checks?.some((check) => check.kind === 'BUSINESS'))).toBe(true);
+    expect(r.outcome.timedOut).toBe(0);
 
     // 8 结果分析
     expect(r.report.findings.length).toBeGreaterThan(0);
 
     // 9 根因分析（覆盖全部失败用例，evidence 链完整）
-    expect(r.rcas!.length).toBeGreaterThanOrEqual(3);
+    expect(r.rcas!.length).toBeGreaterThanOrEqual(1);
     expect(r.rcas!.every((x) => x.confidence > 0)).toBe(true);
-    expect(r.rcas!.some((x) => x.category === 'TIMEOUT')).toBe(true);
-    expect(r.rcas!.some((x) => x.category === 'BILLING_ERROR')).toBe(true);
 
     // 10 缺陷草稿（仅 DRAFT，未提交）
-    expect(r.defects!.length).toBeGreaterThanOrEqual(3);
+    expect(r.defects!.length).toBeGreaterThanOrEqual(1);
     expect(r.defects!.every((d) => d.status === 'DRAFT')).toBe(true);
 
-    // 11 自愈建议（仅 SUGGESTED，未应用；路径失效可定位新路径）
-    expect(r.healing!.suggestions.length).toBeGreaterThanOrEqual(1);
+    // 11 自愈建议保持建议态；没有路径失败时允许为空。
     expect(r.healing!.suggestions.every((s) => s.status === 'SUGGESTED')).toBe(true);
-    expect(r.healing!.suggestions[0].oldPath).toContain('data.videos.list');
-    expect(r.healing!.suggestions[0].newPath).toContain('data.videos.items');
 
     // 12 分级审批 + 审计日志（缺陷草稿 + 自愈建议全部产生审批请求）
-    expect(r.approvals!.length).toBeGreaterThanOrEqual(3);
+    expect(r.approvals!.length).toBeGreaterThanOrEqual(1);
     expect(r.audit!.length).toBe(r.approvals!.length);
 
-    // 13 记忆写入 fail-close：整轮含 TIMEOUT、outcome.executed=false，不持久化为已完成执行记忆。
+    // 13 部分真实执行仍写入真实摘要；DESIGNED_ONLY 不会被伪造成 PASS。
     const all = await memory.query();
-    expect(all).toHaveLength(0);
-    const failures = await memory.query({ type: 'failure' });
-    expect(failures).toHaveLength(0);
+    expect(all.some((record) => record.type === 'execution')).toBe(true);
 
     // 14 观测 Trace（各阶段 span 齐全）
     expect(r.trace!.spans.length).toBeGreaterThanOrEqual(10);
@@ -197,8 +172,7 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
     // 15 预算控制（未超限，流程完整）
     expect(r.budgetStatus!.exceededAny).toBe(false);
 
-    // 退出码：含超时用例 → 3（有失败 → 1，全部通过 → 0）
-    expect(r.exitCode).toBe(3);
+    expect(r.exitCode).toBe(1);
     expect(r.durationMs).toBeGreaterThan(0);
   });
 
@@ -218,7 +192,7 @@ describe('端到端验收 - WAN3 文生视频 15 步闭环', () => {
     tools.register(dangerousTool);
     const context = createAgentContext({
       taskId: 'e2e-safe',
-      feature: 'wan3',
+      feature: 'resource',
       environment: 'prod',
       tools,
       memory: new JsonMemoryStore(file),

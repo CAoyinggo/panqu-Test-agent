@@ -57,6 +57,7 @@ function normalizedHeader(value: string): string {
     actorid: 'actorId', actor: 'actorId', 身份: 'actorId', id: 'actorId',
     角色: 'role', role: 'role', 用户: 'userId', 用户id: 'userId', userid: 'userId',
     租户: 'tenantId', 租户id: 'tenantId', tenant: 'tenantId', tenantid: 'tenantId',
+    项目: 'projectId', 项目id: 'projectId', project: 'projectId', projectid: 'projectId',
     名称: 'actorName', name2: 'actorName', tokenref: 'tokenRef', 凭据: 'tokenRef',
   };
   return aliases[v] ?? value.trim();
@@ -318,6 +319,7 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
           userId: row.data.userId || id,
           role: row.data.role || 'USER',
           tenantId: row.data.tenantId || undefined,
+          projectId: row.data.projectId || undefined,
           tokenRef: row.data.tokenRef || id,
           source: sourceOf(row.line, documentId),
         });
@@ -368,6 +370,7 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
     const actorType = field(actorSection, /^(?:type|类型)$/i)?.value;
     const roleLine = linesInSection(/^(?:role|角色类型)$/i).find((line) => line.text.trim() && !/^#/.test(line.text));
     const tenantField = field(linesInSection(/^(?:tenant|租户)$/i), /^(?:id|tenant\s*id|编号)$/i);
+    const projectField = field(linesInSection(/^(?:project|项目)$/i), /^(?:id|project\s*id|编号)$/i);
     const tokenField = field(linesInSection(/^(?:authentication|auth|认证|鉴权配置)$/i), /^(?:reference|token\s*ref|credential\s*ref|引用)$/i);
     actors.push({
       id: actorIdField.value,
@@ -375,6 +378,7 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
       userId: actorIdField.value,
       role: roleLine?.text.trim().replace(/^[-*+]\s*/, '') || actorType || 'USER',
       tenantId: tenantField?.value,
+      projectId: projectField?.value,
       tokenRef: tokenField?.value,
       source: sourceOf(actorIdField.line, documentId),
     });
@@ -525,7 +529,17 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
     .map((line, index) => ({ id: `BR-${String(index + 1).padStart(3, '0')}`, description: line.text.replace(/^\s*[-*]\s*/, '').trim(), source: sourceOf(line, documentId) }));
   const stateRules = lines
     .filter((line) => /(?:状态|订单|资源).{0,20}(?:从\s*[^，。；]+\s*(?:变为|变成|转为|到)\s*[^，。；]+|(?:变为|变成|转为)\s*[^，。；]+)|state\s+(?:changes?|transitions?)\s+(?:from|to)/i.test(line.text))
-    .map((line, index) => ({ id: `STATE-${String(index + 1).padStart(3, '0')}`, action: line.text.trim(), source: sourceOf(line, documentId) }));
+    .map((line, index) => {
+      const transition = line.text.match(/从\s*([A-Za-z0-9_-]+)(?:[^，。；]{0,40}?)(?:变为|变成|转为|转换到|流转到|到)\s*([A-Za-z0-9_-]+)/i)
+        ?? line.text.match(/transition(?:s|ed)?\s+from\s+([^,.;\s]+)\s+to\s+([^,.;\s]+)/i);
+      return {
+        id: `STATE-${String(index + 1).padStart(3, '0')}`,
+        from: transition?.[1],
+        action: line.text.trim(),
+        to: transition?.[2],
+        source: sourceOf(line, documentId),
+      };
+    });
 
   if (!apis.length) warnings.push({ code: 'NO_API', message: '未识别到可执行 API 定义', source: { documentId, section: title, line: 1 } });
   for (const api of apis) {

@@ -13,6 +13,15 @@ describe('DevTest CLI', () => {
     });
   });
 
+  it('支持产品化 --requirement，并且只允许 test/sandbox', () => {
+    expect(parseDevTestArgs(['--requirement', 'requirements/demo.md', '--env', 'sandbox']))
+      .toMatchObject({ doc: 'requirements/demo.md', env: 'sandbox' });
+    expect(parseDevTestArgs(['--requirement', 'requirements/demo.md'])).toMatchObject({ env: 'test' });
+    expect(() => parseDevTestArgs(['--requirement', 'a.md', '--doc', 'b.md'])).toThrow('DEVTEST_ARG_DUPLICATE');
+    expect(() => parseDevTestArgs(['a.md', '--env', 'local'])).toThrow('DEVTEST_ARG_INVALID');
+    expect(() => parseDevTestArgs(['a.md', '--env', 'integration'])).toThrow('DEVTEST_ARG_INVALID');
+  });
+
   it('缺 Requirement、缺参数值、未知参数、重复参数均拒绝', () => {
     expect(() => parseDevTestArgs([])).toThrow('DEVTEST_ARG_MISSING');
     expect(() => parseDevTestArgs(['a.md', '--env'])).toThrow('DEVTEST_ARG_MISSING_VALUE');

@@ -257,6 +257,9 @@ export function buildRequirementFactLedger(input: RequirementFactLedgerInput): R
   const dedupe = new Map<string, RequirementFact>();
   const representedLineCategories = new Set<string>();
   const representedStructuredLines = new Set<string>();
+  const acceptanceCriterionLines = new Set(input.acceptanceCriteria.map((criterion) => (
+    sourceKey(sourceSpan(criterion.source, criterion.objective, input.documentId), input.documentId)
+  )));
 
   const add = (draft: FactDraft, structured = false): RequirementFact => {
     const conflictReason = conflicts.get(sourceKey(draft.source, input.documentId));
@@ -435,7 +438,9 @@ export function buildRequirementFactLedger(input: RequirementFactLedgerInput): R
       content: line.text.trim(),
       text: line.text.trim(),
     }, line.text.trim(), input.documentId);
-    if (kind === 'TABLE_ROW' && representedStructuredLines.has(sourceKey(source, input.documentId))) continue;
+    const sourceIdentity = sourceKey(source, input.documentId);
+    if ((kind === 'TABLE_ROW' || acceptanceCriterionLines.has(sourceIdentity))
+      && representedStructuredLines.has(sourceIdentity)) continue;
     if (representedLineCategories.has(`${sourceKey(source, input.documentId)}:${category}`)) continue;
     add({
       source,

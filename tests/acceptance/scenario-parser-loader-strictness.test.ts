@@ -4,16 +4,14 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadScenarioAssetPack } from '../../src/acceptance/scenario-asset-loader.js';
 import { parseScenarioMarkdown } from '../../src/acceptance/scenario-markdown-parser.js';
+import { materializeScenarioTemplate } from './helpers/scenario-template.js';
 
 const templatePath = path.resolve('tests/acceptance/templates/scenario.md');
 const referencePack = path.resolve('tests/acceptance/scenarios/generic/multi-api-operation-binding');
 const temporaryDirectories: string[] = [];
 
 function executableMarkdown(template: string): string {
-  return template
-    .replace('SCN-<domain>-<intent>', 'SCN-strict-parser-contract')
-    .replace('- <按风险选择 PERSISTENCE / NON_MUTATION / IDEMPOTENCY / AUTHORIZATION / ...>', '- PERSISTENCE')
-    .replace('- <环境、服务、Processor、Evidence Provider；无则写 NONE>', '- NONE');
+  return materializeScenarioTemplate(template, 'SCN-strict-parser-contract');
 }
 
 async function referenceMarkdown(): Promise<string> {

@@ -12,20 +12,31 @@ import {
   NoopMemory,
   ToolRegistry,
   parseRequirement,
+  generateCanonicalAgentTestDesign,
 } from '../../src/agents/index.js';
 import { MockLLMProvider } from '../../src/llm/index.js';
 import type { AgentContext } from '../../src/agents/core/agent-context.js';
 import type { TestCase } from '../../src/agents/test-design/testcase-schema.js';
 import type { AssertionRule } from '../../src/core/assertion-operators.js';
 
-const DEMO_REQ =
-  '测试文生视频功能，支持 720P、1080P 分辨率，提示词长度 5 到 100 字，支持 5 秒和 10 秒视频，' +
-  '验证模型服务与积分服务，确认任务提交成功、状态成功及积分正确扣除，并验证并发执行正常。';
+const DEMO_REQ = '测试用户资源操作，角色权限必须正确，状态流转保持一致，并发操作不能互相污染。';
+
+let canonicalTraceCache: { requirementId: string; factId: string; objectiveId: string } | undefined;
+function canonicalTrace() {
+  if (canonicalTraceCache) return canonicalTraceCache;
+  const canonical = generateCanonicalAgentTestDesign(parseRequirement(DEMO_REQ));
+  canonicalTraceCache = {
+    requirementId: canonical.requirement.id,
+    factId: canonical.requirement.factLedger.find((fact) => fact.normativity === 'NORMATIVE')!.id,
+    objectiveId: canonical.design.objectives[0].id,
+  };
+  return canonicalTraceCache;
+}
 
 function makeContext(llm: MockLLMProvider): AgentContext {
   return createAgentContext({
     taskId: 't-1',
-    feature: 'wan3',
+    feature: 'Resource',
     environment: 'test',
     tools: new ToolRegistry(),
     memory: new NoopMemory(),
@@ -37,16 +48,15 @@ function makeContext(llm: MockLLMProvider): AgentContext {
 function validCaseJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'tc-01',
-    feature: 'wan3',
+    feature: 'Resource',
     name: '正常提交并成功',
     priority: 'P0',
     tags: ['smoke'],
     steps: [
-      { action: 'submit', input: { prompt: '一个女孩在花园奔跑' } },
-      { action: 'wait', until: 'SUCCESS' },
+      { action: 'submit', scene: 'api', input: { resourceName: 'alpha' } },
     ],
     assertions: [
-      { target: 'submit', path: 'taskId', operator: 'exists', severity: 'P0' },
+      { target: 'response', path: 'result', operator: 'exists', severity: 'P0' },
     ],
     ...overrides,
   };
@@ -54,22 +64,23 @@ function validCaseJson(overrides: Record<string, unknown> = {}): Record<string, 
 
 /** v2 Agent 输出：设计态必须被保留，但 Runtime 能力只能由确定性 Preflight 绑定。 */
 function validV2CaseJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const trace = canonicalTrace();
   return {
     schemaVersion: 'TEST_CASE_V2',
     id: 'tc-v2-01',
-    feature: 'wan3',
-    name: '用户查看视频任务状态',
+    feature: 'Resource',
+    name: '用户查看资源状态',
     priority: 'P0',
     testType: 'FUNCTIONAL',
     testAspects: ['CORE_FUNCTION'],
     executionMode: 'EXECUTABLE',
     requirementStatus: 'CONFIRMED',
     source: {
-      requirementId: 'REQ-wan3', testPointId: 'TP-001', acceptanceCriteriaIds: [],
-      factIds: ['RF-001'], objectiveIds: ['OBJ-RF-001'], sourceType: 'REQUIREMENT', provenance: 'EXPLICIT',
+      requirementId: trace.requirementId, testPointId: 'TP-001', acceptanceCriteriaIds: [],
+      factIds: [trace.factId], objectiveIds: [trace.objectiveId], sourceType: 'REQUIREMENT', provenance: 'EXPLICIT',
     },
     businessScenario: {
-      title: '用户查看视频任务状态', goal: '用户确认已提交任务的当前状态', kind: 'CORE_FLOW',
+      title: '用户查看资源状态', goal: '用户确认自己拥有资源的当前状态', kind: 'CORE_FLOW',
       actors: [{ id: 'user', relation: 'SUBJECT', provenance: 'EXPLICIT' }],
       resourceContext: { type: 'video-task', idRef: 'fixture.taskId', provenance: 'EXPLICIT' },
       ownership: { relation: 'SELF', ownerActorId: 'user', provenance: 'EXPLICIT' },
@@ -77,7 +88,7 @@ function validV2CaseJson(overrides: Record<string, unknown> = {}): Record<string
       permission: { decision: 'NOT_APPLICABLE', provenance: 'EXPLICIT' },
       flow: { id: 'FLOW-001', name: '查看任务状态', mode: 'SINGLE_OPERATION', steps: [{ id: 'FLOW-STEP-1', action: 'query', dependsOn: [] }] },
       dependencies: [], risks: [], expectedBusinessOutcome: '返回需求声明的任务状态',
-      provenance: 'EXPLICIT', factIds: ['RF-001'], acceptanceCriteriaIds: [],
+      provenance: 'EXPLICIT', factIds: [trace.factId], acceptanceCriteriaIds: [],
     },
     tags: ['core'],
     preconditions: [],
@@ -86,17 +97,17 @@ function validV2CaseJson(overrides: Record<string, unknown> = {}): Record<string
     testData: [],
     steps: [{
       id: 'STEP-001', channel: 'FUNCTIONAL', description: '查询任务状态', execution: 'EXECUTABLE',
-      dependsOn: [], acceptanceCriteriaIds: [], factIds: ['RF-001'], action: 'query', input: {},
+      dependsOn: [], acceptanceCriteriaIds: [], factIds: [trace.factId], action: 'query', input: {},
     }],
     assertions: [{
       id: 'AS-001', channel: 'STATE', type: 'DESIGN_EXPECTATION', description: '状态与需求声明一致',
-      acceptanceCriteriaIds: [], factIds: ['RF-001'], objectiveIds: ['OBJ-RF-001'],
+      acceptanceCriteriaIds: [], factIds: [trace.factId], objectiveIds: [trace.objectiveId],
       evidenceRequirementIds: ['EV-001'], sourceType: 'REQUIREMENT', provenance: 'EXPLICIT',
     }],
     expected: { state: { expectation: 'UNKNOWN', description: '需求未声明具体状态值' } },
     evidenceRequirements: [{
       id: 'EV-001', channel: 'STATE_CHANGE', phase: 'AFTER', required: true,
-      description: '任务状态观察证据', factIds: ['RF-001'], sourceStepId: 'STEP-001', assertionIds: ['AS-001'],
+      description: '任务状态观察证据', factIds: [trace.factId], sourceStepId: 'STEP-001', assertionIds: ['AS-001'],
     }],
     oracle: { mode: 'ALL', deterministic: true, status: 'READY', assertionIds: ['AS-001'], evidenceRequirementIds: ['EV-001'] },
     prepare: [],
@@ -111,6 +122,10 @@ function validV2CaseJson(overrides: Record<string, unknown> = {}): Record<string
       observers: [{ channel: 'STATE_CHANGE', ref: 'observer.task-state', phase: 'AFTER', required: true, status: 'AVAILABLE' }],
       preflight: [], lifecycleHooks: [],
     },
+    metadata: {
+      designOrigin: 'REQUIREMENT_DERIVED',
+      riskJustification: '由 Requirement 明确的核心业务结果激活',
+    },
     ...overrides,
   };
 }
@@ -119,13 +134,13 @@ describe('test-design - Test DSL Schema 校验', () => {
   it('合法 TestCase 校验通过并归一化', async () => {
     const tc = await validateTestCase(validCaseJson());
     expect(tc.id).toBe('tc-01');
-    expect(tc.feature).toBe('wan3');
+    expect(tc.feature).toBe('Resource');
     expect(tc.priority).toBe('P0');
-    expect(tc.steps).toHaveLength(2);
+    expect(tc.steps).toHaveLength(1);
   });
 
   it('缺必填字段（id/feature/name/priority/steps）校验失败', async () => {
-    await expect(validateTestCase({ feature: 'wan3' })).rejects.toThrow('TestCase 校验失败');
+    await expect(validateTestCase({ feature: 'Resource' })).rejects.toThrow('TestCase 校验失败');
   });
 
   it('非法优先级校验失败', async () => {
@@ -139,7 +154,7 @@ describe('test-design - Test DSL Schema 校验', () => {
   });
 
   it('normalizeTestCase 补默认值并过滤非法断言', () => {
-    const tc = normalizeTestCase({ id: 'x', feature: 'wan3', name: 'n', priority: 'P1', steps: [], assertions: [{ operator: 'bad' }, { operator: 'equals', target: 'submit' }] });
+    const tc = normalizeTestCase({ id: 'x', feature: 'Resource', name: 'n', priority: 'P1', steps: [], assertions: [{ operator: 'bad' }, { operator: 'equals', target: 'submit' }] });
     expect(tc.tags).toEqual([]);
     expect(tc.assertions).toHaveLength(1);
     expect(tc.assertions[0].operator).toBe('equals');
@@ -156,13 +171,13 @@ describe('test-design - 现有引擎适配器 toTaskDef / toLoadedCase', () => {
     const tc = await validateTestCase(validCaseJson());
     const def = toTaskDef(tc);
     expect(def.name).toBe('正常提交并成功');
-    expect(def.scene).toBe('video'); // 由 submit 步骤推断
-    expect(def.adapter).toBe('wan3'); // video 场景走 wan3 业务适配器
+    expect(def.scene).toBe('api'); // 仅使用 Case 显式声明的场景
+    expect(def.adapter).toBe('default');
     expect(def.extra?.agentTestCaseId).toBe('tc-01');
-    expect(def.extra?.prompt).toBe('一个女孩在花园奔跑'); // 步骤输入合并进 extra
+    expect(def.extra?.resourceName).toBe('alpha'); // 步骤输入合并进 extra
     expect(def.assert?.mode).toBe('all');
     const rule = (def.assert!.rules[0] as AssertionRule);
-    expect(rule.target).toBe('submit');
+    expect(rule.target).toBe('response');
     expect(rule.operator).toBe('exists');
   });
 
@@ -175,14 +190,14 @@ describe('test-design - 现有引擎适配器 toTaskDef / toLoadedCase', () => {
 
   it('data 与步骤输入合并进 extra，data 在前步骤覆盖', () => {
     const tc = normalizeTestCase({
-      id: 'z', feature: 'wan3', name: 'n', priority: 'P2',
-      data: { prompt: 'data-prompt' },
-      steps: [{ action: 'submit', input: { prompt: 'step-prompt', resolution: '1080P' } }],
+      id: 'z', feature: 'Resource', name: 'n', priority: 'P2',
+      data: { resourceName: 'data-name' },
+      steps: [{ action: 'submit', input: { resourceName: 'step-name', quantity: 2 } }],
       assertions: [],
     });
     const def = toTaskDef(tc);
-    expect(def.extra?.prompt).toBe('step-prompt');
-    expect(def.extra?.resolution).toBe('1080P');
+    expect(def.extra?.resourceName).toBe('step-name');
+    expect(def.extra?.quantity).toBe(2);
   });
 
   it('toLoadedCase 产出与 loadCases 兼容的 LoadedCase', () => {
@@ -190,39 +205,47 @@ describe('test-design - 现有引擎适配器 toTaskDef / toLoadedCase', () => {
     const lc = toLoadedCase(tc);
     expect(lc.name).toBe('正常提交并成功');
     expect(lc.file).toBe('<agent:tc-01>');
-    expect(lc.feature).toBe('wan3');
+    expect(lc.feature).toBe('Resource');
     expect(lc.def).toBeDefined();
     expect(lc.def.name).toBe('正常提交并成功');
   });
 });
 
 describe('test-design - 确定性生成器', () => {
-  const req = parseRequirement(DEMO_REQ);
+  const req = {
+    feature: 'Resource', goal: '验证用户对资源的操作结果', capabilities: ['concurrency'],
+    inputs: ['resourceName', 'quantity'],
+    requirements: [{ name: 'resourceName', values: ['alpha', 'beta'] }, { name: 'quantity', values: [1, 5] }],
+    businessRules: ['角色权限必须正确', '并发操作必须互不污染'], dependencies: ['Resource Store'],
+    constraints: [], risks: ['concurrency'], confidence: 1,
+  };
 
   it('生成 P0 正常路径用例', () => {
     const cases = generateTestCases(req);
-    const happy = cases.find((c) => c.tags.includes('happy-path'));
+    const happy = cases.find((c) => c.tags.includes('functional'));
     expect(happy).toBeDefined();
     expect(happy!.priority).toBe('P0');
     expect(happy!.steps[0].action).toBe('submit');
   });
 
-  it('业务规则生成对应用例（积分/并发）', () => {
+  it('业务规则与并发维度只由 Requirement 触发', () => {
     const cases = generateTestCases(req);
-    expect(cases.some((c) => c.assertions.some((a) => a.target === 'billing'))).toBe(true);
+    expect(cases.some((c) => c.name.includes('角色权限必须正确'))).toBe(true);
     expect(cases.some((c) => c.tags.includes('concurrency'))).toBe(true);
   });
 
   it('参数取值组合与边界值用例', () => {
     const cases = generateTestCases(req);
-    expect(cases.some((c) => c.name.includes('resolution'))).toBe(true);
+    expect(cases.some((c) => c.name.includes('quantity'))).toBe(true);
     expect(cases.some((c) => c.tags.includes('boundary'))).toBe(true);
   });
 
-  it('异常输入用例（空提示词/非法分辨率）', () => {
+  it('异常输入只使用 Requirement 声明的字段', () => {
     const cases = generateTestCases(req);
-    expect(cases.some((c) => c.name.includes('空提示词'))).toBe(true);
-    expect(cases.some((c) => c.name.includes('非法分辨率'))).toBe(true);
+    expect(cases.some((c) => c.name.includes('无效输入-resourceName'))).toBe(true);
+    expect(cases.some((c) => c.name.includes('无效输入-quantity'))).toBe(true);
+    expect(cases.flatMap((c) => c.steps).flatMap((s) => Object.keys(s.input ?? {}))
+      .every((key) => ['resourceName', 'quantity'].includes(key))).toBe(true);
   });
 
   it('确定性：同输入产生相同输出', () => {
@@ -238,7 +261,7 @@ describe('test-design - 确定性生成器', () => {
     const cases = generateTestCases(req);
     for (const c of cases) {
       const validated = await validateTestCase(c);
-      expect(validated.feature).toBe('wan3');
+      expect(validated.feature).toBe('Resource');
     }
   });
 
@@ -256,14 +279,14 @@ describe('test-design - 确定性生成器', () => {
 describe('test-design - TestDesignAgent 全链路', () => {
   const req = parseRequirement(DEMO_REQ);
 
-  it('LLM 返回合法数组 → 走 LLM 生成', async () => {
+  it('LLM 返回合法数组 → 走 LLM 生成并删除业务重复', async () => {
     const llm = new MockLLMProvider({
       scripted: [JSON.stringify([validV2CaseJson(), validV2CaseJson({ id: 'tc-v2-02', name: '边界用例' })])],
     });
     const agent = new TestDesignAgent();
     const cases = await agent.execute({ requirement: req }, makeContext(llm));
-    expect(cases).toHaveLength(2);
-    expect(cases[0].id).toBe('tc-v2-01');
+    expect(cases).toHaveLength(1);
+    expect(cases[0].id).toMatch(/^CASE-/);
     expect(cases[0]).toEqual(expect.objectContaining({ executionMode: 'DESIGNED_ONLY', readiness: expect.objectContaining({ status: 'BLOCKED' }) }));
     expect(cases[0].executionContract?.executor.status).toBe('RUNTIME_REQUIRED');
     expect(llm.getCallCount()).toBe(1);
@@ -286,6 +309,16 @@ describe('test-design - TestDesignAgent 全链路', () => {
     const cases = await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
     expect(cases.length).toBeGreaterThan(0);
     expect(cases[0].metadata?.source).toBe('deterministic-generator');
+    expect(cases.every((testCase) => testCase.schemaVersion === 'TEST_CASE_V2')).toBe(true);
+    expect(cases.every((testCase) => testCase.businessScenario && testCase.metadata?.riskJustification)).toBe(true);
+  });
+
+  it('Agent Pipeline 不再提供 LEGACY_EXECUTION 降级入口', async () => {
+    const llm = new MockLLMProvider({ scripted: ['invalid'] });
+    const cases = await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
+    expect(cases.length).toBeGreaterThan(0);
+    expect(cases.every((testCase) => testCase.schemaVersion === 'TEST_CASE_V2')).toBe(true);
+    expect(cases.every((testCase) => testCase.metadata?.compatibilityBoundary === undefined)).toBe(true);
   });
 
   it('LLM 空响应 → 回退生成器', async () => {
@@ -295,7 +328,7 @@ describe('test-design - TestDesignAgent 全链路', () => {
   });
 
   it('LLM 返回非数组对象 → 回退生成器', async () => {
-    const llm = new MockLLMProvider({ scripted: ['{"feature":"wan3"}'] });
+    const llm = new MockLLMProvider({ scripted: ['{"feature":"Resource"}'] });
     const cases = await new TestDesignAgent().execute({ requirement: req }, makeContext(llm));
     expect(cases.length).toBeGreaterThan(0);
   });
@@ -339,11 +372,34 @@ describe('test-design - TestDesignAgent 全链路', () => {
     const last = llm.getLastCall()!;
     expect(last.messages[0].content).toContain('JSON Schema');
     expect(last.messages[0].content).toContain('"priority"');
-    expect(last.messages[0].content).toContain('五维逐项判断适用性');
-    expect(last.messages[0].content).toContain('禁止统一伪造 submit 步骤');
+    expect(last.messages[0].content).toContain('业务理解');
+    expect(last.messages[0].content).toContain('测试策略');
+    expect(last.messages[0].content).toContain('只选择 Requirement、Business Model 或 Risk 支持的测试维度');
     expect(last.messages[0].content).toContain('不设最低条数');
-    expect(last.messages[1].content).toContain('功能模块：wan3');
+    expect(last.messages[1].content).toContain('功能模块：user');
+    expect(last.messages[1].content).toContain('businessProfile');
+    expect(last.messages[1].content).toContain('canonicalBusinessModel');
+    expect(last.messages[1].content).toContain('canonicalBusinessUnderstanding');
+    expect(last.messages[1].content).toContain('riskDrivenTestStrategy');
+    expect(last.messages[1].content).toContain('businessScenarioCandidates');
     expect(last.temperature).toBe(0);
     expect(last.jsonMode).toBe(true);
+  });
+
+  it('业务域未知时保留 UNKNOWN 并输出安全设计态 Case', async () => {
+    const unknown = {
+      feature: 'unknown', goal: '需求仅说明需要验证资源操作', capabilities: [], inputs: [],
+      requirements: [], businessRules: [], dependencies: [], constraints: [], risks: [],
+      understanding: {
+        facts: [{ id: 'F-UNKNOWN', category: 'ACTION' as const, statement: '需要验证资源操作', knowledge: 'EXPLICIT' as const, source: '需要验证资源操作' }],
+        ambiguities: [], unknowns: ['Actor、状态和预期结果未明确'],
+      },
+    };
+    const llm = new MockLLMProvider({ scripted: ['invalid'] });
+    const cases = await new TestDesignAgent().execute({ requirement: unknown }, makeContext(llm));
+    expect(cases.length).toBeGreaterThan(0);
+    expect(cases.every((testCase) => testCase.executionMode === 'DESIGNED_ONLY')).toBe(true);
+    expect(cases.every((testCase) => testCase.requirementStatus !== 'CONFIRMED'
+      || testCase.oracle?.status !== 'READY')).toBe(true);
   });
 });

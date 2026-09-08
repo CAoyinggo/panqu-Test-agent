@@ -1,4 +1,4 @@
-import type { ApiProcessor } from './api-processor.js';
+import type { AcceptanceCaseExecutionResult, ApiProcessor } from './api-processor.js';
 import { buildAcceptanceDefects, runAcceptanceApiCases } from './api-processor.js';
 import { buildAcceptanceReport, renderAcceptanceReportHtml, renderAcceptanceReportJson, renderAcceptanceReportMarkdown } from './acceptance-report.js';
 import { generateAcceptanceApiCases } from './test-case-generator.js';
@@ -28,6 +28,14 @@ import { createPhase1ContractResolver } from '../contracts/seed-contracts.js';
 import { contractSource } from '../contracts/source-priority.js';
 import type { ContractResolver } from '../contracts/resolver.js';
 import type { ContractDependency } from '../contracts/types.js';
+import { reviewTestDesign } from './test-design-intelligence.js';
+import { computeOutcome } from '../agents/execution/execution-schema.js';
+import {
+  runTestCaseV2WithScenarioRunner,
+  type TestCaseScenarioAdapterOptions,
+  type TestCaseScenarioExecution,
+} from './test-case-scenario-adapter.js';
+import type { TestCase } from '../agents/test-design/testcase-schema.js';
 
 export interface AcceptanceDataLifecycle {
   prepare?: () => Promise<void>;
@@ -66,10 +74,150 @@ export interface AcceptancePipelineOptions {
   contractResolver?: ContractResolver;
   /** 调用入口显式解析出的额外 Contract 依赖；会进入同一 Dependency/Drift Gate。 */
   additionalContractDependencies?: ContractDependency[];
+  /** Optional runtime capabilities for canonical TEST_CASE_V2 → Scenario Runner execution. */
+  scenarioRunnerOptions?: TestCaseScenarioAdapterOptions;
 }
 
 export const DEFAULT_ACCEPTANCE_MAX_CASES = 500;
 export const DEFAULT_ACCEPTANCE_DEADLINE_MS = 15 * 60 * 1000;
+
+function resultFromScenarioExecution(
+  testCase: TestCase,
+  execution: TestCaseScenarioExecution,
+): AcceptanceCaseExecutionResult {
+  const result = execution.outcome.result;
+  const request = result.evidence.find((item) => item.kind === 'REQUEST')?.data;
+  const response = result.evidence.find((item) => item.kind === 'RESPONSE')?.data;
+  const passed = result.status === 'PASS';
+  const failed = result.status === 'FAIL';
+  const status = (['PASS', 'FAIL', 'NOT_EXECUTED', 'TIMEOUT', 'CANCELLED'] as const)
+    .includes(result.status as 'PASS' | 'FAIL' | 'NOT_EXECUTED' | 'TIMEOUT' | 'CANCELLED')
+    ? result.status as 'PASS' | 'FAIL' | 'NOT_EXECUTED' | 'TIMEOUT' | 'CANCELLED'
+    : 'BLOCKED' as const;
+  const classification = passed ? 'SUCCESS' as const
+    : failed ? 'PRODUCT_FAILURE' as const
+      : result.status === 'NOT_EXECUTED' ? 'NOT_EXECUTED' as const : 'EXECUTION_BLOCKED' as const;
+  const operationFailures = result.operationResults
+    .filter((item) => item.status !== 'PASS')
+    .map((item) => `${item.operationId}:${item.status}:${item.error
+      ?? item.blockedReasons.map((reason) => reason.code).join(',')
+      ?? 'UNKNOWN'}`);
+  const assertions = execution.adapted.scenario.assertions.map((assertion) => {
+    const observed = result.evidence.find((item) => item.assertionId === assertion.id
+      || item.id === `ASSERTION-${assertion.id}`);
+    const observation = observed?.data && typeof observed.data === 'object' && !Array.isArray(observed.data)
+      ? observed.data as Record<string, unknown> : undefined;
+    const assertionPass = typeof observation?.pass === 'boolean' ? observation.pass : passed;
+    return {
+      assertionId: assertion.id,
+      evidenceRequirementIds: [...assertion.evidenceRequirementIds],
+      type: `${assertion.channel}:${assertion.operator}`,
+      path: assertion.target,
+      factIds: testCase.source?.factIds,
+      objectiveIds: testCase.source?.objectiveIds,
+      sourceType: testCase.source?.sourceType,
+      provenance: testCase.source?.provenance,
+      expected: observation && 'expected' in observation ? observation.expected : assertion.expected,
+      actual: observation?.actual,
+      pass: assertionPass,
+      detail: observed
+        ? `Scenario Runner ${assertionPass ? '验证通过' : '验证失败'}：${assertion.channel}:${assertion.target}`
+        : result.summary ?? result.status,
+    };
+  });
+  return {
+    runId: result.runId,
+    caseId: testCase.id,
+    name: testCase.name,
+    feature: testCase.feature,
+    scene: 'api',
+    processor: result.processors.join(',') || undefined,
+    processorInvoked: result.processorInvoked,
+    timestamp: new Date().toISOString(),
+    priority: testCase.priority,
+    tags: testCase.tags,
+    executed: result.executed,
+    status,
+    pass: passed,
+    passRate: passed ? 100 : 0,
+    assertions: result.assertions,
+    passedAssertions: result.passedAssertions,
+    failedAssertions: result.failedAssertions,
+    durationMs: result.durationMs,
+    error: passed ? undefined : [result.summary, ...operationFailures,
+      ...result.blockedReasons.map((item) => `${item.code}：${item.message}`)]
+      .filter(Boolean).join('；'),
+    blockedReason: result.blockedReasons[0] ?? null,
+    classification,
+    attribution: {
+      classification,
+      confidence: passed || result.executed === false ? 'HIGH' : 'MEDIUM',
+      reason: passed ? 'Scenario Runner 的全部 Assertion 与 required Evidence 通过'
+        : failed ? 'Scenario Runner 的确定性 Oracle 失败'
+          : 'Runtime Readiness 或 Scenario Gate 未满足',
+      evidenceSources: ['SCENARIO_RUNNER', 'RUNTIME_READINESS', 'EVIDENCE_ORACLE'],
+    },
+    evidence: {
+      requirementId: testCase.source?.requirementId,
+      acceptanceCriteriaIds: testCase.source?.acceptanceCriteriaIds ?? [],
+      factIds: testCase.source?.factIds ?? [],
+      objectiveIds: testCase.source?.objectiveIds ?? [],
+      scenarioId: execution.adapted.scenario.id,
+      sourceType: testCase.source?.sourceType,
+      testPointId: testCase.source?.testPointId,
+      request: request && typeof request === 'object' ? request as NonNullable<AcceptanceCaseExecutionResult['evidence']['request']> : undefined,
+      response: response && typeof response === 'object' ? response as NonNullable<AcceptanceCaseExecutionResult['evidence']['response']> : undefined,
+      assertions,
+      evidenceItems: execution.adapted.scenario.evidenceRequirements.filter((item) => item.requiredForPass).map((requirement) => {
+        const observed = result.evidence.find((item) => item.id === requirement.id || item.requirementId === requirement.id);
+        return {
+          requirementId: requirement.id,
+          channel: requirement.kind,
+          sourceStepId: requirement.sourceRef,
+          collected: Boolean(observed),
+          verified: observed?.verified === true,
+          observedAt: observed?.observedAt,
+          missingReason: observed ? undefined : 'Scenario Runner 未采集 required Evidence',
+        };
+      }),
+      oracleResult: {
+        verdict: passed ? 'PASS' : failed ? 'FAIL' : 'BLOCKED',
+        assertionIds: execution.adapted.scenario.assertions.map((item) => item.id),
+        evidenceRequirementIds: execution.adapted.scenario.evidenceRequirements
+          .filter((item) => item.requiredForPass).map((item) => item.id),
+        reasons: passed ? [] : [result.summary ?? result.status],
+      },
+      transport: {
+        requestDispatched: result.operationResults.some((item) => item.processorInvoked),
+        responseCompleted: Boolean(response),
+        outcome: result.executed ? 'CONFIRMED' : 'UNKNOWN',
+        sideEffect: result.operationResults.some((item) => item.processorInvoked
+          && execution.adapted.scenario.operations.some((operation) => operation.id === item.operationId
+            && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(operation.method ?? '')))
+          ? 'POSSIBLY_COMMITTED' : 'NOT_APPLICABLE',
+      },
+    },
+  };
+}
+
+async function runAcceptanceScenarioCases(
+  testCases: TestCase[],
+  options: TestCaseScenarioAdapterOptions,
+) {
+  const results: AcceptanceCaseExecutionResult[] = [];
+  for (const testCase of testCases) {
+    const execution = await runTestCaseV2WithScenarioRunner(testCase, options);
+    results.push(resultFromScenarioExecution(testCase, execution));
+  }
+  return {
+    results,
+    outcome: computeOutcome(testCases[0]?.feature ?? 'acceptance', results, {
+      executed: results.length > 0 && results.every((item) => item.executed
+        && (item.status === 'PASS' || item.status === 'FAIL')),
+      summary: `Scenario Runner 验收：${results.length} 条 TEST_CASE_V2`,
+    }),
+  };
+}
 
 /** Requirement → Fact Ledger → Objective/Scenario → Case → Initial Execution → Evidence/Defect → fixed reports. */
 export async function runAcceptancePipeline(options: AcceptancePipelineOptions) {
@@ -160,6 +308,15 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   const scenarioIds = new Set(objectives.map((objective) => objective.scenarioId).filter(Boolean));
   const scenarios = design.scenarios.filter((scenario) => scenarioIds.has(scenario.id)
     || scenario.objectiveIds.some((id) => objectiveIds.has(id)));
+  const scenarioCandidates = design.scenarioCandidates.filter((scenario) =>
+    scenario.objectiveIds.some((id) => objectiveIds.has(id)));
+  const testDesignReview = reviewTestDesign({
+    requirement,
+    businessModel: design.businessModel,
+    strategy: design.testStrategy,
+    scenarioCandidates,
+    testCases,
+  });
   finalizeRequirementFactLedger(requirement, objectives, testCases);
   const traceIssues = validateAcceptanceTrace(requirement, testPoints, testCases, objectives);
   if (traceIssues.length) throw new Error(`Acceptance Trace 校验失败：${traceIssues.map((issue) => issue.message).join('；')}`);
@@ -173,12 +330,19 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
     : undefined;
   const contractBlockReason = contractPreflight.validation.status === 'VALID' ? undefined
     : `CONTRACT_GATE_${contractPreflight.validation.status}：${contractPreflight.validation.reasons.join('；')}`;
-  const executableCaseCount = testCases.filter((testCase) => !isDesignedOnlyCase(testCase)).length;
+  const runtimeCandidate = (testCase: TestCase): boolean => options.scenarioRunnerOptions !== undefined
+    && testCase.schemaVersion === 'TEST_CASE_V2'
+    && testCase.steps.some((step) => step.type === 'HTTP_REQUEST');
+  const executableCaseCount = testCases.filter((testCase) => !isDesignedOnlyCase(testCase) || runtimeCandidate(testCase)).length;
   const caseLimitReason = mode === 'execute' && executableCaseCount > maxCases
     ? `CASE_LIMIT_EXCEEDED：生成 ${executableCaseCount} 条可执行 Case，超过 maxCases=${maxCases}`
     : undefined;
   const executableOperationKeys = testCases
-    .filter((testCase) => !isDesignedOnlyCase(testCase))
+    // Policy must see every concrete HTTP operation even when generated
+    // Readiness is DESIGNED_ONLY. Runtime capability resolution may upgrade it,
+    // but can never bypass SAFE/BILLABLE/approval policy.
+    .filter((testCase) => !isDesignedOnlyCase(testCase)
+      || testCase.schemaVersion === 'TEST_CASE_V2' && testCase.steps.some((step) => step.type === 'HTTP_REQUEST'))
     .map((testCase) => testCase.source?.apiOperationKey)
     .filter((operationKey): operationKey is string => Boolean(operationKey));
   const safetyDecision = mode === 'execute' && executableOperationKeys.length
@@ -195,7 +359,7 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   let prepareError: string | undefined;
   let cleanupError: string | undefined;
   const hasExecutableCases = !stalePlanReason && !safetyBlockReason && !caseLimitReason && !requirementBlockReason && !contractBlockReason
-    && testCases.some((testCase) => !isDesignedOnlyCase(testCase));
+    && testCases.some((testCase) => !isDesignedOnlyCase(testCase) || runtimeCandidate(testCase));
   if (mode === 'execute' && hasExecutableCases && options.lifecycle?.prepare) {
     try {
       await options.lifecycle.prepare();
@@ -206,7 +370,16 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
 
   let run;
   try {
-    run = await runAcceptanceApiCases(testCases, {
+    run = options.scenarioRunnerOptions && mode === 'execute'
+      && !contractBlockReason && !stalePlanReason && !safetyBlockReason && !requirementBlockReason
+      && !caseLimitReason && !prepareError
+      ? await runAcceptanceScenarioCases(testCases, {
+        ...options.scenarioRunnerOptions,
+        runId,
+        signal: options.signal,
+        contractResolver,
+      })
+      : await runAcceptanceApiCases(testCases, {
       baseUrl: options.baseUrl,
       actorHeaders: options.actorHeaders,
       processor: options.processor,
@@ -270,6 +443,11 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
     runId,
     executionPlan,
     requirement,
+    businessModel: design.businessModel,
+    businessUnderstanding: design.businessUnderstanding,
+    testStrategy: design.testStrategy,
+    scenarioCandidates,
+    testDesignReview,
     contracts: contractPreflight,
     objectives,
     dimensionDecisions: design.dimensionDecisions.filter((decision) => requirement.factLedger.some((fact) => fact.id === decision.factId)),

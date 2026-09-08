@@ -403,15 +403,18 @@ AC-1 code minLength=1 maxLength=1 pattern=^Z$ 违反约束返回 422。`,
     expect(executable.some((testCase) => testCase.parameterContext?.expectedOutcome === 'ACCEPT'
       && testCase.parameterContext.testData === 'Z'
       && testCase.assertions.some((assertion) => assertion.type === 'STATUS_CODE' && assertion.expected === 200))).toBe(true);
-    expect(executable.some((testCase) => testCase.parameterContext?.boundaryVector === 'MAX_PLUS'
+    const rejected = parameterCases.filter((testCase) => testCase.parameterContext?.expectedOutcome === 'REJECT');
+    expect(rejected.some((testCase) => testCase.parameterContext?.boundaryVector === 'MAX_PLUS'
       && testCase.assertions.some((assertion) => assertion.type === 'STATUS_CODE' && assertion.expected === 422))).toBe(true);
-    expect(executable.some((testCase) => testCase.parameterContext?.boundaryVector === 'FORMAT_INVALID'
+    expect(rejected.some((testCase) => testCase.parameterContext?.boundaryVector === 'FORMAT_INVALID'
       && testCase.assertions.some((assertion) => assertion.type === 'STATUS_CODE' && assertion.expected === 422))).toBe(true);
-    const formatInvalid = executable.find((testCase) => testCase.parameterContext?.boundaryVector === 'FORMAT_INVALID');
+    expect(rejected.every((testCase) => testCase.executionMode === 'DESIGNED_ONLY'
+      && String(testCase.design?.reason).includes('NON_MUTATION_EVIDENCE_UNAVAILABLE'))).toBe(true);
+    const formatInvalid = rejected.find((testCase) => testCase.parameterContext?.boundaryVector === 'FORMAT_INVALID');
     expect(formatInvalid?.parameterContext?.testData).toBeTypeOf('string');
     expect(String(formatInvalid?.parameterContext?.testData)).toHaveLength(1);
     expect(/^Z$/.test(String(formatInvalid?.parameterContext?.testData))).toBe(false);
-    expect(executable.some((testCase) => testCase.assertions.some((assertion) =>
+    expect(parameterCases.some((testCase) => testCase.assertions.some((assertion) =>
       assertion.type === 'STATUS_CODE' && assertion.expected === 404))).toBe(false);
     expect(executable.filter((testCase) => testCase.parameterContext?.expectedOutcome === 'ACCEPT')
       .every((testCase) => testCase.parameterContext?.testData === 'Z')).toBe(true);

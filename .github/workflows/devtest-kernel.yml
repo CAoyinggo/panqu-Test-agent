@@ -1,0 +1,36 @@
+name: DevTest Kernel and Package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:mcp-kernel
+      - run: npm run test:standardization
+      - run: npm run acceptance:test
+      - run: npm run test:devtest-v8
+      - run: npm run test:npm-acceptance
+      # Produces a reviewable package; does not publish to npm or use business credentials.
+      - run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devtest-package-${{ github.sha }}
+          path: test-flow-*.tgz
+          retention-days: 7

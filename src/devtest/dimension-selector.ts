@@ -28,8 +28,10 @@ export function devTestDimensionOf(testType: TestType | string | undefined): Dev
 
 export function tierOf(testCase: TestCase): DevTestTier {
   if (testCase.priority === 'P0') return 'TIER_0';
+  // Priority 表示业务风险，不等于默认忽略。一个 Requirement 唯一的参数/边界
+  // 验证仍是 CORE_VALIDATION，必须保留至少一个代表 Case；其余非核心 P2 才进 Deep。
+  if (testCase.testType !== 'BOUNDARY' && coreKindOf(testCase)) return 'TIER_0';
   if (['BOUNDARY', 'PARAMETER', 'PERFORMANCE'].includes(testCase.testType ?? '') && ['P2', 'P3'].includes(testCase.priority)) return 'TIER_2';
-  if (coreKindOf(testCase)) return 'TIER_0';
   return 'TIER_1';
 }
 

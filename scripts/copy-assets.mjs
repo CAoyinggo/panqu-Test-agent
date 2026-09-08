@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const pairs = [
   ['src/config/environments.json', 'dist/src/config/environments.json'],
+  ['src/devtest/assets/devtest/SKILL.md', 'dist/src/devtest/assets/devtest/SKILL.md'],
 ];
 
 for (const [srcRel, dstRel] of pairs) {

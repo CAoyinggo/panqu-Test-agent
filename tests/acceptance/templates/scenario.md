@@ -1,9 +1,8 @@
 # Scenario
 
 <!--
-复制本文件到 tests/acceptance/scenarios/<domain>/<scenario-id>/requirement.md。
-模板只定义通用执行契约，不包含任何产品、模型或业务专用字段。
-设计阶段只能使用 EXECUTABLE / DESIGNED_ONLY / BLOCKED；PASS / FAIL 只能来自真实运行结果。
+复制后必须用 Requirement/Business Model 值替换所有尖括号占位符。
+模板保留现有 Scenario Parser 的章节与列名，不预置产品、项目、接口、字段或业务流程。
 -->
 
 ## Scenario ID
@@ -12,14 +11,14 @@ SCN-<domain>-<intent>
 
 ## Requirement
 
-- Source: <需求文档、工单或版本>
-- Intent: <要验证的业务意图>
+- Source: <requirement-source-ref>
+- Intent: <business-intent>
 
 ## Acceptance Criteria
 
 ### AC-001
 
-<可判定、可追溯的验收条件>
+<deterministic-acceptance-outcome>
 
 ## Priority
 
@@ -37,7 +36,7 @@ P0
 
 ## Role
 
-<角色；无角色要求时写 NOT_APPLICABLE>
+<role-ref-or-not-applicable>
 
 ## Tenant
 
@@ -56,74 +55,63 @@ P0
 
 | ID | Condition | Evidence Channel |
 | --- | --- | --- |
-| PRE-001 | <执行前必须成立的条件> | API |
+| PRE-001 | <requirement-precondition> | API |
 
 ## Test Data
 
 | ID | Owner | Value | Source |
 | --- | --- | --- | --- |
-| DATA-001 | ${ACTOR_ID} | `{}` | prepare hook |
+| DATA-001 | ${ACTOR_ID} | `<runtime-data-ref>` | <data-source-ref> |
 
 ## API Contract
 
-<!--
-每个 API 操作必须精确声明 Method + Path，并绑定 AC 与证据通道。
-Request 是 JSON、标量或 `-`；Capture 使用 `变量=响应路径`，多个值用逗号分隔。
-非 API 操作可将 Method/Path 写为 `-`，但仍必须指定 Channel 与 Processor。
--->
-
 | Step | Channel | Processor | Method | Path | Request | Capture | AC | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| STEP-001 | API | api | POST | /api/resources | `{"name":"${RESOURCE_NAME}"}` | resourceId=body.data.id | AC-001 | EV-001 |
-| STEP-002 | API | api | GET | /api/resources/${STEP-001.resourceId} | - | persistedName=body.data.name | AC-001 | EV-002 |
+| STEP-001 | API | <processor-ref-1> | <method-1> | <path-1> | `<request-ref-1>` | <capture-1> | AC-001 | EV-001 |
+| STEP-002 | API | <processor-ref-2> | <method-2> | <path-2> | `<request-ref-2>` | <capture-2> | AC-001 | EV-002 |
 
 ## Execution Steps
 
-1. STEP-001：执行写操作并捕获新资源标识。
-2. STEP-002：使用 STEP-001 的输出读回资源，证明持久化结果。
+1. STEP-001：<requirement-derived-action-1>。
+2. STEP-002：<requirement-derived-action-2>。
 
 ## Expected Response
 
-- STEP-001 返回明确的成功状态和资源标识。
-- STEP-002 返回与写入值一致的业务字段。
+- <response-oracle-from-requirement>
 
 ## Expected State
 
-- 资源持久化状态与 AC-001 一致。
-- 未声明可变更的字段保持不变。
+- <state-oracle-or-not-applicable>
 
 ## Expected Side Effects
 
-- REQUIRED: <必须发生的副作用及次数；无则写 NOT_APPLICABLE>
-- FORBIDDEN: <不得发生的副作用及次数；无则写 NOT_APPLICABLE>
+- <side-effect-oracle-or-not-applicable>
 
 ## Assertions
 
-<!-- Operator: EQUALS / NOT_EQUALS / EXISTS / NOT_EXISTS / CONTAINS / NOT_CONTAINS / TYPE_IS / COUNT_EQUALS / UNCHANGED / TRANSITIONED_TO -->
-
 | ID | AC | Step | Channel | Target | Operator | Expected | Expected From |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| AS-001 | AC-001 | STEP-001 | RESPONSE | status | EQUALS | 201 | - |
-| AS-002 | AC-001 | STEP-002 | STATE | body.data.name | EQUALS | - | input.RESOURCE_NAME |
+| AS-001 | AC-001 | STEP-001 | RESPONSE | <target-ref-1> | <operator-1> | <expected-1> | - |
+| AS-002 | AC-001 | STEP-002 | STATE | <target-ref-2> | <operator-2> | - | <expected-from-2> |
 
 ## Evidence
 
 | ID | Kind | Channel | Source Step | Assertions | Description |
 | --- | --- | --- | --- | --- | --- |
-| EV-001 | RESPONSE | RESPONSE | STEP-001 | AS-001 | 写操作 Request/Response 与断言结果 |
-| EV-002 | STATE_AFTER | STATE | STEP-002 | AS-002 | 读回状态与断言结果 |
+| EV-001 | RESPONSE | RESPONSE | STEP-001 | AS-001 | <response-proof> |
+| EV-002 | STATE_AFTER | STATE | STEP-002 | AS-002 | <state-proof> |
 
 ## Prepare
 
 | Hook | Required | Description |
 | --- | --- | --- |
-| prepare-resource | true | 创建归属于本场景 Actor/Tenant/Project 的隔离数据 |
+| <prepare-hook-ref> | true | <prepare-description> |
 
 ## Cleanup
 
 | Hook | Required | Description |
 | --- | --- | --- |
-| cleanup-resource | true | 删除本场景创建的资源并验证删除结果 |
+| <cleanup-hook-ref> | true | <cleanup-description> |
 
 ## Execution Mode
 
@@ -131,15 +119,13 @@ EXECUTABLE
 
 ## Blocked Reason
 
-<!-- BLOCKED 时至少保留一行；非 BLOCKED 写 NONE。 -->
-
 | Code | Stage | Recoverable | Message |
 | --- | --- | --- | --- |
 | NONE | DESIGN | false | - |
 
 ## Risk
 
-- <真实执行、数据、权限、计费或外部依赖风险>
+- <risk-from-business-model>
 
 ## Dependencies
 
