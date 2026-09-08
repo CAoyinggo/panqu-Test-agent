@@ -9,6 +9,7 @@ import { doctorDevTestProject, loadDevTestConfig, type DevTestProjectConfig } fr
 import { runDevTest } from './devtest-runner.js';
 import { loadDevTestRuntime } from './runtime-loader.js';
 import type { DevTestRunResult } from './types.js';
+import { devTestNextAction } from './interaction-guidance.js';
 
 const execFileAsync = promisify(execFile);
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -118,6 +119,8 @@ function summary(result: DevTestRunResult, root: string): Record<string, unknown
       .map(({ id, statement, status, source }) => ({ id, statement, status, source })),
     problems: result.problems,
     readiness: result.environmentPreflight.status,
+    readiness_detail: { target_selected: result.environmentPreflight.checks.baseUrl === 'READY',
+      reason: result.environmentPreflight.reason },
     dimensions: result.dimensionApplicability,
     business_flows: result.businessFlowGraph,
     data_lifecycle: result.dataLifecycle,
@@ -157,9 +160,15 @@ export class DevTestMcpService {
   }
 
   async call(value: unknown): Promise<Record<string, unknown>> {
-    try { return await this.dispatch(validateInput(value)); }
+    try {
+      const input = validateInput(value);
+      const result = await this.dispatch(input);
+      return { ...result, next_action: devTestNextAction(result, input) };
+    }
     catch (error) {
-      return artifactSafe({ ok: false, status: 'BLOCKED', message: (error as Error).message }) as Record<string, unknown>;
+      const result = artifactSafe({ ok: false, status: 'BLOCKED', message: (error as Error).message }) as Record<string, unknown>;
+      const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+      return { ...result, next_action: devTestNextAction(result, input) };
     }
   }
 

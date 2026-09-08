@@ -57,11 +57,32 @@ function execution(plan: Record<string, unknown>, key = 'attempt_1') {
 }
 
 describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence', () => {
+  it('executes the returned confirmation arguments directly and recovers them unchanged without duplicate requests', async () => {
+    const { service } = await fixture();
+    const server = await httpService();
+    const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
+    expect(plan.next_action, JSON.stringify({ counts: plan.counts, readiness: plan.readiness, selected: plan.selected_case_ids, next: plan.next_action })).toMatchObject({ kind: 'CONFIRM_EXECUTION', requires_user_confirmation: true });
+    const next = plan.next_action as { execute_arguments: Record<string, unknown>; status_arguments: Record<string, unknown> };
+    expect(server.requests).toEqual([]);
+    const recovered = await service.call(next.status_arguments);
+    expect(recovered.next_action).toEqual(plan.next_action);
+    // Represents dispatch after an external user has confirmed the displayed plan.
+    const result = await service.call(next.execute_arguments);
+    expect(result.ok).toBe(true);
+    expect(result.counts).toMatchObject({ passed: 1, executed: 1 });
+    expect(result.next_action).toMatchObject({ kind: 'REVIEW_RESULT' });
+    const requestCount = server.requests.length;
+    expect((await service.call(next.execute_arguments)).replayed).toBe(true);
+    expect(server.requests).toHaveLength(requestCount);
+  });
+
   it('execution approval cannot confirm a pending requirement; status and artifacts retain the gap', async () => {
     const { service, root } = await fixture('# 资源查询\n## API\nGET /resources\n无需认证。\n返回 200。\n## Acceptance Criteria\nAC-1 GET /resources 返回 HTTP 200（待确认）。\n');
     const server = await httpService();
     const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
     expect(plan.ok).toBe(true); expect(server.requests).toEqual([]);
+    expect(plan.next_action).toMatchObject({ kind: 'CLARIFY_REQUIREMENTS' });
+    expect(plan.next_action).not.toHaveProperty('execute_arguments');
     expect(plan.requirement_assurance).toMatchObject({ status: 'BLOCKED', entries: expect.arrayContaining([
       expect.objectContaining({ status: 'NEEDS_CONFIRMATION', question: expect.any(String), source: { documentId: expect.any(String), section: expect.any(String), line: 7, lineStart: 7, lineEnd: 7, content: expect.any(String), text: expect.any(String) } }),
     ]) });

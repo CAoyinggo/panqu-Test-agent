@@ -33,6 +33,14 @@ npx --no-install devtest doctor
 
 `ok` 表示工具调用是否完成，不是测试 PASS。业务结果看 `conclusion`、`counts`、`oracle` 和 Evidence。报告路径相对于目标仓库，格式与 CLI 一致。
 
+### 降低入口模型的判断负担
+
+新版 Skill 使用中文分支流程：定位需求、规划、集中澄清、展示最终计划、确认后直接执行、查询/交付。明确的信息不重问，业务确认与执行授权分开；最终计划未变时，不重复确认、不无故重新规划、不能只说“马上执行”而不调用工具。
+
+MCP 返回 `next_action`：`CLARIFY_REQUIREMENTS` 附原文问题，`CONFIRM_EXECUTION` 附真实计划生成的 `execute_arguments` 与稳定幂等键，`WAIT_FOR_RESULT` 附原计划查询参数，其他情况进入 `RESOLVE_BLOCKER` 或 `REVIEW_RESULT`。未闭环原文继续保留在 `requirement_assurance`，`remaining_gap_ids` 引用它而不重复复制全文。参数可直接传回 MCP；同键重放不重新发请求。
+
+`next_action` 是确定性交互指引，不是可信的人类授权凭证。Skill 约束模型在用户确认后调用；内核仍独立强制需求、执行安全、计划漂移和幂等门禁。未在具体 Trae 模型上进行行为实测，不能把接口集成测试等同于模型遵循率保证。现有团队 Skill 不会被初始化命令覆盖，升级需合并新版 Skill 并更新包。
+
 ## 确认、重试与隔离
 
 计划绑定现有 Acceptance Execution Plan Identity、需求摘要、配置、Git 索引内及未跟踪的源码内容摘要，以及操作员选择的目标环境和 Runtime 模块内容摘要。摘要记录不保存环境地址或凭证明文。执行前发生变化会返回 STALE_PLAN；生成的 Case 语义和执行范围还会在 DevTest 中再次校验。运行时 Readiness 在每次执行前重新计算。
