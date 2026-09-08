@@ -232,9 +232,9 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     await mkdir(path.join(root, '.trae'));
     await writeFile(path.join(root, '.trae', 'mcp.json'), JSON.stringify({ mcpServers: { team: { command: 'team-tool' } } }));
     const added = await initializeDevTestTrae(root);
-    expect(added).toHaveLength(8);
+    expect(added).toHaveLength(11);
     for (const name of DEVTEST_BUNDLED_SKILLS) {
-      for (const resource of name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md']) {
+      for (const resource of name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md', 'references/input-constraints.md']) {
         expect(await readFile(path.join(root, '.trae', 'skills', name, resource), 'utf8'))
           .toBe(await readFile(path.resolve('src/devtest/assets', name, resource), 'utf8'));
       }
@@ -243,11 +243,31 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     await writeFile(skillFile, 'team custom instructions');
     const specialist = path.join(root, '.trae', 'skills', 'panqu-video-models', 'references', 'code-map.md');
     await writeFile(specialist, 'team model entry points');
+    const constraints = path.join(root, '.trae', 'skills', 'panqu-image-models', 'references', 'input-constraints.md');
+    await writeFile(constraints, 'team confirmed image limits');
     expect(await initializeDevTestTrae(root)).toEqual([]);
     expect(await readFile(skillFile, 'utf8')).toBe('team custom instructions');
     expect(await readFile(specialist, 'utf8')).toBe('team model entry points');
+    expect(await readFile(constraints, 'utf8')).toBe('team confirmed image limits');
     const config = JSON.parse(await readFile(path.join(root, '.trae', 'mcp.json'), 'utf8'));
     expect(Object.keys(config.mcpServers).sort()).toEqual(['devtest', 'team']);
+  });
+
+  it('adds missing input checklists on upgrade without replacing existing team skills', async () => {
+    const { root } = await fixture();
+    await initializeDevTestTrae(root);
+    const names = ['panqu-canvas', 'panqu-image-models', 'panqu-video-models'];
+    const newResources = names.map((name) => `.trae/skills/${name}/references/input-constraints.md`);
+    for (const relative of newResources) await rm(path.join(root, relative));
+    const teamMain = path.join(root, '.trae', 'skills', 'devtest', 'SKILL.md');
+    await writeFile(teamMain, 'existing team workflow');
+    expect((await initializeDevTestTrae(root)).sort()).toEqual(newResources.sort());
+    expect(await readFile(teamMain, 'utf8')).toBe('existing team workflow');
+    for (const name of names) {
+      expect(await readFile(path.join(root, '.trae', 'skills', name, 'references', 'input-constraints.md'), 'utf8'))
+        .toBe(await readFile(path.resolve('src/devtest/assets', name, 'references', 'input-constraints.md'), 'utf8'));
+    }
+    expect(await initializeDevTestTrae(root)).toEqual([]);
   });
 
   it('does not overwrite a symlinked Trae config outside the project', async () => {
@@ -272,12 +292,12 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     expect(await readdir(outside)).toEqual([]);
   });
 
-  it('preserves a symlink target instead of writing a specialist resource through it', async () => {
+  it.each(['SKILL.md', 'references/input-constraints.md'])('preserves a symlink target instead of writing specialist %s through it', async (resource) => {
     const { root } = await fixture();
     const { root: outside } = await fixture();
     const outsideFile = path.join(outside, 'custom-skill.md');
     await writeFile(outsideFile, 'keep this file');
-    const target = path.join(root, '.trae', 'skills', 'panqu-image-models', 'SKILL.md');
+    const target = path.join(root, '.trae', 'skills', 'panqu-image-models', resource);
     await mkdir(path.dirname(target), { recursive: true });
     await symlink(outsideFile, target);
     await expect(initializeDevTestTrae(root)).rejects.toThrow('DEVTEST_TRAE_PATH');

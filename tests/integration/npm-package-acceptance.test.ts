@@ -118,7 +118,7 @@ AC-1 GET /health returns HTTP 200.
     expect(mcp.mcpServers.devtest.args[0]).toContain('node_modules/test-flow/dist/bin/devtest-mcp.js');
     expect(await readFile(path.join(projectRoot, '.trae', 'skills', 'devtest', 'SKILL.md'), 'utf8')).toContain('TEST_CASE_V2');
     for (const name of ['panqu-canvas', 'panqu-video-models', 'panqu-image-models']) {
-      for (const resource of ['SKILL.md', 'references/code-map.md']) {
+      for (const resource of ['SKILL.md', 'references/code-map.md', 'references/input-constraints.md']) {
         const installedSkill = await readFile(path.join(projectRoot, '.trae', 'skills', name, resource), 'utf8');
         expect(installedSkill).toBe(await readFile(path.resolve('src/devtest/assets', name, resource), 'utf8'));
       }

@@ -43,7 +43,7 @@ export async function initializeDevTestTrae(root: string): Promise<string[]> {
     changed.push('.trae/mcp.json');
   }
   for (const name of DEVTEST_BUNDLED_SKILLS) {
-    const resources = name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md'];
+    const resources = name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md', 'references/input-constraints.md'];
     for (const resource of resources) {
       const relative = `.trae/skills/${name}/${resource}`;
       await localDirectory(projectRoot, path.posix.dirname(relative));
