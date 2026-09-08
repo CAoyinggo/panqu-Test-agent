@@ -57,6 +57,25 @@ function execution(plan: Record<string, unknown>, key = 'attempt_1') {
 }
 
 describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence', () => {
+  it('execution approval cannot confirm a pending requirement; status and artifacts retain the gap', async () => {
+    const { service, root } = await fixture('# 资源查询\n## API\nGET /resources\n无需认证。\n返回 200。\n## Acceptance Criteria\nAC-1 GET /resources 返回 HTTP 200（待确认）。\n');
+    const server = await httpService();
+    const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
+    expect(plan.ok).toBe(true); expect(server.requests).toEqual([]);
+    expect(plan.requirement_assurance).toMatchObject({ status: 'BLOCKED', entries: expect.arrayContaining([
+      expect.objectContaining({ status: 'NEEDS_CONFIRMATION', question: expect.any(String), source: { documentId: expect.any(String), section: expect.any(String), line: 7, lineStart: 7, lineEnd: 7, content: expect.any(String), text: expect.any(String) } }),
+    ]) });
+    const result = await service.call(execution(plan));
+    expect(result.conclusion).toBe('BLOCKED');
+    expect(result.counts).toMatchObject({ executed: 0, verified: 0, passed: 0 });
+    expect(result.requirement_assurance).toMatchObject({ status: 'BLOCKED' });
+    const status = await service.call({ action: 'status', plan_id: plan.plan_id });
+    expect(status.requirement_assurance).toEqual(result.requirement_assurance);
+    const report = JSON.parse(await readFile(path.resolve(root, (result.paths as { reportJson: string }).reportJson), 'utf8'));
+    expect(report.requirementAssurance.status).toBe('BLOCKED');
+    expect(report.requirementAssurance.entries.some((entry: { status: string }) => entry.status === 'NEEDS_CONFIRMATION')).toBe(true);
+  });
+
   it('plans with zero requests, executes independent HTTP results, and retries without repeating requests', async () => {
     const { service, root } = await fixture();
     const server = await httpService();

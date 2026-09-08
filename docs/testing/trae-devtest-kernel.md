@@ -4,6 +4,10 @@
 
 ## 安装与使用
 
+每次执行强制应用 `NO_SILENT_REQUIREMENT_GAPS_V1`：未理解、未确认、未覆盖的要求必须保留原文和来源，不得静默丢弃或记作通过。执行前阻断未澄清规则对应的用例；执行后核对完整需求清单，包括过滤、数量限制、重跑未选中的要求。清晰且不受影响的部分可以执行，但有缺口时整体不能 READY/PASS。
+
+`plan`、`execute`、`status` 返回 `requirement_assurance`。其中 `entries` 保留状态、原文、来源、关联用例和澄清问题，`unresolvedIds` 保留未闭环要求。执行授权不是业务确认；取得真实业务答复后更新需求、重新计划并确认执行。此策略升级前的计划失效。已有安装需要更新内核包；初始化会保留已编辑的团队 Skill，需人工合并对应门禁说明。
+
 先在 test-flow 运行 `npm ci`、`npm run build`、`npm pack`。在目标业务 Git 仓库安装生成的 tarball：
 
 ```bash

@@ -2,6 +2,7 @@ import type { TestCase, TestEvidenceRequirement } from '../agents/test-design/te
 import type { AcceptanceCaseExecutionResult } from '../acceptance/api-processor.js';
 import type { AcceptanceRequirement, RequirementFact } from '../acceptance/requirement-ir.js';
 import { devTestDimensionOf } from './dimension-selector.js';
+import { isRequirementObligation, requirementNeedsConfirmation, type RequirementAssurance } from '../acceptance/requirement-assurance.js';
 import type {
   DevTestAcceptanceResult,
   DevTestAcceptanceTrace,
@@ -194,6 +195,12 @@ export function buildDevTestAcceptanceTraces(input: {
     const collected = unique(plan.filter((item) => collectedItems.includes(evidenceKey(item))).map((item) => item.channel));
     const missingEvidence = unique(plan.filter((item) => missingItems.includes(evidenceKey(item))).map((item) => item.channel));
     const missing = executableMissing(testCase, ui);
+    for (const fact of input.requirementModel.facts.filter((fact) => factIds.includes(fact.id))) {
+      if (requirementNeedsConfirmation(fact)) missing.push(`REQUIREMENT_NEEDS_CONFIRMATION:${fact.id}`);
+      else if (fact.normativity === 'NORMATIVE' && (fact.canonical.normalizationStatus === 'UNRESOLVED' || fact.status === 'BLOCKED')) {
+        missing.push(`REQUIREMENT_NOT_UNDERSTOOD:${fact.id}`);
+      }
+    }
     const rawStatus = ui?.status ?? runtime?.status ?? 'NOT_EXECUTED';
     const reason = ui?.error ?? runtime?.error ?? runtime?.attribution?.reason;
     const executableStatus = qualityStatus(testCase, ui);
@@ -279,8 +286,11 @@ function percent(part: number, total: number): number {
 export function buildDevTestDeliveryCoverage(input: {
   requirementModel: DevTestRequirementModel;
   traces: readonly DevTestAcceptanceTrace[];
+  requirementAssurance?: RequirementAssurance;
 }): DevTestDeliveryCoverage {
-  const facts = input.requirementModel.facts.filter((fact) => fact.normativity === 'NORMATIVE');
+  const facts = input.requirementAssurance
+    ? input.requirementAssurance.entries.filter((entry) => entry.status !== 'CONTEXT')
+    : input.requirementModel.facts.filter(isRequirementObligation);
   const linked = (factId: string): DevTestAcceptanceTrace[] => input.traces.filter((trace) => trace.requirement.factIds.includes(factId));
   const generatedFactIds = facts.filter((fact) => linked(fact.id).length > 0).map((fact) => fact.id);
   const executedFactIds = facts.filter((fact) => {
@@ -289,6 +299,7 @@ export function buildDevTestDeliveryCoverage(input: {
   }).map((fact) => fact.id);
   // 一个 Happy Path 的确定结果不能把同一 Requirement 下其余未执行/阻断的义务折叠成 VERIFIED。
   const verifiedFactIds = facts.filter((fact) => {
+    if (input.requirementAssurance && !['PASS', 'FAIL'].includes(input.requirementAssurance.entries.find((entry) => entry.id === fact.id)!.status)) return false;
     const traces = linked(fact.id);
     return traces.length > 0 && traces.every((trace) => (trace.result === 'PASS' || trace.result === 'FAIL')
       && (trace.requirement.verifiedFactIds ?? []).includes(fact.id));

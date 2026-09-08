@@ -41,6 +41,7 @@ import { fetchFeishuDoc, loadFeishuCredentials } from './feishu-fetch.js';
 import { buildDevTestProblems, deriveDevTestConclusion } from './problem-engine.js';
 import { SafeMutationHoldProcessor, buildOperationPolicies } from './safe-mode.js';
 import { ReadFailureConfirmingProcessor } from './read-failure-confirmation.js';
+import { buildRequirementAssurance } from '../acceptance/requirement-assurance.js';
 import { buildDevTestInvariants, buildRequirementCoverageMatrix, extendedDimensionsOf } from './requirement-intelligence.js';
 import { buildVersionComparison, computeDevConfidence } from './final-assessment.js';
 import { buildBusinessFlowGraph, buildBusinessLevelProblems, evaluateBusinessFlows, evaluateCrossCaseInvariants } from './business-flow-engine.js';
@@ -602,7 +603,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   });
 
   const uiExecutions = options.preflight || options.plan ? [] : await executeDevTestUiCases({
-    testCases: result.testCases,
+    testCases: result.testCases.filter((testCase) => !preview.requirementPreflight.blockedCaseIds.includes(testCase.id)),
     requirement,
     discovery,
     environment: environmentPreflight,
@@ -768,7 +769,15 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
             : ['ENVIRONMENT_ISSUE', 'AUTH_ISSUE', 'DATA_ISSUE'].includes(problem.failureClass ?? '') ? 'ENVIRONMENT_ERROR'
               : 'EXECUTION_ERROR');
   }
-  const deliveryCoverage = buildDevTestDeliveryCoverage({ requirementModel, traces: acceptanceTraces });
+  const requirementAssurance = buildRequirementAssurance({ requirement, markdown,
+    allTestCases: selection.candidates, selectedCaseIds,
+    observations: new Map(acceptanceTraces.map((trace) => [trace.caseId, {
+      status: trace.result, verified: trace.result === 'PASS' || trace.result === 'FAIL',
+      verifiedFactIds: trace.requirement.verifiedFactIds ?? [],
+      bindingApiSpecId: result.results.find((execution) => execution.caseId === trace.caseId)?.evidence.binding?.apiSpecId,
+    }])),
+  });
+  const deliveryCoverage = buildDevTestDeliveryCoverage({ requirementModel, traces: acceptanceTraces, requirementAssurance });
   for (const stat of dimensionStats) {
     const traces = acceptanceTraces.filter((trace) => trace.testModel.dimension === stat.dimension);
     stat.total = traces.length;
@@ -793,7 +802,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     verifiedCaseIds,
     trustedBaselinePassIds,
   });
-  const requirementIncomplete = requirementCoverage.uncoveredAc.length > 0
+  const requirementIncomplete = requirementAssurance.status !== 'PASS' || requirementCoverage.uncoveredAc.length > 0
     || requirementCoverage.ambiguousAc.length > 0 || requirementCoverage.blockedAc.length > 0;
   const invariantIncomplete = invariants.some((invariant) => invariant.status === 'BLOCKED' || invariant.status === 'FAILED');
   const coreFlowFailed = flowEvaluation.graph.flows.some((flow) => flow.core && flow.status === 'FAIL');
@@ -880,6 +889,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     deep: options.deep,
   });
   const renderInput = {
+    requirementAssurance,
     runId: result.runId,
     meta: { docSource, baseUrl, environment, mode, project, startedAt, finishedAt },
     conclusion,
@@ -1001,6 +1011,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
 
   return {
     executionPlan,
+    requirementAssurance,
     runId: result.runId,
     conclusion,
     mode,

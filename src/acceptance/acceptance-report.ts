@@ -35,6 +35,7 @@ import {
 } from './acceptance-regression.js';
 import type { TestCaseQualityGateResult } from './test-case-quality-gate.js';
 import { buildBusinessModelProjection } from './business-model.js';
+import { buildRequirementAssurance, type RequirementAssurance } from './requirement-assurance.js';
 
 /** INITIAL_VALIDATION 的总体结论；不等同于正式验收或发布证明。 */
 export type AcceptanceConclusion = 'PASS' | 'FAIL' | 'BLOCKED' | 'PARTIAL';
@@ -171,6 +172,7 @@ export interface AcceptanceReportDefect extends DefectDraft {
 }
 
 export interface AcceptanceReport {
+  requirementAssurance: RequirementAssurance;
   runId: string;
   parentRunId?: string;
   project: string;
@@ -391,6 +393,7 @@ function passIntegrityProblems(result: AcceptanceCaseExecutionResult, testCase?:
 
 function reportStatus(result: AcceptanceCaseExecutionResult | undefined, testCase?: TestCase): AcceptanceResultStatus {
   if (testCase && caseQuality(testCase).status === 'BLOCKED') return 'BLOCKED';
+  if (result?.status === 'BLOCKED' && result.error?.includes('REQUIREMENT_ASSURANCE_BLOCKED')) return 'BLOCKED';
   if (reportDesignedOnly(testCase)) return 'NOT_EXECUTED';
   if (!result) return 'NOT_EXECUTED';
   if (result.status === 'PASS') {
@@ -696,6 +699,8 @@ function overallConclusion(input: {
 }
 
 export function buildAcceptanceReport(input: {
+  requirementSourceMarkdown?: string;
+  allTestCases?: readonly TestCase[];
   runId?: string;
   parentRunId?: string;
   project: string;
@@ -1166,7 +1171,19 @@ export function buildAcceptanceReport(input: {
     businessChecks: input.caseQuality?.businessChecks ?? [],
   };
 
+  const requirementAssurance = buildRequirementAssurance({ requirement: input.requirement,
+    markdown: input.requirementSourceMarkdown, allTestCases: input.allTestCases ?? input.testCases,
+    selectedCaseIds: input.testCases.map((testCase) => testCase.id),
+    observations: new Map(executions.map((execution) => [execution.caseId, {
+      status: execution.status, verified: execution.executed && ['PASS', 'FAIL'].includes(execution.status)
+        && execution.evidence.binding?.valid === true && Boolean(execution.evidence.request && execution.evidence.response)
+        && execution.evidence.assertions.length > 0,
+      verifiedFactIds: execution.evidence.assertions.flatMap((assertion) => assertion.factIds ?? []),
+      bindingApiSpecId: execution.evidence.binding?.apiSpecId,
+    }])),
+  });
   return redactAcceptanceArtifact({
+    requirementAssurance,
     runId: input.runId ?? 'RUN-NOT-PROVIDED',
     parentRunId: input.parentRunId,
     project: input.project,
@@ -1250,7 +1267,7 @@ export function buildAcceptanceReport(input: {
     warnings: input.requirement.warnings,
     bindingIssues,
     operationContractConclusion,
-    conclusion,
+    conclusion: conclusion === 'PASS' && requirementAssurance.status !== 'PASS' ? 'BLOCKED' : conclusion,
   }) as AcceptanceReport;
 }
 
@@ -1433,6 +1450,7 @@ ${report.regression.plan.selections.map((selection) => `| ${selection.caseId} | 
 
 - Validation Stage：${report.validationStage}
 - 总体结论：${report.conclusion}
+- 需求完整性硬门禁：${report.requirementAssurance?.status ?? 'NOT_EVALUATED'}；未闭环要求 ${report.requirementAssurance?.unresolvedIds.length ?? 'UNKNOWN'}
 - Operation Contract Conclusion：${report.operationContractConclusion}
 - Result Scope：${report.trust.resultScope}
 - 可信边界：${report.trust.interpretation}
@@ -1511,6 +1529,9 @@ ${coreIssueSections || '无有证据支持的核心问题。'}
 ${defectSections || '无 PRODUCT_DEFECT。'}
 
 ## 8. 未验证项
+
+${markdownList((report.requirementAssurance?.entries ?? []).filter((entry) => !['CONTEXT', 'PASS', 'FAIL'].includes(entry.status))
+    .map((entry) => `${entry.id} [${entry.status}] 原文行 ${entry.source.line ?? '-'}：${entry.statement.replace(/\n/g, ' ')}；${entry.question ?? entry.reason}`), '需求门禁未记录待解决项；仅门禁 PASS 才代表本轮全部要求已验证。')}
 
 ### Observation Gap
 

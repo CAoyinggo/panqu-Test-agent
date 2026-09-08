@@ -12,7 +12,7 @@ import type { DevTestRunResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const EXECUTION_POLICY = 'SAFE_READ_CONFIRMATION_V1';
+const EXECUTION_POLICY = 'NO_SILENT_REQUIREMENT_GAPS_V1';
 
 /** MCP is a control surface. Case schemas and execution semantics remain in TEST_CASE_V2. */
 export const DEVTEST_MCP_TOOL = {
@@ -112,6 +112,7 @@ function summary(result: DevTestRunResult, root: string): Record<string, unknown
     execution_estimate: result.executionEstimate,
     selected_case_ids: result.executionPlan.selectedCaseIds,
     requirement_coverage: result.requirementCoverage,
+    requirement_assurance: result.requirementAssurance,
     unknown_fact_ids: result.requirementModel.unknownFactIds,
     unknowns: result.requirementModel.facts.filter((fact) => result.requirementModel.unknownFactIds.includes(fact.id))
       .map(({ id, statement, status, source }) => ({ id, statement, status, source })),

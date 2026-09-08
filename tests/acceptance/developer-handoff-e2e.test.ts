@@ -78,8 +78,8 @@ describe('Developer Handoff E2E', () => {
 
     const first = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
     // AC-5/AC-7 are denied writes. Without a state observer they stay
-    // DESIGNED_ONLY/NOT_EXECUTED; the mixed handoff is PARTIAL, never PASS.
-    expect(first).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
+    // Ununderstood requirements retain BLOCKED even for designed-only cases.
+    expect(first).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
     expect(first.summary!.passed).toBeGreaterThan(0);
     expect(first.summary!.notExecuted).toBeGreaterThan(0);
     expect(first.summary!.total).toBe(
@@ -106,18 +106,19 @@ describe('Developer Handoff E2E', () => {
     expect(reportText).toContain('[CONFIGURED_BASE_URL]');
 
     const archivedCases = readJson<TestCase[]>(first.artifacts!.testCases);
+    const requirementBlockedIds = (JSON.parse(reportText).requirementAssurance.blockedCaseIds as string[]);
     const archivedExecution = readJson<{ results: Array<{ caseId: string; status: string; executed: boolean }> }>(first.artifacts!.execution);
     const designedOnlyCases = archivedCases.filter((testCase) => testCase.executionMode === 'DESIGNED_ONLY');
     expect(designedOnlyCases.length).toBeGreaterThan(0);
     expect(designedOnlyCases.every((testCase) => {
       const result = resultForCase(archivedExecution.results, testCase.id);
       const quality = testCase.metadata?.caseQuality as { status?: string } | undefined;
-      const expectedStatus = quality?.status === 'BLOCKED' ? 'BLOCKED' : 'NOT_EXECUTED';
+      const expectedStatus = quality?.status === 'BLOCKED' || requirementBlockedIds.includes(testCase.id) ? 'BLOCKED' : 'NOT_EXECUTED';
       return result.status === expectedStatus && result.executed === false;
     })).toBe(true);
 
     const second = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
-    expect(second).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
+    expect(second).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
     expect(second.runId).not.toBe(first.runId);
     expect(second.artifacts?.runDirectory).not.toBe(first.artifacts?.runDirectory);
     expect(fs.existsSync(first.artifacts!.reportMarkdown)).toBe(true);
@@ -281,7 +282,7 @@ AC-1 POST /echo/{resourceKey} 创建成功返回 200
     AC-2 GET /status/404 查询不存在返回 404`);
 
     const first = await runAcceptanceCli(['--requirement', requirementPath, '--config', configPath]);
-    expect(first).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
+    expect(first).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
     expect(first.summary!.passed).toBeGreaterThan(0);
     expect(first.summary!.notExecuted).toBeGreaterThan(0);
     expect(readJson(first.artifacts!.manifest)).toMatchObject({

@@ -136,6 +136,8 @@ export type AcceptanceExecutionClassification =
   | 'UNCONFIRMED';
 
 export interface ApiProcessorOptions {
+  /** Computed by the requirement gate; checked before invoking any processor. */
+  blockedRequirementCaseIds?: ReadonlySet<string>;
   /** Scenario adapters can prohibit read confirmation for compound/stateful flows. */
   allowReadFailureConfirmation?: boolean;
   baseUrl: string;
@@ -815,6 +817,14 @@ export async function runAcceptanceApiCases(
   let failFastTriggered = false;
   try {
     for (const testCase of testCases) {
+      if (options.blockedRequirementCaseIds?.has(testCase.id)) {
+        const base = resultBase(testCase, options.runId);
+        results.push({ ...base, executed: false, processorInvoked: false, status: 'BLOCKED', pass: false, passRate: 0,
+          classification: 'EXECUTION_BLOCKED', attribution: { classification: 'EXECUTION_BLOCKED', confidence: 'HIGH',
+            reason: 'REQUIREMENT_ASSURANCE_BLOCKED：相关要求未理解或未确认', evidenceSources: ['REQUIREMENT_ASSURANCE_GATE'] },
+          error: 'BLOCKED：REQUIREMENT_ASSURANCE_BLOCKED：先澄清要求，再生成并确认新计划' });
+        continue;
+      }
       if (failFastTriggered) {
         results.push(cancelledByFailFast(testCase));
         continue;

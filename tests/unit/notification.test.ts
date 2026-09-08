@@ -165,12 +165,15 @@ describe('Notification Dispatcher：事件映射与分发', () => {
 
   it('某一通道失败不阻断其他通道（failed 计数正确）', async () => {
     const d = new NotificationDispatcher();
-    d.register(webhookChannel({ name: 'bad', url: 'https://x.invalid/hook' }));
+    // Test dispatcher isolation, not DNS timing or availability of an external network.
+    const failedSender = vi.fn(async () => { throw new Error('simulated transport failure'); });
+    d.register(webhookChannel({ name: 'bad', url: 'https://x.invalid/hook', sender: failedSender }));
     d.register(emailChannel({ name: 'ok' }));
     const sum = await d.notifyEvent({ type: 'RunCompleted', runId: 'r', data: {}, timestamp: FIXED_ISO });
     expect(sum.total).toBe(2);
     expect(sum.sent).toBe(1);
     expect(sum.failed).toBe(1);
+    expect(failedSender).toHaveBeenCalledTimes(1);
   });
 
   it('unregister / channelCount', () => {

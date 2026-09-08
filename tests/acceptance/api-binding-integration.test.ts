@@ -155,7 +155,7 @@ AC-2 GET /status/404 查询不存在返回 404`,
       status: 'NOT_EXECUTED', executed: false, processorInvoked: false, classification: 'NOT_EXECUTED',
     });
     expect(execution.report).toMatchObject({
-      conclusion: 'PARTIAL',
+      conclusion: 'BLOCKED',
       coverage: { caseCoverage: 100, executionCoverage: 0, evidenceCoverage: 0, operationContractEvidenceCoverage: 'NOT_AVAILABLE' },
     });
     expect(lifecycle).toEqual({ prepared: 0, cleaned: 0 });
@@ -245,8 +245,10 @@ ${criteria}`,
       return result?.status === 'NOT_EXECUTED' && result.executed === false && result.processorInvoked === false;
     })).toBe(true);
     expect(execution.report).toMatchObject({
-      conclusion: 'PARTIAL',
-      summary: { total: execution.testCases.length, passed: 0, failed: 0, blocked: 0, notExecuted: execution.testCases.length },
+      conclusion: 'BLOCKED',
+      summary: { total: execution.testCases.length, passed: 0, failed: 0,
+        blocked: execution.requirementPreflight.blockedCaseIds.length,
+        notExecuted: execution.testCases.length - execution.requirementPreflight.blockedCaseIds.length },
       coverage: { executionCoverage: 0, evidenceCoverage: 0, operationContractEvidenceCoverage: 'NOT_AVAILABLE' },
     });
     expect(lifecycle).toEqual({ prepared: 0, cleaned: 0 });

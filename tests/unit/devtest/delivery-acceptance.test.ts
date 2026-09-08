@@ -279,6 +279,18 @@ function coverageTrace(input: {
 }
 
 describe('DevTest delivery acceptance', () => {
+  it.each(['pending', 'unresolved'] as const)('rejects a purported complete PASS for a %s requirement', (kind) => {
+    const model = requirementModel(['FACT-1']);
+    if (kind === 'pending') model.facts[0].statement = '返回 200，待确认';
+    else model.facts[0].canonical.normalizationStatus = 'UNRESOLVED';
+    const testCase = apiCase('CASE-PASS', 'FACT-1');
+    const [trace] = buildDevTestAcceptanceTraces({ requirementModel: model, testCases: [testCase],
+      results: [apiResult(testCase.id, 'PASS')], uiResults: [], oracleResults: [oracle(testCase.id, 'PASS', true)], problems: [] });
+    expect(trace.result).toBe('BLOCKED'); expect(trace.classification).toBe('REQUIREMENT_GAP');
+    expect(trace.requirement.verifiedFactIds).toEqual([]);
+    expect(buildDevTestDeliveryCoverage({ requirementModel: model, traces: [trace] }).requirements.verified).toBe(0);
+  });
+
   it('projects Requirement Facts into explicit, derived and unknown knowledge without collapsing epistemic boundaries', () => {
     const requirement = parseAcceptanceRequirement(BASE_REQUIREMENT, { documentId: 'knowledge.md' });
     const seed = requirement.factLedger.find((fact) => fact.normativity === 'NORMATIVE');

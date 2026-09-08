@@ -36,6 +36,7 @@ import {
   type TestCaseScenarioExecution,
 } from './test-case-scenario-adapter.js';
 import type { TestCase } from '../agents/test-design/testcase-schema.js';
+import { buildRequirementAssurance } from './requirement-assurance.js';
 
 export interface AcceptanceDataLifecycle {
   prepare?: () => Promise<void>;
@@ -210,9 +211,14 @@ function resultFromScenarioExecution(
 async function runAcceptanceScenarioCases(
   testCases: TestCase[],
   options: TestCaseScenarioAdapterOptions,
+  blockedRequirementCaseIds: ReadonlySet<string>,
 ) {
   const results: AcceptanceCaseExecutionResult[] = [];
   for (const testCase of testCases) {
+    if (blockedRequirementCaseIds.has(testCase.id)) {
+      results.push(...(await runAcceptanceApiCases([testCase], { baseUrl: '', blockedRequirementCaseIds })).results);
+      continue;
+    }
     const execution = await runTestCaseV2WithScenarioRunner(testCase, options);
     results.push(resultFromScenarioExecution(testCase, execution));
   }
@@ -325,6 +331,9 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
     testCases,
   });
   finalizeRequirementFactLedger(requirement, objectives, testCases);
+  const requirementPreflight = buildRequirementAssurance({ requirement, markdown: options.markdown,
+    allTestCases, selectedCaseIds: testCases.map((testCase) => testCase.id) });
+  const blockedRequirementCaseIds = new Set(requirementPreflight.blockedCaseIds);
   const traceIssues = validateAcceptanceTrace(requirement, testPoints, testCases, objectives);
   if (traceIssues.length) throw new Error(`Acceptance Trace 校验失败：${traceIssues.map((issue) => issue.message).join('；')}`);
 
@@ -366,7 +375,8 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   let prepareError: string | undefined;
   let cleanupError: string | undefined;
   const hasExecutableCases = !stalePlanReason && !safetyBlockReason && !caseLimitReason && !requirementBlockReason && !contractBlockReason
-    && testCases.some((testCase) => !isDesignedOnlyCase(testCase) || runtimeCandidate(testCase));
+    && testCases.some((testCase) => !blockedRequirementCaseIds.has(testCase.id)
+      && (!isDesignedOnlyCase(testCase) || runtimeCandidate(testCase)));
   if (mode === 'execute' && hasExecutableCases && options.lifecycle?.prepare) {
     try {
       await options.lifecycle.prepare();
@@ -385,11 +395,12 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
         runId,
         signal: options.signal,
         contractResolver,
-      })
+      }, blockedRequirementCaseIds)
       : await runAcceptanceApiCases(testCases, {
       baseUrl: options.baseUrl,
       actorHeaders: options.actorHeaders,
       processor: options.processor,
+      blockedRequirementCaseIds,
       timeoutMs: options.timeoutMs,
       deadlineMs: options.deadlineMs ?? DEFAULT_ACCEPTANCE_DEADLINE_MS,
       concurrency: options.concurrency,
@@ -427,6 +438,8 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
     environment: options.environment,
     mode,
     requirement,
+    requirementSourceMarkdown: options.markdown,
+    allTestCases,
     objectives,
     dimensionDecisions: design.dimensionDecisions.filter((decision) => requirement.factLedger.some((fact) => fact.id === decision.factId)),
     scenarios,
@@ -449,6 +462,7 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   return {
     runId,
     executionPlan,
+    requirementPreflight,
     requirement,
     businessModel: design.businessModel,
     businessUnderstanding: design.businessUnderstanding,

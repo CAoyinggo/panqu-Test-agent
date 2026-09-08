@@ -59,7 +59,8 @@ describe('development acceptance full E2E', () => {
     const executableCases = execution.testCases.filter((testCase) => !isDesignedOnlyCase(testCase));
     const designedOnlyCases = execution.testCases.filter(isDesignedOnlyCase);
     const qualityBlockedCases = designedOnlyCases.filter((testCase) =>
-      (testCase.metadata?.caseQuality as { status?: string } | undefined)?.status === 'BLOCKED');
+      execution.requirementPreflight.blockedCaseIds.includes(testCase.id)
+      || (testCase.metadata?.caseQuality as { status?: string } | undefined)?.status === 'BLOCKED');
     const qualityDesignedOnlyCases = designedOnlyCases.filter((testCase) => !qualityBlockedCases.includes(testCase));
     const resultByCase = new Map(execution.results.map((result) => [result.caseId, result]));
     expect(executableCases.length).toBeGreaterThan(0);
@@ -141,13 +142,15 @@ describe('development acceptance full E2E', () => {
       // human-readable design expectation and must never expose runtime evidence.
       expect(criterionCases.every((testCase) =>
         testCase.assertions.some((assertion) => assertion.type === 'DESIGN_EXPECTATION'))).toBe(true);
-      expect(criterionCases.every((testCase) => resultByCase.get(testCase.id)?.status === 'NOT_EXECUTED')).toBe(true);
+      expect(criterionCases.every((testCase) => resultByCase.get(testCase.id)?.status
+        === (execution.requirementPreflight.blockedCaseIds.includes(testCase.id) ? 'BLOCKED' : 'NOT_EXECUTED'))).toBe(true);
     }
 
     const uiCases = execution.testCases.filter((testCase) => testCase.testType === 'UI');
     expect(uiCases.length).toBeGreaterThan(0);
     expect(uiCases.every(isDesignedOnlyCase)).toBe(true);
-    expect(uiCases.every((testCase) => resultByCase.get(testCase.id)?.status === 'NOT_EXECUTED')).toBe(true);
+    expect(uiCases.every((testCase) => resultByCase.get(testCase.id)?.status
+      === (execution.requirementPreflight.blockedCaseIds.includes(testCase.id) ? 'BLOCKED' : 'NOT_EXECUTED'))).toBe(true);
 
     const ownUserCase = executableCases.find((testCase) => testCase.source?.acceptanceCriteriaIds.includes('AC-1'));
     expect(ownUserCase).toMatchObject({ actor: { userId: 'user-a', tenantId: 'tenant-a' }, data: { targetId: 'user-a' } });

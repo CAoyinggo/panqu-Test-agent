@@ -55,6 +55,7 @@ export interface DevTestRenderMeta {
 }
 
 export interface DevTestRenderInput {
+  requirementAssurance?: import('../acceptance/requirement-assurance.js').RequirementAssurance;
   runId: string;
   meta: DevTestRenderMeta;
   conclusion: DevTestFeatureResult;
@@ -353,6 +354,7 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
     plan: input.plan,
     requirementCoverage: input.requirementCoverage,
     requirementModel: input.requirementModel,
+    requirementAssurance: input.requirementAssurance,
     acceptanceTraces: input.acceptanceTraces,
     deliveryCoverage: input.deliveryCoverage,
     invariants: input.invariants,
@@ -706,6 +708,11 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
     `${index + 1}. ${markdownInline(item.type)} ${markdownInline(item.message)}`));
 
   const pending: Array<{ key: string; question: string; cases: string; owner: string }> = [];
+  for (const entry of input.requirementAssurance?.entries ?? []) {
+    if (['CONTEXT', 'PASS', 'FAIL'].includes(entry.status)) continue;
+    pending.push({ key: `ASSURANCE:${entry.id}`, question: `${entry.status} · 原文行 ${entry.source.line ?? '-'}：${entry.statement}；${entry.question ?? entry.reason}`,
+      cases: entry.caseIds.join(', ') || '尚未关联用例', owner: entry.question ? '产品/需求负责人' : '测试负责人' });
+  }
   for (const issue of input.requirementQuality.issues) {
     const cases = input.acceptanceTraces.filter((trace) => !issue.acId
       || trace.requirement.acceptanceCriteriaIds.includes(issue.acId)).map((trace) => trace.caseId);
