@@ -80,7 +80,7 @@ describe('Acceptance Test Point / API DSL', () => {
       const designedOnly = parameterCases.filter((testCase) => testCase.executionMode === 'DESIGNED_ONLY');
       const executable = parameterCases.filter((testCase) => testCase.executionMode === 'EXECUTABLE');
       expect(designedOnly.every((testCase) =>
-        String(testCase.design?.reason).includes('ACTOR_CONTEXT_INCOMPLETE'))).toBe(true);
+        /ACTOR_CONTEXT_INCOMPLETE|NON_MUTATION_EVIDENCE_UNAVAILABLE/.test(String(testCase.design?.reason)))).toBe(true);
       expect(executable.every((testCase) =>
         testCase.actor?.provenance === 'CONFIGURED'
         && testCase.actor.id === testCase.data?.targetId

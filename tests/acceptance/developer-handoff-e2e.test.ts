@@ -77,9 +77,9 @@ describe('Developer Handoff E2E', () => {
     const { configPath, output } = createConfig(server.baseUrl);
 
     const first = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
-    // AC-5/AC-7 are denied writes. Without a state observer the HTTP 403
-    // cannot prove non-mutation, so the final handoff must fail closed.
-    expect(first).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
+    // AC-5/AC-7 are denied writes. Without a state observer they stay
+    // DESIGNED_ONLY/NOT_EXECUTED; the mixed handoff is PARTIAL, never PASS.
+    expect(first).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
     expect(first.summary!.passed).toBeGreaterThan(0);
     expect(first.summary!.notExecuted).toBeGreaterThan(0);
     expect(first.summary!.total).toBe(
@@ -117,7 +117,7 @@ describe('Developer Handoff E2E', () => {
     })).toBe(true);
 
     const second = await runAcceptanceCli(['--requirement', fixturePath, '--config', configPath]);
-    expect(second).toMatchObject({ exitCode: 2, conclusion: 'BLOCKED', summary: { failed: 0 } });
+    expect(second).toMatchObject({ exitCode: 3, conclusion: 'PARTIAL', summary: { failed: 0 } });
     expect(second.runId).not.toBe(first.runId);
     expect(second.artifacts?.runDirectory).not.toBe(first.artifacts?.runDirectory);
     expect(fs.existsSync(first.artifacts!.reportMarkdown)).toBe(true);

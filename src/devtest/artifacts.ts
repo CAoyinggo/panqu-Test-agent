@@ -99,17 +99,50 @@ export interface DevTestRenderInput {
 }
 
 function escapeHtml(value: unknown): string {
-  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  return String(artifactSafe(value) ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function escapeCsv(value: unknown): string {
-  const text = String(value ?? '');
+  const safe = artifactSafe(value);
+  const text = typeof safe === 'string' ? safe : safe === undefined || safe === null ? '' : JSON.stringify(safe);
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function scrubRuntimeLocations(value: string): string {
+  return value
+    .replace(/(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"')\]}>,]+/gi, '[ENV:DATABASE_URL]')
+    .replace(/https?:\/\/[^\s"')\]}>,]+/gi, (matched) => {
+      try {
+        const parsed = new URL(matched);
+        return `[ENV:DEVTEST_BASE_URL]${parsed.pathname === '/' ? '' : parsed.pathname}`;
+      } catch { return '[ENV:DEVTEST_BASE_URL]'; }
+    })
+    .replace(/\/(?:Users|home)\/[^/\s"']+(?:\/[^\s"')\]}>,]*)?/gi, '[LOCAL_PATH]');
+}
+
+function artifactText(value: string): string {
+  return scrubRuntimeLocations(redactSensitiveText(value));
+}
+
+/** Artifact 的最后一道安全边界：凭据、真实 Origin、数据库连接和本机路径均不落盘。 */
+export function artifactSafe(value: unknown): unknown {
+  const redacted = redactSensitive(value);
+  const visit = (item: unknown, depth = 0): unknown => {
+    if (depth > 8) return '[truncated]';
+    if (typeof item === 'string') return scrubRuntimeLocations(redactSensitiveText(item));
+    if (Array.isArray(item)) return item.map((child) => visit(child, depth + 1));
+    if (item && typeof item === 'object') {
+      return Object.fromEntries(Object.entries(item as Record<string, unknown>)
+        .map(([key, child]) => [key, visit(child, depth + 1)]));
+    }
+    return item;
+  };
+  return visit(redacted);
+}
+
 function markdownCell(value: unknown): string {
-  const redacted = typeof value === 'string' ? redactSensitiveText(value) : redactSensitive(value);
+  const redacted = artifactSafe(value);
   const text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted);
   return (text || 'N/A（不适用）')
     .replace(/<br\s*\/?>/gi, '；')
@@ -128,7 +161,7 @@ function markdownInline(value: unknown): string {
 }
 
 function labeledValue(label: string, value: unknown): string {
-  const redacted = typeof value === 'string' ? redactSensitiveText(value) : redactSensitive(value);
+  const redacted = artifactSafe(value);
   const text = typeof redacted === 'string' ? redacted : JSON.stringify(redacted);
   return `${label}：${(text || 'N/A（不适用）').replace(/\r?\n+/g, '；')}`;
 }
@@ -143,7 +176,7 @@ function renderFeishuMarkdownTable(headers: string[], rows: unknown[][]): string
     if (row.length !== headers.length) throw new Error(`飞书 Markdown 表格列数不一致：${row.length}/${headers.length}`);
     lines.push(`| ${row.map(markdownCell).join(' | ')} |`);
   }
-  return lines.join('\n');
+  return artifactText(lines.join('\n'));
 }
 
 /** 按报告所在时区格式化日期，避免 UTC ISO 在东八区凌晨显示成前一天。 */
@@ -274,9 +307,19 @@ function dimensionsObject(input: DevTestRenderInput): Record<string, unknown> {
   }));
 }
 
+function evidenceProof(input: DevTestRenderInput, channels: readonly string[]): { required: number; collected: number; verified: number } {
+  const traces = input.acceptanceTraces.filter((trace) => trace.evidence.required.some((channel) => channels.includes(channel)));
+  return {
+    required: traces.length,
+    collected: traces.filter((trace) => trace.evidence.collected.some((channel) => channels.includes(channel))).length,
+    verified: traces.filter((trace) => (trace.result === 'PASS' || trace.result === 'FAIL')
+      && trace.evidence.collected.some((channel) => channels.includes(channel))).length,
+  };
+}
+
 export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<string, unknown> {
   const cases = caseRows(input);
-  return {
+  return artifactSafe({
     schema: DEVTEST_REPORT_SCHEMA,
     run: {
       id: input.runId,
@@ -337,11 +380,22 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
       evidenceCoverage: input.deliveryCoverage.evidence.coverage,
       realVerified: input.deliveryCoverage.cases.verified,
       generated: input.deliveryCoverage.cases.generated,
+      executable: input.deliveryCoverage.cases.executable,
       executed: input.deliveryCoverage.cases.executed,
       verified: input.deliveryCoverage.cases.verified,
       notTested: input.deliveryCoverage.cases.notTested,
       blocked: input.deliveryCoverage.cases.blocked,
       unknown: unknownsOf(input.report).length,
+    },
+    evidenceMatrix: {
+      response: evidenceProof(input, ['API_RESPONSE']),
+      state: evidenceProof(input, ['DATABASE_STATE', 'RESOURCE_STATE', 'STATE_CHANGE', 'DATA_DIFF']),
+      nonMutation: {
+        required: input.invariants.filter((item) => item.kind === 'NON_MUTATION').length,
+        collected: input.invariants.filter((item) => item.kind === 'NON_MUTATION' && item.status !== 'DESIGNED').length,
+        verified: input.invariants.filter((item) => item.kind === 'NON_MUTATION' && item.status === 'VERIFIED').length,
+      },
+      sideEffect: evidenceProof(input, ['EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD', 'LOG']),
     },
     dimensions: dimensionsObject(input),
     discovery: input.discovery,
@@ -363,7 +417,7 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
         : input.deliveryCoverage.evidence.collected > 0 ? 'PARTIAL' : 'NONE',
       interpretation: '最终交付结论仅消费 Acceptance Trace：真实执行、必需 Evidence 和 Deterministic Oracle 缺一不可。',
     },
-  };
+  }) as Record<string, unknown>;
 }
 
 export function renderCasesCsv(input: DevTestRenderInput): string {
@@ -415,16 +469,16 @@ export function renderProblemsMarkdown(
     lines.push(...(problem.reproduction?.length ? problem.reproduction.map((step, index) => `${index + 1}. ${step}`) : ['1. 执行 DevTest 并查看关联 Case。']));
     lines.push('', `Expected: ${problem.expected ?? '满足 Requirement/Contract'}`, `Actual: ${problem.actual ?? problem.message}`, '', 'Affected Cases:', '');
     lines.push(...(problem.affectedCases.length ? problem.affectedCases.map((caseId) => `- ${caseId}`) : ['- none']));
-    lines.push('', 'Request / Response / Evidence:', '', '```json', JSON.stringify({
+    lines.push('', 'Request / Response / Evidence:', '', '```json', JSON.stringify(artifactSafe({
       request: problem.request, response: problem.response, evidence: problem.evidence,
       confidenceFactors: problem.confidenceFactors, minimalReproduction: problem.minimalReproduction,
-    }, null, 2), '```', '', `Suggested Priority: ${problem.severity}`,
+    }), null, 2), '```', '', `Suggested Priority: ${problem.severity}`,
       `Remediation: ${problem.remediation ?? '补齐权威契约/执行/证据后重跑。'}`, '');
   }
   lines.push('## Unknowns', '');
   lines.push(...(meta.unknowns.length ? meta.unknowns.map((item) => `- ${item.type} / ${item.id}: ${item.message}`) : ['- none']));
   lines.push('');
-  return lines.join('\n');
+  return artifactText(lines.join('\n'));
 }
 
 export function renderAcceptanceSummary(input: DevTestRenderInput): string {
@@ -452,11 +506,18 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
     `Requirement Quality: ${input.requirementQuality.score}/100 · Testability: ${input.requirementQuality.testability}/100`, '',
     '## Verification Coverage', '',
     `- GENERATED: ${input.deliveryCoverage.cases.generated}`,
+    `- EXECUTABLE: ${input.deliveryCoverage.cases.executable}`,
     `- EXECUTED: ${input.deliveryCoverage.cases.executed}`,
     `- VERIFIED: ${input.deliveryCoverage.cases.verified}`,
     `- NOT_TESTED: ${input.deliveryCoverage.cases.notTested}`,
     `- Requirement: generated ${input.deliveryCoverage.requirements.generatedCoverage}% · executed ${input.deliveryCoverage.requirements.executedCoverage}% · verified ${input.deliveryCoverage.requirements.verifiedCoverage}%`,
     `- Evidence: ${input.deliveryCoverage.evidence.coverage}%`, '',
+    '## Evidence Proof', '',
+    `- Response: ${JSON.stringify(evidenceProof(input, ['API_RESPONSE']))}`,
+    `- State / DB: ${JSON.stringify(evidenceProof(input, ['DATABASE_STATE', 'RESOURCE_STATE', 'STATE_CHANGE', 'DATA_DIFF']))}`,
+    `- Non-Mutation: ${input.invariants.filter((item) => item.kind === 'NON_MUTATION' && item.status === 'VERIFIED').length}/${input.invariants.filter((item) => item.kind === 'NON_MUTATION').length} VERIFIED`,
+    `- Side Effect / Log / Queue: ${JSON.stringify(evidenceProof(input, ['EVENT', 'QUEUE_MESSAGE', 'PROVIDER_CALL', 'BILLING_RECORD', 'AUDIT_RECORD', 'LOG']))}`,
+    '',
     '## Confirmed Problems', '',
     ...(confirmed.length ? confirmed.slice(0, 5).map((problem) => `- ${problem.id}: ${problem.message}`) : ['- none']),
     '', '## Likely Problems', '',
@@ -621,7 +682,7 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
     '', '## 全部测试用例', '',
     renderFeishuMarkdownTable(['编号', '模块', '类型/优先级', '结果', '场景与 Oracle', '执行、证据与备注'], tableRows), '',
   ];
-  return `${lines.join('\n')}\n`;
+  return `${artifactText(lines.join('\n'))}\n`;
 }
 
 /** 用户约定的固定七段开发自测报告。每个章节只渲染一张飞书兼容 Markdown 表格。 */
@@ -637,7 +698,7 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
   const recommendation = input.conclusion === 'READY' ? '建议发布'
     : input.conclusion === 'NOT_READY' ? '暂不发布（修复后再提）' : '待补测';
   const validationMode = input.deliveryCoverage.cases.executed > 0
-    ? `真实调用（${input.meta.baseUrl}，${input.meta.mode}）`
+    ? `真实调用（[ENV:DEVTEST_BASE_URL]，${input.meta.mode}）`
     : `测试设计（无真实执行证据；未产生静态缺陷分析证据，${input.meta.mode}）`;
   const topRisks = orderedProblems.slice(0, 3).map((problem, index) =>
     `${index + 1}. ${handoffProblemLevel(problem, input)} ${markdownInline(problem.id)} ${markdownInline(problem.message)}`);
@@ -732,7 +793,7 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
   const lines = [
     `# ${markdownInline(input.report.requirement.title)} 开发自测测试报告`, '',
     `- 需求文档：${markdownInline(input.meta.docSource)} / 报告类型：开发自测报告 / 测试人：DevTest Agent / 日期：${markdownInline(formatReportDate(input.meta.finishedAt))} / 验证模式：${markdownInline(validationMode)}`,
-    `- 工蜂源码同步：${input.sourceSync ? `${input.sourceSync.status}；${input.sourceSync.repositories.length} 个仓库；${input.sourceSync.repositories.filter((item) => item.updated).length} 个发生覆盖更新` : 'NOT_REQUIRED（plan/preflight/dry-run）'}`, '',
+    `- 源码同步：${input.sourceSync ? `${input.sourceSync.status}；${input.sourceSync.repositories.length} 个仓库；${input.sourceSync.repositories.filter((item) => item.updated).length} 个完成快进更新` : 'NOT_REQUIRED（plan/preflight/dry-run）'}`, '',
     '## 1. 结论概览', '',
     renderFeishuMarkdownTable(['项目', '结果', '说明'], [
       ['用例统计', total, `PASS ${passed}；FAIL ${failed}；BLOCKED ${blocked}；NOT_EXECUTED ${notExecuted}`],
@@ -767,7 +828,7 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
     '> 说明：生成不等于执行，执行不等于验证。PASS/FAIL 只来自真实执行、确定性 Oracle 与完整 Evidence；静态发现和证据不足项保持 BLOCKED/NOT_EXECUTED。',
     '',
   ];
-  return lines.join('\n');
+  return artifactText(lines.join('\n'));
 }
 
 function statusClass(status: string): string {
@@ -777,7 +838,7 @@ function statusClass(status: string): string {
 export function renderDevTestHtml(input: DevTestRenderInput): string {
   const rows = caseRows(input);
   const unknowns = unknownsOf(input.report);
-  const sourceSyncRows = input.sourceSync?.repositories.map((repository) => `<tr><td>${escapeHtml(repository.name)}</td><td>${escapeHtml(repository.branch)}</td><td>${escapeHtml(repository.upstream)}</td><td><code>${escapeHtml(repository.beforeCommit)}</code></td><td><code>${escapeHtml(repository.afterCommit)}</code></td><td>${repository.updated ? 'YES' : 'NO'}</td><td>${repository.discardedWorktreeEntries}</td></tr>`).join('') ?? '';
+  const sourceSyncRows = input.sourceSync?.repositories.map((repository) => `<tr><td>${escapeHtml(repository.name)}</td><td>${escapeHtml(repository.branch)}</td><td>${escapeHtml(repository.upstream)}</td><td><code>${escapeHtml(repository.beforeCommit)}</code></td><td><code>${escapeHtml(repository.afterCommit)}</code></td><td>${repository.updated ? 'YES' : 'NO'}</td><td>YES</td></tr>`).join('') ?? '';
   const contractRows = contractRowsOf(input).map((contract) => `<tr><td>${escapeHtml(contract.id)}</td><td>${escapeHtml(contract.status)}</td><td>${escapeHtml(contract.version ?? '-')}</td><td><code>${escapeHtml(contract.fingerprint ?? '-')}</code></td><td>${escapeHtml(contract.reason ?? '-')}</td></tr>`).join('');
   const dimensionRows = input.dimensionStats.map((stat) => {
     const decision = input.dimensionApplicability.find((item) => item.dimension === stat.dimension);
@@ -821,11 +882,11 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
   const negativeRows = input.negativeChecks.filter((item) => item.status !== 'NOT_APPLICABLE').map((item) => `<tr><td>${item.kind}</td><td>${item.status}</td><td>${escapeHtml(item.operation ?? '-')}</td><td>${escapeHtml(item.relatedCaseIds.join(', ') || '-')}</td><td>${escapeHtml(item.reason)}</td></tr>`).join('');
   const requirementModelRows = input.requirementModel.facts.map((fact) => `<tr><td>${fact.id}</td><td>${fact.knowledge}</td><td>${fact.category}</td><td>${fact.provenance}</td><td>${fact.epistemicType}</td><td>${escapeHtml(fact.statement)}</td><td>${fact.canonical.normalizationStatus}</td><td>${escapeHtml(`${fact.source.section ?? '-'}:${fact.source.lineStart}-${fact.source.lineEnd}`)}</td></tr>`).join('');
   const traceRows = input.acceptanceTraces.map((trace) => `<tr><td>${trace.caseId}</td><td>${trace.testModel.selection}${trace.testModel.selectionReason ? `: ${trace.testModel.selectionReason}` : ''}</td><td>${trace.testModel.dimension}</td><td>${trace.execution.status}</td><td>${escapeHtml(`${trace.evidence.collected.join(', ') || '-'}${trace.evidence.missing.length ? `; missing ${trace.evidence.missing.join(', ')}` : ''}`)}</td><td>${trace.oracle.verdict}</td><td class="${statusClass(trace.result)}">${trace.result}</td><td>${trace.classification}</td><td>${escapeHtml(trace.requirement.factIds.join(', ') || '-')}</td><td>${escapeHtml(trace.problemIds.join(', ') || '-')}</td></tr>`).join('');
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DevTest · ${escapeHtml(input.report.requirement.title)}</title>
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DevTest · ${escapeHtml(input.report.requirement.title)}</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f8fa;color:#1f2328;margin:0}.wrap{max-width:1500px;margin:auto;padding:24px}section,.problem{background:#fff;border:1px solid #d0d7de;border-radius:8px;margin:16px 0;padding:18px}.banner{border-left:6px solid #9a6700}.ok{color:#1a7f37;font-weight:700}.bad{color:#cf222e;font-weight:700}.warn{color:#9a6700;font-weight:700}.cards{display:flex;gap:12px;flex-wrap:wrap}.card{border:1px solid #d0d7de;padding:10px 16px;border-radius:6px}.card b{font-size:22px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{border:1px solid #d0d7de;padding:7px;text-align:left;vertical-align:top}.scroll{overflow:auto}code{font-size:11px;word-break:break-all}</style></head><body><main class="wrap">
 <h1>${escapeHtml(input.report.requirement.title)}</h1>
 <section class="banner"><h2>开发首页 · Feature Acceptance</h2><p><b>Feature：</b>${escapeHtml(input.report.requirement.title)}</p><p class="${statusClass(input.conclusion)}" style="font-size:30px"><b>最终结论 / Final Result：</b>${input.conclusion}</p><div class="cards"><div class="card"><b>${input.devConfidence.score}</b><br>Dev Confidence</div><div class="card"><b>${input.requirementCoverage.coreCoverage}%</b><br>Core Coverage</div><div class="card"><b>${input.businessFlowGraph.applicable === false ? 'N/A' : `${input.businessFlowGraph.coverage}%`}</b><br>Business Flow Coverage</div><div class="card"><b>${evidenceCoverage}%</b><br>Evidence Coverage</div><div class="card bad"><b>${confirmedBugs.length}</b><br>Confirmed Bugs</div><div class="card warn"><b>${likelyProblems.length}</b><br>Likely Bugs</div><div class="card warn"><b>${blocked + notExecuted}</b><br>Blocked</div><div class="card"><b>${unknowns.length}</b><br>Unknowns</div><div class="card"><b>${input.reliability.score}</b><br>Test Reliability</div></div>${input.reproduction ? `<p><b>Reproduction ${input.reproduction.problemId}：</b>${input.reproduction.status}</p>` : ''}</section>
-<section><h2>Worker Source Sync</h2>${input.sourceSync ? `<p class="ok"><b>${escapeHtml(input.sourceSync.status)}</b> · ${escapeHtml(input.sourceSync.root)} · ${input.sourceSync.repositories.length} repositories · ${input.sourceSync.repositories.filter((repository) => repository.updated).length} overwritten/updated</p><div class="scroll"><table><tr><th>Repository</th><th>Branch</th><th>Upstream</th><th>Before SHA</th><th>After SHA</th><th>Updated</th><th>Discarded Entries</th></tr>${sourceSyncRows}</table></div>` : '<p>NOT_REQUIRED（plan/preflight/dry-run）</p>'}</section>
+<section><h2>Worker Source Sync</h2>${input.sourceSync ? `<p class="ok"><b>${escapeHtml(input.sourceSync.status)}</b> · ${escapeHtml(input.sourceSync.root)} · ${input.sourceSync.repositories.length} repositories · ${input.sourceSync.repositories.filter((repository) => repository.updated).length} fast-forward updated</p><div class="scroll"><table><tr><th>Repository</th><th>Branch</th><th>Upstream</th><th>Before SHA</th><th>After SHA</th><th>Updated</th><th>Worktree Clean</th></tr>${sourceSyncRows}</table></div>` : '<p>NOT_REQUIRED（plan/preflight/dry-run）</p>'}</section>
 <section><h2>Top Business Risks</h2>${topRiskHtml ? `<ol>${topRiskHtml}</ol>` : '<p>none</p>'}</section>
 <section><h2>Test Reliability</h2><p><b>Score：</b>${input.reliability.score}/100　Stable ${input.reliability.stable}　Flaky ${input.reliability.flaky}　Unstable ${input.reliability.unstable}</p>${reliabilityRows ? `<div class="scroll"><table><tr><th>Case</th><th>Status</th><th>Pass Rate</th><th>Failure Rate</th><th>Flake Rate</th><th>Avg Duration ms</th></tr>${reliabilityRows}</table></div>` : '<p>No flaky or unstable test.</p>'}<h3>Environment Problems</h3>${environmentProblems ? `<ul>${environmentProblems}</ul>` : '<p>none</p>'}<h3>Test Pollution</h3>${pollutionRows ? `<div class="scroll"><table><tr><th>Case</th><th>Classification</th><th>Severity</th><th>Changed State</th><th>Reason</th></tr>${pollutionRows}</table></div>` : '<p>none</p>'}</section>
 <section><h2>Requirement Quality</h2><p><b>Requirement Quality：</b>${input.requirementQuality.score}/100　<b>Testability：</b>${input.requirementQuality.testability}/100　${input.requirementQuality.needsClarification ? '<b class="warn">Requirement needs clarification</b>' : ''}</p><ul>${input.requirementQuality.issues.map((item) => `<li>${item.acId ?? 'Requirement'} · ${item.code}: ${escapeHtml(item.message)}</li>`).join('') || '<li>none</li>'}</ul></section>
@@ -848,6 +909,7 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
 <section><h2>Unknowns</h2>${unknowns.length ? `<ul>${unknowns.map((item) => `<li><b>${item.type}</b> / ${escapeHtml(item.id)}: ${escapeHtml(item.message)}</li>`).join('')}</ul>` : '<p>none</p>'}</section>
 <details><summary><b>Technical Details</b></summary><section><h2>Feature Model</h2><p><b>Actors:</b> ${escapeHtml(model.roles.join(', ') || '-')} · <b>Resources:</b> ${escapeHtml(model.resources.join(', ') || '-')} · <b>States:</b> ${escapeHtml(model.states.join(', ') || '-')}</p><p><b>Constraints:</b> ${escapeHtml(model.constraints.join('；') || '-')}</p></section><section><h2>API / UI Discovery</h2><p>${escapeHtml(input.discovery.scope)} · inspected ${input.discovery.inspectedFiles} files</p><div class="scroll"><table><tr><th>Method</th><th>Path</th><th>Source Type</th><th>Confidence</th><th>Source</th></tr>${discoveryRows}</table></div><ul>${input.discovery.mappingReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul></section><section><h2>Contract Status</h2><p>Gate: <b class="${statusClass(input.contracts.validation.status === 'VALID' ? 'READY' : 'BLOCKED')}">${input.contracts.validation.status}</b></p><div class="scroll"><table><tr><th>ID</th><th>Status</th><th>Version</th><th>Fingerprint</th><th>Reason</th></tr>${contractRows}</table></div></section></details>
 </main></body></html>`;
+  return artifactText(html);
 }
 
 export { unknownsOf as buildDevTestUnknowns };

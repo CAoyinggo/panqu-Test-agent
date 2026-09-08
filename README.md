@@ -52,51 +52,59 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 ### 当前验证基线
 
-以下数据来自 2026-08-27 的当前代码验证：
+以下数据来自 2026-09-04 的当前代码验证：
 
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 268 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 2609 项通过，19 项跳过 |
+| 全量 Vitest | 285 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2772 项通过，19 项跳过 |
 | 智能体回归 | 36 个测试文件、497 项测试通过 |
-| Acceptance 回归 | 33 个测试文件、310 项测试通过 |
-| DevTest 回归 | 17 个测试文件、133 项测试通过 |
+| Acceptance 回归 | 38 个测试文件、341 项测试通过 |
+| DevTest 回归 | 18 个测试文件、139 项测试通过 |
 | Markdown 本地链接 | 191 个文档、0 个失效链接 |
 
 ## 快速开始
 
 ### 需求驱动开发自测
 
-需要从需求文档直接完成“五维设计 → SAFE 初步执行 → 问题分级 → 固定报告”时，
+需要从需求文档直接完成“风险驱动设计 → SAFE 初步执行 → 问题分级 → 固定报告”时，
 使用 DevTest 入口：
 
 ```bash
-# 将示例路径替换为你的 Markdown 或纯文本需求文件
-npm run devtest -- requirements/new-feature.md
+# 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
+npm install --save-dev ./test-flow-4.29.2.tgz
+
+# 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
+npx devtest init --github --trae
+npx devtest doctor
+npx devtest run --requirement requirements/new-feature.md --env test
+npx devtest status --run RUN-<id>
 
 # 可选：计划预览、单问题复现、精准复测
-npm run devtest -- requirements/new-feature.md --plan
-npm run devtest -- requirements/new-feature.md --repro P001
-npm run devtest -- requirements/new-feature.md --rerun P001
-npm run devtest -- requirements/new-feature.md --final
-npm run devtest -- requirements/new-feature.md --final --concurrency 4 --max-runtime 120000 --budget 30
-npm run devtest -- requirements/new-feature.md --summary
-npm run devtest -- requirements/new-feature.md --deep
+npx devtest run --requirement requirements/new-feature.md --env test --plan
+npx devtest run --requirement requirements/new-feature.md --env test --repro P001
+npx devtest run --requirement requirements/new-feature.md --env test --rerun P001
+npx devtest run --requirement requirements/new-feature.md --env test --final
+npx devtest run --requirement requirements/new-feature.md --env test --summary
+npx devtest run --requirement requirements/new-feature.md --env test --deep
 ```
 
-默认 `mode=SAFE`、最多 20 条风险优先 Case。目标地址来自 `--base-url`、专用环境变量
-或项目测试配置；没有候选地址时进入静态设计模式，不猜测 `127.0.0.1/localhost`，也不发送网络请求。
+Trae 用户可启用初始化生成的 `devtest` MCP 和 Skill。模型提交需求路径，DevTest 生成并核验
+TEST_CASE_V2；执行绑定确认计划，重试复用已保存结果。能力与限制见
+[Trae 与 DevTest 执行内核](docs/testing/trae-devtest-kernel.md)。
+
+默认 `mode=SAFE`、最多 20 条风险优先 Case，仅允许 `test` / `sandbox`。目标地址只来自配置引用的
+环境变量（默认 `DEVTEST_BASE_URL`）；没有候选地址时进入静态设计模式，不猜测本机地址，也不发送网络请求。
 POST/PUT/PATCH/DELETE 即使是预期被拒绝的负向探针，
-也只有显式传入 `--confirm-mutations`，且目标为本机 Sandbox 或具备 Cleanup/Rollback 时
+也只有显式传入 `--confirm-mutations`，且目标为隔离 Sandbox 或具备 Cleanup/Rollback 时
 才可能执行；DELETE、真实扣费、Provider、发布和消息副作用仍默认阻断。
 使用 `--mode dry-run` 可保证零 HTTP 请求。
 
-> [!WARNING]
-> 除 `--plan`、`--preflight`、`--mode dry-run` 外，DevTest CLI 会在测试前同步
-> `/Users/mac/agents/panqu-ai` 下所有 Git 子仓库：先全部 `fetch --prune`，再逐仓库执行
-> `reset --hard <upstream>` 与 `clean -fd`。这会丢弃 tracked 本地改动、本地领先提交和非 ignored
-> 未跟踪文件；任一仓库同步失败时测试不会启动。`--project-root` 只缩小源码发现范围，不改变同步根目录。
+DevTest 在当前项目工作区直接运行，不会重置、清理或同步 Git 仓库。运行时地址、账号、Token、
+Cookie 和数据库连接只能通过配置中的环境变量名引用；报告和 Evidence 会在落盘前统一脱敏。
+Fork PR 默认只允许设计和只读探测，真实写操作必须在明确的 `test` / `sandbox` 环境中显式开启，
+并具备可验证的 Cleanup/Rollback。
 
 DevTest 会先建立 AC Coverage Matrix、提取业务不变量，再构建 Business Flow Graph，校验
 Response/Database/Task/Billing/Audit/Resource 状态一致性，并做 Case 去重与核心 Case 识别；
@@ -109,7 +117,7 @@ Tier 0 + Tier 1；`--deep` 才执行 Tier 2。Flaky、环境错误与 Test Pollu
 不会伪装成产品 Bug。
 固定产物写入 `devtest-results/<runId>/`：面向开发者的 `测试用例.md`、
 `开发自测测试报告.md`，以及 `report.html`、`report.json`、`cases.csv`、`problems.md`、
-`acceptance-summary.md` 审计附件；执行模式还会生成 `source-sync.json`。完整说明见 [DevTest Mode](docs/devtest.md)。
+`acceptance-summary.md`、`evidence.json` 审计附件；执行模式还会生成 `source-sync.json`。完整说明见 [DevTest Mode](docs/devtest.md)。
 
 ### 开发需求一键验收
 
@@ -188,6 +196,7 @@ node dist/bin/run-test.js --help
 | --- | --- |
 | Requirement Agent v2 | 将事实标记为 `EXPLICIT / INFERRED / UNKNOWN`，保留原文来源、置信度、歧义问题和未知项；缺失信息不再按常见规则补全 |
 | Test Design Agent v2 | 生成 `TEST_CASE_V2`，按需求、契约和风险动态选择维度；用例回链 Fact、Step、Assertion、Oracle 与 Evidence，不追求固定数量 |
+| Business Runtime P0 | 在 Requirement/Fact Ledger 上投影统一 Business Model；V2 Case 通过轻量 Adapter 接入既有 Scenario Runner，并在执行前动态计算 Generated/Runtime/Effective Readiness |
 | Runtime Claim Gate | 设计模型无权声明 Executor/Observer 已就绪；所有用例先回收为设计态，再由确定性 Preflight 绑定真实能力 |
 | Analysis Agent v2 | LLM 只解释逐 Case 证据；统计、`PASS/FAIL/BLOCKED/NOT_EXECUTED`、缺陷分类和最终建议由确定性分析器重建 |
 | Prompt Registry | Requirement、Test Design、Analysis 同时保留 v1 回放版本和 v2 默认版本，便于审计、比较和回滚 |
@@ -393,7 +402,7 @@ Agent Memory 的 JSON 后端采用 UUID 临时文件、跨实例文件锁和内�
 
 | 命令 | 用途 |
 | --- | --- |
-| `npm run devtest -- ...` | 需求驱动的五维开发自测与问题清单 |
+| `npx devtest run --requirement ... --env test` | 需求驱动的五维开发自测与问题清单 |
 | `npm run devtest:test` | DevTest CLI、五维、SAFE、问题与报告专项回归 |
 | `npm run self-test -- ...` | 需求与代码变更驱动的开发自测 |
 | `npm run self-test:test` | Developer Self-Test 专项回归 |

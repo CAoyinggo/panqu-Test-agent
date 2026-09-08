@@ -4,7 +4,11 @@
 import type { PromptDefinition } from './registry.js';
 import { promptRegistry } from './registry.js';
 import { REQUIREMENT_PROMPT_V1, REQUIREMENT_PROMPT_V2 } from './requirement.js';
-import { TEST_DESIGN_SYSTEM_PROMPT, TEST_DESIGN_SYSTEM_PROMPT_V1 } from '../test-design/test-design-agent.js';
+import {
+  TEST_DESIGN_SYSTEM_PROMPT,
+  TEST_DESIGN_SYSTEM_PROMPT_V1,
+  TEST_DESIGN_SYSTEM_PROMPT_V2,
+} from '../test-design/test-design-agent.js';
 import { DATA_SYSTEM_PROMPT } from '../data/data-agent.js';
 import { RISK_SYSTEM_PROMPT } from '../risk/risk-agent.js';
 import { TEST_SELECTION_SYSTEM_PROMPT } from '../test-selection/test-selection-agent.js';
@@ -43,8 +47,10 @@ const BUILTIN_PROMPTS: PromptDefinition[] = [
   REQUIREMENT_PROMPT_V1,
   REQUIREMENT_PROMPT_V2,
   v1('test-design', '根据结构化需求生成测试用例（历史兼容）', TEST_DESIGN_SYSTEM_PROMPT_V1, TESTCASE_JSON_SCHEMA, 'medium', 0),
-  { ...v1('test-design', '按适用维度生成可执行、可验证、可追溯的开发验收用例', TEST_DESIGN_SYSTEM_PROMPT, TESTCASE_JSON_SCHEMA, 'medium', 0),
+  { ...v1('test-design', '按适用维度生成可执行、可验证、可追溯的开发验收用例', TEST_DESIGN_SYSTEM_PROMPT_V2, TESTCASE_JSON_SCHEMA, 'medium', 0),
     key: 'test-design.v2', version: 'v2' },
+  { ...v1('test-design', '先理解业务和风险策略，再生成并自检 TEST_CASE_V2', TEST_DESIGN_SYSTEM_PROMPT, TESTCASE_JSON_SCHEMA, 'medium', 0),
+    key: 'test-design.v3', version: 'v3' },
   v1('data', '规划测试数据准备方案', DATA_SYSTEM_PROMPT, DATA_PLAN_JSON_SCHEMA, 'medium'),
   v1('risk', '评估执行风险', RISK_SYSTEM_PROMPT, RISK_JSON_SCHEMA, 'small'),
   v1('test-selection', '智能选择本次执行的测试集', TEST_SELECTION_SYSTEM_PROMPT, SELECTION_JSON_SCHEMA, 'small'),

@@ -58,7 +58,7 @@ describe('DevTest Environment Discovery', () => {
     });
   });
 
-  it('项目配置地址只作为静态候选，未显式授权时不探针', async () => {
+  it('不读取项目 .env 或配置中的 URL，运行地址只能来自进程环境或显式 API 输入', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'devtest-env-'));
     await writeFile(path.join(root, '.env'), 'TESTFLOW_BASE_URL=http://127.0.0.1:43124\n', 'utf8');
     const fetchImpl = vi.fn(async () => new Response('', { status: 200 })) as unknown as typeof fetch;
@@ -67,16 +67,7 @@ describe('DevTest Environment Discovery', () => {
     });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(result.reason).toContain('ENVIRONMENT_NOT_PROVIDED_STATIC_ONLY');
-    expect(result.candidates).toContainEqual(expect.objectContaining({
-      source: 'PROJECT_CONFIG', reachable: false, error: 'ENVIRONMENT_CANDIDATE_NOT_AUTHORIZED',
-    }));
-
-    const authorized = await discoverDevTestEnvironment({
-      environment: 'local', projectRoot: root, requirement: REQUIREMENT, fetchImpl,
-      allowDiscoveredEnvironmentProbe: true,
-    });
-    expect(fetchImpl).toHaveBeenCalled();
-    expect(authorized.selectedBaseUrl).toBe('http://127.0.0.1:43124');
+    expect(result.candidates).toEqual([]);
   });
 
   it('DRY_RUN 只解析候选环境，不发出 Health/API 网络探针', async () => {

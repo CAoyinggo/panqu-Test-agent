@@ -102,8 +102,17 @@ function businessScenarioIdentity(testCase: TestCase): unknown {
   if (!testCase.businessScenario) return undefined;
   const { factIds: _factIds, flow, risks, ...scenario } = testCase.businessScenario;
   const { id: _flowId, ...stableFlow } = flow;
+  const resources = scenario.resources?.map(({ factIds: _resourceFacts, ...resource }) => resource);
+  const ownerships = scenario.ownerships?.map(({ factIds: _ownershipFacts, scopes, ...ownership }) => ({
+    ...ownership,
+    scopes,
+  }));
+  const scopes = scenario.scopes?.map(({ factIds: _scopeFacts, ...scope }) => scope);
   return {
     ...scenario,
+    resources,
+    ownerships,
+    scopes,
     flow: stableFlow,
     risks: risks.map(({ id: _riskId, ...risk }) => risk),
   };

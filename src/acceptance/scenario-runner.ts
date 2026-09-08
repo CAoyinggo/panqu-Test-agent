@@ -742,8 +742,10 @@ function adapterAssertion(assertion: ScenarioAssertion): AssertionDefinition | u
 }
 
 /** 将现有单 HTTP ApiProcessor 复用为 Scenario 原子 Operation Processor。 */
-export function createAcceptanceHttpScenarioProcessor(options: Omit<ApiProcessorOptions, 'signal' | 'timeoutMs'>): ScenarioProcessor {
-  const apiProcessor = new ApiProcessor();
+export function createAcceptanceHttpScenarioProcessor(
+  options: Omit<ApiProcessorOptions, 'signal' | 'timeoutMs'> & { apiProcessor?: ApiProcessor },
+): ScenarioProcessor {
+  const apiProcessor = options.apiProcessor ?? new ApiProcessor();
   return {
     name: 'api',
     supportsAbort: true,
@@ -785,7 +787,9 @@ export function createAcceptanceHttpScenarioProcessor(options: Omit<ApiProcessor
         tenantId: context.scenario.actor.tenantId,
         tokenRef: context.scenario.actor.credentialRef,
       } : undefined;
-      const apiDependency = context.scenario.contractDependencies?.find((dependency) => dependency.contractId === apiSpec.id);
+      const apiDependency = context.scenario.contractDependencies?.find((dependency) =>
+        dependency.contractId === apiSpec.id
+        || dependency.contractId.toLowerCase() === `api.${apiSpec.id.toLowerCase()}`);
       const testCase: TestCase = {
         id: `${context.scenario.id}:${operation.id}`,
         feature: context.scenario.domain ?? 'scenario',
@@ -806,6 +810,10 @@ export function createAcceptanceHttpScenarioProcessor(options: Omit<ApiProcessor
         },
         actor,
         tags: ['scenario-asset'],
+        negativeContractIntent: context.scenario.metadata?.negativeContractIntent
+          && typeof context.scenario.metadata.negativeContractIntent === 'object'
+          ? context.scenario.metadata.negativeContractIntent as TestCase['negativeContractIntent']
+          : undefined,
         steps: [{
           type: 'HTTP_REQUEST',
           method: operation.method,
@@ -849,13 +857,17 @@ export function createAcceptanceHttpScenarioProcessor(options: Omit<ApiProcessor
           verified: true,
         });
       }
+      // ApiProcessor 的 FAIL 表示 HTTP 断言不匹配，不表示传输失败。Scenario
+      // Oracle 必须在 State/Side-effect Observer 完成后统一判定，故传输与
+      // Response 已取得时把原子 Operation 视为完成，不能提前中断后续观察。
+      const transportCompleted = result.executed === true && result.evidence.response !== undefined;
       return {
-        status: result.status ?? 'BLOCKED',
+        status: transportCompleted ? 'PASS' : result.status ?? 'BLOCKED',
         executed: result.executed === true,
         output: result.evidence.response,
         evidence,
-        error: result.error,
-        blockedReasons: result.blockedReason && typeof result.blockedReason === 'object'
+        error: transportCompleted ? undefined : result.error,
+        blockedReasons: !transportCompleted && result.blockedReason && typeof result.blockedReason === 'object'
           ? [result.blockedReason as BlockedReason] : undefined,
       };
     },

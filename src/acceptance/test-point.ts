@@ -119,7 +119,10 @@ export function generateTestPoints(
       source: objective.source,
     };
 
-    if (objective.executionTarget === 'API' || objective.executionTarget === 'HYBRID') {
+    const canCompileBusinessOperation = objective.executionTarget !== 'UI'
+      && objective.canonicalFact.action.kind !== 'UNKNOWN'
+      && objective.canonicalFact.resource.kind !== 'UNKNOWN';
+    if (objective.executionTarget === 'API' || objective.executionTarget === 'HYBRID' || canCompileBusinessOperation) {
       if (objective.apiSpecIds.length === 1) point.apiBinding = directBinding(requirement, point, objective.apiSpecIds[0]);
       if (!point.apiBinding) {
         const decision = bindTestPointToApi(requirement, point, bindingIndex);

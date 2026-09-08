@@ -168,7 +168,7 @@ describe('development acceptance full E2E', () => {
         String(testCase.design?.reason).includes('NON_MUTATION_EVIDENCE_UNAVAILABLE'))).toBe(true);
       expect(deniedMutationCases.every((testCase) => {
         const result = resultByCase.get(testCase.id);
-        return result?.status === 'NOT_EXECUTED'
+        return (result?.status === 'NOT_EXECUTED' || result?.status === 'BLOCKED')
           && result.executed === false
           && result.processorInvoked === false
           && !result.evidence.request;

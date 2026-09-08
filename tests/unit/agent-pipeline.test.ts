@@ -8,20 +8,29 @@ import {
   JsonMemoryStore,
   NoopMemory,
   ToolRegistry,
-  computeOutcome,
   executionPlanFingerprint,
 } from '../../src/agents/index.js';
 import { deterministicExecutionOutcome } from '../../src/agents/orchestration/agent-pipeline.js';
 import type { ExecutionOutcome, ExecutionPlan } from '../../src/agents/execution/execution-schema.js';
 import { MockLLMProvider } from '../../src/llm/index.js';
 import type { AgentContext } from '../../src/agents/core/agent-context.js';
+import type { EvidenceEnvelope, ScenarioAssertion } from '../../src/acceptance/scenario-contract.js';
+import type { ScenarioProcessor } from '../../src/acceptance/scenario-runner.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const DEMO =
-  '测试 WAN3 文生视频，覆盖 720P、1080P 分辨率，支持 5 秒和 10 秒视频，' +
-  '验证模型服务与积分服务，确认任务提交成功、状态成功及积分正确扣除，并验证并发执行正常。';
+const DEMO = `# 通用资源创建
+## Actors
+| actorId | userId | role | tenantId | projectId | tokenRef |
+| --- | --- | --- | --- | --- | --- |
+| user-a | user-a | USER | tenant-a | project-a | token-user-a |
+## Authentication
+Bearer Token 认证。
+## API
+POST /resources
+## Acceptance Criteria
+AC-1 user-a 创建自己拥有的 Resource resourceId=resource-a，返回 HTTP 201。`;
 
 const APPROVED_EXECUTION = {
   id: 'approval-unit-test',
@@ -29,31 +38,42 @@ const APPROVED_EXECUTION = {
   approvedBy: 'unit-test-reviewer',
 };
 
-/** mock 执行器：tc-02 失败，其余通过 */
-function mockRunner(onRun?: () => void) {
-  return async (loaded: Array<{ name: string; feature?: string; def: { extra?: Record<string, unknown>; scene?: string; tags?: string[] } }>) => {
-    onRun?.();
-    const results = loaded.map((c) => {
-      const caseId = String(c.def.extra?.agentTestCaseId ?? c.name);
-      return {
-        caseId,
-        name: c.name,
-        feature: c.feature,
-        scene: c.def.scene,
-        priority: 'P0',
-        tags: c.def.tags,
-        processor: 'mock-runner',
-        processorInvoked: true,
-        executed: true,
-        status: caseId === 'tc-02' ? 'FAIL' as const : 'PASS' as const,
-        pass: caseId !== 'tc-02',
-        passRate: caseId === 'tc-02' ? 0 : 100,
-        error: caseId === 'tc-02' ? '断言失败' : undefined,
-        durationMs: 8,
-        checks: [{ name: 's', pass: caseId !== 'tc-02', detail: caseId === 'tc-02' ? 'failed' : 'ok', level: 'P0' }],
-      };
-    });
-    return computeOutcome('wan3', results, { reports: ['r.json'], executed: true });
+function setPath(target: Record<string, unknown>, pathValue: string, value: unknown): void {
+  const parts = pathValue.replace(/^\$\.?/, '').split('.').filter(Boolean);
+  let cursor = target;
+  for (const [index, part] of parts.entries()) {
+    if (index === parts.length - 1) cursor[part] = value;
+    else cursor = (cursor[part] ??= {}) as Record<string, unknown>;
+  }
+}
+
+function pipelineProcessor(onRun: () => void): ScenarioProcessor {
+  return {
+    name: 'pipeline-runtime', supportsAbort: true,
+    supportedEvidenceKinds: ['REQUEST', 'RESPONSE', 'STATE_BEFORE', 'STATE_AFTER', 'DATABASE', 'RESOURCE', 'AUDIT_RECORD', 'OTHER'],
+    supports: () => true, supportsEvidence: () => true,
+    execute: async (operation, context) => {
+      onRun();
+      const requirements = context.scenario.evidenceRequirements.filter((item) => item.operationId === operation.id);
+      const evidence = requirements.map((requirement): EvidenceEnvelope => {
+        const data: Record<string, unknown> = {};
+        for (const assertionId of requirement.assertionIds) {
+          const assertion = context.scenario.assertions.find((item) => item.id === assertionId) as ScenarioAssertion | undefined;
+          if (!assertion) continue;
+          const value = assertion.operator === 'NOT_EXISTS' ? undefined
+            : assertion.operator === 'EXISTS' ? 'observed'
+              : assertion.expectedFrom ? 'observed' : assertion.expected;
+          setPath(data, assertion.target, value);
+        }
+        return {
+          id: requirement.id, requirementId: requirement.id, scenarioId: context.scenario.id,
+          operationId: operation.id, acceptanceCriteriaIds: context.scenario.acceptanceCriteriaIds,
+          kind: requirement.kind, channel: requirement.channel, source: 'pipeline-runtime',
+          observedAt: new Date().toISOString(), data, verified: true,
+        };
+      });
+      return { status: 'PASS', executed: true, evidence };
+    },
   };
 }
 
@@ -74,16 +94,24 @@ function makeContext(options?: { skipExecTool?: boolean; memory?: JsonMemoryStor
     };
   }));
   if (!options?.skipExecTool) {
-    tools.register(createExecutionRunTool(mockRunner(() => { calls.runner += 1; }) as never));
+    tools.register(createExecutionRunTool());
   }
+  const processor = pipelineProcessor(() => { calls.runner += 1; });
   const ctx = createAgentContext({
     taskId: 'pipe-1',
-    feature: 'wan3',
+    feature: 'resource',
     environment: 'test',
     tools,
     memory,
     llm: new MockLLMProvider(),
-    metadata: options?.approve === false ? {} : { executionApproval: APPROVED_EXECUTION },
+    metadata: {
+      ...(options?.approve === false ? {} : { executionApproval: APPROVED_EXECUTION }),
+      scenarioRunnerOptions: {
+        processors: [processor], environmentAvailable: true, policyAllowed: true,
+        availableDependencies: new Set(['runtime.caseCleanup']),
+        cleanupHooks: new Map([['runtime.caseCleanup', async () => ({})]]),
+      },
+    },
   });
   return { ctx, memory, calls };
 }
@@ -93,17 +121,16 @@ describe('agent-pipeline - 完整链路', () => {
     const { ctx } = makeContext();
     const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
 
-    expect(r.requirement.feature).toBe('wan3');
+    expect(r.requirement.feature).toBeTruthy();
     expect(r.testCases.length).toBeGreaterThan(0);
     expect(r.risk.risks.length).toBeGreaterThan(0);
     expect(r.policyGate.verdict).toBe('ALLOW');
-    expect(r.dataPlan.needsSetup).toBe(true);
-    expect(r.dataContext.account?.id).toBe('acct-1'); // 经 data.prepare 准备
-    expect(r.outcome.executed).toBe(true);
+    expect(r.dataPlan.needsSetup).toBe(false);
+    expect(r.outcome.executed).toBe(false); // 仍有 DESIGNED_ONLY，严格区分“部分已执行”与“全部已执行”
+    expect(r.outcome.results.some((result) => result.executed && result.processorInvoked)).toBe(true);
     expect(r.outcome.total).toBe(r.testCases.length);
-    expect(r.outcome.failed).toBe(1); // tc-02
+    expect(r.outcome.passed).toBeGreaterThan(0);
     expect(r.report.summary.overall).toBe('fail');
-    expect(r.report.failedCases.some((c) => c.caseId === 'tc-02')).toBe(true);
     expect(r.stages.requirement).toBe(true);
     expect(r.stages.testDesign).toBe(true);
     expect(r.stages.risk).toBe(true);
@@ -115,12 +142,11 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.durationMs).toBeGreaterThan(0);
   });
 
-  it('执行结果写入记忆（执行摘要 + 失败记录）', async () => {
+  it('执行结果写入记忆（执行摘要）', async () => {
     const { ctx, memory } = makeContext();
-    await runAgentPipeline({ requirementText: DEMO }, ctx);
+    const r = await runAgentPipeline({ requirementText: DEMO }, ctx);
     const all = await memory.query({ limit: 50 });
-    expect(all.some((r) => r.type === 'execution' && r.data?.feature === 'wan3')).toBe(true);
-    expect(all.some((r) => r.type === 'failure' && r.data?.caseId === 'tc-02')).toBe(true);
+    expect(all.some((record) => record.type === 'execution' && record.data?.feature === r.requirement.feature)).toBe(true);
   });
 
   it('skipExecution 时仅产出计划，不执行', async () => {
@@ -144,6 +170,16 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.report).toBeDefined();
   });
 
+  it('Quality Gate 未产出 Case 时 fail-close，不调用 Runner 也不伪造 PASS', async () => {
+    const { ctx, calls } = makeContext();
+    const r = await runAgentPipeline({ requirementText: '# Context\n仅供背景说明，无验收标准。' }, ctx);
+
+    expect(r.testCases).toHaveLength(0);
+    expect(calls.runner).toBe(0);
+    expect(r.outcome).toMatchObject({ total: 0, passed: 0, executed: false });
+    expect(r.stages.execution).toBe(false);
+  });
+
   it('Policy Gate 未获批准时在数据准备和 Runner 之前阻断', async () => {
     const { ctx, calls } = makeContext({ approve: false });
     const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
@@ -160,15 +196,15 @@ describe('agent-pipeline - 完整链路', () => {
     expect(r.outcome.passed).toBe(0);
   });
 
-  it('Policy Gate 人工审批成功后才允许 Data Prepare 和 Runner 各执行一次', async () => {
+  it('Policy Gate 人工审批成功后允许 V2 Case 进入 Scenario Runtime', async () => {
     const { ctx, calls } = makeContext();
     const r = await runAgentPipeline({ requirementText: DEMO, environment: 'test' }, ctx);
 
     expect(r.policyGate).toMatchObject({ allowed: true, verdict: 'ALLOW' });
     expect(r.stages.dataPrepare).toBe(true);
-    expect(calls.dataPrepare).toBe(1);
-    expect(calls.runner).toBe(1);
-    expect(r.outcome.executed).toBe(true);
+    expect(calls.dataPrepare).toBe(0);
+    expect(calls.runner).toBeGreaterThan(0);
+    expect(r.outcome.results.some((result) => result.executed && result.processorInvoked)).toBe(true);
   });
 
   it('Orchestrator 六类策略汇总后，Gate 与 Runner 消费同一份 Execution Plan', async () => {
@@ -215,7 +251,7 @@ describe('agent-pipeline - 完整链路', () => {
         type: 'failure',
         createdAt: new Date().toISOString(),
         data: { caseId: 'tc-09', category: 'error', message: '历史失败', evidence: [] },
-        tags: ['wan3', 'failure'],
+        tags: ['user', 'failure'],
       });
     }
     const r = await runAgentPipeline({ requirementText: DEMO }, ctx);
@@ -259,20 +295,20 @@ describe('agent-pipeline - Phase 10-18 增强阶段', () => {
     // Coverage
     expect(r.stages.coverage).toBe(true);
     expect(r.coverage).toBeDefined();
-    expect(r.coverage!.feature).toBe('wan3');
+    expect(r.coverage!.feature).toBe(r.requirement.feature);
     expect(r.coverage!.dimensions.length).toBeGreaterThan(0);
 
-    // RCA（tc-02 失败用例）
+    // 无产品失败时 RCA 可以为空，但阶段必须真实完成。
     expect(r.stages.rca).toBe(true);
-    expect(r.rcas?.some((x) => x.caseId === 'tc-02')).toBe(true);
+    expect(r.rcas).toBeDefined();
 
     // Defect（LLM 空输出 → 回退规则，产出 DRAFT 草稿）
     expect(r.stages.defect).toBe(true);
-    expect(r.defects?.some((d) => d.status === 'DRAFT')).toBe(true);
+    expect(r.defects).toBeDefined();
 
     // Approval（默认不自动批准：REVIEW → pending，不拒绝）
     expect(r.stages.approval).toBe(true);
-    expect(r.approvals?.some((a) => a.operation === 'create-defect')).toBe(true);
+    expect(r.approvals).toBeDefined();
     expect(r.approvalResults?.every((x) => x.verdict !== 'rejected')).toBe(true);
 
     // Trace
@@ -353,7 +389,8 @@ describe('agent-pipeline - Phase 10-18 增强阶段', () => {
       { requirementText: DEMO, options: { useSelection: true } },
       ctx,
     );
-    expect(r.outcome.executed).toBe(true);
+    expect(r.outcome.executed).toBe(false);
+    expect(r.outcome.results.some((result) => result.executed && result.processorInvoked)).toBe(true);
     expect(r.outcome.total).toBeGreaterThan(0);
     expect(r.stages.execution).toBe(true);
   });

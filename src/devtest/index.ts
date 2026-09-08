@@ -34,6 +34,26 @@ export { appendDiscoveredContracts, discoverDevTestProject } from './project-dis
 export { discoverDevTestEnvironment } from './environment-discovery.js';
 export { executeDevTestUiCases } from './ui-executor.js';
 export { synchronizeDevTestSource } from './source-sync.js';
+export { loadDevTestRuntime, type DevTestRuntimeExtension } from './runtime-loader.js';
+export {
+  collectDevTestGitHubInputs,
+  githubBusinessWritePolicy,
+  publishDevTestToGitHub,
+  readDevTestGitHubContext,
+  renderGitHubDevTestSummary,
+  DevTestGitHubClient,
+} from './github-integration.js';
+export {
+  DEFAULT_DEVTEST_CONFIG,
+  DEVTEST_CONFIG_FILE,
+  DEVTEST_WORKFLOW_FILE,
+  doctorDevTestProject,
+  initializeDevTestProject,
+  loadDevTestConfig,
+  resolveRequirementFile,
+  validateDevTestConfig,
+  type DevTestProjectConfig,
+} from './cli-config.js';
 export type { DevTestSourceSyncOptions, DevTestSourceSyncResult, DevTestSourceRepositorySync } from './source-sync.js';
 export {
   SafeMutationHoldProcessor,

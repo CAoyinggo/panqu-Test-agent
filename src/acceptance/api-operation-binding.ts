@@ -31,6 +31,76 @@ export function createApiBindingIndex(requirement: AcceptanceRequirement): ApiBi
 
 const OPERATION_PATTERN = /\b(GET|HEAD|POST|PUT|PATCH|DELETE)\s+(\/[^\s|`，。,;；]+)/gi;
 
+const ACTION_METHODS: Partial<Record<TestPoint['canonicalFact']['action']['kind'], readonly ApiSpec['method'][]>> = {
+  CREATE: ['POST'], READ: ['GET', 'HEAD'], UPDATE: ['PUT', 'PATCH'], DELETE: ['DELETE'],
+  SUBMIT: ['POST'], TRANSITION: ['POST', 'PUT', 'PATCH'], CHARGE: ['POST'],
+  ROLLBACK: ['POST', 'PUT', 'PATCH'], ACCESS: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
+};
+
+const RESOURCE_ALIASES: Record<string, readonly string[]> = {
+  USER_PROFILE: ['profile', 'profiles', 'user', 'users'],
+  USER_DATA: ['user', 'users', 'data'], TENANT_DATA: ['tenant', 'tenants', 'data'],
+  ORDER: ['order', 'orders'], RESOURCE: ['resource', 'resources'], TASK: ['task', 'tasks'],
+  PROJECT: ['project', 'projects'], ACCOUNT: ['account', 'accounts'], RECORD: ['record', 'records'],
+};
+
+function pathTokens(path: string): string[] {
+  return path.split('/').filter((part) => part && !part.startsWith('{'))
+    .map((part) => part.toLowerCase().replace(/[^a-z0-9_-]/g, ''))
+    .filter((part) => part && part !== 'api' && !/^v\d+$/.test(part));
+}
+
+function singular(value: string): string {
+  return value.replace(/ies$/i, 'y').replace(/s$/i, '');
+}
+
+function resourceMatches(point: TestPoint, api: ApiSpec): boolean {
+  const kind = point.canonicalFact.resource.kind;
+  if (kind === 'UNKNOWN') return false;
+  const aliases = RESOURCE_ALIASES[kind] ?? [kind.toLowerCase(), kind.toLowerCase().replace(/_/g, '-')];
+  const tokens = pathTokens(api.path);
+  return tokens.some((token) => aliases.some((alias) => singular(token) === singular(alias)));
+}
+
+function actionPathTokens(point: TestPoint): string[] {
+  const text = `${point.canonicalFact.action.expression ?? ''} ${point.objective}`;
+  const result: string[] = [];
+  // “取消未支付订单”中的“支付”是状态修饰语，不是 pay 动作。更具体的
+  // cancel/submit/recover 动词优先，避免把状态词同时绑定到多个 Operation。
+  if (/(?:取消|cancel)/i.test(text)) return ['cancel', 'cancellation'];
+  if (/(?:提交|submit)/i.test(text)) result.push('submit');
+  if (/(?:恢复|重试|recover|retry)/i.test(text)) result.push('recover', 'retry');
+  if (/(?:支付|付款|扣款|pay(?:ment)?|charge|billing)/i.test(text)) result.push('pay', 'payment', 'charge', 'billing');
+  return result;
+}
+
+function semanticCandidates(requirement: AcceptanceRequirement, point: TestPoint): ApiSpec[] {
+  const actionTokens = actionPathTokens(point);
+  // 状态规则常被 canonical 化为 TRANSITION，部分错误/恢复 Fact 甚至没有
+  // 单一 Action kind；当需求明确给出 pay/cancel/retry 等业务动作时，允许
+  // 这些确定性的 path token 限定写 Operation，但仍要求最终唯一匹配。
+  const methods = ACTION_METHODS[point.canonicalFact.action.kind]
+    ?? (actionTokens.length ? ['POST', 'PUT', 'PATCH'] as const : undefined);
+  if (!methods?.length) return [];
+  let candidates = requirement.apis.filter((api) => methods.includes(api.method) && resourceMatches(point, api));
+  if (actionTokens.length) {
+    const actionMatches = candidates.filter((api) => pathTokens(api.path).some((token) => actionTokens.includes(token)));
+    if (actionMatches.length) candidates = actionMatches;
+  } else if (point.canonicalFact.action.kind === 'CREATE') {
+    const minimum = Math.min(...candidates.map((api) => pathTokens(api.path).length));
+    candidates = candidates.filter((api) => pathTokens(api.path).length === minimum);
+  }
+  const identifiers = Object.keys(point.canonicalFact.resource.identifiers).map((name) => name.toLowerCase());
+  if (/(?:列表|清单|集合|list|search)/i.test(point.objective)) {
+    const collectionOperations = candidates.filter((api) => api.pathParams.length === 0);
+    if (collectionOperations.length) candidates = collectionOperations;
+  } else if (identifiers.length) {
+    const itemOperations = candidates.filter((api) => api.pathParams.some((parameter) => identifiers.includes(parameter.name.toLowerCase())));
+    if (itemOperations.length) candidates = itemOperations;
+  }
+  return candidates;
+}
+
 function normalizedPath(value: string): string {
   return value.trim().replace(/[，。,;；.]+$/, '');
 }
@@ -71,8 +141,8 @@ function issue(
 }
 
 /**
- * Binding Policy：单 API 可确定绑定；多 API 仅接受 AC 中明确的 Method + Path。
- * 业务描述相似度不作为执行依据，避免猜测后真实调用错误接口。
+ * Binding Policy：显式 Method+Path 优先；其次是单 API；最后只允许由 canonical
+ * Action + Resource 唯一确定的 Operation。自由文本相似度不作为执行依据。
  */
 export function bindTestPointToApi(
   requirement: AcceptanceRequirement,
@@ -103,5 +173,10 @@ export function bindTestPointToApi(
     return issue(point, 'API_NOT_FOUND', `${point.id} 声明的 Method + Path 在 Requirement IR 中不存在`, requirement.apis);
   }
   if (requirement.apis.length === 1) return binding(requirement.apis[0], point, 'SINGLE_API');
+  const semantic = semanticCandidates(requirement, point);
+  if (semantic.length === 1) return binding(semantic[0], point, 'ACTION_RESOURCE');
+  if (semantic.length > 1) {
+    return issue(point, 'BINDING_AMBIGUOUS', `${point.id} 的 Action + Resource 对应多个 ApiSpec，需明确 Method + Path`, semantic);
+  }
   return issue(point, 'BINDING_AMBIGUOUS', `${point.id} 面对多个 ApiSpec，但 AC 未明确 Method + Path`, requirement.apis);
 }

@@ -1,0 +1,60 @@
+# Trae 入口与 DevTest 执行内核
+
+本入口使用 npm 包中的 `devtest-mcp`。它只接受需求路径和计划控制参数，调用现有 DevTest、TEST_CASE_V2、Quality Gate、Scenario Adapter、Evidence、Oracle 和报告实现。模型不再提交另一种格式的测试 Case。
+
+## 安装与使用
+
+先在 test-flow 运行 `npm ci`、`npm run build`、`npm pack`。在目标业务 Git 仓库安装生成的 tarball：
+
+```bash
+npm install --save-dev /path/to/test-flow-4.29.2.tgz
+npx --no-install devtest init --github --trae
+npx --no-install devtest doctor
+```
+
+初始化产生 `.devtest.json`、`.github/workflows/devtest.yml`、`.trae/mcp.json` 和 `.trae/skills/devtest/SKILL.md`。保留已有其他 MCP 配置和团队修改过的 Skill。相同名字但内容不同的 MCP 配置需要先处理冲突。npm 公共发布不属于本次交付；不能假设同名 npm 包就是本项目。
+
+在 Trae 启用项目 `devtest` MCP 和生成的 Skill，输入：
+
+> 根据 requirements/feature.md 生成测试计划，说明关键风险和 UNKNOWN，先不要执行。
+
+工具名称为 `devtest`，完整 JSON Schema 由 `tools/list` 返回：
+
+| Action | 输入 | 结果 |
+| --- | --- | --- |
+| doctor | 无额外参数 | 配置、需求和环境变量检查；READY 不代表业务可执行 |
+| plan | requirement：仓库内相对文档路径 | Generator + Quality Gate 生成计划；返回 plan_id、plan_hash、风险、UNKNOWN、报告路径；不发网络请求 |
+| execute | plan_id、expected_plan_hash、idempotency_key | 校验确认计划并调用现有内核；返回执行统计、Oracle、证据及报告路径 |
+| status | plan_id | 从持久化记录读取 NOT_EXECUTED、RUNNING、COMPLETED 或 BLOCKED 及业务结论 |
+
+`ok` 表示工具调用是否完成，不是测试 PASS。业务结果看 `conclusion`、`counts`、`oracle` 和 Evidence。报告路径相对于目标仓库，格式与 CLI 一致。
+
+## 确认、重试与隔离
+
+计划绑定现有 Acceptance Execution Plan Identity、需求摘要、配置、Git 索引内及未跟踪的源码内容摘要，以及操作员选择的目标环境和 Runtime 模块内容摘要。摘要记录不保存环境地址或凭证明文。执行前发生变化会返回 STALE_PLAN；生成的 Case 语义和执行范围还会在 DevTest 中再次校验。运行时 Readiness 在每次执行前重新计算。
+
+同一个计划重复使用相同幂等键只返回已保存结果。换一个幂等键不会重新执行该计划，需要重新生成计划。项目级排他锁防止多个 MCP 进程并发污染数据。异常退出留下 RUNNING 或锁时，先核查实际业务状态和运行进程；工具不自动重复未知结果的业务操作。
+
+本地 MCP 当前只执行 SAFE 只读用例。写操作由目标仓库的 GitHub `workflow_dispatch` 在明确的 test/sandbox 环境中显式启用；运行时通过 GitHub Secrets 和受审查的 Runtime 模块提供。Fork PR 不得执行写操作。此版本 MCP 不提供远程 Workflow dispatch，也不把本地调用自动转成 GitHub 写操作。
+
+缺少鉴权、Observer、状态预期或副作用证据时保持 BLOCKED / DESIGNED_ONLY / NOT_EXECUTED。不能通过放宽 Gate 获取 PASS。
+
+## 运行层级与证据
+
+- MCP 回归启动独立本机 HTTP 服务，验证实际请求、错误响应 FAIL、证据、重试、计划漂移和路径隔离。这是受控服务集成测试，不是客户环境验收。
+- `p0-reference-scenarios.test.ts` 中按期望值构造观察结果的处理器仅验证模拟合约串接；指标标记 SIMULATED_CONTRACT_ONLY，不能当作三类业务实际通过。
+- 真实业务验收需要目标 test/sandbox、对应需求、测试身份、实际数据/日志/队列 Observer 和 Cleanup。条件不具备时不能报告实际业务通过。
+
+## 维护
+
+```bash
+npm run build
+npm run test:standardization
+npm run acceptance:test
+npm run test:devtest-v8
+npm run test:mcp-kernel
+npm run test:npm-acceptance
+npm test
+```
+
+同步维护 `src/devtest/mcp-service.ts` 控制 Schema、`src/devtest/assets/devtest/SKILL.md`、CLI 初始化、打包白名单和集成测试。旧 mcp-bridge 保留作兼容资产，不再是项目默认入口。

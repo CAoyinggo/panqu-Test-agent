@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "devtest": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/dist/bin/devtest-mcp.js",
+        "--project-root",
+        "${workspaceFolder}"
+      ]
+    }
+  }
+}

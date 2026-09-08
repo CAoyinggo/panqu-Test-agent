@@ -22,6 +22,11 @@ import type { DataSession } from '../../core/data-session.js';
 import type { ExecutionPlan } from './execution-schema.js';
 import type { UsageMeter } from '../observability/usage-meter.js';
 import type { ContractResolver } from '../../contracts/resolver.js';
+import type { TestCase } from '../test-design/testcase-schema.js';
+import {
+  runTestCaseV2WithScenarioRunner,
+  type TestCaseScenarioAdapterOptions,
+} from '../../acceptance/test-case-scenario-adapter.js';
 
 /** 执行选项 */
 export interface ExecutionRunOptions {
@@ -53,6 +58,16 @@ export interface ExecutionRunOptions {
   meter?: UsageMeter;
   /** 与 TestDesign/Contract Gate 同一 scoped Resolver，禁止 Runner 重新解释依赖。 */
   contractResolver?: ContractResolver;
+  /** canonical TEST_CASE_V2 的 Scenario Runner 运行时能力。 */
+  scenarioRunnerOptions?: TestCaseScenarioAdapterOptions;
+}
+
+export interface ExecutionRunToolInput {
+  /** canonical 路径：原样消费 Generator + Quality Gate 产出的 TEST_CASE_V2。 */
+  testCases?: TestCase[];
+  /** 旧独立调用方兼容路径；Agent Pipeline 不再使用。 */
+  cases?: LoadedCase[];
+  options?: ExecutionRunOptions;
 }
 
 /** 执行器签名（可注入 mock） */
@@ -378,35 +393,176 @@ export async function runCasesWithEngine(
   return outcome;
 }
 
+function scenarioCaseResult(
+  testCase: TestCase,
+  execution: Awaited<ReturnType<typeof runTestCaseV2WithScenarioRunner>>,
+): CaseExecutionResult {
+  const result = execution.outcome.result;
+  const assertionEvidence = new Map(result.evidence
+    .filter((item) => item.assertionId)
+    .map((item) => [item.assertionId!, item]));
+  const checks = execution.adapted.scenario.assertions.flatMap((assertion) => {
+    const evidence = assertionEvidence.get(assertion.id);
+    const data = evidence?.data && typeof evidence.data === 'object' && !Array.isArray(evidence.data)
+      ? evidence.data as Record<string, unknown> : undefined;
+    if (!data || typeof data.pass !== 'boolean') return [];
+    return [{
+      name: assertion.description ?? assertion.id,
+      pass: data.pass,
+      detail: `${assertion.operator} ${assertion.target}：actual=${JSON.stringify(data.actual)} expected=${JSON.stringify(data.expected)}`,
+      level: assertion.severity,
+      kind: 'BUSINESS' as const,
+    }];
+  });
+  const status = result.status === 'PASS' || result.status === 'FAIL'
+    || result.status === 'BLOCKED' || result.status === 'NOT_EXECUTED'
+    || result.status === 'TIMEOUT' || result.status === 'CANCELLED'
+    ? result.status : 'BLOCKED';
+  return {
+    caseId: testCase.id,
+    name: testCase.name,
+    feature: testCase.feature,
+    scene: 'scenario',
+    priority: testCase.priority,
+    tags: testCase.tags,
+    processor: result.processors.length ? result.processors.join(',') : undefined,
+    processorInvoked: result.processorInvoked,
+    requestId: result.runId,
+    timestamp: result.finishedAt,
+    executed: result.executed,
+    status,
+    pass: status === 'PASS',
+    passRate: status === 'PASS' ? 100 : 0,
+    blockedReason: result.blockedReasons,
+    evidence: result.evidence,
+    error: status === 'PASS' ? undefined : result.summary,
+    timedOut: status === 'TIMEOUT',
+    durationMs: result.durationMs,
+    checks,
+  };
+}
+
+async function runTestCaseV2Cases(
+  testCases: TestCase[],
+  options: ExecutionRunOptions,
+  context: AgentContext,
+  signal?: AbortSignal,
+): Promise<ExecutionOutcome> {
+  const plan = options.plan;
+  const byId = new Map(testCases.map((testCase) => [testCase.id, testCase]));
+  const ordered = (plan?.order ?? testCases.map((testCase) => testCase.id))
+    .flatMap((id) => byId.get(id) ? [byId.get(id)!] : []);
+  const limit = Math.min(
+    ordered.length,
+    plan?.maxCases ?? Number.POSITIVE_INFINITY,
+    options.meter?.maxCasesClamp ?? Number.POSITIVE_INFINITY,
+  );
+  const selected = ordered.slice(0, limit);
+  const deferred = ordered.slice(limit);
+  const configured = options.scenarioRunnerOptions;
+  const runtime: TestCaseScenarioAdapterOptions = {
+    ...(configured ?? {}),
+    processors: configured?.processors ?? [],
+    environmentAvailable: configured?.environmentAvailable === true,
+    policyAllowed: configured?.policyAllowed === true && plan?.policy?.realExecution !== false,
+    variables: {
+      ...(options.dataSession?.context ?? {}),
+      ...(configured?.variables ?? {}),
+    },
+    contractResolver: options.contractResolver ?? configured?.contractResolver,
+    signal,
+  };
+  const results: CaseExecutionResult[] = [];
+  for (const testCase of selected) {
+    if (signal?.aborted) {
+      results.push({
+        caseId: testCase.id, name: testCase.name, feature: testCase.feature,
+        executed: false, status: 'CANCELLED', pass: false, passRate: 0,
+        error: 'CANCELLED：Scenario 执行被取消',
+      });
+      continue;
+    }
+    try {
+      options.meter?.beforeCase();
+      const execution = await runTestCaseV2WithScenarioRunner(testCase, {
+        ...runtime,
+        runId: `${runtime.runId ?? context.taskId}:${testCase.id}`,
+      });
+      const caseResult = scenarioCaseResult(testCase, execution);
+      results.push(caseResult);
+      options.meter?.afterCase();
+      if (plan?.policy?.stopOnFailure && caseResult.status === 'FAIL') break;
+    } catch (error) {
+      results.push({
+        caseId: testCase.id, name: testCase.name, feature: testCase.feature,
+        executed: false, status: 'BLOCKED', pass: false, passRate: 0,
+        error: `BLOCKED：${(error as Error).message}`,
+      });
+      if (plan?.policy?.stopOnFailure) break;
+    }
+  }
+  const returned = new Set(results.map((result) => result.caseId));
+  for (const testCase of [...deferred, ...selected.filter((item) => !returned.has(item.id))]) {
+    if (returned.has(testCase.id)) continue;
+    results.push({
+      caseId: testCase.id, name: testCase.name, feature: testCase.feature,
+      executed: false, status: 'NOT_EXECUTED', pass: false, passRate: 0,
+      error: deferred.includes(testCase)
+        ? 'NOT_EXECUTED：Execution Plan / Budget 截断'
+        : 'NOT_EXECUTED：stopOnFailure 停止后续调度',
+    });
+  }
+  const outcome = computeOutcome(testCases[0]?.feature ?? 'default', results, {
+    executed: results.length > 0 && results.every((item) => item.executed === true),
+    plan,
+  });
+  context.logger.info(`execution.run Scenario Adapter 完成：${outcome.summary}`);
+  return outcome;
+}
+
 /** Execution Run Tool 实现 */
-export class ExecutionRunTool implements AgentTool<{ cases: LoadedCase[]; options?: ExecutionRunOptions }, ExecutionOutcome> {
+export class ExecutionRunTool implements AgentTool<ExecutionRunToolInput, ExecutionOutcome> {
   name = 'execution.run';
   description = '通过现有执行引擎执行测试用例，返回结构化执行结果';
   permission: ToolPermission = 'risky';
   inputSchema = {
     type: 'object',
-    required: ['cases'],
     properties: {
+      testCases: { type: 'array' },
       cases: { type: 'array' },
       options: { type: 'object' },
     },
+    anyOf: [{ required: ['testCases'] }, { required: ['cases'] }],
   };
   outputSchema = { type: 'object' };
   timeoutMs = 600_000;
 
   constructor(private runner: ExecutionRunner = realEngineRunner) {}
 
-  async execute(input: { cases: LoadedCase[]; options?: ExecutionRunOptions }, context: AgentContext, signal?: AbortSignal): Promise<ExecutionOutcome> {
-    if (!input?.cases?.length) {
+  async execute(input: ExecutionRunToolInput, context: AgentContext, signal?: AbortSignal): Promise<ExecutionOutcome> {
+    const testCases = input?.testCases ?? [];
+    const cases = input?.cases ?? [];
+    if (!testCases.length && !cases.length) {
       context.logger.warn('execution.run 无输入用例，返回空结果');
       return computeOutcome('default', [], { executed: false });
     }
+    if (testCases.length && cases.length) throw new Error('execution.run 不允许同时传入 TEST_CASE_V2 与 LoadedCase');
     if (planRequiresDryRun(input.options?.plan, input.options?.dryRun)) {
       // dry-run / 策略禁止真实执行：零副作用——不触 runner、不发请求、不写数据
       const reason = input.options?.plan?.policy?.realExecution === false
         ? '策略禁止真实执行（policy.realExecution=false）'
         : 'dry-run 不调用真实 Runner';
-      const results = input.cases.map((testCase) => ({
+      const results = testCases.length ? testCases.map((testCase) => ({
+        caseId: testCase.id,
+        name: testCase.name,
+        feature: testCase.feature,
+        scene: 'scenario',
+        executed: false,
+        status: 'NOT_EXECUTED' as const,
+        pass: false,
+        passRate: 0,
+        error: `NOT_EXECUTED：${reason}`,
+      })) : cases.map((testCase) => ({
         caseId: String(testCase.def.extra?.agentTestCaseId ?? testCase.name),
         name: testCase.name,
         feature: testCase.feature,
@@ -418,13 +574,14 @@ export class ExecutionRunTool implements AgentTool<{ cases: LoadedCase[]; option
         error: `NOT_EXECUTED：${reason}`,
       }));
       context.logger.info(`execution.run dry-run：仅校验输入（${reason}）`);
-      return computeOutcome(input.cases[0]?.feature ?? 'default', results, {
+      return computeOutcome(testCases[0]?.feature ?? cases[0]?.feature ?? 'default', results, {
         executed: false,
         summary: `dry-run：${results.length} 条用例未执行`,
       });
     }
+    if (testCases.length) return runTestCaseV2Cases(testCases, input.options ?? {}, context, signal);
     // 取消信号贯穿：Tool 层超时/取消 → runner → Engine.runTask → Pipeline → HTTP fetch
-    const outcome = await this.runner(input.cases, { ...input.options, signal });
+    const outcome = await this.runner(cases, { ...input.options, signal });
     context.logger.info(`execution.run 完成：${outcome.summary}`);
     return outcome;
   }

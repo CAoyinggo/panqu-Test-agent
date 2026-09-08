@@ -28,7 +28,7 @@ export interface DevTestSourceSyncResult {
 
 export interface DevTestSourceSyncOptions {
   root: string;
-  /** 覆盖模式：丢弃 tracked 修改/本地提交，并删除非 ignored 的未跟踪文件。 */
+  /** @deprecated 保留调用兼容；安全同步不会清理或丢弃任何本地文件。 */
   cleanUntracked?: boolean;
 }
 
@@ -76,9 +76,19 @@ async function gitText(runner: DevTestGitRunner, repository: string, args: reado
   }
 }
 
+async function gitSucceeds(runner: DevTestGitRunner, repository: string, args: readonly string[]): Promise<boolean> {
+  try {
+    await runner(repository, args);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 测试执行前的两阶段强制同步：先让所有仓库 fetch/解析成功，再开始覆盖。
- * 这样认证或网络失败不会先覆盖一半仓库。ignored 依赖（如 node_modules）保留。
+ * 测试执行前的两阶段安全同步：先验证所有仓库工作树与上游关系，再 fetch，
+ * 最后仅执行 fast-forward。任何本地改动、未跟踪文件、本地提交、分支分叉、
+ * 认证或网络失败都会 fail-close；绝不 reset、clean、stash 或覆盖用户内容。
  */
 export async function synchronizeDevTestSource(
   options: DevTestSourceSyncOptions,
@@ -99,10 +109,9 @@ export async function synchronizeDevTestSource(
     remote: string;
     beforeCommit: string;
     targetCommit: string;
-    dirtyEntries: number;
   }> = [];
 
-  // Phase 1：只读检查 + fetch。任一仓库失败时尚未 reset/clean。
+  // Phase 1A：先检查所有工作树。任何仓库不干净时，不开始网络同步。
   for (const repository of repositories) {
     const branch = await gitText(runner, repository, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
     if (!branch) throw new Error(`DEVTEST_SOURCE_SYNC_DETACHED_HEAD：${path.basename(repository)} 未处于分支`);
@@ -112,16 +121,28 @@ export async function synchronizeDevTestSource(
     const remote = upstream.slice(0, separator);
     const beforeCommit = await gitText(runner, repository, ['rev-parse', 'HEAD']);
     const dirtyEntries = lines(await gitText(runner, repository, ['status', '--porcelain', '--untracked-files=normal'])).length;
-    await gitText(runner, repository, ['fetch', '--prune', remote]);
-    const targetCommit = await gitText(runner, repository, ['rev-parse', upstream]);
-    inspected.push({ repository, branch, upstream, remote, beforeCommit, targetCommit, dirtyEntries });
+    if (dirtyEntries > 0) {
+      throw new Error(`DEVTEST_SOURCE_SYNC_DIRTY：${path.basename(repository)} 有 ${dirtyEntries} 项未提交或未跟踪改动；请先由用户处理，未执行 reset/clean/stash`);
+    }
+    inspected.push({ repository, branch, upstream, remote, beforeCommit, targetCommit: '' });
   }
 
-  // Phase 2：用户要求的覆盖语义。
+  // Phase 1B：全部工作树安全后再 fetch，并验证只能快进到远端跟踪分支。
+  for (const item of inspected) {
+    await gitText(runner, item.repository, ['fetch', '--prune', item.remote]);
+    item.targetCommit = await gitText(runner, item.repository, ['rev-parse', item.upstream]);
+    if (item.beforeCommit !== item.targetCommit
+      && !await gitSucceeds(runner, item.repository, ['merge-base', '--is-ancestor', item.beforeCommit, item.targetCommit])) {
+      throw new Error(`DEVTEST_SOURCE_SYNC_NON_FAST_FORWARD：${path.basename(item.repository)}:${item.branch} 与 ${item.upstream} 已分叉或含本地提交；请先由用户处理`);
+    }
+  }
+
+  // Phase 2：只允许快进，不丢弃任何本地内容。
   const synchronized: DevTestSourceRepositorySync[] = [];
   for (const item of inspected) {
-    await gitText(runner, item.repository, ['reset', '--hard', item.upstream]);
-    if (options.cleanUntracked !== false) await gitText(runner, item.repository, ['clean', '-fd']);
+    if (item.beforeCommit !== item.targetCommit) {
+      await gitText(runner, item.repository, ['merge', '--ff-only', item.upstream]);
+    }
     const afterCommit = await gitText(runner, item.repository, ['rev-parse', 'HEAD']);
     const remaining = lines(await gitText(runner, item.repository, ['status', '--porcelain', '--untracked-files=normal']));
     if (afterCommit !== item.targetCommit || remaining.length) {
@@ -135,8 +156,8 @@ export async function synchronizeDevTestSource(
       beforeCommit: item.beforeCommit,
       targetCommit: item.targetCommit,
       afterCommit,
-      discardedWorktreeEntries: item.dirtyEntries,
-      updated: item.beforeCommit !== afterCommit || item.dirtyEntries > 0,
+      discardedWorktreeEntries: 0,
+      updated: item.beforeCommit !== afterCommit,
     });
   }
 

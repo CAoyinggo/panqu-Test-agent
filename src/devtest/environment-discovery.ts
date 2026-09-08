@@ -1,6 +1,3 @@
-import { readFile, readdir } from 'node:fs/promises';
-import path from 'node:path';
-
 import type { AcceptanceRequirement } from '../acceptance/requirement-ir.js';
 import type {
   DevTestCapabilityStatus,
@@ -9,57 +6,12 @@ import type {
 } from './types.js';
 
 const LOCAL_DEFAULTS = ['http://127.0.0.1:3000', 'http://localhost:3000'];
-const CONFIG_NAMES = new Set(['environments.json', 'acceptance.config.json', 'acceptance.config.example.json', '.env', '.env.local', '.env.test']);
-
 function origin(value: string): string | undefined {
   try {
     const url = new URL(value.trim());
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined;
     return url.origin;
   } catch { return undefined; }
-}
-
-function urlsFromText(content: string, environment: string): string[] {
-  const urls = new Set<string>();
-  try {
-    const parsed = JSON.parse(content) as Record<string, unknown>;
-    const visit = (value: unknown, key = ''): void => {
-      if (typeof value === 'string' && /(?:base.?url|test.?url|origin)/i.test(key)) {
-        const normalized = origin(value);
-        if (normalized) urls.add(normalized);
-      } else if (value && typeof value === 'object') {
-        for (const [childKey, child] of Object.entries(value as object)) {
-          if (key === 'environments' && childKey !== environment) continue;
-          visit(child, childKey);
-        }
-      }
-    };
-    visit(parsed);
-  } catch {
-    for (const match of content.matchAll(/^\s*(?:DEVTEST_BASE_URL|TESTFLOW_BASE_URL|TEST_BASE_URL|BASE_URL)\s*=\s*['"]?([^'"\s#]+)['"]?/gmi)) {
-      const normalized = origin(match[1]);
-      if (normalized) urls.add(normalized);
-    }
-  }
-  return [...urls];
-}
-
-async function projectConfigCandidates(root: string, environment: string): Promise<Array<{ url: string; ref: string }>> {
-  const candidates: Array<{ url: string; ref: string }> = [];
-  const directories = [root, path.join(root, 'config'), path.join(root, 'config', 'env'), path.join(root, 'tests')];
-  for (const directory of directories) {
-    let names: string[];
-    try { names = await readdir(directory); } catch { continue; }
-    for (const name of names) {
-      if (!CONFIG_NAMES.has(name) && !/^acceptance\..*\.json$/i.test(name)) continue;
-      const file = path.join(directory, name);
-      try {
-        const content = await readFile(file, 'utf8');
-        for (const url of urlsFromText(content, environment)) candidates.push({ url, ref: path.relative(root, file) });
-      } catch { /* unreadable config is not an address candidate */ }
-    }
-  }
-  return candidates.filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index);
 }
 
 async function fetchWithTimeout(fetchImpl: typeof fetch, url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -118,8 +70,6 @@ export async function discoverDevTestEnvironment(input: {
   probeNetwork?: boolean;
   /** 仅供明确要求的本机约定模式使用；DevTest 默认不猜测 localhost。 */
   allowLocalDefaults?: boolean;
-  /** 项目配置只是静态候选；必须显式授权才可向其发探针。 */
-  allowDiscoveredEnvironmentProbe?: boolean;
 }): Promise<DevTestEnvironmentPreflight> {
   const raw: Array<Omit<DevTestEnvironmentCandidate, 'reachable'>> = [];
   const add = (value: string | undefined, source: DevTestEnvironmentCandidate['source'], sourceRef: string): void => {
@@ -130,15 +80,13 @@ export async function discoverDevTestEnvironment(input: {
   if (input.explicitBaseUrl) add(input.explicitBaseUrl, 'CLI', '--base-url');
   else {
     for (const name of ['DEVTEST_BASE_URL', 'TESTFLOW_BASE_URL', 'TEST_BASE_URL']) add(process.env[name], 'ENV', name);
-    for (const item of await projectConfigCandidates(input.projectRoot, input.environment)) add(item.url, 'PROJECT_CONFIG', item.ref);
     if (!raw.length && input.allowLocalDefaults === true) {
       for (const value of LOCAL_DEFAULTS) add(value, 'LOCAL_DEFAULT', 'explicit local convention');
     }
   }
-  const authorized = raw.filter((candidate) => candidate.source !== 'PROJECT_CONFIG'
-    || input.allowDiscoveredEnvironmentProbe === true);
+  const authorized = raw;
   const environmentMissing = raw.length === 0;
-  const environmentUnauthorized = !environmentMissing && authorized.length === 0;
+  const environmentUnauthorized = false;
   const probeNetwork = input.probeNetwork !== false && authorized.length > 0;
   const authorizedUrls = new Set(authorized.map((candidate) => candidate.url));
   const candidates = await Promise.all(raw.map((candidate) => {

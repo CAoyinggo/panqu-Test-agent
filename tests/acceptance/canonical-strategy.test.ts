@@ -7,6 +7,28 @@ import { buildAcceptanceTestDesign } from '../../src/acceptance/test-objective.j
 import { TEST_STRATEGY_POLICY } from '../../src/acceptance/test-strategy-engine.js';
 
 describe('Canonical Requirement Fact and Test Strategy Engine', () => {
+  it('keeps the business entity distinct from Tenant/Project scope and preserves an explicit current-state precondition', () => {
+    const requirement = parseAcceptanceRequirement(`# 通用资源隔离
+POST /resources/{resourceId}/transition
+该接口需要认证
+## Actors
+| actorId | userId | role | tenantId | projectId | tokenRef |
+| --- | --- | --- | --- | --- | --- |
+| user-a | user-a | USER | tenant-a | project-a | token-a |
+返回 409
+AC-1 user-a 修改 tenant-a/project-a 中已锁定 Resource resourceId=resource-a 时返回 HTTP 409，Resource 保持不变。`);
+
+    const fact = requirement.factLedger.find((candidate) => candidate.statement.includes('已锁定 Resource'));
+    expect(fact?.canonical.resource).toMatchObject({
+      kind: 'RESOURCE', identifiers: { resourceId: 'resource-a' },
+    });
+    expect(fact?.canonical.conditions).toContainEqual(expect.objectContaining({
+      kind: 'STATE', expression: '已锁定', explicit: true,
+    }));
+    expect(fact?.canonical.resource.kind).not.toBe('PROJECT');
+    expect(fact?.canonical.resource.kind).not.toBe('TENANT');
+  });
+
   it('normalizes explicit Actor → Action → Resource → Expected and subject/target scope once', () => {
     const requirement = parseAcceptanceRequirement(`# 用户资料权限
 GET /users/{id}
