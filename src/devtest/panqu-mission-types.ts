@@ -10,6 +10,8 @@ export interface PanquMissionVariant {
   parameters: { durationSeconds?: number; width: number; height: number; count: number; quality: string };
   /** Complete application payload from the trusted project adapter; no arbitrary URL or method. */
   request: Record<string, unknown>;
+  /** Trusted preparer evidence. Refreshing it invalidates the exact execution approval. */
+  preparation?: PanquMissionPreparationEvidence;
 }
 export interface PanquMissionMaterial {
   file: string;
@@ -90,10 +92,61 @@ export interface PanquMissionDriver {
   profile: PanquMissionProfile;
   /** Called before any network; must check source pins, environment, adapters and auth availability. */
   preflight(plan: PanquMissionPlan, approval: PanquMissionApproval): Promise<void>;
+  /** Bounded read/estimate-only freshness check before the first generation submission. */
+  revalidate?(plan: PanquMissionPlan, signal: AbortSignal): Promise<void>;
   /** Never retried after ambiguous delivery. A driver must not implement automatic submission retries. */
   submit(plan: PanquMissionPlan, signal: AbortSignal): Promise<{ taskId: string }>;
   observe(taskId: string, plan: PanquMissionPlan, signal: AbortSignal): Promise<PanquMissionObservation>;
   verifyAsset(observation: PanquMissionObservation, plan: PanquMissionPlan, signal: AbortSignal): Promise<PanquMissionAssetEvidence>;
+}
+
+/** A stable logical intent survives refreshed prices and plans; it is not a new run permission. */
+export interface PanquMissionIntent {
+  schema: 'panqu.mission-intent.v1';
+  intentId: string;
+  requirement: PanquMissionSpec['requirement'];
+  projectId: string;
+  nodeId: string;
+  maxMilliCredits: number;
+  /** Only confirmed output oracles, never guessed pixel sizes from a display label. */
+  outputProfiles: Array<{ source: string; quality: string; aspectRatio: string; width: number; height: number }>;
+  /** Optional explicit test scope. Omission uses the complete finite capability domain. */
+  required?: { quality?: string; durationSeconds?: number };
+  /** Omit to use the existing target node's prompt; no arbitrary prompt is silently substituted. */
+  prompt?: string;
+  audio: boolean;
+  proposal?: { variantId?: string };
+}
+
+/** Operator-supplied permission for fixed model/design reads and cost estimation, never generation. */
+export interface PanquMissionReadAccess {
+  schema: 'panqu.mission-read-access.v1';
+  accessId: string;
+  allowedOrigin: string;
+  projectId: string;
+  environment: PanquMissionApproval['environment'];
+  actorRef: string;
+  expiresAt: string;
+  scope: 'MODELS_CANVAS_ESTIMATE_ONLY';
+  /** Confirm the configured proxy estimates Panqu credits, not an upstream currency amount. */
+  estimateUnit: 'PANQU_CREDIT';
+  maxEstimateRequests: number;
+}
+
+export interface PanquMissionPreparationEvidence {
+  schema: 'panqu.nuxt-video-preparation.v1';
+  intentId: string;
+  intentHash: string;
+  intent: PanquMissionIntent;
+  contextHash: string;
+  origin: string;
+  actorRef: string;
+  apiBasePath: string;
+  observedAt: string;
+  canvasHash: string;
+  modelHash: string;
+  /** All candidates were priced. Partial/failed quotes cannot justify a minimum-price claim. */
+  quotes: Array<{ variantId: string; params: Record<string, unknown>; milliCredits: number }>;
 }
 export interface PanquMissionJournal {
   schema: 'panqu.mission-journal.v1';

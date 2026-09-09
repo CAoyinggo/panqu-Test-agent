@@ -17,6 +17,8 @@
 
 ## 有意保留的边界
 
+v4.31.0 新增独立的[自主任务准备](testing/panqu-mission-preparation.md)：Nuxt 文生视频单节点自动读取能力、节点与候选报价并绑定执行计划。该适配器的相关源码就绪不等于全项目解析完整，也不会解除普通 DevTest 门禁。
+
 用户已指定[真实执行、最低积分和可指定本地素材目录的测试策略](testing/panqu-low-cost-real-execution.md)。v4.30.0 在独立的 [Mission 控制器](testing/panqu-mission.md) 中实现受明确授权约束的生成闭环；本页描述的普通 DevTest/MCP 路径继续保持原有只读边界。
 
 这不是完整 TypeScript 类型解析器或应用编译器。动态 URL、复杂参数合并、Nuxt 自动导入、再导出链、运行期配置、PHP/Go 服务端源码和真实 provider 行为尚不能完整绑定。SFC 仅提取 script，完整原文件进入指纹；不校验模板运行行为。已识别客户端条件只是源码观察，不等同后端或产品契约。

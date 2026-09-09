@@ -34,6 +34,8 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest init --github [--trae]
   devtest doctor [--github]
   devtest inspect-project
+  devtest mission readiness
+  devtest mission prepare --intent <file> --config <file> --access <file> --output <directory>
   devtest mission plan --spec <file> --catalog <file> --output <directory>
   devtest mission run|resume --plan <file> --config <file> --approval <file> --output <directory>
   devtest mission status --plan <file> --output <directory>

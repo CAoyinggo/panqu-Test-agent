@@ -23,10 +23,27 @@ export interface PanquHttpMissionConfig {
   /** Optional independently documented task-bound billing receipt; amounts must be integer milli-credits. */
   receipt?: { source: string; path: string; taskIdPointer: string; chargedMilliCreditsPointer: string };
 }
-const REQUIRED_SOURCES: Record<PanquMissionProfile, string[]> = {
+export const PANQU_MISSION_REQUIRED_SOURCES: Record<PanquMissionProfile, string[]> = {
   PHP_VIDEO_V1: ['lib/api/video.ts', 'lib/api/taskStatus.ts', 'lib/api/request.ts', 'lib/api/csrf.ts', 'lib/api/url.ts', 'components/nodes/videoNode.tsx'],
   NUXT_CANVAS_V1: ['composables/canvas-flow/adapters/canvas-flow-api-client.ts', 'composables/canvas-flow/core/use-execution-engine.ts', 'composables/canvas-flow/types/canvas-flow.types.ts', 'utils/myFetchInstance.ts'],
 };
+/** Shared bounded transport; callers choose only their fixed application routes, never model URLs. */
+export async function fetchPanquMissionJson(config: Pick<PanquHttpMissionConfig, 'origin' | 'apiBasePath' | 'headers'>,
+  route: string, method: 'GET' | 'POST', body: BodyInit | undefined, signal: AbortSignal, json = false): Promise<unknown> {
+  missionAssert(route.startsWith('/') && !route.startsWith('//') && !route.includes('\\') && !route.includes('#') && !route.includes('..'), 'MISSION_ROUTE_INVALID');
+  const prefix = config.apiBasePath ?? '';
+  missionAssert(prefix === '' || /^\/[a-zA-Z0-9_/-]+$/.test(prefix) && !prefix.includes('..') && !prefix.startsWith('//'), 'MISSION_BASE_PATH_INVALID');
+  const response = await fetch(new URL(`${prefix.replace(/\/$/, '')}${route}`, config.origin), { method, body, redirect: 'error', signal,
+    headers: { ...config.headers, ...(json ? { 'Content-Type': 'application/json' } : {}) } });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(response.status === 401 ? 'MISSION_HTTP_AUTH_REQUIRED' : response.status === 403 ? 'MISSION_HTTP_ACCESS_DENIED' : 'MISSION_HTTP_REJECTED');
+  }
+  const reader = response.body.getReader(); const buffers: Uint8Array[] = []; let size = 0;
+  try { for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; missionAssert(size <= 2 * 1024 * 1024, 'MISSION_RESPONSE_TOO_LARGE'); buffers.push(next.value); } }
+  finally { await reader.cancel().catch(() => {}); }
+  try { return JSON.parse(Buffer.concat(buffers).toString('utf8')); } catch { throw new Error('MISSION_RESPONSE_NOT_JSON'); }
+}
 /** Safe JSON pointer traversal; no evaluation or prototype access. */
 function pointer(value: unknown, expression: string): unknown {
   missionAssert(expression.startsWith('/'), 'MISSION_JSON_POINTER_INVALID');
@@ -78,27 +95,15 @@ export class PanquHttpMissionDriver implements PanquMissionDriver {
     this.config = structuredClone(config); this.origin = config.origin; this.profile = config.profile;
     this.identity = missionDigest({ ...config, headers: undefined, mediaTools: undefined, materialsRoot: undefined });
   }
-  private url(route: string): string {
-    missionAssert(route.startsWith('/') && !route.startsWith('//') && !route.includes('\\') && !route.includes('#') && !route.includes('..'), 'MISSION_ROUTE_INVALID');
-    const prefix = this.config.apiBasePath ?? '';
-    missionAssert(prefix === '' || /^\/[a-zA-Z0-9_/-]+$/.test(prefix) && !prefix.includes('..') && !prefix.startsWith('//'), 'MISSION_BASE_PATH_INVALID');
-    return new URL(`${prefix.replace(/\/$/, '')}${route}`, this.origin).href;
-  }
   private async json(route: string, method: 'GET' | 'POST', body: BodyInit | undefined, signal: AbortSignal, json = false): Promise<unknown> {
-    const response = await fetch(this.url(route), { method, body, redirect: 'error', signal,
-      headers: { ...this.config.headers, ...(json ? { 'Content-Type': 'application/json' } : {}) } });
-    missionAssert(response.ok && response.body, 'MISSION_HTTP_REJECTED');
-    const reader = response.body.getReader(); const buffers: Uint8Array[] = []; let size = 0;
-    try { for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; missionAssert(size <= 2 * 1024 * 1024, 'MISSION_RESPONSE_TOO_LARGE'); buffers.push(next.value); } }
-    finally { await reader.cancel().catch(() => {}); }
-    try { return JSON.parse(Buffer.concat(buffers).toString('utf8')); } catch { throw new Error('MISSION_RESPONSE_NOT_JSON'); }
+    return fetchPanquMissionJson(this.config, route, method, body, signal, json);
   }
   async preflight(plan: PanquMissionPlan, approval: PanquMissionApproval): Promise<void> {
     missionAssert(plan.profile === this.profile && this.config.actorRef.trim() && approval.allowedOrigin === this.origin, 'MISSION_DRIVER_CONFIG_INVALID');
     missionAssert(approval.environment === 'local' || Object.keys(this.config.headers ?? {}).length > 0, 'MISSION_AUTH_NOT_CONFIGURED');
     missionAssert(!Object.keys(this.config.headers ?? {}).some(key => /^(host|content-type|content-length)$/i.test(key)), 'MISSION_TRANSPORT_HEADER_OVERRIDE');
     missionAssert(plan.variant.parameters.count === 1, 'MISSION_BATCH_OUTPUT_NOT_SUPPORTED');
-    for (const source of REQUIRED_SOURCES[this.profile]) missionAssert(plan.sourcePins.some(pin => pin.file === source), 'MISSION_REQUIRED_SOURCE_PIN_MISSING');
+    for (const source of PANQU_MISSION_REQUIRED_SOURCES[this.profile]) missionAssert(plan.sourcePins.some(pin => pin.file === source), 'MISSION_REQUIRED_SOURCE_PIN_MISSING');
     for (const pin of plan.sourcePins) {
       const file = await resolveMissionFile(this.config.projectRoot, pin.file);
       missionAssert(createHash('sha256').update(await readFile(file)).digest('hex') === pin.sha256, 'MISSION_SOURCE_CHANGED');
@@ -121,11 +126,17 @@ export class PanquHttpMissionDriver implements PanquMissionDriver {
       for (const field of ['row[type]', 'row[extra][selmodels]', 'task_type', 'row[extra][cueword]']) missionAssert(typeof request[field] === 'string' && request[field], 'MISSION_REQUIRED_FORM_FIELD_MISSING');
     } else {
       missionAssert(request.projectId === plan.projectId && request.nodeId === plan.nodeId && request.mode === 'node' && request.nodeIds === undefined, 'MISSION_SUBMISSION_SCOPE_MISMATCH');
-      const binding = this.config.nuxtBindings; missionAssert(binding, 'MISSION_NUXT_PARAMETER_BINDINGS_REQUIRED');
+      const binding = plan.variant.preparation ? { modelId: '/graph/nodes/0/data/model', durationSeconds: '/graph/nodes/0/data/videoGenParams/duration', quality: '/graph/nodes/0/data/videoGenParams/resolution' }
+        : this.config.nuxtBindings; missionAssert(binding, 'MISSION_NUXT_PARAMETER_BINDINGS_REQUIRED');
       missionAssert(pointer(request, binding.modelId) === plan.requirement.modelId && pointer(request, binding.quality) === plan.variant.parameters.quality, 'MISSION_SUBMISSION_PARAMETERS_MISMATCH');
       if (plan.variant.parameters.durationSeconds !== undefined) missionAssert(binding.durationSeconds && pointer(request, binding.durationSeconds) === plan.variant.parameters.durationSeconds, 'MISSION_SUBMISSION_PARAMETERS_MISMATCH');
     }
     if (this.config.receipt) missionAssert(this.config.receipt.source.trim() && this.config.receipt.path.includes('{taskId}'), 'MISSION_RECEIPT_BINDING_INVALID');
+  }
+  async revalidate(plan: PanquMissionPlan, signal: AbortSignal): Promise<void> {
+    if (!plan.variant.preparation) return;
+    const { revalidatePreparedPanquMission } = await import('./panqu-mission-prepare.js');
+    await revalidatePreparedPanquMission(plan, this.config, signal);
   }
   async submit(plan: PanquMissionPlan, signal: AbortSignal): Promise<{ taskId: string }> {
     if (this.profile === 'PHP_VIDEO_V1') {

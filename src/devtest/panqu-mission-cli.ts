@@ -5,13 +5,18 @@ import { inventoryMissionMedia, prepareMissionReferenceClip, type PanquReference
 import { PanquHttpMissionDriver, type PanquHttpMissionConfig } from './panqu-mission-driver.js';
 import { renderPanquMission, runPanquMission } from './panqu-mission-runtime.js';
 import { artifactSafe } from './artifacts.js';
-import type { PanquMissionApproval, PanquMissionCatalog, PanquMissionPlan, PanquMissionSpec, PanquMissionJournal } from './panqu-mission-types.js';
+import { preparePanquMission, inspectPanquMissionPreparation } from './panqu-mission-prepare.js';
+import { ensurePanquMissionDirectory, savePanquMissionJson } from './panqu-mission-runtime.js';
+import { randomUUID } from 'node:crypto';
+import type { PanquMissionApproval, PanquMissionCatalog, PanquMissionPlan, PanquMissionSpec, PanquMissionJournal, PanquMissionIntent, PanquMissionReadAccess } from './panqu-mission-types.js';
 
 /** CLI-only operator entry; the existing MCP remains read-only and cannot mint billable approvals. */
 export async function runPanquMissionCommand(argv: string[], root = process.cwd()): Promise<number> {
   const command = argv[0];
-  missionAssert(['plan', 'run', 'resume', 'status', 'materials', 'prepare-media'].includes(command), 'MISSION_COMMAND_INVALID');
+  missionAssert(['readiness', 'prepare', 'plan', 'run', 'resume', 'status', 'materials', 'prepare-media'].includes(command), 'MISSION_COMMAND_INVALID');
   const allowed: Record<string, string[]> = {
+    readiness: [],
+    prepare: ['intent', 'config', 'access', 'output', 'recover-dead-lock'],
     plan: ['spec', 'catalog', 'output'], run: ['plan', 'config', 'approval', 'output'], resume: ['plan', 'config', 'approval', 'output'],
     materials: ['folder', 'ffprobe', 'ffmpeg'], status: ['plan', 'output'],
     'prepare-media': ['folder', 'spec', 'ffprobe', 'ffmpeg'],
@@ -26,7 +31,22 @@ export async function runPanquMissionCommand(argv: string[], root = process.cwd(
   async function json<T>(name: string): Promise<T> {
     const file = path.resolve(root, required(name)); const info = await lstat(file);
     missionAssert(!info.isSymbolicLink() && info.isFile() && info.size <= 2 * 1024 * 1024, 'MISSION_INPUT_FILE_INVALID');
-    return JSON.parse(await readFile(file, 'utf8')) as T;
+    const content = await readFile(file, 'utf8');
+    try { return JSON.parse(content) as T; } catch { throw new Error('MISSION_INPUT_JSON_INVALID'); }
+  }
+  async function runtimeConfig() {
+    const config = await json<Omit<PanquHttpMissionConfig, 'origin' | 'headers' | 'projectRoot'> & { originEnv: string; headersEnv: string; maxCycles?: number }>('config');
+    missionAssert(/^[A-Z][A-Z0-9_]*$/.test(config.originEnv) && /^[A-Z][A-Z0-9_]*$/.test(config.headersEnv)
+      && !Object.hasOwn(config, 'headers') && !Object.hasOwn(config, 'origin'), 'MISSION_CREDENTIAL_ENV_REFERENCES_REQUIRED');
+    const origin = process.env[config.originEnv]; missionAssert(origin, 'MISSION_ORIGIN_ENV_MISSING');
+    let headers: Record<string, string>;
+    try { headers = JSON.parse(process.env[config.headersEnv] || '{}') as Record<string, string>; } catch { throw new Error('MISSION_HEADERS_ENV_INVALID'); }
+    missionAssert(headers && typeof headers === 'object' && !Array.isArray(headers) && Object.values(headers).every(value => typeof value === 'string'), 'MISSION_HEADERS_ENV_INVALID');
+    return { ...config, origin, headers, projectRoot: root };
+  }
+  if (command === 'readiness') {
+    const result = await inspectPanquMissionPreparation(root); console.log(JSON.stringify(artifactSafe(result), null, 2));
+    return result.state === 'ADAPTER_READY' ? 0 : 3;
   }
   if (command === 'materials') {
     console.log(JSON.stringify(artifactSafe(await inventoryMissionMedia(path.resolve(root, required('folder')), { ffprobe: required('ffprobe'), ffmpeg: required('ffmpeg') })), null, 2));
@@ -42,6 +62,19 @@ export async function runPanquMissionCommand(argv: string[], root = process.cwd(
     try { missionAssert(!(await lstat(part)).isSymbolicLink(), 'MISSION_OUTPUT_SYMLINK'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     if (path.dirname(part) === part) break;
+  }
+  if (command === 'prepare') {
+    missionAssert(!flags.has('recover-dead-lock') || flags.get('recover-dead-lock') === 'true', 'MISSION_RECOVERY_FLAG_INVALID');
+    const result = await preparePanquMission({ intent: await json<PanquMissionIntent>('intent'), access: await json<PanquMissionReadAccess>('access'),
+      config: await runtimeConfig(), directory: output, recoverDeadLock: flags.get('recover-dead-lock') === 'true' });
+    const { plan, ...summary } = result;
+    const printable = { ...summary, planHash: plan?.hash ?? result.existingPlanHash, planFileBase: 'SUPPLIED_OUTPUT_DIRECTORY',
+      parameters: plan?.variant.parameters, reservedMilliCredits: plan?.variant.maxMilliCredits, decisions: plan?.decisions,
+      scope: 'Read models/design and estimate cost only. Exact generation approval remains separate.' };
+    await ensurePanquMissionDirectory(output);
+    const reportFile = `preparation-${randomUUID()}.json`; await savePanquMissionJson(path.join(output, reportFile), printable);
+    console.log(JSON.stringify(artifactSafe({ ...printable, reportFile }), null, 2));
+    return result.state === 'BLOCKED' ? 3 : 0;
   }
   if (command === 'plan') {
     const plan = compilePanquMission(await json<PanquMissionSpec>('spec'), await json<PanquMissionCatalog>('catalog'));
@@ -67,15 +100,10 @@ export async function runPanquMissionCommand(argv: string[], root = process.cwd(
     console.log(renderPanquMission(journal)); return 0;
   }
   const approval = await json<PanquMissionApproval>('approval');
-  const config = await json<Omit<PanquHttpMissionConfig, 'origin' | 'headers' | 'projectRoot'> & { originEnv: string; headersEnv: string; maxCycles?: number }>('config');
-  missionAssert(/^[A-Z][A-Z0-9_]*$/.test(config.originEnv) && /^[A-Z][A-Z0-9_]*$/.test(config.headersEnv)
-    && !Object.hasOwn(config, 'headers') && !Object.hasOwn(config, 'origin'), 'MISSION_CREDENTIAL_ENV_REFERENCES_REQUIRED');
-  const origin = process.env[config.originEnv]; missionAssert(origin, 'MISSION_ORIGIN_ENV_MISSING');
-  const headers = JSON.parse(process.env[config.headersEnv] || '{}') as Record<string, string>;
-  missionAssert(headers && typeof headers === 'object' && !Array.isArray(headers) && Object.values(headers).every(value => typeof value === 'string'), 'MISSION_HEADERS_ENV_INVALID');
+  const config = await runtimeConfig();
   const cycles = config.maxCycles ?? 1;
   missionAssert(Number.isSafeInteger(cycles) && cycles > 0 && cycles <= 20, 'MISSION_CYCLE_LIMIT_INVALID');
-  const driver = new PanquHttpMissionDriver({ ...config, origin, headers, projectRoot: root });
+  const driver = new PanquHttpMissionDriver(config);
   for (let cycle = 0; cycle < cycles; cycle++) {
     const journal = await runPanquMission({ plan, approval, driver, journalDirectory: output, recoverDeadLock: command === 'resume' });
     console.log(renderPanquMission(journal));

@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.30.0` |
+| 版本 | `v4.31.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -70,6 +70,8 @@ v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操�
 
 [Mission 使用与边界](docs/testing/panqu-mission.md) · [最低积分与素材规则](docs/testing/panqu-low-cost-real-execution.md)
 
+v4.31.0 新增 `mission readiness/prepare`：在 Nuxt 文生视频单节点范围，内核读取当前能力和已保存节点、枚举确认范围内的合法组合、逐一询价并编译最低成本计划，不再要求模型手写 catalog、执行 payload 或 JSON 指针。提交前重新核对能力、节点和全部候选价格，漂移即阻断。同一逻辑任务重规划与执行共享持久化锁；已提交任务只恢复，不重新生成。读取授权和付费执行审批分离。PHP 自动准备、参考输入、UI 和语义质量仍未覆盖。详见 [自主任务准备](docs/testing/panqu-mission-preparation.md)。
+
 ### 当前验证基线
 
 全量测试、Panqu Mission、Acceptance、P0 与 Agent Eval 已于 2026-09-09 复核；其余历史专项统计保留原基线。不代表客户业务环境验收通过。全量使用 `--maxWorkers=2`；默认并发首轮出现超时/取消时序失败，不能隐去该结果或推断为业务缺陷：
@@ -77,8 +79,9 @@ v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操�
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 295 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 2932 项通过，19 项跳过 |
+| 全量 Vitest | 296 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 2979 项通过，19 项跳过 |
+| 4.31.0 自主准备 | 新增 47 项通过，含独立 HTTP、提交前漂移校验和 CLI 完整链路 |
 | Panqu Mission | 新增 29 项通过，含双协议、跨进程恢复、断线隔离及真实媒体解码 |
 | 4.30.0 Mission 与 npm 安装复核 | 2 个测试文件、30 项通过 |
 | Panqu 专属观察/门禁 | 新增 17 项通过，含独立 HTTP 健康与异常对照 |
@@ -101,7 +104,7 @@ v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操�
 
 ```bash
 # 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
-npm install --save-dev ./test-flow-4.30.0.tgz
+npm install --save-dev ./test-flow-4.31.0.tgz
 
 # 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
 npx devtest init --github --trae

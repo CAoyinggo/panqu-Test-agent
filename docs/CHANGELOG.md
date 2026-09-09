@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.31.0] - 2026-09-09
+
+### Panqu 自主任务准备
+
+- 新增只读 `mission readiness` 和带独立读取授权的 `mission prepare`，Nuxt 文生视频单节点由当前能力、保存节点和逐项报价生成最低成本计划，不依赖模型手写 catalog、payload 或绑定指针。
+- AST 路由/参数锚点、完整候选报价、模型身份、输出 Oracle 和预算约束准备结果。报价窗口 120 秒，最多 24 个组合；未知能力或部分报价失败不出计划。
+- 执行前重新获取能力、画布和全部候选价格并重建 payload；变化阻断。稳定 intent 注册、重规划失效和共享执行锁防止重复生成，已有提交只恢复。
+- 新增 47 项回归：独立本地 HTTP、真实媒体解码、CLI、并发、价格反转、篡改与漂移。全量 2979 项通过、19 项跳过；不代表真实业务环境验收。
+- 手工 Mission 和只读 MCP 边界不变。PHP 自动准备缺少完整能力/报价契约而阻断；图片、参考输入、上游节点、UI、语义质量与全局预算尚未自动化。
+
 ## [4.30.0] - 2026-09-09
 
 ### Panqu Mission 独立执行内核
