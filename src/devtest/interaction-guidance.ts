@@ -13,6 +13,9 @@ export function devTestNextAction(result: Record<string, unknown>, input: Record
       reason: result.message ?? '只解释本轮证据和剩余缺口；工具调用完成不等于测试通过。' };
   }
   const assurance = result.requirement_assurance as { entries?: Array<Record<string, unknown>> } | undefined;
+  const project = result.project_assessment as { blockers?: unknown[] } | undefined;
+  if (project?.blockers?.length) return { kind: 'RESOLVE_BLOCKER', blockers: project.blockers,
+    reason: '项目源码绑定与计划冲突或尚未验证；先核对实际调用链，不能靠执行确认忽略冲突。' };
   if (!Array.isArray(assurance?.entries)) return { kind: 'RESOLVE_BLOCKER', reason: '需求完整性门禁缺失，需要更新内核。' };
   const questions = assurance.entries.filter((entry) => ['NEEDS_CONFIRMATION', 'NOT_UNDERSTOOD'].includes(String(entry.status)))
     .map(({ id, statement, source, caseIds, question, reason }) => ({ id, statement, source, case_ids: caseIds, question: question ?? reason }));

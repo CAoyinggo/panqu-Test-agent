@@ -167,6 +167,15 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     expect(server.requests).toEqual([]);
   });
 
+  it('invalidates an approved plan on a Vue-only edit before all HTTP work', async () => {
+    const { service, root } = await fixture(); const server = await httpService();
+    await writeFile(path.join(root, 'Panel.vue'), '<template><button>old</button></template>');
+    const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });
+    await writeFile(path.join(root, 'Panel.vue'), '<template><button>new</button></template>');
+    expect((await service.call(execution(plan))).message).toContain('STALE_PLAN');
+    expect(server.requests).toEqual([]);
+  });
+
   it('keeps missing runtime BLOCKED with no verified cases instead of inventing PASS', async () => {
     const { service } = await fixture();
     const plan = await service.call({ action: 'plan', requirement: 'requirements/feature.md' });

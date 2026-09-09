@@ -13,7 +13,7 @@ import { devTestNextAction } from './interaction-guidance.js';
 
 const execFileAsync = promisify(execFile);
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const EXECUTION_POLICY = 'NO_SILENT_REQUIREMENT_GAPS_V1+EXACT_INPUT_CASES_V1';
+const EXECUTION_POLICY = 'NO_SILENT_REQUIREMENT_GAPS_V1+EXACT_INPUT_CASES_V1+PANQU_SOURCE_BINDING_V1';
 
 /** MCP is a control surface. Case schemas and execution semantics remain in TEST_CASE_V2. */
 export const DEVTEST_MCP_TOOL = {
@@ -106,6 +106,7 @@ async function atomicJson(file: string, value: unknown): Promise<void> {
 function summary(result: DevTestRunResult, root: string): Record<string, unknown> {
   return artifactSafe({
     run_id: result.runId, conclusion: result.conclusion,
+    project_assessment: result.projectAssessment,
     counts: result.deliveryCoverage.cases,
     evidence: result.deliveryCoverage.evidence,
     oracle: result.oracleResults,
@@ -152,7 +153,7 @@ export class DevTestMcpService {
     const records: string[] = [];
     for (const file of [...new Set(stdout.split('\0').filter(Boolean))].sort()) {
       if (file.startsWith(`${config.runtime.output}/`) || /(?:^|\/)(?:node_modules|dist|\.git|\.env[^/]*|devtest-results)(?:\/|$)/.test(file)) continue;
-      if (!/\.(?:[cm]?[jt]sx?|md|txt|json|ya?ml|prisma|graphql)$/.test(file)) continue;
+      if (!/\.(?:[cm]?[jt]sx?|vue|md|txt|json|ya?ml|prisma|graphql)$/.test(file)) continue;
       try { records.push(`${file}:${digest(await readFile(await within(root, file), 'utf8'))}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') records.push(`${file}:deleted`); else throw error; }
     }

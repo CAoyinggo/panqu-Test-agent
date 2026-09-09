@@ -805,6 +805,7 @@ export interface DevTestArtifacts {
 }
 
 export interface DevTestRunResult {
+  projectAssessment?: import('./panqu-project-types.js').PanquProjectAssessment;
   requirementAssurance: import('../acceptance/requirement-assurance.js').RequirementAssurance;
   executionPlan: import('../acceptance/acceptance-execution-plan.js').AcceptanceExecutionPlanIdentity;
   runId: string;

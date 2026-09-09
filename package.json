@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.29.2",
+  "version": "4.29.3",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "./dist/src/devtest/index.js",
@@ -304,10 +304,10 @@
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
     "pg-mem": "^3.0.14",
-    "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "typescript": "^5.9.3",
     "ali-oss": "^6.23.0",
     "chokidar": "^3.6.0",
     "p-limit": "^7.3.1",

@@ -63,7 +63,7 @@ MCP 返回 `next_action`：`CLARIFY_REQUIREMENTS` 附原文问题，`CONFIRM_EXE
 
 计划绑定现有 Acceptance Execution Plan Identity、需求摘要、配置、Git 索引内及未跟踪的源码内容摘要，以及操作员选择的目标环境和 Runtime 模块内容摘要。摘要记录不保存环境地址或凭证明文。执行前发生变化会返回 STALE_PLAN；生成的 Case 语义和执行范围还会在 DevTest 中再次校验。运行时 Readiness 在每次执行前重新计算。
 
-计划也绑定执行策略版本；当前为 `NO_SILENT_REQUIREMENT_GAPS_V1+EXACT_INPUT_CASES_V1`。升级有界只读复核、输入去重或默认边界选择后，旧策略生成的计划必须重新生成、确认，不会在旧计划上静默增加请求。
+计划也绑定执行策略版本；当前为 `NO_SILENT_REQUIREMENT_GAPS_V1+EXACT_INPUT_CASES_V1+PANQU_SOURCE_BINDING_V1`。升级有界只读复核、输入去重、默认边界选择或 Panqu 源码绑定后，旧策略生成的计划必须重新生成、确认，不会在旧计划上静默增加请求。
 
 同一个计划重复使用相同幂等键只返回已保存结果。换一个幂等键不会重新执行该计划，需要重新生成计划。项目级排他锁防止多个 MCP 进程并发污染数据。异常退出留下 RUNNING 或锁时，先核查实际业务状态和运行进程；工具不自动重复未知结果的业务操作。
 

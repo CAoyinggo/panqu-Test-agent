@@ -8,6 +8,12 @@ const plan = {
 };
 
 describe('deterministic Trae next-action guidance', () => {
+  it('does not ask for execution confirmation when Panqu source binding conflicts', () => {
+    const blockers = [{ code: 'PANQU_METHOD_CONFLICT', operationKey: 'GET /submit' }];
+    const next = devTestNextAction({ ...plan, project_assessment: { blockers } }, { action: 'plan' });
+    expect(next).toMatchObject({ kind: 'RESOLVE_BLOCKER', blockers });
+    expect(next).not.toHaveProperty('execute_arguments');
+  });
   it('returns stable executable arguments from the actual plan, including on status recovery', () => {
     const next = devTestNextAction(plan, { action: 'plan' });
     expect(next).toMatchObject({ kind: 'CONFIRM_EXECUTION', requires_user_confirmation: true,

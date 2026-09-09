@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 import { redactSensitiveText } from '../src/core/redact.js';
 import { runDevTest } from '../src/devtest/index.js';
+import { inspectPanquProject } from '../src/devtest/panqu-project.js';
+import { artifactSafe } from '../src/devtest/artifacts.js';
 import {
   collectDevTestGitHubInputs,
   githubBusinessWritePolicy,
@@ -30,6 +32,7 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
 用法:
   devtest init --github [--trae]
   devtest doctor [--github]
+  devtest inspect-project
   devtest run --requirement <file> --env test [--github]
   devtest status [--run <id>]
 
@@ -479,8 +482,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   try {
     const root = process.cwd();
-    const command = ['init', 'doctor', 'run', 'status'].includes(argv[0]) ? argv[0] : 'legacy-run';
+    const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
     const rest = command === 'legacy-run' ? [...argv] : argv.slice(1);
+    if (command === 'inspect-project') {
+      if (rest.length) throw new Error('DEVTEST_ARG_UNKNOWN: inspect-project accepts no arguments');
+      console.log(JSON.stringify(artifactSafe(await inspectPanquProject(root)), null, 2));
+      return 0;
+    }
     if (command === 'init') {
       const allowed = new Set(['--github', '--trae', '--force']);
       const unknown = rest.find((argument) => !allowed.has(argument));

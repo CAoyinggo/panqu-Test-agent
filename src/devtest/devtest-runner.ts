@@ -53,6 +53,8 @@ import { SnapshottingProcessor, buildPollutionProblems, detectTestPollution } fr
 import { adaptiveScore, assessRequirementQuality, buildNegativeIntelligence, buildPermissionMatrix,
   buildRequirementQualityProblems, buildRootCauseGraph } from './test-intelligence.js';
 import { readDiscoveryStageCache, workspaceCacheFingerprint, writeDiscoveryStageCache } from './stage-cache.js';
+import { inspectPanquProject, assessPanquProject } from './panqu-project.js';
+import { PanquProtocolProcessor } from './panqu-protocol-processor.js';
 import { synchronizeDevTestSource } from './source-sync.js';
 import {
   buildDevTestAcceptanceTraces,
@@ -307,7 +309,8 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   const project = options.project ?? 'devtest';
   const outDir = options.outDir ?? 'devtest-results';
   const requirementFingerprint = requirementPlanFingerprint(originalMarkdown);
-  const workspaceFingerprint = await workspaceCacheFingerprint(projectRoot);
+  const projectContext = await inspectPanquProject(projectRoot);
+  const workspaceFingerprint = createHash('sha256').update(`${await workspaceCacheFingerprint(projectRoot)}:${projectContext.fingerprint}`).digest('hex');
   const discoveryCache = await readDiscoveryStageCache({ outDir, sourceKey: docSource,
     requirementFingerprint, workspaceFingerprint });
   const maxCases = options.maxCases ?? DEFAULT_MAX_CASES;
@@ -316,6 +319,10 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirement: explicitRequirement, enabled: options.discoverProject });
   const markdown = appendDiscoveredContracts(originalMarkdown, discovery, explicitRequirement.apis.length > 0);
   const requirement = parseAcceptanceRequirement(markdown, { documentId: options.documentId });
+  const projectAssessment = assessPanquProject(projectContext, requirement);
+  if (options.scenarioRuntime?.processors.length && projectAssessment.relevantActions.some(action => action.responseProtocol !== 'UNVERIFIED')) {
+    projectAssessment.blockers.push({ code: 'PANQU_CUSTOM_PROTOCOL_UNVERIFIED', message: 'Custom scenario processors require an explicit client-protocol evidence adapter before Panqu execution.' });
+  }
   const environmentPreflight = await discoverDevTestEnvironment({
     explicitBaseUrl,
     environment,
@@ -323,7 +330,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirement,
     actorHeaders: options.actorHeaders,
     fetchImpl: options.fetchImpl,
-    probeNetwork: mode !== 'DRY_RUN' && !options.plan,
+    probeNetwork: mode !== 'DRY_RUN' && !options.plan && projectAssessment.blockers.length === 0,
   });
   const baseUrl = environmentPreflight.selectedBaseUrl ?? explicitBaseUrl ?? STATIC_BASE_URL;
   const resolvedDiscovery = resolveDiscoveredOperations(discovery.mappedOperations, contractResolver, environment);
@@ -411,6 +418,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     maxRuntimeMs: options.maxRuntimeMs, budget: options.budget });
   const syntheticBlocks: Array<{ code: string; message: string; affectedCases?: string[]; dimension?: 'DATA_ISOLATION' | 'EXECUTION' }> = [];
   syntheticBlocks.push(...parameterContractConflicts);
+  syntheticBlocks.push(...projectAssessment.blockers.map(blocker => ({ ...blocker, affectedCases: selectedCaseIds, dimension: 'EXECUTION' as const })));
   for (const behavior of preliminaryCoverage.behaviors.filter((item) => item.missingAssertions.includes('MISSING_POST_STATE_ASSERTION'))) {
     syntheticBlocks.push({
       code: 'MISSING_POST_STATE_ASSERTION',
@@ -490,6 +498,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     allowNoCleanup: environment === 'local',
   };
   const pipelineMode = mode === 'DRY_RUN' || options.preflight === true || options.plan === true
+    || projectAssessment.blockers.length > 0
     || environmentPreflight.status === 'BLOCKED' || !selectedCaseIds.length || executionEstimate.exceeded.length > 0 ? 'dry-run' : 'execute';
   const environmentSnapshots: DevTestEnvironmentSnapshot[] = [];
   const selectedCases = selection.selected.filter((testCase) => selectedCaseIds.includes(testCase.id));
@@ -497,7 +506,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     ? undefined
     : new SafeMutationHoldProcessor({
       confirmMutations: confirmedMutation,
-      inner: options.processor ?? (confirmReadFailures ? new ReadFailureConfirmingProcessor() : undefined),
+      inner: projectAssessment.relevantActions.length
+        ? new PanquProtocolProcessor(projectAssessment, options.processor ?? (confirmReadFailures ? new ReadFailureConfirmingProcessor() : undefined))
+        : options.processor ?? (confirmReadFailures ? new ReadFailureConfirmingProcessor() : undefined),
     });
   const legacySnapshotProcessor = safeProcessor && options.caseSnapshotObserver ? new SnapshottingProcessor({
     inner: safeProcessor,
@@ -889,6 +900,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     deep: options.deep,
   });
   const renderInput = {
+    projectAssessment,
     requirementAssurance,
     runId: result.runId,
     meta: { docSource, baseUrl, environment, mode, project, startedAt, finishedAt },
@@ -1010,6 +1022,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirementFingerprint, workspaceFingerprint, discovery, featureModel });
 
   return {
+    projectAssessment,
     executionPlan,
     requirementAssurance,
     runId: result.runId,

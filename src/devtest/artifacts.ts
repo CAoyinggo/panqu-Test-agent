@@ -55,6 +55,7 @@ export interface DevTestRenderMeta {
 }
 
 export interface DevTestRenderInput {
+  projectAssessment?: import('./panqu-project-types.js').PanquProjectAssessment;
   requirementAssurance?: import('../acceptance/requirement-assurance.js').RequirementAssurance;
   runId: string;
   meta: DevTestRenderMeta;
@@ -401,6 +402,7 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
     },
     dimensions: dimensionsObject(input),
     discovery: input.discovery,
+    projectAssessment: input.projectAssessment,
     environment: input.environmentPreflight,
     sourceSync: input.sourceSync,
     uiExecutions: input.uiExecutions,

@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.29.3] - 2026-09-09
+
+### Panqu 项目源码与执行绑定
+
+- 新增只读 AST 项目观察器和 `devtest inspect-project`；区分 Nuxt/Vue Flow 与 Next/XYFlow，读取实际 wrapper 调用、FormData、节点 kind、源码指纹与反向导入影响链。不执行仓库代码，不把源码作为产品需求。
+- `runDevTest` 默认接入源代码绑定门禁，HTTP 方法冲突、动态方法未验证、multipart 不支持及源码不完整时，在环境探测前阻断；MCP 下一步明确要求处理冲突，不诱导再次确认执行。
+- 内置 HTTP 流程保留 PHP/Go 客户端协议检查；传输成功但客户端拒绝时标为 BLOCKED/UNCONFIRMED，不作为已确认产品缺陷。自定义场景缺少适配时 fail closed。
+- Vue 内容纳入旧计划失效检查，完整源码指纹参与发现缓存校验；执行策略升级为 PANQU_SOURCE_BINDING_V1，旧计划必须重新生成并确认。
+- 新增独立本地 HTTP 健康/异常对照、零请求门禁、导入影响分析及 AST/路径/旧计划回归。实际项目检查仍是源码观察，不代表业务 UI、生成或结算验收。
+
 ## [Unreleased] - 2026-09-08
 
 ### 输入测试能力硬化
