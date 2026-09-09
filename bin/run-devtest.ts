@@ -9,6 +9,7 @@ import { redactSensitiveText } from '../src/core/redact.js';
 import { runDevTest } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
+import { runPanquMissionCommand } from '../src/devtest/panqu-mission-cli.js';
 import {
   collectDevTestGitHubInputs,
   githubBusinessWritePolicy,
@@ -33,6 +34,11 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest init --github [--trae]
   devtest doctor [--github]
   devtest inspect-project
+  devtest mission plan --spec <file> --catalog <file> --output <directory>
+  devtest mission run|resume --plan <file> --config <file> --approval <file> --output <directory>
+  devtest mission status --plan <file> --output <directory>
+  devtest mission materials --folder <directory> --ffprobe <absolute-path> --ffmpeg <absolute-path>
+  devtest mission prepare-media --folder <directory> --spec <file> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest run --requirement <file> --env test [--github]
   devtest status [--run <id>]
 
@@ -482,6 +488,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   try {
     const root = process.cwd();
+    if (argv[0] === 'mission') return await runPanquMissionCommand(argv.slice(1), root);
     const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
     const rest = command === 'legacy-run' ? [...argv] : argv.slice(1);
     if (command === 'inspect-project') {

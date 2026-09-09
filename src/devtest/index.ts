@@ -4,6 +4,11 @@
  */
 
 export { runDevTest } from './devtest-runner.js';
+export { compilePanquMission } from './panqu-mission-plan.js';
+export { runPanquMission, renderPanquMission } from './panqu-mission-runtime.js';
+export { PanquHttpMissionDriver, decodePanquMissionTask } from './panqu-mission-driver.js';
+export { inventoryMissionMedia, inspectMissionMedia, prepareMissionReferenceClip } from './panqu-mission-media.js';
+export type * from './panqu-mission-types.js';
 export { buildDevTestProblems, deriveDevTestConclusion, suggestionForReasonCode } from './problem-engine.js';
 export {
   coreKindOf,
