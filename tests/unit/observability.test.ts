@@ -1,6 +1,6 @@
 // 单元测试：Agent Observability + Budget（Phase 17）
 // 覆盖：Tracer 记录 LLM/Tool/重试/回退/错误、Trace 汇总、Budget 限额与超限
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   AgentTracer,
   AgentBudget,
@@ -9,22 +9,25 @@ import {
 } from '../../src/agents/index.js';
 
 describe('tracer - 阶段记录', () => {
-  it('startSpan/endSpan 记录耗时与状态', async () => {
-    const t = new AgentTracer('t1', { feature: 'wan3', environment: 'test' });
-    const id = t.startSpan('requirement', 'REQUIREMENT_PARSED');
-    await new Promise((r) => setTimeout(r, 10));
-    t.recordLLM('requirement', 100, 50, 5);
-    t.endSpan(id, { inputTokens: 100, outputTokens: 50 });
-    const trace = t.toTrace();
-    expect(trace.spans).toHaveLength(1);
-    const s = trace.spans[0];
-    expect(s.agent).toBe('requirement');
-    expect(s.llmCalls).toBe(1);
-    expect(s.durationMs).toBeGreaterThanOrEqual(10);
-    expect(s.success).toBe(true);
-    expect(s.status).toBe('ok');
-    expect(trace.totalTokens).toBe(150);
-    expect(trace.llmCallTotal).toBe(1);
+  it('startSpan/endSpan 记录耗时与状态', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    try {
+      const t = new AgentTracer('t1', { feature: 'wan3', environment: 'test' });
+      const id = t.startSpan('requirement', 'REQUIREMENT_PARSED');
+      clock.mockReturnValue(1010);
+      t.recordLLM('requirement', 100, 50, 5);
+      t.endSpan(id, { inputTokens: 100, outputTokens: 50 });
+      const trace = t.toTrace();
+      expect(trace.spans).toHaveLength(1);
+      const s = trace.spans[0];
+      expect(s.agent).toBe('requirement');
+      expect(s.llmCalls).toBe(1);
+      expect(s.durationMs).toBe(10);
+      expect(s.success).toBe(true);
+      expect(s.status).toBe('ok');
+      expect(trace.totalTokens).toBe(150);
+      expect(trace.llmCallTotal).toBe(1);
+    } finally { clock.mockRestore(); }
   });
 
   it('回退与错误状态记录', () => {

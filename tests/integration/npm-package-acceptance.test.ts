@@ -70,7 +70,10 @@ describe('npm tarball installation acceptance', () => {
       || file.startsWith('dist/bin/run-devtest.') || runtimeRoots.some((root) => file.startsWith(root))
       || file.startsWith('dist/bin/devtest-mcp.')
       || runtimeFiles.has(file))).toBe(true);
-    expect(entries.length).toBeLessThan(300);
+    // 4.32 adds exactly one runtime module (.js + .d.ts), not reports/tests or broad source publishing.
+    expect(entries).toContain('dist/src/devtest/panqu-mission-evidence.js');
+    expect(entries).toContain('dist/src/devtest/panqu-mission-evidence.d.ts');
+    expect(entries.length).toBeLessThanOrEqual(300);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');

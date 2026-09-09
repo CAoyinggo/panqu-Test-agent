@@ -52,7 +52,8 @@ export async function inspectPanquMissionPreparation(projectRoot: string) {
     state: 'BLOCKED', networkRequests: 0, sourcePins: [] as PanquMissionCatalog['sourcePins'], problems: [] as Array<{ code: string; resolution: string; sourceFile?: string }>,
     broaderProjectComplete: project.complete, broaderProjectDiagnostics: project.diagnostics,
     operatorInputs: ['Confirmed logical intent and target project/node/model', 'Source-backed output pixel oracles and audio requirement',
-      'Test origin and identity via environment references', 'Read/estimate-only access with Panqu-credit unit', 'Separate exact-plan generation approval'] };
+      'Test origin and identity via environment references', 'Read/estimate-only access with Panqu-credit unit',
+      'Verified task-bound final settlement contract, amount meaning and refund binding', 'Separate exact-plan generation approval'] };
   try {
     missionAssert(profile, 'MISSION_PROJECT_PROFILE_UNSUPPORTED');
     result.sourcePins = await collectSourcePins({ projectRoot, profile, origin: 'http://127.0.0.1', actorRef: 'readiness-only' });

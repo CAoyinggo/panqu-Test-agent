@@ -37,6 +37,8 @@ devtest mission prepare --intent ./intent.json --config ./operator-runtime.json 
 
 ## 明确边界
 
+v4.32.0 的[业务证据协调器](panqu-mission-business-evidence.md)要求首次生成前提供最终结算契约；prepare 的能力/报价就绪不是账单接入就绪，也不批准实际生成。实际任务详情可能触发 PHP 的回调 ID 同步，不能仅因 HTTP GET 就宣传为绝对无写入；只在原任务执行授权内调用。
+
 当前自动准备仅覆盖 Nuxt 文生视频单节点。PHP 模型列表不足以建立完整时长/报价契约，返回 MISSION_PHP_AUTOPLAN_CONTRACT_MISSING；原手工 Catalog 执行路径保留。图片、参考素材上传、图生/首尾帧、上游工作流、UI、语义质量、批量输出和跨任务全局预算没有自动化。
 
 源码锚点不是全应用语义解释器。相关文件需解析和匹配，项目其他解析诊断另外保留；ADAPTER_READY 不会清除普通 DevTest 的全项目缺口。47 项专项使用独立本地 HTTP 和真实小视频解码，验证内核行为；不代表真实供应商生成、实际账单或业务验收已通过。

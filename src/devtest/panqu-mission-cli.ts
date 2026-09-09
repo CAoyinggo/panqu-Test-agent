@@ -88,7 +88,7 @@ export async function runPanquMissionCommand(argv: string[], root = process.cwd(
     console.log(JSON.stringify(artifactSafe({ state: 'PLANNED', plan_hash: plan.hash, plan_file: path.basename(file), plan_file_base: 'SUPPLIED_OUTPUT_DIRECTORY',
       profile: plan.profile, requirement: plan.requirement, parameters: plan.variant.parameters,
       reserved_credits: plan.variant.maxMilliCredits / 1000, budget_credits: plan.maxMilliCredits / 1000,
-      decisions: plan.decisions, next_action: 'OPERATOR_CONFIRM_EXACT_PLAN_AND_BUDGET', scope: 'Generation smoke: media structure and task-bound debit; not full UI or semantic quality acceptance.' }), null, 2));
+      decisions: plan.decisions, next_action: 'OPERATOR_CONFIRM_EXACT_PLAN_AND_BUDGET', scope: 'Generation smoke: media structure and explicit final task-bound settlement; not full UI or semantic quality acceptance.' }), null, 2));
     return 0;
   }
   const plan = await json<PanquMissionPlan>('plan'); verifyMissionPlan(plan);
@@ -107,7 +107,7 @@ export async function runPanquMissionCommand(argv: string[], root = process.cwd(
   for (let cycle = 0; cycle < cycles; cycle++) {
     const journal = await runPanquMission({ plan, approval, driver, journalDirectory: output, recoverDeadLock: command === 'resume' });
     console.log(renderPanquMission(journal));
-    if (journal.state !== 'POLLING') return journal.state === 'PASSED' ? 0 : journal.state === 'FAILED' ? 1 : 3;
+    if (!['POLLING', 'SETTLING'].includes(journal.state)) return journal.state === 'PASSED' ? 0 : journal.state === 'FAILED' ? 1 : 3;
   }
   return 3;
 }

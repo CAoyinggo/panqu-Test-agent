@@ -425,14 +425,19 @@ describe('plan-executor：DNS 解析受 timeout / budget 控制', () => {
     if (!v.ok) throw new Error('plan 应合法');
     const transport = vi.fn();
 
-    const result = await executePlan(v.normalized, {
-      allowedTargetOrigins: ALLOWED,
-      resolveHost: neverDns,
-      transport,
-      budgetDurationMs: 20,
-    });
-    expect(result.caseResults[0].status).toBe('BLOCKED_BY_BUDGET');
-    expect(transport).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const running = executePlan(v.normalized, {
+        allowedTargetOrigins: ALLOWED,
+        resolveHost: neverDns,
+        transport,
+        budgetDurationMs: 20,
+      });
+      await vi.advanceTimersByTimeAsync(21);
+      const result = await running;
+      expect(result.caseResults[0].status).toBe('BLOCKED_BY_BUDGET');
+      expect(transport).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('DNS 超时后迟到返回公网地址：transport 调用次数仍为 0', async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { missionAssert, missionDigest } from './panqu-mission-plan.js';
 import { inspectMissionMedia, resolveMissionFile, type PanquMediaTools } from './panqu-mission-media.js';
-import type { PanquMissionApproval, PanquMissionDriver, PanquMissionObservation, PanquMissionPlan, PanquMissionProfile, PanquMissionAssetEvidence } from './panqu-mission-types.js';
+import type { PanquMissionApproval, PanquMissionDriver, PanquMissionObservation, PanquMissionPlan, PanquMissionProfile, PanquMissionAssetEvidence, PanquMissionSettlement } from './panqu-mission-types.js';
 
 /** Operator-owned configuration. It is not accepted as a model proposal or through the read-only MCP. */
 export interface PanquHttpMissionConfig {
@@ -21,7 +21,14 @@ export interface PanquHttpMissionConfig {
   /** Nuxt node parameters vary by plugin. Operator-verified JSON pointers are mandatory. */
   nuxtBindings?: { modelId: string; durationSeconds?: string; quality: string };
   /** Optional independently documented task-bound billing receipt; amounts must be integer milli-credits. */
-  receipt?: { source: string; path: string; taskIdPointer: string; chargedMilliCreditsPointer: string };
+  receipt?: {
+    source: string; path: string; taskIdPointer: string; chargedMilliCreditsPointer: string;
+    /** Finality and amount meaning must come from a verified billing contract, never a guessed status. */
+    settlement?: {
+      statePointer: string; finalValue: string | number | boolean; pendingValues: Array<string | number | boolean>;
+      amountMeaning: 'FINAL_NET_DEBIT' | 'DEBIT_MINUS_REFUND'; refundedMilliCreditsPointer?: string;
+    };
+  };
 }
 export const PANQU_MISSION_REQUIRED_SOURCES: Record<PanquMissionProfile, string[]> = {
   PHP_VIDEO_V1: ['lib/api/video.ts', 'lib/api/taskStatus.ts', 'lib/api/request.ts', 'lib/api/csrf.ts', 'lib/api/url.ts', 'components/nodes/videoNode.tsx'],
@@ -57,6 +64,27 @@ function pointer(value: unknown, expression: string): unknown {
 }
 function object(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 
+/** Require an explicit finality/amount contract before spending; JSON pointer syntax alone is not business proof. */
+function validateSettlementContract(receipt: PanquHttpMissionConfig['receipt']): void {
+  missionAssert(receipt?.settlement, 'MISSION_SETTLEMENT_CONTRACT_MISSING');
+  const contract = receipt.settlement;
+  const scalar = (value: unknown) => typeof value === 'boolean' || typeof value === 'string' && value.length > 0
+    || typeof value === 'number' && Number.isFinite(value);
+  const validPointer = (value: unknown) => typeof value === 'string' && value.startsWith('/') && value.length < 500
+    && value.slice(1).split('/').every(key => key.length > 0 && !['__proto__', 'prototype', 'constructor'].includes(key.replace(/~1/g, '/').replace(/~0/g, '~')));
+  missionAssert(receipt.source.trim() && receipt.path.startsWith('/') && !receipt.path.startsWith('//')
+    && !receipt.path.includes('..') && !receipt.path.includes('\\') && !receipt.path.includes('#')
+    && receipt.path.split('{taskId}').length === 2 && validPointer(receipt.taskIdPointer)
+    && validPointer(receipt.chargedMilliCreditsPointer) && validPointer(contract.statePointer)
+    && new Set([receipt.taskIdPointer, receipt.chargedMilliCreditsPointer, contract.statePointer]).size === 3
+    && scalar(contract.finalValue) && Array.isArray(contract.pendingValues) && contract.pendingValues.length <= 16
+    && contract.pendingValues.every(scalar) && !contract.pendingValues.includes(contract.finalValue)
+    && ['FINAL_NET_DEBIT', 'DEBIT_MINUS_REFUND'].includes(contract.amountMeaning), 'MISSION_SETTLEMENT_CONTRACT_INVALID');
+  if (contract.amountMeaning === 'DEBIT_MINUS_REFUND') missionAssert(validPointer(contract.refundedMilliCreditsPointer)
+    && ![receipt.taskIdPointer, receipt.chargedMilliCreditsPointer, contract.statePointer].includes(contract.refundedMilliCreditsPointer!), 'MISSION_REFUND_BINDING_REQUIRED');
+  else missionAssert(contract.refundedMilliCreditsPointer === undefined, 'MISSION_SETTLEMENT_AMOUNT_MEANING_CONFLICT');
+}
+
 /** Public decoders make host differences testable independently from transport. */
 export function decodePanquMissionTask(profile: PanquMissionProfile, body: unknown, taskId: string, projectId: string, nodeId: string, kind: 'image' | 'video'): PanquMissionObservation {
   const root = object(body);
@@ -80,7 +108,10 @@ export function decodePanquMissionTask(profile: PanquMissionProfile, body: unkno
     if (Array.isArray(payload.items)) for (const item of payload.items.map(object)) if (typeof item.url === 'string') outputs.push(item.url);
   }
   missionAssert(outputs.length <= 1, 'MISSION_OUTPUT_COUNT_MISMATCH');
-  return { taskId, projectId, state: root.status === 'failed' || root.status === 'cancelled' ? 'failed'
+  if (root.updated_at !== undefined) missionAssert(typeof root.updated_at === 'string' && Number.isFinite(Date.parse(root.updated_at)), 'MISSION_TASK_VERSION_INVALID');
+  return { taskId, projectId, requestId: typeof root.requestId === 'string' ? root.requestId : undefined,
+    nodeId: nodes.length === 1 ? nodeId : undefined, updatedAt: root.updated_at as string | undefined,
+    state: root.status === 'failed' || root.status === 'cancelled' ? 'failed'
     : root.status === 'success' && nodes.length === 1 && nodes[0].status === 'success' ? 'success'
       : root.status === 'submitted' ? 'pending' : root.status === 'running' ? 'running' : 'unknown', assetUrl: outputs[0] };
 }
@@ -98,10 +129,16 @@ export class PanquHttpMissionDriver implements PanquMissionDriver {
   private async json(route: string, method: 'GET' | 'POST', body: BodyInit | undefined, signal: AbortSignal, json = false): Promise<unknown> {
     return fetchPanquMissionJson(this.config, route, method, body, signal, json);
   }
-  async preflight(plan: PanquMissionPlan, approval: PanquMissionApproval): Promise<void> {
+  async preflight(plan: PanquMissionPlan, approval: PanquMissionApproval, context?: { resumeOnly: boolean }): Promise<void> {
     missionAssert(plan.profile === this.profile && this.config.actorRef.trim() && approval.allowedOrigin === this.origin, 'MISSION_DRIVER_CONFIG_INVALID');
     missionAssert(approval.environment === 'local' || Object.keys(this.config.headers ?? {}).length > 0, 'MISSION_AUTH_NOT_CONFIGURED');
     missionAssert(!Object.keys(this.config.headers ?? {}).some(key => /^(host|content-type|content-length)$/i.test(key)), 'MISSION_TRANSPORT_HEADER_OVERRIDE');
+    // Once submission is durable, fixed task/billing reads do not depend on old prompt/media/quote or frontend source files.
+    // Origin, identity, approval and driver configuration remain bound by the runtime; this path cannot submit.
+    if (context?.resumeOnly) {
+      if (this.config.receipt?.settlement) validateSettlementContract(this.config.receipt);
+      return;
+    }
     missionAssert(plan.variant.parameters.count === 1, 'MISSION_BATCH_OUTPUT_NOT_SUPPORTED');
     for (const source of PANQU_MISSION_REQUIRED_SOURCES[this.profile]) missionAssert(plan.sourcePins.some(pin => pin.file === source), 'MISSION_REQUIRED_SOURCE_PIN_MISSING');
     for (const pin of plan.sourcePins) {
@@ -132,6 +169,7 @@ export class PanquHttpMissionDriver implements PanquMissionDriver {
       if (plan.variant.parameters.durationSeconds !== undefined) missionAssert(binding.durationSeconds && pointer(request, binding.durationSeconds) === plan.variant.parameters.durationSeconds, 'MISSION_SUBMISSION_PARAMETERS_MISMATCH');
     }
     if (this.config.receipt) missionAssert(this.config.receipt.source.trim() && this.config.receipt.path.includes('{taskId}'), 'MISSION_RECEIPT_BINDING_INVALID');
+    validateSettlementContract(this.config.receipt);
   }
   async revalidate(plan: PanquMissionPlan, signal: AbortSignal): Promise<void> {
     if (!plan.variant.preparation) return;
@@ -161,14 +199,36 @@ export class PanquHttpMissionDriver implements PanquMissionDriver {
       body = await this.json('/aivideo/v2/task_status/apiGetStatus', 'POST', form, signal);
     } else body = await this.json(`/canvas-workflow/tasks/${encodeURIComponent(taskId)}`, 'GET', undefined, signal);
     const observation = decodePanquMissionTask(this.profile, body, taskId, plan.projectId, plan.nodeId, plan.requirement.kind);
-    if (this.config.receipt && ['success', 'failed'].includes(observation.state)) {
-      const receipt = await this.json(this.config.receipt.path.replace('{taskId}', encodeURIComponent(taskId)), 'GET', undefined, signal);
-      missionAssert(String(pointer(receipt, this.config.receipt.taskIdPointer)) === taskId, 'MISSION_RECEIPT_TASK_MISMATCH');
-      const charged = pointer(receipt, this.config.receipt.chargedMilliCreditsPointer);
-      missionAssert(typeof charged === 'number' && Number.isSafeInteger(charged) && charged >= 0, 'MISSION_CHARGE_RECEIPT_INVALID');
-      observation.chargedMilliCredits = charged;
-    }
+    if (plan.variant.preparation) missionAssert(observation.requestId === plan.hash && observation.nodeId === plan.nodeId, 'MISSION_TASK_REQUEST_BINDING_MISMATCH');
+    else if (observation.requestId !== undefined) missionAssert(observation.requestId === plan.hash, 'MISSION_TASK_REQUEST_BINDING_MISMATCH');
     return observation;
+  }
+  /** Billing identity stays in the submitted task namespace; a media/provider ID is never guessed as equivalent. */
+  async observeSettlement(taskId: string, _plan: PanquMissionPlan, signal: AbortSignal): Promise<PanquMissionSettlement> {
+    const config = this.config.receipt;
+    if (!config) return { taskId, state: 'unknown', reason: 'BILLING_EVIDENCE_MISSING' };
+    const contract = config.settlement;
+    if (!contract) return { taskId, state: 'unknown', reason: 'MISSION_SETTLEMENT_CONTRACT_MISSING' };
+    validateSettlementContract(config);
+    const receipt = await this.json(config.path.replace('{taskId}', encodeURIComponent(taskId)), 'GET', undefined, signal);
+    const root = object(receipt);
+    missionAssert(root.success !== false && root.ok !== false && !root.error, 'MISSION_SETTLEMENT_RESPONSE_REJECTED');
+    missionAssert(String(pointer(receipt, config.taskIdPointer)) === taskId, 'MISSION_RECEIPT_TASK_MISMATCH');
+    const state = pointer(receipt, contract.statePointer);
+    if (contract.pendingValues.some(value => value === state)) return { taskId, state: 'pending' };
+    if (state !== contract.finalValue) return { taskId, state: 'unknown', reason: 'MISSION_SETTLEMENT_STATE_UNKNOWN' };
+    const debit = pointer(receipt, config.chargedMilliCreditsPointer);
+    missionAssert(typeof debit === 'number' && Number.isSafeInteger(debit) && debit >= 0, 'MISSION_CHARGE_RECEIPT_INVALID');
+    let refunded: number | undefined;
+    if (contract.amountMeaning === 'DEBIT_MINUS_REFUND') {
+      missionAssert(typeof contract.refundedMilliCreditsPointer === 'string', 'MISSION_REFUND_BINDING_REQUIRED');
+      const refund = pointer(receipt, contract.refundedMilliCreditsPointer);
+      missionAssert(typeof refund === 'number' && Number.isSafeInteger(refund) && refund >= 0 && refund <= debit, 'MISSION_REFUND_RECEIPT_INVALID');
+      refunded = refund;
+    }
+    const amounts = contract.amountMeaning === 'DEBIT_MINUS_REFUND'
+      ? { debitMilliCredits: debit, refundedMilliCredits: refunded!, netMilliCredits: debit - refunded! } : { netMilliCredits: debit };
+    return { taskId, state: 'final', ...amounts, evidenceHash: missionDigest({ taskId, state, source: config.source, ...amounts }) };
   }
   async verifyAsset(observation: PanquMissionObservation, plan: PanquMissionPlan, signal: AbortSignal): Promise<PanquMissionAssetEvidence> {
     missionAssert(observation.assetUrl, 'MISSION_SUCCESS_WITHOUT_ASSET');

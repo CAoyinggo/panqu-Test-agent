@@ -2,6 +2,7 @@ import { mkdir, open, readFile, rename, unlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
+import { advancePanquMissionEvidence } from './panqu-mission-evidence.js';
 import { missionAssert, verifyMissionPlan, validMilliCredits } from './panqu-mission-plan.js';
 import type { PanquMissionApproval, PanquMissionDriver, PanquMissionJournal, PanquMissionPlan, PanquMissionState } from './panqu-mission-types.js';
 
@@ -59,7 +60,7 @@ export async function readPanquMissionJson<T>(file: string): Promise<T> {
 function event(journal: PanquMissionJournal, state: PanquMissionState, code: string, detail: string): void {
   journal.state = state;
   journal.events.push({ sequence: journal.events.length + 1, at: new Date().toISOString(), state, code, detail });
-  journal.nextAction = state === 'SUBMISSION_UNKNOWN' ? 'RECONCILE_SUBMISSION' : ['POLLING', 'VERIFYING'].includes(state) ? 'RESUME_OBSERVATION'
+  journal.nextAction = state === 'SUBMISSION_UNKNOWN' ? 'RECONCILE_SUBMISSION' : ['POLLING', 'VERIFYING', 'SETTLING'].includes(state) ? 'RESUME_OBSERVATION'
     : ['PASSED', 'FAILED'].includes(state) ? 'REVIEW_EVIDENCE' : 'RESOLVE_BLOCKER';
 }
 function validateApproval(plan: PanquMissionPlan, approval: PanquMissionApproval, driver: PanquMissionDriver): void {
@@ -109,10 +110,11 @@ async function runPanquMissionCycle(input: MissionRunInput): Promise<PanquMissio
     let journal: PanquMissionJournal;
     try {
       missionAssert(!(await lstat(file)).isSymbolicLink(), 'MISSION_JOURNAL_SYMLINK');
-      journal = JSON.parse(await readFile(file, 'utf8')) as PanquMissionJournal;
+      journal = await readPanquMissionJson<PanquMissionJournal>(file);
       missionAssert(journal.schema === 'panqu.mission-journal.v1' && journal.planHash === plan.hash && journal.driverIdentity === driver.identity
         && journal.origin === driver.origin && Array.isArray(journal.events) && Number.isSafeInteger(journal.submissionAttempts)
-        && journal.submissionAttempts >= 0 && journal.submissionAttempts <= 1 && journal.reservedMilliCredits === plan.variant.maxMilliCredits, 'MISSION_JOURNAL_BINDING_INVALID');
+        && journal.submissionAttempts >= 0 && journal.submissionAttempts <= 1 && journal.reservedMilliCredits === plan.variant.maxMilliCredits
+        && (journal.taskId === undefined || typeof journal.taskId === 'string' && /^[a-zA-Z0-9_.:-]{1,160}$/.test(journal.taskId) && journal.submissionAttempts === 1), 'MISSION_JOURNAL_BINDING_INVALID');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       journal = { schema: 'panqu.mission-journal.v1', planHash: plan.hash, driverIdentity: driver.identity, origin: driver.origin,
@@ -120,17 +122,23 @@ async function runPanquMissionCycle(input: MissionRunInput): Promise<PanquMissio
       event(journal, 'PLANNED', 'BUDGET_RESERVED', `${plan.variant.maxMilliCredits} milli-credits reserved before submission.`);
       await save(file, journal);
     }
+    if (['PASSED', 'FAILED'].includes(journal.state) && !journal.evidence) {
+      event(journal, 'BLOCKED', 'MISSION_LEGACY_SETTLEMENT_UNVERIFIED', 'Historical result lacks staged/final settlement evidence. No submission repeated; explicit evidence migration is required.');
+      await save(file, journal); return journal;
+    }
+    if (journal.events.some(item => item.code === 'MISSION_LEGACY_SETTLEMENT_UNVERIFIED')) return journal;
     if (['PASSED', 'FAILED', 'SUBMISSION_UNKNOWN'].includes(journal.state)) return journal;
     if (journal.state === 'SUBMITTING') {
       event(journal, 'SUBMISSION_UNKNOWN', 'INTERRUPTED_SUBMISSION', 'The request may have reached the server. No automatic resubmission is permitted.');
       await save(file, journal); return journal;
     }
-    await driver.preflight(plan, approval);
+    await driver.preflight(plan, approval, { resumeOnly: Boolean(journal.taskId) });
     // Source/media checks can outlive approval. Recheck before creating any network signal.
     validateApproval(plan, approval, driver);
     const authorizationWindow = Math.max(1, Math.min(timeout, Date.parse(approval.expiresAt) - Date.now()));
     const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(authorizationWindow)]) : AbortSignal.timeout(authorizationWindow);
     if (!journal.taskId) {
+      missionAssert(driver.observeSettlement, 'MISSION_SETTLEMENT_ADAPTER_MISSING');
       missionAssert(journal.submissionAttempts === 0, 'MISSION_SUBMISSION_ALREADY_ATTEMPTED');
       missionAssert(Date.parse(plan.quote.expiresAt) > Date.now(), 'MISSION_QUOTE_EXPIRED');
       missionAssert(!signal.aborted, 'MISSION_CANCELLED_BEFORE_SUBMIT');
@@ -159,51 +167,31 @@ async function runPanquMissionCycle(input: MissionRunInput): Promise<PanquMissio
     }
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       if (signal.aborted) break;
-      try {
-        const observed = await driver.observe(journal.taskId!, plan, signal);
-        missionAssert(observed.taskId === journal.taskId && (observed.projectId === undefined || observed.projectId === plan.projectId), 'MISSION_FOREIGN_TASK_REJECTED');
-        if (observed.chargedMilliCredits !== undefined) {
-          missionAssert(validMilliCredits(observed.chargedMilliCredits), 'MISSION_CHARGE_RECEIPT_INVALID');
-          journal.chargedMilliCredits = observed.chargedMilliCredits;
-          if (observed.chargedMilliCredits > journal.reservedMilliCredits || observed.chargedMilliCredits > approval.maxMilliCredits) {
-            event(journal, 'FAILED', 'BUDGET_OVERRUN_OBSERVED', 'Actual task-bound debit exceeded the approved quote/budget. No additional submissions are allowed.'); await save(file, journal); return journal;
-          }
-        }
-        if (observed.state === 'failed') {
-          event(journal, 'FAILED', 'REMOTE_TASK_FAILED', 'The bound task failed; no automatic generation retry.'); await save(file, journal); return journal;
-        }
-        if (observed.state === 'success') {
-          event(journal, 'VERIFYING', 'RESULT_REQUIRES_PROOF', 'Server success requires independently decoded asset and billing evidence.'); await save(file, journal);
-          const asset = await driver.verifyAsset(observed, plan, signal);
-          const params = plan.variant.parameters;
-          missionAssert(asset.decoded === true && asset.bytes > 0 && /^[a-f0-9]{64}$/.test(asset.sha256) && asset.kind === plan.requirement.kind, 'MISSION_ASSET_UNVERIFIED');
-          journal.asset = asset;
-          missionAssert(asset.width === params.width && asset.height === params.height && params.count === 1, 'MISSION_OUTPUT_DIMENSION_OR_COUNT_MISMATCH');
-          if (params.durationSeconds !== undefined) missionAssert(asset.durationSeconds !== undefined && Math.abs(asset.durationSeconds - params.durationSeconds) <= 0.1, 'MISSION_OUTPUT_DURATION_MISMATCH');
-          if (journal.chargedMilliCredits === undefined) {
-            event(journal, 'BLOCKED', 'BILLING_EVIDENCE_MISSING', 'Media was verified, but no task-bound debit receipt is available. Reserved cost is not treated as actual cost.');
-          } else event(journal, 'PASSED', 'REAL_OUTPUT_AND_COST_VERIFIED', 'One bound task, decoded matching media and task-bound debit verified.');
-          await save(file, journal); return journal;
-        }
-        event(journal, 'POLLING', observed.state === 'unknown' ? 'UNKNOWN_REMOTE_STATE' : 'TASK_IN_PROGRESS', 'Keep observing the same task; no new generation submission.'); await save(file, journal);
-      } catch (error) {
-        const code = error instanceof Error && /^MISSION_[A-Z_]+$/.test(error.message) ? error.message : 'MISSION_OBSERVATION_UNAVAILABLE';
-        event(journal, code.startsWith('MISSION_OUTPUT_') ? 'FAILED' : 'BLOCKED', code,
-          code.startsWith('MISSION_OUTPUT_') ? 'Decoded output contradicts the approved output requirement.' : 'Observation or media verification was inconclusive. Resume the same task; do not re-submit.'); await save(file, journal); return journal;
-      }
+      const state = await advancePanquMissionEvidence({ journal, plan, approval, driver, signal,
+        persist: async (state, code, detail) => { event(journal, state, code, detail); await save(file, journal); } });
+      if (!['POLLING', 'SETTLING'].includes(state)) return journal;
       if (attempt + 1 < maxPolls && interval) await new Promise<void>(resolve => {
         const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
         const timer = setTimeout(finish, interval); signal.addEventListener('abort', finish, { once: true }); if (signal.aborted) finish();
       });
     }
-    event(journal, 'POLLING', 'OBSERVATION_WINDOW_ENDED', 'Resume observation in the next bounded cycle without repeating submission.'); await save(file, journal); return journal;
+    event(journal, journal.state === 'SETTLING' ? 'SETTLING' : 'POLLING', 'OBSERVATION_WINDOW_ENDED', 'Resume the missing evidence stage in the next bounded cycle without repeating submission.'); await save(file, journal); return journal;
   });
 }
 
 /** Evidence summary is usable without an LLM, including recovery instructions and exact cost uncertainty. */
 export function renderPanquMission(journal: PanquMissionJournal): string {
-  return [`# Panqu Mission ${journal.planHash.slice(0, 12)}`, '', `State: ${journal.state}`, `Next action: ${journal.nextAction}`,
+  const legacyTerminal = ['PASSED', 'FAILED'].includes(journal.state) && !journal.evidence;
+  return [`# Panqu Mission ${journal.planHash.slice(0, 12)}`, '', `State: ${legacyTerminal ? 'BLOCKED' : journal.state}`, `Next action: ${legacyTerminal ? 'RESOLVE_BLOCKER' : journal.nextAction}`,
+    ...(legacyTerminal ? [`Historical state: ${journal.state}; final settlement was not verified under the current evidence policy.`] : []),
     `Submission attempts: ${journal.submissionAttempts}`, `Reserved credits: ${journal.reservedMilliCredits / 1000}`,
     `Observed debit: ${journal.chargedMilliCredits === undefined ? 'UNKNOWN' : journal.chargedMilliCredits / 1000}`, '',
+    `Generation fact: ${journal.evidence?.task?.state ?? 'UNKNOWN'}`,
+    `Media fact: ${journal.evidence?.media.state ?? 'UNVERIFIED'}`,
+    `Settlement fact: ${journal.evidence?.settlement.state ?? 'UNVERIFIED'}`,
+    `Observed refund: ${journal.evidence?.settlement.refundedMilliCredits === undefined ? 'UNKNOWN' : journal.evidence.settlement.refundedMilliCredits / 1000}`,
+    `Known failures: ${journal.evidence?.failures.join(', ') || 'NONE_OBSERVED'}`,
+    `Evidence action: ${journal.evidence?.next.action ?? 'REVIEW_LEGACY_SCOPE'}`,
+    `Missing evidence: ${journal.evidence?.next.missing.join(', ') ?? 'LEGACY_FINALITY_UNVERIFIED'}`, '',
     '| Step | State | Evidence |', '| --- | --- | --- |', ...journal.events.map(item => `| ${item.sequence} | ${item.state} | ${item.code}: ${item.detail} |`), ''].join('\n');
 }

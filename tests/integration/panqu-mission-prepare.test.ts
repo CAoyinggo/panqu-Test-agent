@@ -91,10 +91,10 @@ async function setup() {
       send({ taskId: 'task-a', status: 'submitted' }); return;
     }
     if (request.url === '/canvas-workflow/tasks/task-a') {
-      state.counters.observe++; send({ taskId: 'task-a', projectId: 'project-a', status: state.pending ? 'running' : 'success',
+      state.counters.observe++; send({ taskId: 'task-a', projectId: 'project-a', requestId: state.submissions[0]?.requestId, status: state.pending ? 'running' : 'success',
         nodeRuns: [{ nodeId: 'node-a', status: 'success', outputs: { out: { type: 'video', payload: { items: [{ url: '/asset.mp4' }] } } } }] }); return;
     }
-    if (request.url === '/billing/task-a') { send({ taskId: 'task-a', milliCredits: 100 }); return; }
+    if (request.url === '/billing/task-a') { send({ taskId: 'task-a', milliCredits: 100, state: 'final' }); return; }
     if (request.url === '/asset.mp4') { state.counters.asset++; response.end(clip); return; }
     response.statusCode = 404; response.end();
   });
@@ -112,7 +112,7 @@ async function setup() {
   const input = { intent, config, access, directory: path.join(root, 'journal') };
   const run = (plan: PanquMissionPlan) => runPanquMission({ plan, approval: { approvalId: 'fixture-generation-approval', planHash: plan.hash, maxMilliCredits: 1000,
     allowedOrigin: origin, environment: 'local', expiresAt: new Date(Date.now() + 600000).toISOString(), retainTestAssets: true }, journalDirectory: input.directory,
-    driver: new PanquHttpMissionDriver({ ...config, mediaTools, assetOrigins: [origin], receipt: { source: 'fixture task-bound ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits' } }),
+    driver: new PanquHttpMissionDriver({ ...config, mediaTools, assetOrigins: [origin], receipt: { source: 'fixture task-bound ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits', settlement: { statePointer: '/state', finalValue: 'final', pendingValues: ['pending'], amountMeaning: 'FINAL_NET_DEBIT' } } }),
     maxPolls: 1, pollIntervalMs: 0 });
   return { root, state, input, run };
 }
@@ -297,7 +297,7 @@ describe.skipIf(!mediaTools.ffmpeg || !mediaTools.ffprobe)('Prepared missions wi
     const { root, state, input } = await setup();
     await writeFile(path.join(root, 'intent.json'), JSON.stringify(input.intent)); await writeFile(path.join(root, 'access.json'), JSON.stringify(input.access));
     await writeFile(path.join(root, 'runtime.json'), JSON.stringify({ profile: 'NUXT_CANVAS_V1', actorRef: 'fixture-actor', originEnv: 'PANQU_PREPARE_ORIGIN', headersEnv: 'PANQU_PREPARE_HEADERS',
-      mediaTools, assetOrigins: [input.config.origin], receipt: { source: 'fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits' } }));
+      mediaTools, assetOrigins: [input.config.origin], receipt: { source: 'fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits', settlement: { statePointer: '/state', finalValue: 'final', pendingValues: ['pending'], amountMeaning: 'FINAL_NET_DEBIT' } } }));
     const cli = path.resolve('dist/bin/run-devtest.js');
     const command = (args: string[]) => exec(process.execPath, [cli, 'mission', ...args], { cwd: root, env: { ...process.env, PANQU_PREPARE_ORIGIN: input.config.origin, PANQU_PREPARE_HEADERS: '{}' } });
     const output = JSON.parse((await command(['prepare', '--intent', 'intent.json', '--access', 'access.json', '--config', 'runtime.json', '--output', 'journal'])).stdout);

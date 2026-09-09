@@ -67,7 +67,7 @@ async function service(fault: Fault = 'none') {
         task_status: fault === 'remote-failure' ? 4 : fault === 'pending' && counts.observe === 1 ? 2 : 3, progress: 50,
         video_url: fault === 'empty-asset' ? undefined : '/asset.mp4' } }] }); return;
     }
-    if (request.url === '/billing/task-a') { send({ taskId: 'task-a', milliCredits: fault === 'overrun' ? 900 : 100 }); return; }
+    if (request.url === '/billing/task-a') { send({ taskId: 'task-a', milliCredits: fault === 'overrun' ? 900 : 100, state: 'final' }); return; }
     if (request.url === '/canvas-workflow/execute') {
       counts.submit++;
       const parts: Buffer[] = []; for await (const part of request) parts.push(Buffer.from(part));
@@ -89,7 +89,7 @@ function runtime(root: string, plan: PanquMissionPlan, origin: string, receipt =
   const approval: PanquMissionApproval = { approvalId: 'fixture-operator-approved', planHash: plan.hash, maxMilliCredits: 1000,
     environment: 'local', allowedOrigin: origin, retainTestAssets: true, expiresAt: new Date(Date.now() + 600000).toISOString() };
   const driver = new PanquHttpMissionDriver({ projectRoot: root, origin, actorRef: 'fixture-actor', profile: 'PHP_VIDEO_V1', assetOrigins: [origin], mediaTools,
-    headers: { Authorization: 'Bearer fixture-only-value' }, receipt: receipt ? { source: 'Independent fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits' } : undefined });
+    headers: { Authorization: 'Bearer fixture-only-value' }, receipt: receipt ? { source: 'Independent fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits', settlement: { statePointer: '/state', finalValue: 'final', pendingValues: ['pending'], amountMeaning: 'FINAL_NET_DEBIT' } } : undefined });
   return { plan, approval, driver, journalDirectory: path.join(root, 'journal'), maxPolls: 1, pollIntervalMs: 0 };
 }
 
@@ -144,7 +144,7 @@ describe.skipIf(!mediaTools.ffmpeg || !mediaTools.ffprobe)('Panqu missions with 
     await writeFile(path.join(root, 'approval.json'), JSON.stringify(input.approval));
     await writeFile(path.join(root, 'config.json'), JSON.stringify({ originEnv: 'PANQU_FIXTURE_ORIGIN', headersEnv: 'PANQU_FIXTURE_HEADERS',
       actorRef: 'fixture-actor', profile: 'PHP_VIDEO_V1', mediaTools, assetOrigins: [server.origin],
-      receipt: { source: 'fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits' } }));
+      receipt: { source: 'fixture task ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits', settlement: { statePointer: '/state', finalValue: 'final', pendingValues: ['pending'], amountMeaning: 'FINAL_NET_DEBIT' } } }));
     const args = ['--plan', planFile, '--config', 'config.json', '--approval', 'approval.json', '--output', 'journal'];
     expect((await execute(['run', ...args])).stdout).toContain('State: PASSED');
     const counts = { ...server.counts };
@@ -167,7 +167,7 @@ describe.skipIf(!mediaTools.ffmpeg || !mediaTools.ffprobe)('Panqu missions with 
     const plan = compilePanquMission(spec, catalog); const input = runtime(root, plan, server.origin);
     input.driver = new PanquHttpMissionDriver({ projectRoot: root, origin: server.origin, actorRef: 'fixture-actor', profile: 'NUXT_CANVAS_V1', mediaTools, assetOrigins: [server.origin],
       nuxtBindings: { modelId: '/graph/nodes/0/params/modelId', durationSeconds: '/graph/nodes/0/params/durationSeconds', quality: '/graph/nodes/0/params/quality' },
-      receipt: { source: 'fixture task-bound ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits' } });
+      receipt: { source: 'fixture task-bound ledger', path: '/billing/{taskId}', taskIdPointer: '/taskId', chargedMilliCreditsPointer: '/milliCredits', settlement: { statePointer: '/state', finalValue: 'final', pendingValues: ['pending'], amountMeaning: 'FINAL_NET_DEBIT' } } });
     expect((await runPanquMission(input)).state).toBe('PASSED'); expect(server.counts).toMatchObject({ submit: 1, observe: 1, csrf: 0 });
   });
   it('creates and decodes its own bounded reference video without touching existing files', async () => {
@@ -200,11 +200,10 @@ describe.skipIf(!mediaTools.ffmpeg || !mediaTools.ffprobe)('Panqu missions with 
     const result = await runPanquMission(runtime(root, compilePanquMission(spec, catalog), server.origin));
     expect(result.state, renderPanquMission(result)).toBe('BLOCKED'); expect(server.counts.submit).toBe(1);
   });
-  it('keeps a valid video unverified when task-bound billing evidence is unavailable', async () => {
+  it('blocks before spending when no final task-bound settlement contract is configured', async () => {
     const { root, spec, catalog } = await data(); const server = await service();
-    const result = await runPanquMission(runtime(root, compilePanquMission(spec, catalog), server.origin, false));
-    expect(result.state).toBe('BLOCKED'); expect(result.asset?.decoded).toBe(true); expect(result.chargedMilliCredits).toBeUndefined();
-    expect(result.events.at(-1)?.code).toBe('BILLING_EVIDENCE_MISSING');
+    await expect(runPanquMission(runtime(root, compilePanquMission(spec, catalog), server.origin, false))).rejects.toThrow('MISSION_SETTLEMENT_CONTRACT_MISSING');
+    expect(server.counts).toEqual({ submit: 0, observe: 0, asset: 0, csrf: 0 });
   });
   it.each(['overrun', 'remote-failure'] as const)('stops on %s without trying another model or submission', async fault => {
     const { root, spec, catalog } = await data(); const server = await service(fault);

@@ -41,7 +41,7 @@ devtest mission status --plan ./mission-results/PLAN_HASH.plan.json --output ./m
 - **Catalog**：操作员/可信项目适配器取得并核对的完整合法组合，每个组合包含实际 payload、尺寸/时长/数量/质量和积分上界，带来源、过期时间及相关源码 SHA-256。每个组合都是完整合法组合，不擅自对独立枚举做笛卡尔积。没有实时接口适配时不得把模型输出或旧的 UI 选项当作新报价。`1000 milliCredits = 1 积分`，只接受非负安全整数；字符串、NaN、负数、未知成本一律拒绝。
 - **文案**：PHP payload 没有 cueword 时，必须提供带来源的 `promptConstraints`（minCodePoints/maxCodePoints），内核才生成短测试文案；也可以用 Spec.prompt 提供文案并按同一限制检查。不猜 token 限制，不覆盖已确认的其他输入规则。
 - **Config**：`originEnv` 和 `headersEnv` 只保存环境变量名，身份 Header 只存在进程内存；`actorRef` 绑定执行者。配置 profile、可选 apiBasePath、assetOrigins、媒体工具绝对路径；Nuxt 还需当前节点模型/时长/质量字段的 JSON pointer。不得把 Cookie/Token 写进 JSON 文件或命令行。
-- **Receipt**：可选配置 `source/path/taskIdPointer/chargedMilliCreditsPointer`，必须是当前项目真实、只读、任务级账单契约。没有账单契约可以保留生成和媒体证据，但不能得到完整 PASSED。Nuxt execute 返回的 score 未经确认不作为实际扣费。
+- **Receipt**：v4.32.0 首次生成前必须配置 `source/path/taskIdPointer/chargedMilliCreditsPointer` 及 `settlement` 最终状态/金额含义契约，否则零业务请求阻断。必须是当前项目经确认的任务级账单契约；已提交任务可保留缺失证据，但不能得到完整 PASSED。Nuxt execute 返回的 score 是账户余额更新线索，不能替代任务扣费。完整规则见[业务证据协调器](panqu-mission-business-evidence.md)。
 - **Approval**：操作员确认后给出 approvalId、同一 planHash、积分上限、环境、唯一 allowedOrigin、有效期及 `retainTestAssets:true`（明确保留测试生成资产）。只允许 local/test/integration；local 只允许 loopback。MCP 不提供创建此审批的入口，也不将用户确认业务规则当作扣费授权。
 
 报价是执行预算依据，不是服务端硬限额。内核能阻止超预算计划及重复提交，并发现服务端超收；不能保证存在计费缺陷的服务端绝不超扣。预算按一个 Mission 的一次生成提交管理，不是跨多个独立审批任务的账户全局限额。
@@ -57,6 +57,8 @@ Nuxt 画布：POST JSON `/canvas-workflow/execute`，限定单节点 mode；requ
 驱动预检核对项目关键文件的源码指纹、身份配置、请求模型/参数及素材哈希。两套协议保持隔离。新增 provider、模型和价格均不作为内核固定白名单。
 
 ## 证据、安全与已知边界
+
+v4.32.0 将任务/媒体/最终结算分开持久化。SETTLING 表示仅结算未完成，失败原因不会消失；重复 run/resume 只读取尚缺阶段。首次生成仍检查源码/素材/报价；已提交后的定向证据读取保留计划、任务、身份、配置和审批绑定，不要求旧前端文件继续不变。旧版本终态缺少分阶段最终结算证据时显示 BLOCKED/Historical state，不自动重跑或迁移。
 
 Journal 以计划 hash 定位，提交前 fsync 提交意图，临时文件原子替换保存状态。进程死亡恢复只在同一机器确认原 PID 已不存在后隔离旧锁；活跃锁、外机锁、不完整锁信息不能被强行删除。SUBMITTING 中断后始终进入未知提交，不伪造幂等保证。
 
