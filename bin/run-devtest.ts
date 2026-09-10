@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { redactSensitiveText } from '../src/core/redact.js';
-import { runDevTest } from '../src/devtest/index.js';
+import { runDevTest, runPanquDiversionFlow } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
 import { runPanquMissionCommand } from '../src/devtest/panqu-mission-cli.js';
@@ -44,6 +44,7 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest mission materials --folder <directory> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest mission prepare-media --folder <directory> --spec <file> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest run --requirement <file> --env test [--github]
+  devtest flow api-diversion [--project-root <directory>] [--output <directory>]
   devtest status [--run <id>]
 
 兼容入口:
@@ -517,6 +518,37 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return validation.valid ? 0 : 1;
     }
     if (argv[0] === 'mission') return await runPanquMissionCommand(argv.slice(1), root);
+    if (argv[0] === 'flow') {
+      const flowName = argv[1];
+      if (flowName !== 'api-diversion') {
+        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion，收到: ${flowName ?? '(空)'}`);
+      }
+      let projectRoot = root;
+      let outputDir: string | undefined;
+      let env: 'test' | 'sandbox' = 'test';
+      for (let i = 2; i < argv.length; i++) {
+        if (argv[i] === '--project-root' && argv[i + 1]) {
+          projectRoot = path.resolve(root, argv[++i]);
+        } else if (argv[i] === '--output' && argv[i + 1]) {
+          outputDir = path.resolve(root, argv[++i]);
+        } else if (argv[i] === '--env' && argv[i + 1]) {
+          env = argv[++i].toLowerCase() as 'test' | 'sandbox';
+        }
+      }
+      console.log(`[DevTest Flow] 启动 API 分流专项测试流程 (api-diversion)...`);
+      console.log(`[DevTest Flow] 目标项目根目录: ${projectRoot}`);
+      const report = await runPanquDiversionFlow({ projectRoot, outputDir, env });
+      console.log(`\n================ API 分流测试流程执行报告 ================`);
+      console.log(`运行 ID:   ${report.runId}`);
+      console.log(`需求文档: ${report.requirementTitle} (${report.requirementUrl})`);
+      console.log(`用例统计: 总计 ${report.summary.total} 条 | 通过 ${report.summary.pass} 条 | 失败 ${report.summary.fail} 条 | 阻断 ${report.summary.blocked} 条 | 通过率: ${report.summary.passRate}`);
+      console.log(`测试产物:`);
+      console.log(`  - 结构化 JSON: ${report.artifacts.reportJson}`);
+      console.log(`  - 自测测试报告: ${report.artifacts.reportMd}`);
+      console.log(`  - 测试用例清单: ${report.artifacts.casesMd}`);
+      console.log(`==========================================================\n`);
+      return report.summary.fail === 0 ? 0 : 1;
+    }
     const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
     const rest = command === 'legacy-run' ? [...argv] : argv.slice(1);
     if (command === 'inspect-project') {

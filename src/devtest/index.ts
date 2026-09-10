@@ -149,3 +149,14 @@ export type {
   DevTestDeliveryCoverage,
 } from './types.js';
 export { validateDeveloperHandoffMarkdown, HANDOFF_SECTIONS } from './handoff-validation.js';
+export {
+  runPanquDiversionFlow,
+  evaluateDiversionDecision,
+  type PanquDiversionFlowOptions,
+  type PanquDiversionFlowReport,
+  type PanquDiversionCase,
+  type DiversionDecision,
+  type DiversionTaskInput,
+  type DiversionConfigSnapshot,
+  type DiversionDecisionResult,
+} from './panqu-diversion-flow.js';

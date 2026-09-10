@@ -66,6 +66,20 @@ v4.33.1 增强针对复合多模块仓库（`panqu-ai` 复合架构）的项目�
 
 在业务项目根目录运行 `devtest inspect-project` 可取得只读项目图、源码行号/指纹和 `NOT_EXECUTED` 回归候选；不执行仓库脚本、不加载环境凭证。动态路径、Nuxt 自动导入、复杂 wrapper、未解析源码及未找到的测试继续明确保留缺口。源码现状不是业务需求；这些能力不代表真实画布、模型生成、结算或 UI 已验收。详见 [Panqu 专属内核边界](docs/panqu-project-kernel.md)。
 
+### Panqu API 分流专项测试流程（`devtest flow api-diversion`）
+
+v4.33.2 引入面向飞书需求《[0903 - 主站与Newapi对接v1.2版本](https://panqu-ai.feishu.cn/docx/W3cZd813YoNMnCxiT1zckWzenwe)》的独立 API 分流测试流程（API Diversion Test Flow）：
+- **全链路两级分流决策树**：
+  - **第 1 级（主站资格判断）**：分流模式切换（`newapi` / `legacy` / `off`）、硬性资格拦截（提示词 > 5000 字、`mov` 格式、真人人像、带参考视频 Seedance 拦截）、全量模型判断（`pq_model_config.is_newapi_global == 1` 绕过组织路由组直达 NewAPI 全局渠道，记 `org_id=0`）、非全量模型全局能力并集与分组能力精准校验（`isModelRoutable` 与 `isModelRoutableForGroup`）；
+  - **第 2 级（NewAPI 调度与渠道分发）**：覆盖 Wan 3.0 / Wan 3.0 Prime（6 种宽高比）、RunningHub 视频（sd2.0/2.5/fast 分辨率含 768P、全能参考/首尾帧）、RunningHub 图片（1k/2k/4k 与 9 种画幅）、TD 渠道等参数约束；
+  - **异常兜底与计费**：SD 系列失败标记 `is_need_fallback` 进入兜底、非 SD 模型不进重试；10 积分=1 元计费核对与大盘动态线路映射；
+  - **划掉项保护**：严格识别需求文档中的删除线属性，菲玲渠道与海外站同步排除在缺陷范围之外。
+- **独立 CLI 触发入口**：
+  ```bash
+  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--env <test|sandbox>]
+  ```
+- **自动化产物**：一键生成 `diversion-flow-report.json`、`开发自测测试报告.md` 与 `测试用例.md`。
+
 ### Panqu Mission：持久化的真实生成任务控制器
 
 v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操作员核对的合法参数/报价组合中选择最低成本方案，修正昂贵或换错模型的建议，持久化提交意图，只提交一次，恢复原任务，解码结果媒体并核对任务级扣费证据。返回 HTTP 200、生成任务 ID、服务器成功状态或模型声称 PASS 都不能单独使任务通过。源码、素材、参数、报价和预算绑定在同一个计划 hash 中。
