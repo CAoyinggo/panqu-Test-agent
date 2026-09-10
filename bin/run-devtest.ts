@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { constants, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,6 +10,7 @@ import { runDevTest } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
 import { runPanquMissionCommand } from '../src/devtest/panqu-mission-cli.js';
+import { validateDeveloperHandoffMarkdown } from '../src/devtest/handoff-validation.js';
 import {
   collectDevTestGitHubInputs,
   githubBusinessWritePolicy,
@@ -34,6 +35,7 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest init --github [--trae]
   devtest doctor [--github]
   devtest inspect-project
+  devtest validate-report <directory>  校验两份固定 Markdown；只读，无业务请求
   devtest mission readiness
   devtest mission prepare --intent <file> --config <file> --access <file> --output <directory>
   devtest mission plan --spec <file> --catalog <file> --output <directory>
@@ -490,6 +492,30 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   try {
     const root = process.cwd();
+    if (argv[0] === 'validate-report') {
+      if (argv.length !== 2 || !argv[1].trim() || argv[1].startsWith('-')) throw new Error('DEVTEST_ARG_INVALID: validate-report requires exactly one directory');
+      const readBounded = async (name: string): Promise<string> => {
+        const file = await open(path.join(path.resolve(root, argv[1]), name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          const info = await file.stat();
+          const maxBytes = 8 * 1024 * 1024;
+          if (!info.isFile() || info.size > maxBytes) throw new Error('DEVTEST_HANDOFF_INPUT_INVALID: regular file <= 8 MiB required');
+          const buffer = Buffer.alloc(maxBytes + 1);
+          let offset = 0;
+          while (offset < buffer.length) {
+            const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
+            if (!bytesRead) break;
+            offset += bytesRead;
+          }
+          if (offset > maxBytes) throw new Error('DEVTEST_HANDOFF_INPUT_INVALID: report exceeds 8 MiB');
+          return buffer.subarray(0, offset).toString('utf8');
+        } finally { await file.close(); }
+      };
+      const [cases, report] = await Promise.all([readBounded('测试用例.md'), readBounded('开发自测测试报告.md')]);
+      const validation = validateDeveloperHandoffMarkdown(cases, report);
+      console.log(JSON.stringify({ ...validation, scope: 'FORMAT_AND_CONSISTENCY_ONLY', businessVerified: false }));
+      return validation.valid ? 0 : 1;
+    }
     if (argv[0] === 'mission') return await runPanquMissionCommand(argv.slice(1), root);
     const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
     const rest = command === 'legacy-run' ? [...argv] : argv.slice(1);

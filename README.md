@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.32.0` |
+| 版本 | `v4.33.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -74,6 +74,8 @@ v4.31.0 新增 `mission readiness/prepare`：在 Nuxt 文生视频单节点范�
 
 ### 当前验证基线
 
+v4.33.0 明确[代码、校验与页面联合测试](src/devtest/assets/devtest/references/combined-validation.md)：每条规则串联代码/边界/API/页面/真实结果；允许审查后运行已有安全本地测试并单独记录，不冒充 MCP 执行结果。代码回归候选未执行会出现在报告缺口。沿用[固定七章单表格式](src/devtest/assets/devtest/references/markdown-handoff.md)，内核写文件前校验章节、表头、用例 ID/状态、统计、证据行和发布建议一致性。格式校验不是业务 Oracle，也没有新增自动运行任意仓库脚本的权限。
+
 v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-evidence.md)：任务、媒体、最终结算分别持久化，只补查缺失阶段；任务失败仍继续对账，账单迟到不重新下载已验证视频。Nuxt requestId 与节点关联、来源时间戳和终态冲突进入硬校验。首次生成前必须有明确的最终结算/金额含义契约，历史终态不自动升级为新策略通过。已经提交的任务可以在前端代码变化后继续定向读取证据，但环境、身份、精确计划和有效审批仍需匹配。
 
 全量测试、Panqu Mission、Acceptance、P0 与 Agent Eval 已于 2026-09-09 复核；其余历史专项统计保留原基线。不代表客户业务环境验收通过。全量使用 `--maxWorkers=2`；默认并发首轮出现超时/取消时序失败，不能隐去该结果或推断为业务缺陷：
@@ -81,8 +83,9 @@ v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-eviden
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 构建 | `npm run build` 通过 |
-| 全量 Vitest | 297 个测试文件通过，4 个跳过 |
-| 全量测试用例 | 3018 项通过，19 项跳过 |
+| 全量 Vitest | 298 个测试文件通过，4 个跳过 |
+| 全量测试用例 | 3046 项通过，19 项跳过 |
+| 4.33.0 联合验证与报告门禁 | 新增 28 项通过；CLI、源码候选展示和 npm 打包复核共 54 项通过；不是 Panqu 业务代码验收 |
 | 4.31.0 自主准备 | 新增 47 项通过，含独立 HTTP、提交前漂移校验和 CLI 完整链路 |
 | 4.32.0 业务证据协调 | 新增 39 项通过，含结算延迟、退款、账务故障、真实解码及跨进程阶段恢复 |
 | Panqu Mission | 新增 29 项通过，含双协议、跨进程恢复、断线隔离及真实媒体解码 |
@@ -107,7 +110,7 @@ v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-eviden
 
 ```bash
 # 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
-npm install --save-dev ./test-flow-4.32.0.tgz
+npm install --save-dev ./test-flow-4.33.0.tgz
 
 # 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
 npx devtest init --github --trae

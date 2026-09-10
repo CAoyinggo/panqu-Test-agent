@@ -73,7 +73,11 @@ describe('npm tarball installation acceptance', () => {
     // 4.32 adds exactly one runtime module (.js + .d.ts), not reports/tests or broad source publishing.
     expect(entries).toContain('dist/src/devtest/panqu-mission-evidence.js');
     expect(entries).toContain('dist/src/devtest/panqu-mission-evidence.d.ts');
-    expect(entries.length).toBeLessThanOrEqual(300);
+    expect(entries).toContain('dist/src/devtest/handoff-validation.js');
+    expect(entries).toContain('dist/src/devtest/handoff-validation.d.ts');
+    expect(entries).toContain('dist/src/devtest/assets/devtest/references/combined-validation.md');
+    expect(entries).toContain('dist/src/devtest/assets/devtest/references/markdown-handoff.md');
+    expect(entries.length).toBeLessThanOrEqual(304);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');

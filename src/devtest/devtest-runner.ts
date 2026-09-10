@@ -3,6 +3,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { validateDeveloperHandoffMarkdown } from './handoff-validation.js';
 
 import { runAcceptancePipeline } from '../acceptance/acceptance-pipeline.js';
 import { buildAcceptanceExecutionPlanIdentity, validateAcceptanceExecutionPlanIdentity } from '../acceptance/acceptance-execution-plan.js';
@@ -960,6 +961,10 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     sourceSyncJson: sourceSync ? path.join(dir, 'source-sync.json') : undefined,
   };
   const unknowns = buildDevTestUnknowns(result.report);
+  const casesMarkdown = renderDeveloperSelfTestCases(renderInput);
+  const reportMarkdown = renderDeveloperSelfTestReport(renderInput);
+  const handoffValidation = validateDeveloperHandoffMarkdown(casesMarkdown, reportMarkdown);
+  if (!handoffValidation.valid) throw new Error(`DEVTEST_HANDOFF_INVALID: ${handoffValidation.errors.join(', ')}`);
   await Promise.all([
     writeFile(artifacts.reportHtml, renderDevTestHtml(renderInput), 'utf8'),
     writeFile(artifacts.reportJson, `${JSON.stringify(buildDevTestReportEnvelope(renderInput), null, 2)}\n`, 'utf8'),
@@ -986,8 +991,8 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
       dataLifecycle,
     }), null, 2)}\n`, 'utf8'),
     writeFile(artifacts.acceptanceSummaryMd, renderAcceptanceSummary(renderInput), 'utf8'),
-    writeFile(artifacts.testCasesMd, renderDeveloperSelfTestCases(renderInput), 'utf8'),
-    writeFile(artifacts.developerSelfTestReportMd, renderDeveloperSelfTestReport(renderInput), 'utf8'),
+    writeFile(artifacts.testCasesMd, casesMarkdown, 'utf8'),
+    writeFile(artifacts.developerSelfTestReportMd, reportMarkdown, 'utf8'),
     ...(artifacts.sourceSyncJson && sourceSync
       ? [writeFile(artifacts.sourceSyncJson, `${JSON.stringify(artifactSafe(sourceSync), null, 2)}\n`, 'utf8')]
       : []),

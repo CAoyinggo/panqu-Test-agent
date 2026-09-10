@@ -684,7 +684,8 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
     `- 生成时间：${markdownInline(input.meta.finishedAt)}`,
     `- 用例统计：共 ${rows.length} 条｜PASS ${rows.filter((row) => row.status === 'PASS').length}｜FAIL ${rows.filter((row) => row.status === 'FAIL').length}｜BLOCKED ${rows.filter((row) => row.status === 'BLOCKED').length}｜NOT_EXECUTED ${rows.filter((row) => row.status === 'NOT_EXECUTED').length}`,
     '', '## 全部测试用例', '',
-    renderFeishuMarkdownTable(['编号', '模块', '类型/优先级', '结果', '场景与 Oracle', '执行、证据与备注'], tableRows), '',
+    renderFeishuMarkdownTable(['编号', '模块', '类型/优先级', '结果', '场景与 Oracle', '执行、证据与备注'],
+      tableRows.length ? tableRows : [['N/A（不适用）', 'N/A（不适用）', 'N/A（不适用）', 'NOT_EXECUTED', '无用例', '用例数为 0']]), '',
   ];
   return `${artifactText(lines.join('\n'))}\n`;
 }
@@ -778,6 +779,12 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
   }
   const uniqueUncovered = uncovered.filter((item, index, all) => all.findIndex((other) => other.item === item.item
     && other.reason === item.reason) === index);
+
+  for (const candidate of input.projectAssessment?.regressionCandidates ?? []) {
+    uniqueUncovered.push({ item: `本地代码测试候选：${candidate.file}`,
+      reason: `${candidate.evidenceLevel}；NOT_EXECUTED；源码发现不等于运行，也不自动认定为本需求必测项`,
+      material: '核对需求/边界与实际测试断言，审查脚本及依赖副作用后运行；补充命令、源码版本、实际测试名、退出码和日志。不得用页面 PASS 替代。' });
+  }
 
   const requirementTableRows: unknown[][] = input.requirementModel.facts.map((fact) => [
     '需求事实', fact.id, fact.statement, `${fact.knowledge}/${fact.provenance}`,

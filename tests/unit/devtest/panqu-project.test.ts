@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -169,6 +169,20 @@ export const shadow = (requestPHPApi: Function) => requestPHPApi('/shadow');`);
     const context = await inspectPanquProject(root, { changedFiles: ['lib/api/request.ts'] });
     expect(context.affectedFiles).toEqual(expect.arrayContaining(['lib/api/node.ts', 'components/nodes/useAddFlowNode.ts', 'test/node.test.ts']));
     expect(context.regressionCandidates).toContainEqual(expect.objectContaining({ file: 'test/node.test.ts', status: 'NOT_EXECUTED' }));
+  });
+
+  it('keeps discovered local regressions visible in the report without executing repository code', async () => {
+    const root = await fixture();
+    await put(root, 'test/node.test.ts', `import { add } from '../components/nodes/useAddFlowNode'; throw new Error('Repository test must not be auto-executed');`);
+    const result = await runDevTest({ projectRoot: root, project: 'panqu-fixture', mode: 'DRY_RUN',
+      markdown: '# 视频模型列表\nGET /aivideo/v2/video/getPanquaivideoModels\n无需认证。\n返回 200。\nAC-1 列表返回 HTTP 200。',
+      discoverProject: false, outDir: path.join(root, 'devtest-results') });
+    const report = await readFile(result.artifacts.developerSelfTestReportMd, 'utf8');
+    const gaps = report.split('## 6. 未覆盖项与回归建议')[1].split('## 7. 发布判定')[0];
+    expect(gaps).toContain('本地代码测试候选：test/node.test.ts');
+    expect(gaps).toContain('NOT_EXECUTED');
+    expect(gaps).toContain('不得用页面 PASS 替代');
+    expect(result.deliveryCoverage.cases.executed).toBe(0);
   });
 
   it('treats syntax errors and scan limits as explicit incomplete evidence', async () => {

@@ -148,3 +148,4 @@ export type {
   DevTestAcceptanceTrace,
   DevTestDeliveryCoverage,
 } from './types.js';
+export { validateDeveloperHandoffMarkdown, HANDOFF_SECTIONS } from './handoff-validation.js';
