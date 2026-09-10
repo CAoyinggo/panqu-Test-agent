@@ -60,7 +60,7 @@ Trae 入口使用“集中澄清 → 展示最终计划 → 一次确认 → 立
 - `panqu-image-models`（图片模型与参数约束）
 - `panqu-billing`（计费扣费、积分预估、19个端点与归档表对账）
 - `panqu-newapi-diversion`（主站与 NewAPI 两级分流决策、全量开关与权重调度）
-- `panqu-newapi-model-onboarding`（**新增**：NewAPI 新模型/渠道接入、两级分流决策树、参数回显、组织密钥绑定与端到端自测 SOP）
+- `panqu-newapi-model-onboarding`（**深度专项**：NewAPI 新模型与新渠道接入七步 SOP、两级分流决策树全量/分组状态机、渠道参数与能力配置、组织密钥绑定、SD 重试兜底、计费对账、[场景测试矩阵](src/devtest/assets/panqu-newapi-model-onboarding/references/test-scenarios.md) 与 [故障排查手册](src/devtest/assets/panqu-newapi-model-onboarding/references/troubleshooting.md)）
 
 主 Skill 按功能语义组合读取，已有团队 Skill 不覆盖。
 各专项含 `references/input-constraints.md` 与 `references/code-map.md`：逐项提取需求中的格式、大小、数量、提示词、默认值、计费阶梯、分流条件和违规行为，派生边界并关联真实计划用例；未知规则不能自行补值，未覆盖不能算通过。
