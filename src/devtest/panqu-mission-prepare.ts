@@ -47,7 +47,11 @@ function problemCode(error: unknown): string {
 /** Zero-network readiness explains which project adapter can prepare tasks and what remains operator-owned. */
 export async function inspectPanquMissionPreparation(projectRoot: string) {
   const project = await inspectPanquProject(projectRoot);
-  const profile = project.host === 'NUXT_VUE_FLOW' ? 'NUXT_CANVAS_V1' : project.host === 'NEXT_XYFLOW' ? 'PHP_VIDEO_V1' : undefined;
+  const profile = (project.host === 'NUXT_VUE_FLOW' || (project.host === 'PANQU_HYBRID_MONOREPO' && project.submodules?.includes('aiworkflow')))
+    ? 'NUXT_CANVAS_V1'
+    : (project.host === 'NEXT_XYFLOW' || project.host === 'THINKPHP_BACKEND' || (project.host === 'PANQU_HYBRID_MONOREPO' && project.submodules?.includes('aibaseos')))
+      ? 'PHP_VIDEO_V1'
+      : undefined;
   const result = { schema: 'panqu.mission-preparation-readiness.v1', scope: 'RELEVANT_ADAPTER_SOURCES_ONLY', host: project.host, profile,
     state: 'BLOCKED', networkRequests: 0, sourcePins: [] as PanquMissionCatalog['sourcePins'], problems: [] as Array<{ code: string; resolution: string; sourceFile?: string }>,
     broaderProjectComplete: project.complete, broaderProjectDiagnostics: project.diagnostics,

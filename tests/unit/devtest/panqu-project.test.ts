@@ -221,4 +221,35 @@ export const shadow = (requestPHPApi: Function) => requestPHPApi('/shadow');`);
     await put(root, 'package.json', '{"dependencies":{"next":"16"}}');
     expect((await inspectPanquProject(root)).host).toBe('UNKNOWN');
   });
+
+  it('detects PANQU_HYBRID_MONOREPO and parses ThinkPHP routes when submodules exist', async () => {
+    const root = await mkdtemp(path.join(await realpath(tmpdir()), 'panqu-monorepo-')); roots.push(root);
+    await mkdir(path.join(root, 'aibaseos', 'application'), { recursive: true });
+    await mkdir(path.join(root, 'aiworkflow', 'test'), { recursive: true });
+    await put(root, 'aibaseos/application/route.php', `<?php
+Route::get('billing/apiSummary$', 'admin/Billing/apiSummary');
+Route::post('aivideo/videonew/add$', 'admin/Videonew/add');
+Route::rule('login', 'index/login');
+`);
+    await put(root, 'aiworkflow/test/canvas.test.ts', `// test file`);
+    const context = await inspectPanquProject(root);
+    expect(context.host).toBe('PANQU_HYBRID_MONOREPO');
+    expect(context.submodules).toContain('aibaseos');
+    expect(context.submodules).toContain('aiworkflow');
+    expect(context.actions.some(a => a.path === '/billing/apiSummary' && a.method === 'GET')).toBe(true);
+    expect(context.actions.some(a => a.path === '/aivideo/videonew/add' && a.method === 'POST')).toBe(true);
+    expect(context.actions.some(a => a.path === '/login' && a.method === undefined)).toBe(true);
+    expect(context.regressionCandidates.some(c => c.file === 'aiworkflow/test/canvas.test.ts')).toBe(true);
+  });
+
+  it('detects THINKPHP_BACKEND when inspecting a standalone backend project', async () => {
+    const root = await mkdtemp(path.join(await realpath(tmpdir()), 'panqu-php-')); roots.push(root);
+    await mkdir(path.join(root, 'application'), { recursive: true });
+    await put(root, 'application/route.php', `<?php
+Route::get('user/profile', 'api/User/profile');
+`);
+    const context = await inspectPanquProject(root);
+    expect(context.host).toBe('THINKPHP_BACKEND');
+    expect(context.actions.some(a => a.path === '/user/profile' && a.method === 'GET')).toBe(true);
+  });
 });

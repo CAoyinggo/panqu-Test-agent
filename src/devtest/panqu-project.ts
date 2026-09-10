@@ -25,6 +25,40 @@ function symbolOf(node: ts.Node): string {
   return '<anonymous>';
 }
 
+async function extractThinkPhpRoutes(routePath: string, relPath: string): Promise<PanquSourceAction[]> {
+  const actions: PanquSourceAction[] = [];
+  try {
+    const text = await readFile(routePath, 'utf8');
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.startsWith('//') || line.startsWith('#') || line.startsWith('/*') || line.startsWith('*')) continue;
+      const match = line.match(/Route::(get|post|put|delete|patch|rule)\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]/i);
+      if (match) {
+        const rawMethod = match[1].toUpperCase();
+        let p = match[2].replace(/\$$/, '');
+        if (!p.startsWith('/')) p = '/' + p;
+        const symbol = match[3];
+        const method = rawMethod === 'RULE' ? undefined : rawMethod;
+        actions.push({
+          id: `${relPath}:${i + 1}`,
+          symbol,
+          wrapper: 'ThinkPHP::Route',
+          path: p,
+          method,
+          methodBasis: method ? 'EXPLICIT' : 'UNRESOLVED',
+          body: method === 'GET' ? 'NONE' : 'JSON',
+          responseProtocol: 'PHP_CODE_1',
+          source: { file: relPath, line: i + 1, sha256: hash(line) },
+          wrapperSource: { file: relPath, line: i + 1, sha256: hash(line) },
+          unresolved: method ? [] : ['Route::rule accepts multiple HTTP methods; requires runtime binding'],
+        });
+      }
+    }
+  } catch {}
+  return actions;
+}
+
 /** Inspection bounds and omissions are part of the returned evidence, not silently treated as coverage. */
 export async function inspectPanquProject(projectRoot: string, options: { changedFiles?: string[]; maxFiles?: number } = {}): Promise<PanquProjectContext> {
   const root = path.resolve(projectRoot);
@@ -33,6 +67,10 @@ export async function inspectPanquProject(projectRoot: string, options: { change
   const issue = (code: string, message: string, file?: string) => { context.complete = false; context.diagnostics.push({ code, message, file }); };
   const files = new Map<string, { text: string; ast: ts.SourceFile }>();
   let manifest = '';
+  let isMonorepo = false;
+  let isThinkPhp = false;
+  const detectedSubmodules: string[] = [];
+
   // Refuse symlink ancestors as well as children; never follow an external source tree.
   for (let ancestor = root; ; ancestor = path.dirname(ancestor)) {
     try {
@@ -45,10 +83,47 @@ export async function inspectPanquProject(projectRoot: string, options: { change
     if (info.isSymbolicLink() || info.size > 1024 * 1024) { issue('PANQU_MANIFEST_UNREADABLE', 'Unsafe manifest omitted'); context.fingerprint = hash('unsafe-manifest'); return context; }
     manifest = await readFile(path.join(root, 'package.json'), 'utf8');
     const pkg = JSON.parse(manifest); const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    if (!(deps.nuxt && deps['@vue-flow/core']) && !(deps.next && deps['@xyflow/react'])) { context.fingerprint = hash(manifest); return context; }
+    const hasVueFlow = Boolean(deps.nuxt && deps['@vue-flow/core']);
+    const hasXyFlow = Boolean(deps.next && deps['@xyflow/react']);
+    if (!hasVueFlow && !hasXyFlow) {
+      try {
+        if ((await lstat(path.join(root, 'application', 'route.php'))).isFile()) isThinkPhp = true;
+      } catch {}
+      if (!isThinkPhp) {
+        const candidateDirs = ['aibaseos', 'aiworkflow', 'aidrawos', 'aipanqucenter', 'aipanco'];
+        for (const dir of candidateDirs) {
+          try {
+            if ((await lstat(path.join(root, dir))).isDirectory()) detectedSubmodules.push(dir);
+          } catch {}
+        }
+        if (detectedSubmodules.length > 0) isMonorepo = true;
+        else { context.fingerprint = hash(manifest); return context; }
+      }
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issue('PANQU_MANIFEST_PARSE_ERROR', 'Manifest unavailable or invalid');
-    context.fingerprint = hash(manifest); return context;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      const candidateDirs = ['aibaseos', 'aiworkflow', 'aidrawos', 'aipanqucenter', 'aipanco'];
+      for (const dir of candidateDirs) {
+        try {
+          if ((await lstat(path.join(root, dir))).isDirectory()) detectedSubmodules.push(dir);
+        } catch {}
+      }
+      if (detectedSubmodules.length > 0) {
+        isMonorepo = true;
+      } else {
+        try {
+          if ((await lstat(path.join(root, 'application', 'route.php'))).isFile()) isThinkPhp = true;
+        } catch {}
+        if (!isThinkPhp) {
+          context.fingerprint = hash('missing');
+          return context;
+        }
+      }
+    } else {
+      issue('PANQU_MANIFEST_PARSE_ERROR', 'Manifest unavailable or invalid');
+      context.fingerprint = hash(manifest);
+      return context;
+    }
   }
   const maxFiles = Math.max(1, Math.min(options.maxFiles ?? 3000, 10000));
   let entries = 0;
@@ -80,12 +155,60 @@ export async function inspectPanquProject(projectRoot: string, options: { change
     }
   }
   await scan('');
-  let dependencies: Record<string, unknown> = {};
-  try { const pkg = JSON.parse(manifest || '{}'); dependencies = { ...pkg.dependencies, ...pkg.devDependencies }; }
-  catch { issue('PANQU_MANIFEST_PARSE_ERROR', 'Package manifest is invalid'); }
-  const nuxt = Boolean(dependencies.nuxt && dependencies['@vue-flow/core'] && files.has('composables/canvas-flow/core/use-plugin-registry.ts'));
-  const react = Boolean(dependencies.next && dependencies['@xyflow/react'] && [...files.keys()].some(file => file.startsWith('components/nodes/')) && files.has('lib/api/request.ts'));
-  context.host = nuxt && react ? 'AMBIGUOUS' : nuxt ? 'NUXT_VUE_FLOW' : react ? 'NEXT_XYFLOW' : 'UNKNOWN';
+  if (isMonorepo) {
+    context.host = 'PANQU_HYBRID_MONOREPO';
+    context.submodules = detectedSubmodules;
+    const phpRoutePath = path.join(root, 'aibaseos', 'application', 'route.php');
+    try {
+      if ((await lstat(phpRoutePath)).isFile()) {
+        const phpActions = await extractThinkPhpRoutes(phpRoutePath, 'aibaseos/application/route.php');
+        context.actions.push(...phpActions);
+        context.sources.push({
+          file: 'aibaseos/application/route.php',
+          line: 1,
+          sha256: hash(await readFile(phpRoutePath, 'utf8')),
+          imports: [],
+          exports: [...new Set(phpActions.map(a => a.symbol))],
+        });
+      }
+    } catch {}
+    for (const sub of detectedSubmodules) {
+      const subDir = path.join(root, sub);
+      if (sub === 'aiworkflow') {
+        try {
+          const testFiles = await readdir(path.join(subDir, 'test')).catch(() => []);
+          for (const tf of testFiles) {
+            if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(tf)) {
+              context.regressionCandidates.push({ file: `aiworkflow/test/${tf}`, status: 'NOT_EXECUTED', evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' });
+            }
+          }
+        } catch {}
+      }
+    }
+  } else if (isThinkPhp) {
+    context.host = 'THINKPHP_BACKEND';
+    const phpRoutePath = path.join(root, 'application', 'route.php');
+    try {
+      if ((await lstat(phpRoutePath)).isFile()) {
+        const phpActions = await extractThinkPhpRoutes(phpRoutePath, 'application/route.php');
+        context.actions.push(...phpActions);
+        context.sources.push({
+          file: 'application/route.php',
+          line: 1,
+          sha256: hash(await readFile(phpRoutePath, 'utf8')),
+          imports: [],
+          exports: [...new Set(phpActions.map(a => a.symbol))],
+        });
+      }
+    } catch {}
+  } else {
+    let dependencies: Record<string, unknown> = {};
+    try { const pkg = JSON.parse(manifest || '{}'); dependencies = { ...pkg.dependencies, ...pkg.devDependencies }; }
+    catch { issue('PANQU_MANIFEST_PARSE_ERROR', 'Package manifest is invalid'); }
+    const nuxt = Boolean(dependencies.nuxt && dependencies['@vue-flow/core'] && files.has('composables/canvas-flow/core/use-plugin-registry.ts'));
+    const react = Boolean(dependencies.next && dependencies['@xyflow/react'] && [...files.keys()].some(file => file.startsWith('components/nodes/')) && files.has('lib/api/request.ts'));
+    context.host = nuxt && react ? 'AMBIGUOUS' : nuxt ? 'NUXT_VUE_FLOW' : react ? 'NEXT_XYFLOW' : 'UNKNOWN';
+  }
   const resolve = (from: string, specifier: string): string | undefined => {
     const base = specifier.startsWith('~/') || specifier.startsWith('@/') ? specifier.slice(2) : specifier.startsWith('.') ? path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier)) : undefined;
     if (!base || base.startsWith('../')) return undefined;
@@ -212,8 +335,9 @@ export async function inspectPanquProject(projectRoot: string, options: { change
   let expanded = true;
   while (expanded) { expanded = false; for (const source of context.sources) if (!affected.has(source.file) && source.imports.some(file => affected.has(file))) { affected.add(source.file); expanded = true; } }
   context.affectedFiles = [...affected].sort();
-  context.regressionCandidates = context.sources.filter(source => /(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(source.file) && (!context.changedFiles.length || affected.has(source.file)))
-    .map(source => ({ file: source.file, status: 'NOT_EXECUTED', evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' }));
+  const localCandidates = context.sources.filter(source => /(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(source.file) && (!context.changedFiles.length || affected.has(source.file)))
+    .map(source => ({ file: source.file, status: 'NOT_EXECUTED' as const, evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' as const }));
+  context.regressionCandidates = [...new Map([...context.regressionCandidates, ...localCandidates].map(c => [c.file, c])).values()];
   return context;
 }
 
@@ -221,13 +345,15 @@ export async function inspectPanquProject(projectRoot: string, options: { change
 export function assessPanquProject(context: PanquProjectContext, requirement: { apis: Array<{ method: string; path: string }> }): PanquProjectAssessment {
   const assessment: PanquProjectAssessment = { host: context.host, fingerprint: context.fingerprint, provenance: context.provenance,
     sourceDiagnostics: context.diagnostics,
+    submodules: context.submodules,
     overview: { inspectedFiles: context.sources.length, requestCallSites: context.actions.length, nodeKinds: [...new Set(context.nodes.map(node => node.kind))] },
     relevantActions: [], blockers: [], regressionCandidates: context.regressionCandidates,
     limitations: ['Source observations are not product requirements or executed UI/API evidence.', 'Dynamic paths, Nuxt auto-imports and unverified wrapper semantics require explicit bindings.'] };
   if (context.host === 'UNKNOWN') return assessment;
   if (!context.complete || context.host === 'AMBIGUOUS') assessment.blockers.push({ code: 'PANQU_SOURCE_INCOMPLETE', message: 'Project source inspection is incomplete or ambiguous; review diagnostics before execution.' });
+  const norm = (p: string) => p.startsWith('/') ? p : '/' + p;
   for (const api of requirement.apis) {
-    const actions = context.actions.filter(action => action.path === api.path);
+    const actions = context.actions.filter(action => action.path && norm(action.path) === norm(api.path));
     assessment.relevantActions.push(...actions);
     const operationKey = `${api.method.toUpperCase()} ${api.path}`;
     if (actions.length && !actions.some(action => action.method === api.method.toUpperCase())) assessment.blockers.push({ code: actions.some(action => !action.method) ? 'PANQU_METHOD_UNRESOLVED' : 'PANQU_METHOD_CONFLICT', operationKey, message: `${operationKey}: requested method is not supported by the inspected call sites; confirm the binding.` });

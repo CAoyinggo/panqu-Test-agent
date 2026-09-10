@@ -1,7 +1,14 @@
 import { readFile, mkdir, writeFile, realpath, lstat } from 'node:fs/promises';
 import path from 'node:path';
 
-export const DEVTEST_BUNDLED_SKILLS = ['devtest', 'panqu-canvas', 'panqu-video-models', 'panqu-image-models'] as const;
+export const DEVTEST_BUNDLED_SKILLS = [
+  'devtest',
+  'panqu-canvas',
+  'panqu-video-models',
+  'panqu-image-models',
+  'panqu-billing',
+  'panqu-newapi-diversion',
+] as const;
 
 /** Validate each ancestor before creating children, so a symlink cannot redirect writes. */
 async function localDirectory(root: string, relative: string): Promise<string> {
