@@ -54,11 +54,15 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 Trae 入口使用“集中澄清 → 展示最终计划 → 一次确认 → 立即执行”的中文 Skill。MCP 的 `next_action` 返回下一步与可直接调用的真实计划参数，降低模型自行判断和拼接参数的负担；同一计划确认后不反复询问，内容变化才重新确认。Skill 和交互提示不替代内核安全门禁，也不保证任意模型都能正确理解所有业务。
 
-`init --trae` 同时安装 Panqu 的 `panqu-canvas`、`panqu-video-models`、`panqu-image-models` 三个专项 Skill 及代码索引。主 Skill 按功能语义组合读取：画布新增视频模型会加载画布和视频，模型名称不必预先登记。已有团队 Skill 不覆盖，升级时需合并新版主 Skill 的功能路由；自动选择依赖宿主发现和模型遵循，不是内核已验证调用的保证。
+`init --trae` 同时安装 Panqu 的五个专属业务 Skill 及代码索引：`panqu-canvas`（画布组件与节点）、`panqu-video-models`（视频模型与约束）、`panqu-image-models`（图片模型与约束）、`panqu-billing`（计费扣费、积分预估、19个端点与归档表对账）及 `panqu-newapi-diversion`（主站与 NewAPI 两级分流决策、全量开关与权重调度）。主 Skill 按功能语义组合读取，已有团队 Skill 不覆盖。
 
-各专项含 `references/input-constraints.md`：逐项提取需求中的格式、大小、数量、提示词、默认值、条件和违规行为，区分单文件/整批、单次/累计、条数/长度及计数单位，派生边界并关联真实计划用例；未知规则不能自行补值，未覆盖不能算通过。它是模型检查指南，不是新增的产品运行时校验或上传/生成执行能力。升级会补齐缺失参考文件，但已存在的主/专项 Skill 需合并新版入口说明才能要求读取清单。
+各专项含 `references/input-constraints.md` 与 `references/code-map.md`：逐项提取需求中的格式、大小、数量、提示词、默认值、计费阶梯、分流条件和违规行为，派生边界并关联真实计划用例；未知规则不能自行补值，未覆盖不能算通过。
 
-v4.29.3 将 Panqu 项目观察接入执行内核，不依赖模型记住路由：TypeScript AST 识别 Nuxt/Vue Flow 与 Next/XYFlow 的实际调用、节点 kind 和导入影响链；源码与请求方式冲突、未验证的动态方法、FormData 被 JSON 执行器替代时，在环境探测前阻断。内置 HTTP 路径对 PHP `code === 1` 和 Go HTTP 200 的已识别客户端检查保留额外证据：仅传输断言通过、客户端却拒绝时不报 PASS，也不直接归为产品缺陷。Vue 编辑会使旧 MCP 计划失效。
+v4.33.1 增强针对复合多模块仓库（`panqu-ai` 复合架构）的项目级观察与感知：
+- **复合多模块感知（`PANQU_HYBRID_MONOREPO`）**：在 `/Users/mac/agents/panqu-ai` 根目录下自动探测并注册 `aibaseos`（PHP 后端）、`aiworkflow`（Nuxt 画布前端）、`aidrawos`（React 画布前端）、`aipanqucenter`（NestJS 中台）与 `aipanco`，无需依赖根目录 `package.json`。
+- **ThinkPHP 5 路由契约解析**：新增静态路由提取器，解析 `aibaseos/application/route.php` 中的 221 条后端路由（`Route::get`、`Route::post`、`Route::rule`），将 PHP 控制器方法与接口契约纳入自动化测试感知面。
+- **跨子项目存量单测联动**：自动发现并调度各子项目的存量单测（如 `aiworkflow/test/` 57 个测试套件与 `freecut` 50+ 个单测），将其注册为回归测试候选集（`regressionCandidates`）。
+- **保留既有安全门禁**：内置 HTTP 路径对 PHP `code === 1` 和 Go HTTP 200 的已识别客户端检查保留额外证据：仅传输断言通过、客户端却拒绝时不报 PASS，也不直接归为产品缺陷。
 
 在业务项目根目录运行 `devtest inspect-project` 可取得只读项目图、源码行号/指纹和 `NOT_EXECUTED` 回归候选；不执行仓库脚本、不加载环境凭证。动态路径、Nuxt 自动导入、复杂 wrapper、未解析源码及未找到的测试继续明确保留缺口。源码现状不是业务需求；这些能力不代表真实画布、模型生成、结算或 UI 已验收。详见 [Panqu 专属内核边界](docs/panqu-project-kernel.md)。
 
