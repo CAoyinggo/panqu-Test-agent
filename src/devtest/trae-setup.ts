@@ -8,6 +8,7 @@ export const DEVTEST_BUNDLED_SKILLS = [
   'panqu-image-models',
   'panqu-billing',
   'panqu-newapi-diversion',
+  'panqu-newapi-model-onboarding',
 ] as const;
 
 /** Validate each ancestor before creating children, so a symlink cannot redirect writes. */

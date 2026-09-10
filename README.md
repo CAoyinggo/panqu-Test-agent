@@ -54,8 +54,15 @@ test-flow 是一套标准化、可自动执行的 AI 测试平台。每个业务
 
 Trae 入口使用“集中澄清 → 展示最终计划 → 一次确认 → 立即执行”的中文 Skill。MCP 的 `next_action` 返回下一步与可直接调用的真实计划参数，降低模型自行判断和拼接参数的负担；同一计划确认后不反复询问，内容变化才重新确认。Skill 和交互提示不替代内核安全门禁，也不保证任意模型都能正确理解所有业务。
 
-`init --trae` 同时安装 Panqu 的五个专属业务 Skill 及代码索引：`panqu-canvas`（画布组件与节点）、`panqu-video-models`（视频模型与约束）、`panqu-image-models`（图片模型与约束）、`panqu-billing`（计费扣费、积分预估、19个端点与归档表对账）及 `panqu-newapi-diversion`（主站与 NewAPI 两级分流决策、全量开关与权重调度）。主 Skill 按功能语义组合读取，已有团队 Skill 不覆盖。
+`init --trae` 同时安装 Panqu 的六个专属业务 Skill 及代码索引：
+- `panqu-canvas`（画布组件与节点）
+- `panqu-video-models`（视频模型与参数约束）
+- `panqu-image-models`（图片模型与参数约束）
+- `panqu-billing`（计费扣费、积分预估、19个端点与归档表对账）
+- `panqu-newapi-diversion`（主站与 NewAPI 两级分流决策、全量开关与权重调度）
+- `panqu-newapi-model-onboarding`（**新增**：NewAPI 新模型/渠道接入、两级分流决策树、参数回显、组织密钥绑定与端到端自测 SOP）
 
+主 Skill 按功能语义组合读取，已有团队 Skill 不覆盖。
 各专项含 `references/input-constraints.md` 与 `references/code-map.md`：逐项提取需求中的格式、大小、数量、提示词、默认值、计费阶梯、分流条件和违规行为，派生边界并关联真实计划用例；未知规则不能自行补值，未覆盖不能算通过。
 
 v4.33.1 增强针对复合多模块仓库（`panqu-ai` 复合架构）的项目级观察与感知：
