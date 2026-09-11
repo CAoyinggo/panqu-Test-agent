@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { redactSensitiveText } from '../src/core/redact.js';
-import { runDevTest, runPanquDiversionFlow } from '../src/devtest/index.js';
+import { runDevTest, runPanquDiversionFlow, runPanquRealVideoFlow } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
 import { runPanquMissionCommand } from '../src/devtest/panqu-mission-cli.js';
@@ -44,7 +44,9 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest mission materials --folder <directory> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest mission prepare-media --folder <directory> --spec <file> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest run --requirement <file> --env test [--github]
-  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--model-id <id>] [--model-type <video|image>]
+  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--model-id <id>] [--model-type <video|image>] [--real-submit]
+  devtest flow real-video-submit [--model-id <id>] [--duration <sec>] [--resolution <res>] [--aspect-ratio <ratio>] [--poll-timeout <sec>] [--no-poll]
+  devtest real-video [--model-id <id>]
   devtest status [--run <id>]
 
 兼容入口:
@@ -518,16 +520,91 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return validation.valid ? 0 : 1;
     }
     if (argv[0] === 'mission') return await runPanquMissionCommand(argv.slice(1), root);
+    if (argv[0] === 'real-video' || (argv[0] === 'flow' && argv[1] === 'real-video-submit')) {
+      let modelId: number | undefined;
+      let duration: number | undefined;
+      let resolution: string | undefined;
+      let aspectRatio: string | undefined;
+      let prompt: string | undefined;
+      let pollTimeoutSec: number | undefined;
+      let noPoll = false;
+      let env: 'test' | 'preonline' = 'test';
+      let outputDir: string | undefined;
+      const startIndex = argv[0] === 'real-video' ? 1 : 2;
+
+      for (let i = startIndex; i < argv.length; i++) {
+        if (argv[i] === '--model-id' && argv[i + 1]) {
+          modelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--duration' && argv[i + 1]) {
+          duration = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--resolution' && argv[i + 1]) {
+          resolution = argv[++i];
+        } else if (argv[i] === '--aspect-ratio' && argv[i + 1]) {
+          aspectRatio = argv[++i];
+        } else if (argv[i] === '--prompt' && argv[i + 1]) {
+          prompt = argv[++i];
+        } else if (argv[i] === '--poll-timeout' && argv[i + 1]) {
+          pollTimeoutSec = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--no-poll') {
+          noPoll = true;
+        } else if (argv[i] === '--env' && argv[i + 1]) {
+          env = argv[++i].toLowerCase() as 'test' | 'preonline';
+        } else if (argv[i] === '--output' && argv[i + 1]) {
+          outputDir = path.resolve(root, argv[++i]);
+        }
+      }
+
+      console.log(`[DevTest Flow] 🚀 发起真实视频提交与分流快照核查流程 (real-video-submit)...`);
+      console.log(`[DevTest Flow] 环境: ${env} | 模型 ID: ${modelId ?? 84} | 画幅分辨率: ${aspectRatio ?? '16:9'} / ${resolution ?? '720p'}`);
+      const report = await runPanquRealVideoFlow({
+        env,
+        modelId,
+        duration,
+        resolution,
+        aspectRatio,
+        prompt,
+        pollTimeoutSec,
+        noPoll,
+        outputDir,
+        verbose: true,
+      });
+
+      console.log(`\n================ 真实视频提交与分流验证报告 ================`);
+      console.log(`运行 ID:     ${report.runId}`);
+      console.log(`目标环境:   ${report.environment} (${report.targetUrl})`);
+      console.log(`测试账号:   ${report.accountMasked}`);
+      console.log(`提交状态:   任务 ID = ${report.summary.taskId ?? '失败'} (耗时 ${report.submission.durationMs}ms)`);
+      console.log(`分流快照:   extra.diversion = ${report.diversionCheck?.diversionValue} (${report.diversionCheck?.isDiverted ? '✅ 命中 NewAPI' : '❌ 未命中'})`);
+      console.log(`模型别名:   ${report.diversionCheck?.newapiModel || '(未写入)'}`);
+      console.log(`预扣积分:   ${report.summary.pointsCharged ?? 0}`);
+      if (report.polling) {
+        console.log(`生成状态:   ${report.polling.finalStatus.statusLabel} (进度 ${report.polling.finalStatus.progress}%)`);
+        if (report.polling.finalStatus.videoUrl) {
+          console.log(`成片地址:   ${report.polling.finalStatus.videoUrl}`);
+        }
+      }
+      if (report.rootCauseAnalysis) {
+        console.log(`\n⚠️ 未命中分流根因分析:`);
+        console.log(`  问题: ${report.rootCauseAnalysis.detectedIssue}`);
+        report.rootCauseAnalysis.possibleReasons.forEach((r, idx) => console.log(`  ${idx + 1}. ${r}`));
+      }
+      console.log(`\n自测报告:   ${report.artifacts.reportMd}`);
+      console.log(`结构化证据: ${report.artifacts.evidenceJson}`);
+      console.log(`============================================================\n`);
+
+      return report.diversionCheck?.isDiverted ? 0 : 1;
+    }
     if (argv[0] === 'flow') {
       const flowName = argv[1];
       if (flowName !== 'api-diversion') {
-        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion，收到: ${flowName ?? '(空)'}`);
+        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion 或 real-video-submit，收到: ${flowName ?? '(空)'}`);
       }
       let projectRoot = root;
       let outputDir: string | undefined;
       let env: 'test' | 'sandbox' = 'test';
       let targetModelId: number | undefined;
       let targetModelType: 'video' | 'image' | undefined;
+      let realSubmit = false;
       for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--project-root' && argv[i + 1]) {
           projectRoot = path.resolve(root, argv[++i]);
@@ -539,6 +616,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           targetModelId = parseInt(argv[++i], 10);
         } else if (argv[i] === '--model-type' && argv[i + 1]) {
           targetModelType = argv[++i].toLowerCase() as 'video' | 'image';
+        } else if (argv[i] === '--real-submit') {
+          realSubmit = true;
         }
       }
       console.log(`[DevTest Flow] 启动 API 分流专项测试流程 (api-diversion)...`);
@@ -562,6 +641,19 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       console.log(`  - 自测测试报告: ${report.artifacts.reportMd}`);
       console.log(`  - 测试用例清单: ${report.artifacts.casesMd}`);
       console.log(`==========================================================\n`);
+
+      if (realSubmit && report.summary.fail === 0) {
+        console.log(`\n[DevTest Flow] 🔗 触发联动：执行真实测试环境视频提交与分流快照核查...`);
+        const realReport = await runPanquRealVideoFlow({
+          env: 'test',
+          modelId: targetModelId ?? 84,
+          outputDir,
+          verbose: true,
+        });
+        console.log(`[DevTest Flow] 真实提交任务 ID: ${realReport.summary.taskId ?? 'N/A'}, 分流快照 extra.diversion: ${realReport.diversionCheck?.diversionValue}`);
+        return realReport.diversionCheck?.isDiverted ? 0 : 1;
+      }
+
       return report.summary.fail === 0 ? 0 : 1;
     }
     const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
@@ -612,7 +704,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return await executeRun({ argv: rest, root, config: command === 'legacy-run' ? undefined : config,
       github: rest.includes('--github') });
   } catch (error) {
-    console.error(`DEVTEST_ERROR: ${redactSensitiveText((error as Error).message)}`);
+    const err = error as Error & { cause?: Error };
+    console.error(`DEVTEST_ERROR: ${redactSensitiveText(err.message)}`);
+    if (err.cause) {
+      console.error(`DEVTEST_CAUSE: ${redactSensitiveText(String(err.cause?.message || err.cause))}`);
+    }
+    if (process.env.DEBUG || process.env.DEVTEST_DEBUG) {
+      console.error(err.stack);
+    }
     return 2;
   }
 }

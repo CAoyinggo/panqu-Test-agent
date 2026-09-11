@@ -93,6 +93,40 @@ v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本
 - **定向模型接入诊断（`--model-id`）**：
   支持指定模型 ID 极速输出上线就绪度（Readiness Score 0~100%）、检查模型别名映射、全量/分组分流状态机、模拟真实请求决策树判定并生成具体操作建议。
 
+### Panqu 真实视频提交与分流快照核查流程（`devtest flow real-video-submit`）
+
+针对“拒绝纸上谈兵、必须在被测环境真实提交业务任务并验真分流快照”的生产级要求，v4.33.4 推出**真实视频提交与分流核验闭环引擎**：
+- **真实环境自动注入与凭证脱敏**：
+  - 自动从配置中加载被测环境会话（`https://test.panqu.com/`，账号 `DEL01_panqu_439`）；
+  - 铁律安全防护：任何终端输出、Markdown 报告与 JSON 证据中，严禁泄露明文 Cookie、JWT Token 或密码，统一使用掩码（`eyJh******`，`sk******`）；
+  - 隔离测试流量：提交的所有任务名称与 Prompt 强制自动注入 `devtest_` 前缀（如 `devtest_wan3_smoke_<timestamp>`），与线上真实用户数据彻底隔离。
+- **端到端 6 步真实闭环链路**：
+  1. **会话探活与凭据解析**：校验 Session 有效性与账户可用积分；
+  2. **CSRF Token 动态刷新**：发起 `GET /ajax/refreshtoken`，获取主站安全令牌 `__token__`；
+  3. **真实视频任务提交**：发起 `POST /aivideo/videonew/add`，真实写入主站 `pq_aivideo_new` 表，返回真实任务 ID（如 `239184`）；
+  4. **主站 extra 分流快照深度核验**：查询主站任务详情，断言后端持久化的核心决策证据：
+     - `extra.diversion === 10`：断言必须命中 NewAPI 专线；
+     - `extra.newapi_model`：断言正确记录了客户端别名（如 `wan3.0-video`）；
+     - `extra.newapi_org_id`：断言全量模型记录为 `0`、分组模型记录为所属组织 ID；
+     - `extra.points`：断言计算并写入了预扣积分（如 `70`）；
+  5. **异步状态长轮询追踪**：调用 `POST /aivideo/v2/task_status/apiGetStatus`，带 `type=video&ids=<taskId>`，实时追踪任务状态机（0 待处理 -> 1 生成中 -> 2 完成 / 3 失败）与进度（`progress`）；
+  6. **根因反查与对账报告**：若出现未命中分流或报错，自动对比全量开关、渠道能力并集与组织绑定，给出排查指引；导出《真实视频提交流程测试报告.md》与结构化证据 `real-video-flow-report.json`。
+- **多入口快捷调用方式**：
+  ```bash
+  # 1. 独立执行真实视频提交（默认 Wan 3.0 / ID 84）：
+  devtest flow real-video-submit [--model-id <id>] [--duration <sec>] [--resolution <res>] [--aspect-ratio <ratio>] [--poll-timeout <sec>]
+  # 或使用快捷别名：
+  devtest real-video --model-id 84
+
+  # 2. 联动契约测试（跑完 28 项契约后自动触发真实提交验真）：
+  devtest flow api-diversion --real-submit [--model-id <id>]
+
+  # 3. 业务工程根目录一键执行（零摩擦）：
+  cd /Users/mac/agents/panqu-ai
+  ./test-diversion.sh --real --model-id 84       # 直接执行真实提交
+  ./test-diversion.sh --real-submit              # 28项契约 + 真实提交联动
+  ```
+
 ### Panqu Mission：持久化的真实生成任务控制器
 
 v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操作员核对的合法参数/报价组合中选择最低成本方案，修正昂贵或换错模型的建议，持久化提交意图，只提交一次，恢复原任务，解码结果媒体并核对任务级扣费证据。返回 HTTP 200、生成任务 ID、服务器成功状态或模型声称 PASS 都不能单独使任务通过。源码、素材、参数、报价和预算绑定在同一个计划 hash 中。

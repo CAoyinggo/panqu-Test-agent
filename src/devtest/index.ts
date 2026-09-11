@@ -160,3 +160,18 @@ export {
   type DiversionConfigSnapshot,
   type DiversionDecisionResult,
 } from './panqu-diversion-flow.js';
+export {
+  runPanquRealVideoFlow,
+  loadPanquSession,
+  fetchCsrfToken,
+  submitRealVideoTask,
+  verifyTaskDiversionSnapshot,
+  pollTaskStatus,
+  maskSensitive,
+  renderRealVideoReportMarkdown,
+  type PanquRealVideoFlowOptions,
+  type PanquRealVideoReport,
+  type DiversionSnapshotCheck,
+  type TaskStatusSnapshot,
+  type RealVideoSubmitEvidence,
+} from './panqu-real-video-flow.js';

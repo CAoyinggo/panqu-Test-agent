@@ -162,6 +162,13 @@ description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0
      # 或在 panqu-ai 根目录执行快捷脚本：
      ./test-diversion.sh --model-id 84
      ```
+   - **真实视频任务提交与分流验真（端到端真实业务测试）**：
+     ```bash
+     devtest flow real-video-submit --model-id <ID> [--duration 5] [--poll-timeout 30]
+     # 或在 panqu-ai 根目录一键发起真实测试：
+     ./test-diversion.sh --real --model-id 84
+     ./test-diversion.sh --real-submit --model-id 84   # 契约 + 真实提交双重验证
+     ```
 
 ---
 
@@ -183,5 +190,7 @@ description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0
    - 智能体自动读取 `onboarding-sop.md`，核查 `Ai.php` 客户端别名、`pq_model_config.is_newapi_global` 全量状态、渠道能力配置与计费单价，并输出定向就绪度报告（0~100%）。
 2. **“测试分流” / “跑一下分流测试”**：
    - 智能体直接调用 `runPanquDiversionFlow` 执行 28 项契约自测，10 秒内输出《开发自测测试报告.md》，直接作为提测附件。
-3. **“诊断未分流任务 [任务ID]”**：
+3. **“真实提交视频测试 [模型ID]”**：
+   - 智能体读取安全登录态，真实调用 `/aivideo/videonew/add` 提交任务，提取 Task ID，核验 `extra.diversion=10` 快照与预扣积分，轮询生成状态并生成《真实视频提交流程测试报告.md》。
+4. **“诊断未分流任务 [任务ID]”**：
    - 智能体读取 `troubleshooting.md` 五层决策树，分析源表 `extra`，定位是别名为空、未开全量、角色组未绑定、能力不匹配还是配额超限。
