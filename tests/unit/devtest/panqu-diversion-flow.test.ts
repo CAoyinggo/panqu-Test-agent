@@ -380,5 +380,20 @@ Route::get('aivideo/channel', 'admin/aivideo.Channel/index');`,
       expect(report.summary.fail).toBe(0);
       expect(report.summary.passRate).toBe('100%');
     }, 20000);
+
+    it('支持针对特定模型 (--model-id) 输出定向接入就绪度诊断报告', async () => {
+      const realRoot = '/Users/mac/agents/panqu-ai';
+      const report = await runPanquDiversionFlow({
+        projectRoot: realRoot,
+        targetModelId: 84,
+        outputDir: path.join(tmpdir(), 'real-panqu-flow-model84'),
+      });
+      expect(report.targetModelCheck).toBeDefined();
+      expect(report.targetModelCheck?.modelId).toBe(84);
+      expect(report.targetModelCheck?.readinessScore).toBe(100);
+      expect(report.targetModelCheck?.modelAlias).toBe('wan3.0-video');
+      expect(report.targetModelCheck?.isGlobalModel).toBe(true);
+      expect(report.artifacts.reportMd).toBeDefined();
+    }, 20000);
   });
 });

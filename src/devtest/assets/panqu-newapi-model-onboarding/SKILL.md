@@ -150,10 +150,18 @@ description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0
 3. **CMS 操作必回滚**：在 CMS 上的任何测试操作（如开关单模型 `is_newapi_global`）必须先记录基线，操作完成后必须立即调用原接口回滚并复核（零残留）。
 4. **凭证脱敏与安全**：禁止输出或记录任何明文 Cookie、Bearer Token 或 API Key（一律脱敏为 `sk******`）。
 5. **自动化测试命令**：
-   通过专属测试命令一键执行 21 项契约与决策流检验：
-   ```bash
-   devtest flow api-diversion --project-root /Users/mac/agents/panqu-ai
-   ```
+   - **全量契约自动化验证（28 项）**：
+     ```bash
+     devtest flow api-diversion --project-root /Users/mac/agents/panqu-ai
+     # 或在 panqu-ai 根目录执行快捷脚本：
+     ./test-diversion.sh
+     ```
+   - **定向新模型接入就绪度诊断（精准核查单个模型）**：
+     ```bash
+     devtest flow api-diversion --project-root /Users/mac/agents/panqu-ai --model-id <ID> [--model-type <video|image>]
+     # 或在 panqu-ai 根目录执行快捷脚本：
+     ./test-diversion.sh --model-id 84
+     ```
 
 ---
 
@@ -162,5 +170,18 @@ description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0
 - [references/code-map.md](references/code-map.md)：包含 Controller、Service、Model、View、数据库表与 SQL 契约。
 - [references/input-constraints.md](references/input-constraints.md)：逐项提取 17 项需求参数格式、大小、数量、边界与违规处理。
 - [references/onboarding-sop.md](references/onboarding-sop.md)：新模型接入与自测的标准操作程序指南。
-- [references/test-scenarios.md](references/test-scenarios.md)：完整用例场景矩阵（C01-C21 及正向/反向/边界全覆盖）。
+- [references/test-scenarios.md](references/test-scenarios.md)：完整用例场景矩阵（C01-C28 及正向/反向/边界全覆盖）。
 - [references/troubleshooting.md](references/troubleshooting.md)：分流未生效或调用失败的快速排查决策树。
+
+---
+
+## 六、日常高频交互引导与指令库（提升使用率）
+
+在 Trae IDE 或智能体交互界面中，开发者可直接使用以下高频口令，无需繁琐说明上下文：
+
+1. **“接入新模型 [模型ID]”**：
+   - 智能体自动读取 `onboarding-sop.md`，核查 `Ai.php` 客户端别名、`pq_model_config.is_newapi_global` 全量状态、渠道能力配置与计费单价，并输出定向就绪度报告（0~100%）。
+2. **“测试分流” / “跑一下分流测试”**：
+   - 智能体直接调用 `runPanquDiversionFlow` 执行 28 项契约自测，10 秒内输出《开发自测测试报告.md》，直接作为提测附件。
+3. **“诊断未分流任务 [任务ID]”**：
+   - 智能体读取 `troubleshooting.md` 五层决策树，分析源表 `extra`，定位是别名为空、未开全量、角色组未绑定、能力不匹配还是配额超限。

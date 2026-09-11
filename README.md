@@ -84,10 +84,14 @@ v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本
   - **计费核算与划掉项保护**：10 积分 = 1 元人民币汇率换算、按秒计费公式、账单大盘动态线路映射；严格识别飞书文档删除线属性，菲玲渠道、海外站同步与存量历史模型排除在缺陷与阻塞范围之外。
 - **独立 CLI 触发入口**：
   ```bash
-  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--env <test|sandbox>]
+  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--env <test|sandbox>] [--model-id <id>] [--model-type <video|image>]
+  # 或在 panqu-ai 根目录执行快捷脚本：
+  ./test-diversion.sh [--model-id <id>]
   ```
 - **自动化产物与 28 项契约用例**：
   一键执行 28 项标准化契约用例（涵盖 AST 探测、两级分流决策树、生图分流全规则、网关分组隔离、渠道配额熔断、加权轮询调度、Go 消费端线路改写与降级、组织企业绑定、计费对账），生成 `diversion-flow-report.json`、`开发自测测试报告.md` 与 `测试用例.md`。可在 `/Users/mac/agents/panqu-ai` 项目实测实现 **28/28 (100% PASS)**。
+- **定向模型接入诊断（`--model-id`）**：
+  支持指定模型 ID 极速输出上线就绪度（Readiness Score 0~100%）、检查模型别名映射、全量/分组分流状态机、模拟真实请求决策树判定并生成具体操作建议。
 
 ### Panqu Mission：持久化的真实生成任务控制器
 

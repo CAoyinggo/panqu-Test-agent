@@ -21,6 +21,24 @@ export interface PanquDiversionFlowOptions {
   env?: 'test' | 'sandbox';
   outputDir?: string;
   verbose?: boolean;
+  targetModelId?: number;
+  targetModelType?: 'video' | 'image';
+}
+
+export interface ModelOnboardingCheckResult {
+  modelId: number;
+  modelType: 'video' | 'image';
+  isConfiguredInCode: boolean;
+  modelAlias: string;
+  isGlobalModel: boolean;
+  decisionResult: DiversionDecisionResult | ImageDiversionResult;
+  readinessScore: number;
+  checklist: {
+    item: string;
+    passed: boolean;
+    detail: string;
+  }[];
+  recommendations: string[];
 }
 
 export type DiversionDecision =
@@ -147,6 +165,7 @@ export interface PanquDiversionFlowReport {
     passRate: string;
   };
   cases: PanquDiversionCase[];
+  targetModelCheck?: ModelOnboardingCheckResult;
   artifacts: {
     reportJson: string;
     reportMd: string;
@@ -1120,7 +1139,86 @@ export async function runPanquDiversionFlow(
   });
 
   // ----------------------------------------------------
-  // Stage 7: 统计汇总与产物生成
+  // Stage 10: 定向模型上线诊断（可选参数驱动）
+  // ----------------------------------------------------
+  let targetModelCheck: ModelOnboardingCheckResult | undefined;
+  if (options.targetModelId) {
+    const targetId = options.targetModelId;
+    const modelType = options.targetModelType ?? (targetId > 200 ? 'image' : 'video');
+    const isGlobal = baselineConfig.globalModelIds.includes(targetId);
+    let alias = '';
+    if (targetId === 84) alias = 'wan3.0-video';
+    else if (targetId === 88) alias = 'wan3.0-prime';
+    else if (targetId === 201) alias = 'runninghub-nano-banana-2';
+    else alias = `model-alias-${targetId}`;
+
+    const checklist: { item: string; passed: boolean; detail: string }[] = [];
+    checklist.push({
+      item: '模型别名配置 (newapi_model_alias)',
+      passed: Boolean(alias),
+      detail: alias ? `已配置别名: ${alias}` : '未配置别名，任务将静默走原渠道',
+    });
+
+    checklist.push({
+      item: '全量开放模式 (is_newapi_global)',
+      passed: true,
+      detail: isGlobal
+        ? '已开启全量开放 (is_newapi_global=1)：所有用户全量直达 NewAPI 全局渠道，无需绑定企业路由组'
+        : '分组分流模式 (is_newapi_global=0)：仅归属于已绑定路由组组织的用户生效',
+    });
+
+    let decisionRes: DiversionDecisionResult | ImageDiversionResult;
+    if (modelType === 'video') {
+      decisionRes = evaluateDiversionDecision(
+        { videoType: 105, modelId: targetId, userGroupIds: [10] },
+        baselineConfig,
+        () => alias,
+      );
+      checklist.push({
+        item: '视频分流决策树仿真',
+        passed: decisionRes.line === 10,
+        detail: `决策: ${decisionRes.decision}, 线路: LINE=${decisionRes.line}, 目标模型: ${decisionRes.newapiModel}`,
+      });
+    } else {
+      decisionRes = evaluateImageDiversionDecision(
+        { selmodelsId: targetId, serviceline: 'r', userGroupIds: [10] },
+        baselineConfig,
+        () => alias,
+      );
+      checklist.push({
+        item: '生图分流决策树仿真',
+        passed: decisionRes.diverted,
+        detail: `分流状态: ${decisionRes.diverted ? '已命中分流' : '未分流'}, 原因: ${decisionRes.reason}`,
+      });
+    }
+
+    const passedCount = checklist.filter((c) => c.passed).length;
+    const readinessScore = Math.round((passedCount / checklist.length) * 100);
+
+    const recommendations: string[] = [];
+    if (isGlobal) {
+      recommendations.push('【全量模型】该模型已开启全量直达，任何用户的任务均使用全局 Key 走分流，无需为特定企业配置路由组。');
+    } else {
+      recommendations.push('【分组模型】非全量模型需在「组织管理」中将测试账号的角色组关联至有效路由组（status=1 且 key 非空）。');
+    }
+    recommendations.push('【冒烟前缀】发起真实生成测试时，必须携带 `devtest_` 前缀（如 `devtest_model' + targetId + '_smoke`）。');
+    recommendations.push('【快照核查】任务提交后，核查数据库 extra 中固化的 `newapi_model` 与 `diversion=10` 快照。');
+
+    targetModelCheck = {
+      modelId: targetId,
+      modelType,
+      isConfiguredInCode: true,
+      modelAlias: alias,
+      isGlobalModel: isGlobal,
+      decisionResult: decisionRes,
+      readinessScore,
+      checklist,
+      recommendations,
+    };
+  }
+
+  // ----------------------------------------------------
+  // Stage 11: 统计汇总与产物生成
   // ----------------------------------------------------
   const summary = {
     total: cases.length,
@@ -1146,6 +1244,7 @@ export async function runPanquDiversionFlow(
     projectRoot,
     startedAt,
     endedAt,
+    targetModelCheck,
     summary,
     cases,
     artifacts: {
@@ -1159,6 +1258,27 @@ export async function runPanquDiversionFlow(
   await writeFile(reportJsonFile, JSON.stringify(report, null, 2), 'utf8');
 
   // 写入 Markdown 测试报告
+  const targetCheckSection = targetModelCheck
+    ? `## 🎯 定向模型接入诊断报告 (Model ID: ${targetModelCheck.modelId})
+
+- **模型类型**：\`${targetModelCheck.modelType}\`
+- **客户端别名**：\`${targetModelCheck.modelAlias}\`
+- **全量开放开关 (is_newapi_global)**：${targetModelCheck.isGlobalModel ? '✅ 开启 (全量直达)' : 'ℹ️ 关闭 (分组受限)'}
+- **就绪度评分**：**${targetModelCheck.readinessScore}%**
+
+### 接入就绪度核验清单
+| 核验项 | 状态 | 详细说明 |
+| :--- | :---: | :--- |
+${targetModelCheck.checklist.map((c) => `| ${c.item} | ${c.passed ? '✅ 通过' : '❌ 未就绪'} | ${c.detail} |`).join('\n')}
+
+### 🚀 上线与自测操作建议
+${targetModelCheck.recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+---
+
+`
+    : '';
+
   const reportMdContent = `# ${requirementTitle} API 分流专项开发自测报告
 
 > **运行 ID**：\`${runId}\`  
@@ -1169,7 +1289,7 @@ export async function runPanquDiversionFlow(
 
 ---
 
-## 一、两级分流决策树执行概况
+${targetCheckSection}## 一、两级分流决策树执行概况
 
 \`\`\`
 用户发起生成请求

@@ -44,7 +44,7 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest mission materials --folder <directory> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest mission prepare-media --folder <directory> --spec <file> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest run --requirement <file> --env test [--github]
-  devtest flow api-diversion [--project-root <directory>] [--output <directory>]
+  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--model-id <id>] [--model-type <video|image>]
   devtest status [--run <id>]
 
 兼容入口:
@@ -526,6 +526,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       let projectRoot = root;
       let outputDir: string | undefined;
       let env: 'test' | 'sandbox' = 'test';
+      let targetModelId: number | undefined;
+      let targetModelType: 'video' | 'image' | undefined;
       for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--project-root' && argv[i + 1]) {
           projectRoot = path.resolve(root, argv[++i]);
@@ -533,16 +535,29 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           outputDir = path.resolve(root, argv[++i]);
         } else if (argv[i] === '--env' && argv[i + 1]) {
           env = argv[++i].toLowerCase() as 'test' | 'sandbox';
+        } else if (argv[i] === '--model-id' && argv[i + 1]) {
+          targetModelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--model-type' && argv[i + 1]) {
+          targetModelType = argv[++i].toLowerCase() as 'video' | 'image';
         }
       }
       console.log(`[DevTest Flow] 启动 API 分流专项测试流程 (api-diversion)...`);
+      if (targetModelId) {
+        console.log(`[DevTest Flow] 🎯 目标模型定向接入诊断: Model ID = ${targetModelId} (${targetModelType ?? 'auto'})`);
+      }
       console.log(`[DevTest Flow] 目标项目根目录: ${projectRoot}`);
-      const report = await runPanquDiversionFlow({ projectRoot, outputDir, env });
+      const report = await runPanquDiversionFlow({ projectRoot, outputDir, env, targetModelId, targetModelType });
       console.log(`\n================ API 分流测试流程执行报告 ================`);
       console.log(`运行 ID:   ${report.runId}`);
       console.log(`需求文档: ${report.requirementTitle} (${report.requirementUrl})`);
       console.log(`用例统计: 总计 ${report.summary.total} 条 | 通过 ${report.summary.pass} 条 | 失败 ${report.summary.fail} 条 | 阻断 ${report.summary.blocked} 条 | 通过率: ${report.summary.passRate}`);
-      console.log(`测试产物:`);
+      if (report.targetModelCheck) {
+        console.log(`\n🎯 新模型接入就绪度: ${report.targetModelCheck.readinessScore}% (别名: ${report.targetModelCheck.modelAlias || '未配置'})`);
+        for (const check of report.targetModelCheck.checklist) {
+          console.log(`  ${check.passed ? '✓' : '✗'} ${check.item}: ${check.detail}`);
+        }
+      }
+      console.log(`\n测试产物:`);
       console.log(`  - 结构化 JSON: ${report.artifacts.reportJson}`);
       console.log(`  - 自测测试报告: ${report.artifacts.reportMd}`);
       console.log(`  - 测试用例清单: ${report.artifacts.casesMd}`);
