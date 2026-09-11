@@ -54,6 +54,45 @@ export interface DevTestBusinessFlowStep {
   caseIds: string[];
   resource?: string;
   expectedState?: string;
+  actor?: {
+    id?: string;
+    role?: string;
+    kind?: string;
+    tenantId?: string;
+    projectId?: string;
+    userId?: string;
+  };
+  preconditions?: string[];
+  actions?: string[];
+  stateTransition?: {
+    from: string;
+    to: string;
+  };
+  businessRules?: string[];
+  permission?: {
+    role: string;
+    action: string;
+    effect: 'ALLOW' | 'DENY';
+  };
+  sideEffects?: string[];
+  billing?: {
+    action: 'DEDUCT' | 'HOLD' | 'REFUND' | 'NONE';
+    amount?: number;
+    currency?: string;
+    expectedNet?: number;
+  };
+  failureBranch?: {
+    condition: string;
+    recoveryAction: string;
+    fallbackRoute?: string;
+    expectRefund?: boolean;
+  };
+  recovery?: {
+    safeRetry: boolean;
+    deduplicationKey?: string;
+    queryExistingFirst: boolean;
+  };
+  postConditions?: string[];
   dependencies: Array<{
     kind: 'INPUT' | 'OUTPUT' | 'RESOURCE' | 'STATE';
     fromStepId: string;
@@ -61,10 +100,79 @@ export interface DevTestBusinessFlowStep {
   }>;
 }
 
+export type DevTestBusinessFlowKind =
+  | 'MAIN_HAPPY_PATH'
+  | 'FAILURE_REFUND'
+  | 'RETRY_IDEMPOTENCY'
+  | 'CONCURRENCY_SAFETY'
+  | 'PERMISSION_ISOLATION';
+
+export interface DevTestCrossStepAuditResult {
+  flowId: string;
+  passed: boolean;
+  status: 'PASS' | 'FAIL' | 'BLOCKED';
+  primaryKeys: {
+    taskId?: number | string;
+    projectId?: number | string;
+    userId?: number | string;
+    assetUrl?: string;
+  };
+  causalChain: Array<{
+    stepId: string;
+    timestamp?: string;
+    action: string;
+    primaryKeyMatched: boolean;
+    error?: string;
+  }>;
+  inconsistencies: string[];
+  reason?: string;
+}
+
+export type DevTestIdempotencyCheckKind =
+  | 'SUBMISSION_UNKNOWN_RECOVERY'
+  | 'REQUEST_TIMEOUT_DEDUPLICATION'
+  | 'ANTI_DOUBLE_BILLING'
+  | 'ANTI_DUPLICATE_TASK'
+  | 'CONCURRENT_SUBMIT_SAFETY'
+  | 'REPLAY_CALLBACK_SAFETY'
+  | 'EVENTUAL_CONSISTENCY';
+
+export interface DevTestIdempotencyCheck {
+  kind: DevTestIdempotencyCheckKind;
+  verdict: 'PASS' | 'FAIL' | 'BLOCKED';
+  evidence: {
+    required: string[];
+    collected: string[];
+    complete: boolean;
+  };
+  reason: string;
+  details?: Record<string, unknown>;
+}
+
+export type DevTestQualityGateName =
+  | 'RequirementCoverage'
+  | 'FlowCompleteness'
+  | 'EvidenceCompleteness'
+  | 'CrossStepConsistency'
+  | 'IdempotencySafety'
+  | 'DataIsolation'
+  | 'CleanupIntegrity'
+  | 'OracleDeterminism';
+
+export interface DevTestQualityGateResult {
+  gate: DevTestQualityGateName;
+  status: 'PASS' | 'FAIL' | 'BLOCKED';
+  required: boolean;
+  score?: number;
+  reason: string;
+  details?: Record<string, unknown>;
+}
+
 export interface DevTestBusinessFlow {
   id: string;
   name: string;
   core: boolean;
+  kind?: DevTestBusinessFlowKind;
   acIds: string[];
   invariantIds: string[];
   steps: DevTestBusinessFlowStep[];
@@ -74,6 +182,15 @@ export interface DevTestBusinessFlow {
   beforeState?: unknown;
   actualState?: unknown;
   expectedState?: unknown;
+  actor?: {
+    id?: string;
+    role?: string;
+    tenantId?: string;
+    projectId?: string;
+  };
+  preconditions?: string[];
+  postConditions?: string[];
+  crossStepAudit?: DevTestCrossStepAuditResult;
 }
 
 export interface DevTestBusinessFlowGraph {
@@ -414,6 +531,10 @@ export interface DevTestDataLifecycleRecord {
   prepareStatus: 'NOT_REQUIRED' | 'READY' | 'FAILED' | 'NOT_CONFIGURED';
   cleanupStatus: 'NOT_REQUIRED' | 'CLEANED' | 'FAILED' | 'NOT_CONFIGURED';
   traceable: boolean;
+  cleanupIssues?: string[];
+  entitiesCreated?: Array<{ type: string; id: string | number; runId: string }>;
+  isolatedProjects?: string[];
+  isolatedTenants?: string[];
 }
 
 export interface DevTestConfidenceScore {
@@ -845,6 +966,9 @@ export interface DevTestRunResult {
   reproduction?: { problemId: string; status: DevTestReproductionStatus; caseIds: string[] };
   environmentPreflight: DevTestEnvironmentPreflight;
   uiExecutions: DevTestUiExecutionResult[];
+  crossStepAudits?: DevTestCrossStepAuditResult[];
+  idempotencyChecks?: DevTestIdempotencyCheck[];
+  qualityGates?: DevTestQualityGateResult[];
   artifacts: DevTestArtifacts;
   pipeline: {
     summary: AcceptanceReport['summary'];

@@ -125,8 +125,8 @@ export async function loadPanquSession(
   sessionFilePath?: string,
   targetEnv = 'test'
 ): Promise<PanquSession> {
-  const defaultPath = '/Users/mac/agents/test-Configuration/session-cookies.json';
-  const resolvedPath = sessionFilePath || process.env.PANQU_SESSION_COOKIES_FILE || defaultPath;
+  const resolvedPath = sessionFilePath || process.env.PANQU_SESSION_COOKIES_FILE;
+  if (!resolvedPath) throw new Error('SESSION_CONFIG_REQUIRED: 请显式提供会话文件路径或 PANQU_SESSION_COOKIES_FILE');
 
   if (!existsSync(resolvedPath)) {
     throw new Error(`SESSION_CONFIG_NOT_FOUND: 无法找到会话配置文件: ${resolvedPath}`);

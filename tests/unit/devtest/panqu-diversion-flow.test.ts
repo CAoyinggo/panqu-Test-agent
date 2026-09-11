@@ -369,8 +369,8 @@ Route::get('aivideo/channel', 'admin/aivideo.Channel/index');`,
       expect(report.artifacts.casesMd).toContain('测试用例.md');
     });
 
-    it('可在实际 /Users/mac/agents/panqu-ai 仓库直接执行', async () => {
-      const realRoot = '/Users/mac/agents/panqu-ai';
+    it.skipIf(!process.env.PANQU_SOURCE_FIXTURE_ROOT)('显式选择真实源码快照时执行完整源码诊断（非业务执行）', async () => {
+      const realRoot = process.env.PANQU_SOURCE_FIXTURE_ROOT!;
       const report = await runPanquDiversionFlow({
         projectRoot: realRoot,
         outputDir: path.join(tmpdir(), 'real-panqu-flow-out'),
@@ -381,8 +381,8 @@ Route::get('aivideo/channel', 'admin/aivideo.Channel/index');`,
       expect(report.summary.passRate).toBe('100%');
     }, 20000);
 
-    it('支持针对特定模型 (--model-id) 输出定向接入就绪度诊断报告', async () => {
-      const realRoot = '/Users/mac/agents/panqu-ai';
+    it.skipIf(!process.env.PANQU_SOURCE_FIXTURE_ROOT)('显式选择匹配模型 84 的源码快照时输出定向诊断', async () => {
+      const realRoot = process.env.PANQU_SOURCE_FIXTURE_ROOT!;
       const report = await runPanquDiversionFlow({
         projectRoot: realRoot,
         targetModelId: 84,

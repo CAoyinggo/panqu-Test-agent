@@ -446,6 +446,12 @@ describe('DevTest Mode integration', () => {
     }));
     expect(result.problems.some((problem) => problem.reasonCode === 'CLEANUP_FAILED')).toBe(true);
     expect(result.conclusion).toBe('BLOCKED');
+    expect(result.qualityGates).toHaveLength(8);
+    expect(result.qualityGates).toContainEqual(expect.objectContaining({ gate: 'CleanupIntegrity', status: 'FAIL' }));
+    const published = JSON.parse(await readFile(result.artifacts.reportJson, 'utf8'));
+    expect(published.qualityGates).toEqual(result.qualityGates);
+    expect(published.crossStepAudits).toEqual(result.crossStepAudits);
+    expect(published.idempotencyChecks).toEqual(result.idempotencyChecks);
   });
 
   it('Browser 使用源码稳定 data-testid 执行 Requirement 绑定的 UI 元素断言', async () => {

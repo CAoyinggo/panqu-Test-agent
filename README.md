@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.34.0` |
+| 版本 | `v4.35.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -15,7 +15,37 @@
 
 [DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [交接/发布检查清单](docs/testing/developer-handoff-release-checklist.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
-## 本次更新：Playwright 执行与独立证据核验
+## 本次更新：v4.35.0 业务一致性与质量门禁
+
+本版新增以下组件。版本号表示源码版本；是否安装、部署成功需核对实际入口，不能仅凭 README 判断。未发布 npm，也不代表所有成员的 TRAE 已升级。
+
+| 能力 | 已接入范围与限制 |
+| --- | --- |
+| 跨步骤审计 | 业务流完成步骤核验后检查 task/project/user/asset 关联及因果时序，冲突进入业务问题；未执行或提前阻断的流程不能据此宣称审计通过 |
+| 八项质量门禁 | `runDevTest` 聚合需求覆盖、流程完整性、证据、跨步骤、幂等、数据隔离、清理和 Oracle 结果，影响最终 READY/BLOCKED/NOT_READY；判断依赖已有输入，不自动补采数据库、账单或租户证据 |
+| 幂等 Oracle | 提供提交恢复、超时防重、重复扣费/任务、并发、回调和最终状态检查；主流程目前在多次尝试或退款/重试流程时接入账单与任务记录，不等于自动执行全部七类真实故障注入 |
+| 数据生命周期 | 导出 `TestDataLifecycleManager`，支持登记实体、清理钩子、隔离检查与失败记录；目前是独立接口，主流程仍使用原生命周期钩子，不会自动删除业务数据 |
+| 需求溯源 | 导出 `TraceabilityMatrixBuilder`，关联验收追踪、流程步骤及问题；需调用方显式调用，尚未自动输出单独的溯源矩阵附件 |
+| 报告 | JSON 与 HTML 接入 `crossStepAudits`、`idempotencyChecks`、`qualityGates`；没有采集到的证据不得解读为真实业务已验证 |
+
+特别注意：部分门禁在没有适用事件或异常记录时返回 PASS，只能解释为当前输入未发现问题，不是已完成并发、跨租户、退款或清理的真实验收。无可验证业务流且未明确标记不适用时，流程门禁会阻断。门禁失败不会单独将未知证据升级为产品缺陷；已有业务失败仍为 NOT_READY，其余未达标情况阻断交付。上线前仍需配置真实证据源和明确业务授权。
+
+可复现验证（单元、受控集成与安装包验证，不触发供应商生成）：
+
+```bash
+npm ci
+npm run build
+npx --no-install vitest run tests/unit/devtest tests/integration/devtest-mode.test.ts tests/integration/devtest-mcp-kernel.test.ts tests/integration/devtest-detection-regression.test.ts tests/integration/npm-package-acceptance.test.ts --maxWorkers=1
+node --test integrations/trae-mcp/native-cli.test.mjs
+```
+
+两项依赖真实业务源码快照的分流检查默认跳过；仅在显式设置 `PANQU_SOURCE_FIXTURE_ROOT` 且快照匹配其测试前提时运行，不将跳过项计为通过。会话文件必须显式传入或配置 `PANQU_SESSION_COOKIES_FILE`，无配置时拒绝执行，不读取机器专属默认路径。
+
+2026-09-11 本轮结果：构建通过，上述 41 个 Vitest 文件中 423 项通过、2 项源码快照检查跳过；本地 MCP 8 项通过，包含版本握手、真实执行确认与跨进程报告恢复。安装包验收通过。这不是全仓测试或真实供应商业务验收。
+
+TRAE 同步验收：GitHub `main` 的完整提交 SHA、本地固定快照 `git rev-parse HEAD`、`panqu_native_cli` 的 catalog `engineSha`、`panqu_capabilities` 的云端及本地 SHA 必须相同。每次更新都应从该提交重新安装依赖并构建，重启 MCP 后检查工具和报告链路；历史任务仍保留历史 SHA，不应改写。云端 Actions 固定引用与 Worker 能力声明也必须同步，不能只改版本字符串。凭据仅保留在原受控配置中，禁止写入仓库。
+
+## v4.34.0 更新：Playwright 执行与独立证据核验
 
 本次新增浏览器/API 执行组件、媒体检查器、计费与供应商成本 Oracle、分流决策与跨系统证据采集器，并接入 CLI、业务综合套件和本地 Trae MCP。源码包版本已更新为 `4.34.0`；这不代表已经公开发布 npm 包或更新成员电脑上的 MCP。
 
@@ -143,154 +173,22 @@ Trae 入口使用“集中澄清 → 展示最终计划 → 一次确认 → 立
 主 Skill 按功能语义组合读取，已有团队 Skill 不覆盖。
 各专项含 `references/input-constraints.md` 与 `references/code-map.md`：逐项提取需求中的格式、大小、数量、提示词、默认值、计费阶梯、分流条件和违规行为，派生边界并关联真实计划用例；未知规则不能自行补值，未覆盖不能算通过。
 
-v4.33.1 增强针对复合多模块仓库（`panqu-ai` 复合架构）的项目级观察与感知：
-- **复合多模块感知（`PANQU_HYBRID_MONOREPO`）**：在 `/Users/mac/agents/panqu-ai` 根目录下自动探测并注册 `aibaseos`（PHP 后端）、`aiworkflow`（Nuxt 画布前端）、`aidrawos`（React 画布前端）、`aipanqucenter`（NestJS 中台）与 `aipanco`，无需依赖根目录 `package.json`。
-- **ThinkPHP 5 路由契约解析**：新增静态路由提取器，解析 `aibaseos/application/route.php` 中的 221 条后端路由（`Route::get`、`Route::post`、`Route::rule`），将 PHP 控制器方法与接口契约纳入自动化测试感知面。
-- **跨子项目存量单测联动**：自动发现并调度各子项目的存量单测（如 `aiworkflow/test/` 57 个测试套件与 `freecut` 50+ 个单测），将其注册为回归测试候选集（`regressionCandidates`）。
-- **保留既有安全门禁**：内置 HTTP 路径对 PHP `code === 1` 和 Go HTTP 200 的已识别客户端检查保留额外证据：仅传输断言通过、客户端却拒绝时不报 PASS，也不直接归为产品缺陷。
+### Panqu 项目发现与业务流程
 
-在业务项目根目录运行 `devtest inspect-project` 可取得只读项目图、源码行号/指纹和 `NOT_EXECUTED` 回归候选；不执行仓库脚本、不加载环境凭证。动态路径、Nuxt 自动导入、复杂 wrapper、未解析源码及未找到的测试继续明确保留缺口。源码现状不是业务需求；这些能力不代表真实画布、模型生成、结算或 UI 已验收。详见 [Panqu 专属内核边界](docs/panqu-project-kernel.md)。
+`devtest inspect-project` 从指定项目识别复合仓库、路由及回归候选，输出源码位置和缺口。候选为 NOT_EXECUTED，不自动调度子仓库测试；路由数量和模型配置随实际源码变化，不以固定数量作为验收标准。
 
-### Panqu API 分流专项测试流程（`devtest flow api-diversion`）
+| CLI 入口 | 行为及证据边界 |
+| --- | --- |
+| `devtest flow api-diversion` | 执行源码/契约检查与受控分流规则计算，支持 `--project-root`、`--model-id`、`--model-type`；诊断分数不证明真实渠道可用或最终结算正确 |
+| `devtest flow real-video-submit` / `devtest real-video` | 使用显式会话向主站提交视频任务，检查任务详情、分流快照并轮询；会写入业务任务并可能扣费 |
+| `devtest flow real-image-submit` / `devtest real-image` | 提交生图任务并核验关联结果；具体模型、服务线路、尺寸和参考图限制以已确认契约为准 |
+| `devtest flow real-canvas-submit` / `devtest real-canvas` | 执行画布任务提交与状态核验；不等于浏览器中所有节点编辑、上传及连线交互已覆盖 |
+| `devtest flow business-suite` | 编排指定模块；`all` 含真实提交模块和 Playwright，不能作为无副作用的健康检查 |
+| `devtest playwright` | 独立 Mock/API/浏览器执行入口；完整参数与 MCP 读取方式见前文 |
 
-v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本](https://panqu-ai.feishu.cn/docx/W3cZd813YoNMnCxiT1zckWzenwe)》的独立 API 分流测试流程（API Diversion Test Flow），覆盖双模态分流决策与全链路端到端闭环：
-- **全链路两级分流决策树（双模态统一支持）**：
-  - **视频分流判定（`Videonew.php` / `NewapiDiversionRuleService.php`）**：分流模式切换（`newapi` / `legacy` / `off`）、硬性资格拦截（提示词 > 5000 字、`mov` 格式、真人人像、带参考视频 Seedance 拦截）、全量模型特权（`pq_model_config.is_newapi_global == 1` 开启后全量直达 NewAPI 全局渠道，绕过组织路由组，记 `org_id=0`）、非全量模型全局能力并集与分组能力精准校验（`isModelRoutable` 与 `isModelRoutableForGroup`）；
-  - **生图分流判定（`NewapiImageDiversionService.php`）**：模型别名非空校验、服务线路限制（仅 `serviceline === 'r'` 放行，t/k 线路静默走原渠道）、尺寸类型限制（禁止自定义像素 `pixels`）、参考图数量限制（`countReferenceImages <= 10`）、组织路由解析与快照固化（写入 `extra['newapi_image']=1` 及路由快照，`NewapiTaskLog` 初始化为 `STATUS_INIT`）；
-  - **网关调度与配额熔断（NewAPI 网关层）**：Token 分组精确隔离（`default` 全局共享）、每日积分上限（`daily_quota_limit` 与预扣 `points` 校验）超额熔断剔除、多可用渠道权重（`weight`）加权调度分流；
-  - **Go 消费端失败容灾与线路改写（`diversion_retry_dispatcher.go`）**：Wan 3.0 系列（105 全能参考 / 106 首尾帧）失败自动改写 `line=1` 降级投递原生阿里云百炼队列，由原生轮询接管；SD 系列任务失败标记 `is_need_fallback=1` 写入 `pq_aivideo_diversion_retry_log` 并投递火山重试队列；非 SD 模型失败直接报错中断，绝对不进入重试列表；
-  - **计费核算与划掉项保护**：10 积分 = 1 元人民币汇率换算、按秒计费公式、账单大盘动态线路映射；严格识别飞书文档删除线属性，菲玲渠道、海外站同步与存量历史模型排除在缺陷与阻塞范围之外。
-- **独立 CLI 触发入口**：
-  ```bash
-  devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--env <test|sandbox>] [--model-id <id>] [--model-type <video|image>]
-  # 或在 panqu-ai 根目录执行快捷脚本：
-  ./test-diversion.sh [--model-id <id>]
-  ```
-- **自动化产物与 28 项契约用例**：
-  一键执行 28 项标准化契约用例（涵盖 AST 探测、两级分流决策树、生图分流全规则、网关分组隔离、渠道配额熔断、加权轮询调度、Go 消费端线路改写与降级、组织企业绑定、计费对账），生成 `diversion-flow-report.json`、`开发自测测试报告.md` 与 `测试用例.md`。可在 `/Users/mac/agents/panqu-ai` 项目实测实现 **28/28 (100% PASS)**。
-- **定向模型接入诊断（`--model-id`）**：
-  支持指定模型 ID 极速输出上线就绪度（Readiness Score 0~100%）、检查模型别名映射、全量/分组分流状态机、模拟真实请求决策树判定并生成具体操作建议。
+源码/模拟分流通过不等于生产级端到端验收；提交成功、HTTP 200、任务 ID、快照通过均不能代替真实媒体、供应商记录和最终扣退费证据。报告需逐项检查执行模式、断言结果和证据缺失。功能入口不会自动提供账号权限、数据库连接或模型凭据。
 
-### Panqu 真实视频提交与分流快照核查流程（`devtest flow real-video-submit`）
-
-针对“拒绝纸上谈兵、必须在被测环境真实提交业务任务并验真分流快照”的生产级要求，v4.33.4 推出**真实视频提交与分流核验闭环引擎**：
-- **真实环境自动注入与凭证脱敏**：
-  - 从本机受保护配置中加载获准的测试环境会话（`https://test.panqu.com/`），不在仓库保存账号凭证；
-  - 铁律安全防护：任何终端输出、Markdown 报告与 JSON 证据中，严禁泄露明文 Cookie、JWT Token 或密码，统一使用掩码（`eyJh******`，`sk******`）；
-  - 标识测试流量：提交任务名称与 Prompt 注入 `devtest_` 前缀（如 `devtest_wan3_smoke_<timestamp>`）；此前缀仅便于追踪，不构成权限或数据隔离。
-- **端到端 6 步真实闭环链路**：
-  1. **会话探活与凭据解析**：校验 Session 有效性与账户可用积分；
-  2. **CSRF Token 动态刷新**：发起 `GET /ajax/refreshtoken`，获取主站安全令牌 `__token__`；
-  3. **真实视频任务提交**：发起 `POST /aivideo/videonew/add`，真实写入主站 `pq_aivideo_new` 表，返回真实任务 ID（如 `239184`）；
-  4. **主站 extra 分流快照深度核验**：查询主站任务详情，断言后端持久化的核心决策证据：
-     - `extra.diversion === 10`：断言必须命中 NewAPI 专线；
-     - `extra.newapi_model`：断言正确记录了客户端别名（如 `wan3.0-video`）；
-     - `extra.newapi_org_id`：断言全量模型记录为 `0`、分组模型记录为所属组织 ID；
-     - `extra.points`：断言计算并写入了预扣积分（如 `70`）；
-  5. **异步状态长轮询追踪**：调用 `POST /aivideo/v2/task_status/apiGetStatus`，带 `type=video&ids=<taskId>`，实时追踪任务状态机（0 待处理 -> 1 生成中 -> 2 完成 / 3 失败）与进度（`progress`）；
-  6. **根因反查与对账报告**：若出现未命中分流或报错，自动对比全量开关、渠道能力并集与组织绑定，给出排查指引；导出《真实视频提交流程测试报告.md》与结构化证据 `real-video-flow-report.json`。
-- **多入口快捷调用方式**：
-  ```bash
-  # 1. 独立执行真实视频提交（默认 Wan 3.0 / ID 84）：
-  devtest flow real-video-submit [--model-id <id>] [--duration <sec>] [--resolution <res>] [--aspect-ratio <ratio>] [--poll-timeout <sec>]
-  # 或使用快捷别名：
-  devtest real-video --model-id 84
-
-  # 2. 联动契约测试（跑完 28 项契约后自动触发真实提交验真）：
-  devtest flow api-diversion --real-submit [--model-id <id>]
-
-  # 3. 业务工程根目录一键执行（零摩擦）：
-  cd /Users/mac/agents/panqu-ai
-  ./test-diversion.sh --real --model-id 84       # 直接执行真实提交
-  ./test-diversion.sh --real-submit              # 28项契约 + 真实提交联动
-  ```
-
-### Panqu 真实生图提交与分流快照核查流程（`devtest flow real-image-submit`）
-
-针对文生图与场景生图（Scene 生图）的真实环境自动化提交与分流验真，v4.33.5 推出生图全链路核验能力：
-- **真实生图协议与参数组装**：
-  - 发起 `POST /aivideo/scene/add`，真实写入主站 `pq_aivideo_scene` 表；
-  - 规范入参：设置 `row[type]=1`（提示词文生图），在 `row[extra]` 中注入 `selmodels`（如 `12-Nano Banana Pro`）、`serviceline='r'`（RunningHub 线路，触发 NewapiImageDiversionService 分流判定）；
-  - 安全防护：自动注入 `devtest_` 提示词前缀，凭证掩码保护。
-- **生图分流快照深度核验**：
-  - 查询 `GET /aivideo/scene/index`，精准断言：
-    - `extra.newapi_image === 1`：必须正确打上 NewAPI 生图分流标记；
-    - `extra.newapi_model`：必须记录客户端别名（如 `pan-banana-pro`）；
-    - `extra.newapi_org_id`：正确记录所属组织 ID；
-- **生图异步状态追踪**：
-  - 调度 `POST /aivideo/v2/task_status/apiGetStatus`（入参 `type=scene&ids=<taskId>`），实时轮询生图终态并抓取成图图片地址（`pic_url`）。
-- **执行命令**：
-  ```bash
-  # 真实生图提交自测（默认 Nano Banana Pro / ID 12）：
-  devtest flow real-image-submit [--model-id <id>] [--resolution <res>] [--serviceline <line>] [--no-poll]
-  # 快捷别名：
-  devtest real-image --model-id 12
-  ```
-
-### Panqu 真实画布节点工作流提交流程（`devtest flow real-canvas-submit`）
-
-针对无限画布（Canvas / Workflow）节点任务流转与分流验证，v4.33.5 推出画布真实业务提交流程：
-- **前端生产协议对齐**：
-  - 深度对齐 `aidrawos/components/nodes/videoNode.tsx` 真实交互标准，向主站 `/aivideo/videonew/add` 注入 `row[workflow_node_id]`、`row[workflow_id]` 与 `row[workflow_snapshot_id]`，消除旧独立接口未注入分流逻辑的隐患；
-  - 真实触发 `Videonew.php` 核心路由判定，落库并持久化 `extra.diversion = 10`。
-- **节点与分流快照核查**：
-  - 校验画布节点任务成功插入主站数据库，并正确绑定 NewAPI 模型别名（如 `wan3.0-video`）。
-- **执行命令**：
-  ```bash
-  devtest flow real-canvas-submit [--canvas-id <id>] [--node-id <id>] [--model-id <id>] [--no-poll]
-  # 快捷别名：
-  devtest real-canvas --canvas-id 127
-  ```
-
-### Panqu 业务全模块自动化自测综合套件（`devtest flow business-suite`）
-
-为了实现“图片、视频、画布、分流”四大业务模块的一键端到端闭环验证，平台提供四合一自动化综合套件：
-- **多模态四合一综合调度矩阵**：
-  1. **【分流矩阵】**：全量 28 项契约规则推演与双向判定断言；
-  2. **【视频模块】**：真实视频任务提交、`extra.diversion=10` 快照核查、生命周期追踪；
-  3. **【生图模块】**：真实生图任务提交、`extra.newapi_image=1` 快照核查、成图地址捕获；
-  4. **【画布模块】**：真实画布节点任务流转、`row[workflow_node_id]` 绑定与分流快照核查。
-- **业务工程根目录一键脚本（`test-business.sh`）**：
-  研发人员可在业务工程根目录无需记忆命令，秒级发起全量自测：
-  ```bash
-  cd /Users/mac/agents/panqu-ai
-  ./test-business.sh                      # 真实执行综合套件（当前 all 还包含 Playwright；可能扣费）
-  ./test-business.sh --module video       # 仅测试真实视频
-  ./test-business.sh --module image       # 仅测试真实生图
-  ./test-business.sh --module canvas      # 仅测试真实画布
-  ./test-business.sh --module diversion   # 仅测试分流矩阵
-  ./test-business.sh --no-poll            # 快速自测模式（核验快照后立即返回）
-  ```
-- **测试产物与证据**：
-  自动生成《业务全模块综合自测报告.md》与结构化 JSON 证据，提供清晰对比矩阵：
-  ```
-  ================ 业务全模块自动化自测综合报告 ================
-  套件 ID:     suite-1789105059234
-  目标模块:   all
-  用例统计:   总计 4 模块 | 通过 4 | 失败 0 | 通过率 100.0%
-  综合判定:   ALL_PASSED
-
-  模块执行详情:
-    ✅ [分流全量用例矩阵推演] 28/28 通过 - 需求覆盖率 100%, 目标模型就绪度 100%
-    ✅ [真实视频生成与分流快照] ✅ 命中 extra.diversion=10 (任务 ID: 239190) - 模型: wan3.0-video, 预扣积分: 70
-    ✅ [真实场景生图与分流快照] ✅ 命中 extra.newapi_image=1 (任务 ID: 1234) - 模型: pan-banana-pro
-    ✅ [真实画布工作流节点任务] ✅ 命中 extra.diversion=10 (任务 ID: 239191) - 画布 ID: 127
-  ==============================================================
-  ```
-
-### 领先单一 Skill 文件的四大代差架构说明
-
-相较于仅包含提示词的单文件智能体（如单一 Skill），本自测工程具备四大决定性的架构代差优势：
-1. **真实协议与环境交互能力 (Zero Hallucination)**：
-   - 单一 Skill 依赖 LLM 自行揣测代码逻辑，极易产生“代码看起来支持所以测试通过”的幻觉；
-   - 本工程具备真实 HTTP 驱动引擎，直连 `https://test.panqu.com`，动态获取 CSRF Token，真实向数据库插入任务并校验持久化记录。
-2. **多模态全业务覆盖 (Multi-Modal Full Coverage)**：
-   - 深度覆盖视频（`/aivideo/videonew/add`）、生图（`/aivideo/scene/add`）、画布（`/aivideo/videonew/add` 携带 `workflow_node_id`）与契约规则推演，实现全业务闭环。
-3. **数据库分流快照回查对账 (Snapshot Ground Truth)**：
-   - 任务提交后直接调取 FastAdmin 主站持久化快照，比对 `extra.diversion === 10`、`extra.newapi_image === 1`、`extra.newapi_model`，100% 杜绝假阳性。
-4. **长生命周期异步状态轮询监控 (Async Life-cycle Polling)**：
-   - 对接 `POST /aivideo/v2/task_status/apiGetStatus`，捕获任务排队、生成进度、成片/成图 URL 与预扣积分，提供全生命周期审计证据。
-
+本仓库不承诺业务仓库存在 `test-diversion.sh` 或 `test-business.sh` 等快捷脚本。以本仓库 CLI 和实际 `--help` 为准；真实执行需事先确认环境、账号、模型、次数、预算和清理范围，TRAE MCP 还须传 `confirm_real_execution: true`。
 
 ### Panqu Mission：持久化的真实生成任务控制器
 
@@ -302,7 +200,7 @@ v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操�
 
 v4.31.0 新增 `mission readiness/prepare`：在 Nuxt 文生视频单节点范围，内核读取当前能力和已保存节点、枚举确认范围内的合法组合、逐一询价并编译最低成本计划，不再要求模型手写 catalog、执行 payload 或 JSON 指针。提交前重新核对能力、节点和全部候选价格，漂移即阻断。同一逻辑任务重规划与执行共享持久化锁；已提交任务只恢复，不重新生成。读取授权和付费执行审批分离。PHP 自动准备、参考输入、UI 和语义质量仍未覆盖。详见 [自主任务准备](docs/testing/panqu-mission-preparation.md)。
 
-### 当前验证基线
+### 历史验证基线（不代表 v4.35.0 本轮全量结果）
 
 v4.33.0 明确[代码、校验与页面联合测试](src/devtest/assets/devtest/references/combined-validation.md)：每条规则串联代码/边界/API/页面/真实结果；允许审查后运行已有安全本地测试并单独记录，不冒充 MCP 执行结果。代码回归候选未执行会出现在报告缺口。沿用[固定七章单表格式](src/devtest/assets/devtest/references/markdown-handoff.md)，内核写文件前校验章节、表头、用例 ID/状态、统计、证据行和发布建议一致性。格式校验不是业务 Oracle，也没有新增自动运行任意仓库脚本的权限。
 
@@ -340,7 +238,7 @@ v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-eviden
 
 ```bash
 # 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
-npm install --save-dev ./test-flow-4.34.0.tgz
+npm install --save-dev ./test-flow-4.35.0.tgz
 
 # 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
 npx devtest init --github --trae

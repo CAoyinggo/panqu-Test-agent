@@ -48,6 +48,8 @@ import { buildVersionComparison, computeDevConfidence } from './final-assessment
 import { buildBusinessFlowGraph, buildBusinessLevelProblems, evaluateBusinessFlows, evaluateCrossCaseInvariants } from './business-flow-engine.js';
 import { buildExecutionEstimate, buildRegressionGuard, buildRegressionProblem, evaluateRegressionGuard,
   relatedRegressionCaseIds } from './acceptance-governance.js';
+import { QualityGateEngine } from './quality-gate-engine.js';
+import { IdempotencyOracle } from './idempotency-oracle.js';
 import { buildTestOracleResults } from './oracle-engine.js';
 import { buildTestReliability } from './reliability-engine.js';
 import { SnapshottingProcessor, buildPollutionProblems, detectTestPollution } from './pollution-engine.js';
@@ -823,9 +825,46 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   const acceptanceFailed = selectedAcceptanceTraces.some((trace) => trace.result === 'FAIL');
   const acceptanceIncomplete = selectedAcceptanceTraces.length === 0
     || selectedAcceptanceTraces.some((trace) => trace.result === 'BLOCKED' || trace.result === 'NOT_TESTED');
-  if (acceptanceFailed || coreFlowFailed || regressionGuard.status === 'FAIL') conclusion = 'NOT_READY';
-  else if (conclusion !== 'NOT_READY' && (requirementIncomplete || invariantIncomplete || coreFlowBlocked
-    || regressionGuard.status === 'BLOCKED' || acceptanceIncomplete)) conclusion = 'BLOCKED';
+
+  const primaryActor = featureModel.actors[0];
+  const dataLifecycle: DevTestRunResult['dataLifecycle'] = {
+    runId: result.runId,
+    owner: primaryActor?.role ?? primaryActor?.id,
+    tenant: featureModel.tenants[0],
+    project,
+    resource: featureModel.resources[0],
+    createdBy: options.lifecyclePrepare ? 'DEVTEST' : options.sandbox ? 'EXISTING_FIXTURE' : 'UNKNOWN',
+    prepareStatus,
+    cleanupStatus,
+    traceable: Boolean(project && featureModel.resources[0] && (primaryActor || featureModel.tenants[0])),
+  };
+
+  const idempotencyChecks: import('./types.js').DevTestIdempotencyCheck[] = [];
+  const hasMultipleAttempts = result.results.some((r) => (r.evidence as any)?.attempts?.length > 1);
+  if (hasMultipleAttempts || flowEvaluation.graph.flows.some((f) => f.kind === 'FAILURE_REFUND' || f.kind === 'RETRY_IDEMPOTENCY')) {
+    idempotencyChecks.push(...IdempotencyOracle.evaluate({
+      billingEntries: result.results.flatMap((r) => ((r.evidence as any)?.billing?.entries ?? [])),
+      createdTasks: result.results.map((r) => ({ taskId: (r.evidence as any)?.taskId, prompt: (r.evidence as any)?.prompt })).filter((t) => t.taskId),
+    }));
+  }
+
+  const qualityGateEvaluation = QualityGateEngine.evaluateAll({
+    requirementCoverage,
+    businessFlowGraph: flowEvaluation.graph,
+    oracleResults,
+    crossStepAudits: flowEvaluation.crossStepAudits,
+    idempotencyChecks,
+    dataLifecycle,
+    pollutionFindings,
+  });
+
+  if (acceptanceFailed || coreFlowFailed || regressionGuard.status === 'FAIL') {
+    conclusion = 'NOT_READY';
+  } else if (conclusion !== 'NOT_READY' && (requirementIncomplete || invariantIncomplete || coreFlowBlocked
+    || regressionGuard.status === 'BLOCKED' || acceptanceIncomplete
+    || qualityGateEvaluation.failedGate || qualityGateEvaluation.blockedGate)) {
+    conclusion = 'BLOCKED';
+  }
   const pendingMutationCaseIds = result.results
     .filter((item) => item.attribution?.reason?.includes('SAFE_MODE_MUTATION_HOLD'))
     .map((item) => item.caseId);
@@ -862,18 +901,6 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     regressions: baseline.regressions,
   });
   const devConfidence = computeDevConfidence({ conclusion, matrix: requirementCoverage, report: result.report, problems });
-  const primaryActor = featureModel.actors[0];
-  const dataLifecycle: DevTestRunResult['dataLifecycle'] = {
-    runId: result.runId,
-    owner: primaryActor?.role ?? primaryActor?.id,
-    tenant: featureModel.tenants[0],
-    project,
-    resource: featureModel.resources[0],
-    createdBy: options.lifecyclePrepare ? 'DEVTEST' : options.sandbox ? 'EXISTING_FIXTURE' : 'UNKNOWN',
-    prepareStatus,
-    cleanupStatus,
-    traceable: Boolean(project && featureModel.resources[0] && (primaryActor || featureModel.tenants[0])),
-  };
   const plannedCases = selection.selected.filter((testCase) => selectedCaseIds.includes(testCase.id));
   const affectedFlowIds = preliminaryFlowGraph.flows.filter((flow) => flow.steps.some((step) =>
     step.caseIds.some((caseId) => impact.affectedCaseIds.includes(caseId)))).map((flow) => flow.id);
@@ -901,6 +928,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     deep: options.deep,
   });
   const renderInput = {
+    crossStepAudits: flowEvaluation.crossStepAudits,
+    idempotencyChecks,
+    qualityGates: qualityGateEvaluation.gates,
     projectAssessment,
     requirementAssurance,
     runId: result.runId,
@@ -1067,6 +1097,9 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     reproduction,
     environmentPreflight,
     uiExecutions,
+    crossStepAudits: flowEvaluation.crossStepAudits,
+    idempotencyChecks,
+    qualityGates: qualityGateEvaluation.gates,
     artifacts,
     pipeline: {
       summary: result.report.summary,

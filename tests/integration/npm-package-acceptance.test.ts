@@ -59,6 +59,9 @@ describe('npm tarball installation acceptance', () => {
     ];
     const runtimeFiles = new Set([
       'scripts/prepare.mjs', 'packages/panqu-agent-cli/package.json',
+      'integrations/trae-mcp/job-store.mjs', 'integrations/trae-mcp/local-artifacts.mjs',
+      'integrations/trae-mcp/native-cli.mjs',
+      'dist/src/platform/version.js', 'dist/src/platform/version.d.ts',
       'packages/panqu-agent-cli/README.md', 'packages/panqu-agent-cli/LICENSE',
       'dist/src/utils/run-id.js', 'dist/src/utils/run-id.d.ts',
       'dist/src/agents/execution/execution-schema.js', 'dist/src/agents/execution/execution-schema.d.ts',
@@ -77,7 +80,14 @@ describe('npm tarball installation acceptance', () => {
     expect(entries).toContain('dist/src/devtest/handoff-validation.d.ts');
     expect(entries).toContain('dist/src/devtest/assets/devtest/references/combined-validation.md');
     expect(entries).toContain('dist/src/devtest/assets/devtest/references/markdown-handoff.md');
-    expect(entries.length).toBeLessThanOrEqual(304);
+    for (const module of ['idempotency-oracle', 'quality-gate-engine', 'test-data-lifecycle', 'traceability-matrix']) {
+      expect(entries).toContain(`dist/src/devtest/${module}.js`);
+      expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
+    }
+    expect(entries).not.toContain('integrations/trae-mcp/native-cli.test.mjs');
+    // Reviewed 4.34 CLI/MCP additions plus four 4.35 runtime modules; retain strict path and size checks.
+    expect(entries).toContain('dist/src/platform/version.js');
+    expect(entries.length).toBeLessThanOrEqual(355);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');

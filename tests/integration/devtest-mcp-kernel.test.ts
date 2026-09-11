@@ -242,7 +242,7 @@ describe('Trae MCP → actual DevTest Generator/Quality Gate/Execution/Evidence'
     await mkdir(path.join(root, '.trae'));
     await writeFile(path.join(root, '.trae', 'mcp.json'), JSON.stringify({ mcpServers: { team: { command: 'team-tool' } } }));
     const added = await initializeDevTestTrae(root);
-    expect(added).toHaveLength(11);
+    expect(added).toHaveLength(23);
     for (const name of DEVTEST_BUNDLED_SKILLS) {
       for (const resource of name === 'devtest' ? ['SKILL.md'] : ['SKILL.md', 'references/code-map.md', 'references/input-constraints.md']) {
         expect(await readFile(path.join(root, '.trae', 'skills', name, resource), 'utf8'))

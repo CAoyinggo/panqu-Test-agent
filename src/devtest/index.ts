@@ -25,7 +25,7 @@ export { analyzeDevTestImpact, buildDevTestPlan } from './planning.js';
 export { buildRequirementCoverageMatrix, buildDevTestInvariants, extendedDimensionsOf } from './requirement-intelligence.js';
 export { computeDevConfidence, buildVersionComparison } from './final-assessment.js';
 export { buildBusinessFlowGraph, evaluateBusinessFlows, evaluateCrossCaseInvariants,
-  buildBusinessLevelProblems } from './business-flow-engine.js';
+  buildBusinessLevelProblems, auditCrossStepConsistency } from './business-flow-engine.js';
 export { buildExecutionEstimate, buildRegressionGuard, evaluateRegressionGuard,
   relatedRegressionCaseIds } from './acceptance-governance.js';
 export { buildTestOracleResults } from './oracle-engine.js';
@@ -126,6 +126,11 @@ export type {
   DevTestBusinessFlowGraph,
   DevTestBusinessFlowStep,
   DevTestFlowStatus,
+  DevTestCrossStepAuditResult,
+  DevTestIdempotencyCheck,
+  DevTestIdempotencyCheckKind,
+  DevTestQualityGateName,
+  DevTestQualityGateResult,
   DevTestStateObservation,
   DevTestStateConsistencyResult,
   DevTestRegressionGuard,
@@ -270,3 +275,27 @@ export {
   sanitizeObject,
   type ArtifactVerificationLevel,
 } from './panqu-playwright-engine.js';
+export {
+  IdempotencyOracle,
+  type SubmitAttemptRecord,
+  type BillingEntryRecord,
+  type TaskRecord,
+  type AssetRecord,
+  type CallbackEventRecord,
+  type FinalStateRecord,
+} from './idempotency-oracle.js';
+export {
+  TestDataLifecycleManager,
+  type TestDataScope,
+  type ManagedEntity,
+  type CleanupHandler,
+} from './test-data-lifecycle.js';
+export {
+  QualityGateEngine,
+  type QualityGateEvaluationInput,
+} from './quality-gate-engine.js';
+export {
+  TraceabilityMatrixBuilder,
+  type TraceabilityItem,
+  type TraceabilityMatrixSummary,
+} from './traceability-matrix.js';

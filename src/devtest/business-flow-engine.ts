@@ -8,6 +8,7 @@ import type {
   DevTestBusinessFlowGraph,
   DevTestBusinessFlowStep,
   DevTestCaseProfile,
+  DevTestCrossStepAuditResult,
   DevTestInvariant,
   DevTestProblem,
   DevTestOracleResult,
@@ -76,10 +77,41 @@ export function buildBusinessFlowGraph(input: {
     const ranked = [...cases].sort((left, right) => Number(right.executionMode === 'EXECUTABLE') - Number(left.executionMode === 'EXECUTABLE')
       || Number(input.profiles[right.id]?.core) - Number(input.profiles[left.id]?.core)
       || (left.priority ?? 'P2').localeCompare(right.priority ?? 'P2'));
+    const resource = resourceOf(operation, input.featureModel);
+    const actor = input.featureModel.actors[0];
+    const matchingPermission = input.featureModel.permissions.find((p) => p.resource.toLowerCase() === resource?.toLowerCase());
+    const isPost = operation.startsWith('POST ');
+    const isDelete = operation.startsWith('DELETE ');
+    const preconditions = ranked[0]?.preconditions ?? (input.featureModel.constraints.slice(0, 2));
+    const expectedOutcome = expectedStateOf(ranked);
+
     return {
       id: id('FLOWSTEP', operation), order: index + 1, name: operation, operation,
-      caseIds: [ranked[0].id], resource: resourceOf(operation, input.featureModel),
-      expectedState: expectedStateOf(ranked), dependencies: [],
+      caseIds: [ranked[0].id], resource,
+      expectedState: expectedOutcome,
+      actor: actor ? { id: actor.id, role: actor.role, kind: actor.kind } : undefined,
+      preconditions,
+      actions: [operation],
+      stateTransition: {
+        from: index === 0 ? 'INITIAL' : (expectedStateOf(ranked) ?? 'QUEUED'),
+        to: expectedOutcome ?? (isDelete ? 'DELETED' : (isPost ? 'CREATED' : 'QUERIED')),
+      },
+      businessRules: input.featureModel.constraints.filter((c) => c.toLowerCase().includes(resource?.toLowerCase() ?? '')),
+      permission: matchingPermission ? { role: matchingPermission.role, action: matchingPermission.action, effect: matchingPermission.effect as any } : undefined,
+      sideEffects: input.featureModel.sideEffects.filter((s) => s.action.toLowerCase().includes(operation.split(' ')[0].toLowerCase())).map((s) => s.expression),
+      billing: isPost ? { action: 'DEDUCT', amount: 70 } : (isDelete ? { action: 'NONE' } : { action: 'NONE' }),
+      failureBranch: {
+        condition: 'HTTP_5XX | TIMEOUT | GATEWAY_FAILURE',
+        recoveryAction: 'AUTO_REFUND_OR_RETRY',
+        expectRefund: true,
+      },
+      recovery: {
+        safeRetry: true,
+        deduplicationKey: 'client_token',
+        queryExistingFirst: true,
+      },
+      postConditions: ranked[0]?.design?.expectedOutcome ? [ranked[0].design.expectedOutcome] : [],
+      dependencies: [],
     };
   });
   if (statefulSingleOperation && steps[0]) steps[0].expectedState = input.featureModel.states.join(' → ');
@@ -101,10 +133,19 @@ export function buildBusinessFlowGraph(input: {
     current.dependencies.push(...additions);
     dependencies.push(...additions.map((item) => ({ from: item.fromStepId, to: current.id, kind: item.kind, expression: item.expression })));
   }
-  const flow: DevTestBusinessFlow = {
+  const mainFlow: DevTestBusinessFlow = {
     id: id('FLOW', { feature: input.featureModel.feature.id, operations: steps.map((step) => step.operation) }),
     name: steps.map((step) => step.name.replace(/^\w+\s+/, '')).join(' → '),
     core: true,
+    kind: 'MAIN_HAPPY_PATH',
+    actor: input.featureModel.actors[0] ? {
+      id: input.featureModel.actors[0].id,
+      role: input.featureModel.actors[0].role,
+      tenantId: input.featureModel.tenants[0],
+      projectId: input.featureModel.projects[0],
+    } : undefined,
+    preconditions: steps[0]?.preconditions,
+    postConditions: steps.at(-1)?.postConditions,
     acIds: [...new Set(steps.flatMap((step) => step.caseIds).flatMap((caseId) =>
       input.testCases.find((testCase) => testCase.id === caseId)?.source?.acceptanceCriteriaIds ?? []))],
     invariantIds: input.invariants.filter((invariant) => invariant.linkedCaseIds.some((caseId) => steps.some((step) => step.caseIds.includes(caseId))))
@@ -112,7 +153,43 @@ export function buildBusinessFlowGraph(input: {
     steps,
     status: 'NOT_EXECUTED',
   };
-  return { flows: [flow], applicable: true, operationCount: operations.length, dependencies, coverage: 0 };
+
+  const flows: DevTestBusinessFlow[] = [mainFlow];
+
+  // 若存在失败退款分支用例，提取独立的 FAILURE_REFUND 业务分支
+  const negativeCases = input.testCases.filter((testCase) => !positiveCase(testCase) || testCase.negativeContractIntent);
+  if (negativeCases.length > 0) {
+    const failureStep: DevTestBusinessFlowStep = {
+      id: id('FLOWSTEP', 'FAILURE_REFUND'),
+      order: 1,
+      name: 'Task Failure & Auto Refund',
+      operation: httpOperation(negativeCases[0]) ?? 'FAILURE_BRANCH',
+      caseIds: [negativeCases[0].id],
+      resource: steps[0]?.resource,
+      expectedState: 'FAILED → REFUNDED',
+      actor: mainFlow.actor,
+      actions: ['SUBMIT', 'HANDLE_FAILURE', 'REFUND'],
+      stateTransition: { from: 'SUBMITTED', to: 'REFUNDED' },
+      billing: { action: 'REFUND', expectedNet: 0 },
+      failureBranch: { condition: 'UPSTREAM_REJECTED', recoveryAction: 'EXECUTE_REFUND', expectRefund: true },
+      recovery: { safeRetry: false, queryExistingFirst: false },
+      postConditions: ['netCharged = 0'],
+      dependencies: [],
+    };
+    flows.push({
+      id: id('FLOW', { feature: input.featureModel.feature.id, kind: 'FAILURE_REFUND' }),
+      name: 'Task Failure & Auto Refund Branch',
+      core: false,
+      kind: 'FAILURE_REFUND',
+      actor: mainFlow.actor,
+      acIds: negativeCases[0]?.source?.acceptanceCriteriaIds ?? [],
+      invariantIds: [],
+      steps: [failureStep],
+      status: 'NOT_EXECUTED',
+    });
+  }
+
+  return { flows, applicable: true, operationCount: operations.length, dependencies, coverage: 0 };
 }
 
 function responseObservation(result: AcceptanceCaseExecutionResult): DevTestStateObservation | undefined {
@@ -170,6 +247,127 @@ function consistencyOf(caseId: string, observations: readonly DevTestStateObserv
   return { caseId, status: 'CONSISTENT', sources, before, after };
 }
 
+export function auditCrossStepConsistency(input: {
+  flow: DevTestBusinessFlow;
+  results: readonly AcceptanceCaseExecutionResult[];
+  observations?: readonly DevTestStateObservation[];
+  uiResults?: readonly DevTestUiExecutionResult[];
+}): DevTestCrossStepAuditResult {
+  const resultByCase = new Map(input.results.map((r) => [r.caseId, r]));
+  const causalChain: DevTestCrossStepAuditResult['causalChain'] = [];
+  const inconsistencies: string[] = [];
+
+  let canonicalTaskId: number | string | undefined;
+  let canonicalProjectId: number | string | undefined;
+  let canonicalUserId: number | string | undefined;
+  let canonicalAssetUrl: string | undefined;
+  let previousTimestamp: number | undefined;
+
+  for (const step of input.flow.steps) {
+    const caseId = step.caseIds[0];
+    const result = resultByCase.get(caseId);
+    const request = result?.evidence?.request;
+    const response = result?.evidence?.response;
+    const body = response?.body && typeof response.body === 'object' && !Array.isArray(response.body)
+      ? (response.body as Record<string, unknown>)
+      : undefined;
+
+    // 提取 task_id
+    const stepTaskId = (body?.data && typeof body.data === 'object' && (body.data as any).id)
+      ?? body?.id ?? body?.taskId ?? body?.task_id
+      ?? ((request?.query as any)?.task_id ?? (request?.query as any)?.id ?? (request as any)?.queryParams?.task_id ?? (request as any)?.queryParams?.id);
+
+    // 提取 project_id
+    const stepProjectId = ((request?.query as any)?.project_id ?? (request as any)?.queryParams?.project_id)
+      ?? (request?.body && typeof request.body === 'object' && (request.body as any).project_id)
+      ?? body?.project_id ?? (body?.data && typeof body.data === 'object' && (body.data as any).project_id);
+
+    // 提取 user_id
+    const stepUserId = body?.user_id ?? (body?.data && typeof body.data === 'object' && (body.data as any).user_id)
+      ?? (request?.body && typeof request.body === 'object' && (request.body as any).user_id);
+
+    // 提取 asset_url
+    const stepAssetUrl = (body?.data && typeof body.data === 'object' && ((body.data as any).video_url || (body.data as any).image_url))
+      ?? body?.url ?? body?.asset_url;
+
+    // 验证或确立 task_id
+    if (stepTaskId !== undefined && stepTaskId !== null) {
+      if (canonicalTaskId === undefined) {
+        canonicalTaskId = stepTaskId;
+      } else if (String(canonicalTaskId) !== String(stepTaskId)) {
+        inconsistencies.push(
+          `TASK_ID_MISMATCH: 步骤 ${step.name} 引用了 task_id=${stepTaskId}，但前置步骤确立的主键为 task_id=${canonicalTaskId}`
+        );
+      }
+    }
+
+    // 验证或确立 project_id
+    if (stepProjectId !== undefined && stepProjectId !== null) {
+      if (canonicalProjectId === undefined) {
+        canonicalProjectId = stepProjectId;
+      } else if (String(canonicalProjectId) !== String(stepProjectId)) {
+        inconsistencies.push(
+          `PROJECT_ID_MISMATCH: 步骤 ${step.name} 的 project_id=${stepProjectId} 与前置步骤 project_id=${canonicalProjectId} 不一致`
+        );
+      }
+    }
+
+    // 验证或确立 user_id
+    if (stepUserId !== undefined && stepUserId !== null) {
+      if (canonicalUserId === undefined) {
+        canonicalUserId = stepUserId;
+      } else if (String(canonicalUserId) !== String(stepUserId)) {
+        inconsistencies.push(
+          `USER_ID_MISMATCH: 步骤 ${step.name} 的 user_id=${stepUserId} 与前置步骤 user_id=${canonicalUserId} 不一致`
+        );
+      }
+    }
+
+    // 验证或确立 asset_url
+    if (stepAssetUrl && typeof stepAssetUrl === 'string') {
+      if (canonicalAssetUrl === undefined) {
+        canonicalAssetUrl = stepAssetUrl;
+      } else if (canonicalAssetUrl !== stepAssetUrl) {
+        inconsistencies.push(
+          `ASSET_URL_MISMATCH: 步骤 ${step.name} 返回的成品 asset_url 与前序生成产物不匹配`
+        );
+      }
+    }
+
+    // 时序因果链验证
+    const stepTimeRaw = result?.timestamp ?? (result as any)?.finishedAt;
+    const stepTime = stepTimeRaw ? new Date(stepTimeRaw).getTime() : undefined;
+    if (stepTime && previousTimestamp && stepTime < previousTimestamp) {
+      inconsistencies.push(`TIMELINE_CAUSALITY_VIOLATION: 步骤 ${step.name} 的执行时间早于前序步骤`);
+    }
+    if (stepTime) previousTimestamp = stepTime;
+
+    causalChain.push({
+      stepId: step.id,
+      timestamp: stepTimeRaw,
+      action: step.operation,
+      primaryKeyMatched: inconsistencies.length === 0,
+      error: inconsistencies.at(-1),
+    });
+  }
+
+  const passed = inconsistencies.length === 0;
+  return {
+    flowId: input.flow.id,
+    passed,
+    status: passed ? 'PASS' : 'FAIL',
+    primaryKeys: {
+      taskId: canonicalTaskId,
+      projectId: canonicalProjectId,
+      userId: canonicalUserId,
+      assetUrl: canonicalAssetUrl,
+    },
+    causalChain,
+    inconsistencies,
+    reason: inconsistencies.length ? inconsistencies.join('；') : undefined,
+  };
+}
+
 export async function evaluateBusinessFlows(input: {
   graph: DevTestBusinessFlowGraph;
   testCases: readonly TestCase[];
@@ -177,7 +375,7 @@ export async function evaluateBusinessFlows(input: {
   uiResults?: readonly DevTestUiExecutionResult[];
   invariants: readonly DevTestInvariant[];
   stateObserver?: (input: { caseId: string; request?: unknown; response?: unknown; previousState?: unknown }) => Promise<DevTestStateObservation[]>;
-}): Promise<{ graph: DevTestBusinessFlowGraph; consistency: DevTestStateConsistencyResult[]; observations: DevTestStateObservation[] }> {
+}): Promise<{ graph: DevTestBusinessFlowGraph; consistency: DevTestStateConsistencyResult[]; observations: DevTestStateObservation[]; crossStepAudits?: DevTestCrossStepAuditResult[] }> {
   const resultByCase = new Map(input.results.map((result) => [result.caseId, result]));
   const uiByCase = new Map(input.uiResults?.map((result) => [result.caseId, result]));
   const observations: DevTestStateObservation[] = input.results.map(responseObservation).filter((item): item is DevTestStateObservation => Boolean(item));
@@ -198,12 +396,13 @@ export async function evaluateBusinessFlows(input: {
   const requiredCases = new Set(input.invariants.filter((invariant) => invariant.requiredEvidence.some((source) => source !== 'RESPONSE'))
     .flatMap((invariant) => invariant.linkedCaseIds));
   for (const flow of input.graph.flows) for (const step of flow.steps) {
-    if (step.dependencies.some((item) => item.kind === 'STATE')) step.caseIds.forEach((caseId) => requiredCases.add(caseId));
+    if (step.dependencies?.some((item) => item.kind === 'STATE')) step.caseIds.forEach((caseId) => requiredCases.add(caseId));
     if (flow.steps.length === 1 && step.expectedState) step.caseIds.forEach((caseId) => requiredCases.add(caseId));
   }
   const consistency = [...new Set(input.testCases.map((testCase) => testCase.id))]
     .map((caseId) => consistencyOf(caseId, observations, requiredCases.has(caseId)));
   const consistencyByCase = new Map(consistency.map((item) => [item.caseId, item]));
+  const crossStepAudits: DevTestCrossStepAuditResult[] = [];
 
   const flows = input.graph.flows.map((flow): DevTestBusinessFlow => {
     let previousResult: AcceptanceCaseExecutionResult | undefined;
@@ -229,7 +428,7 @@ export async function evaluateBusinessFlows(input: {
         reason: state.reason, beforeState: state.before, actualState: state.after, expectedState: step.expectedState };
       if (state?.status === 'BLOCKED') return { ...flow, status: 'BLOCKED', failedStepId: step.id,
         reason: state.reason, beforeState: state.before, actualState: state.after, expectedState: step.expectedState };
-      if (previousResult && step.dependencies.some((item) => item.kind === 'OUTPUT')) {
+      if (previousResult && step.dependencies?.some((item) => item.kind === 'OUTPUT')) {
         const outputId = responseObservation(previousResult)?.resourceId;
         const inputId = requestResourceId(result);
         if (!outputId || !inputId) return { ...flow, status: 'BLOCKED', failedStepId: step.id,
@@ -242,13 +441,41 @@ export async function evaluateBusinessFlows(input: {
       previousResult = result;
       beforeState = responseObservation(result);
     }
-    return { ...flow, status: 'PASS', beforeState: flow.steps.length ? observations.filter((item) => item.caseId === flow.steps[0].caseIds[0] && item.phase === 'BEFORE') : undefined,
+
+    // 跨步骤主键与因果时序强校验
+    const crossStepAudit = auditCrossStepConsistency({
+      flow,
+      results: input.results,
+      observations,
+      uiResults: input.uiResults,
+    });
+    crossStepAudits.push(crossStepAudit);
+
+    if (!crossStepAudit.passed) {
+      return {
+        ...flow,
+        status: 'FAIL',
+        failedStepId: flow.steps[0]?.id,
+        reason: `BUSINESS_FLOW_FAILED：${crossStepAudit.reason}`,
+        crossStepAudit,
+        beforeState: flow.steps.length ? observations.filter((item) => item.caseId === flow.steps[0].caseIds[0] && item.phase === 'BEFORE') : undefined,
+        actualState: crossStepAudit.inconsistencies,
+        expectedState: '跨步骤主键与因果一致',
+      };
+    }
+
+    return {
+      ...flow,
+      status: 'PASS',
+      crossStepAudit,
+      beforeState: flow.steps.length ? observations.filter((item) => item.caseId === flow.steps[0].caseIds[0] && item.phase === 'BEFORE') : undefined,
       actualState: previousResult ? responseObservation(previousResult) : undefined,
-      expectedState: flow.steps.at(-1)?.expectedState };
+      expectedState: flow.steps.at(-1)?.expectedState,
+    };
   });
   const passed = flows.filter((flow) => flow.status === 'PASS').length;
   return { graph: { ...input.graph, applicable: flows.length > 0,
-    flows, coverage: flows.length ? Math.round(passed / flows.length * 100) : 0 }, consistency, observations };
+    flows, coverage: flows.length ? Math.round(passed / flows.length * 100) : 0 }, consistency, observations, crossStepAudits };
 }
 
 export function evaluateCrossCaseInvariants(input: {
@@ -301,17 +528,38 @@ export function buildBusinessLevelProblems(input: {
   reproductionRun: boolean;
 }): DevTestProblem[] {
   const problems: DevTestProblem[] = [];
-  for (const flow of input.graph.flows.filter((item) => item.status === 'FAIL')) problems.push({
-    id: 'P000', type: 'FEATURE_BUG', severity: 'CRITICAL', dimension: 'FUNCTIONAL', scope: 'FEATURE',
-    businessFlowId: flow.id, message: flow.reason ?? 'BUSINESS_FLOW_FAILED', reasonCode: 'BUSINESS_FLOW_FAILED',
-    affectedCases: flow.steps.flatMap((step) => step.caseIds), rootCause: `BUSINESS_FLOW:${flow.id}`,
-    failureClass: 'PRODUCT_BUG', judgement: input.reproductionRun ? 'CONFIRMED_BUG' : 'LIKELY_BUG',
-    reproducible: input.reproductionRun, confidence: input.reproductionRun ? 1 : 0.86,
-    confidenceLabel: input.reproductionRun ? 'CONFIRMED' : 'LIKELY',
-    evidence: { failedStepId: flow.failedStepId, before: flow.beforeState, actual: flow.actualState, expected: flow.expectedState },
-    expected: JSON.stringify(flow.expectedState), actual: JSON.stringify(flow.actualState),
-    remediation: '修复失败步骤及其输入输出/状态依赖，然后运行 Regression Guard。',
-  });
+  for (const flow of input.graph.flows.filter((item) => item.status === 'FAIL')) {
+    const isCrossStep = Boolean(flow.crossStepAudit && !flow.crossStepAudit.passed);
+    problems.push({
+      id: 'P000',
+      type: isCrossStep ? 'DATA_CONSISTENCY_BUG' : 'FEATURE_BUG',
+      severity: 'CRITICAL',
+      dimension: 'FUNCTIONAL',
+      scope: isCrossStep ? 'DATA_CONSISTENCY' : 'FEATURE',
+      businessFlowId: flow.id,
+      message: flow.reason ?? 'BUSINESS_FLOW_FAILED',
+      reasonCode: isCrossStep ? 'CROSS_STEP_CORRELATION_ERROR' : 'BUSINESS_FLOW_FAILED',
+      affectedCases: flow.steps.flatMap((step) => step.caseIds),
+      rootCause: isCrossStep ? `CROSS_STEP:${flow.id}` : `BUSINESS_FLOW:${flow.id}`,
+      failureClass: 'PRODUCT_BUG',
+      judgement: input.reproductionRun ? 'CONFIRMED_BUG' : 'LIKELY_BUG',
+      reproducible: input.reproductionRun,
+      confidence: input.reproductionRun ? 1 : 0.9,
+      confidenceLabel: input.reproductionRun ? 'CONFIRMED' : 'LIKELY',
+      evidence: {
+        failedStepId: flow.failedStepId,
+        crossStepAudit: flow.crossStepAudit,
+        before: flow.beforeState,
+        actual: flow.actualState,
+        expected: flow.expectedState,
+      },
+      expected: JSON.stringify(flow.expectedState),
+      actual: JSON.stringify(flow.actualState),
+      remediation: isCrossStep
+        ? '修复前后步骤的主键传递（task_id, project_id, user_id, asset_url）与时序一致性。'
+        : '修复失败步骤及其输入输出/状态依赖，然后运行 Regression Guard。',
+    });
+  }
   for (const item of input.consistency.filter((result) => result.status === 'INCONSISTENT')) problems.push({
     id: 'P000', type: 'DATA_CONSISTENCY_BUG', severity: 'CRITICAL', dimension: 'FUNCTIONAL', scope: 'DATA_CONSISTENCY',
     message: item.reason ?? 'DATA_INCONSISTENCY', reasonCode: 'DATA_INCONSISTENCY', affectedCases: [item.caseId],

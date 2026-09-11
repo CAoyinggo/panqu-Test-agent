@@ -152,13 +152,13 @@ description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0
 5. **自动化测试命令**：
    - **全量契约自动化验证（28 项）**：
      ```bash
-     devtest flow api-diversion --project-root /Users/mac/agents/panqu-ai
+     devtest flow api-diversion --project-root /path/to/panqu-ai
      # 或在 panqu-ai 根目录执行快捷脚本：
      ./test-diversion.sh
      ```
    - **定向新模型接入就绪度诊断（精准核查单个模型）**：
      ```bash
-     devtest flow api-diversion --project-root /Users/mac/agents/panqu-ai --model-id <ID> [--model-type <video|image>]
+     devtest flow api-diversion --project-root /path/to/panqu-ai --model-id <ID> [--model-type <video|image>]
      # 或在 panqu-ai 根目录执行快捷脚本：
      ./test-diversion.sh --model-id 84
      ```

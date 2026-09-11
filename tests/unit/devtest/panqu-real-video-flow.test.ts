@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   maskSensitive,
+  loadPanquSession,
   fetchCsrfToken,
   submitRealVideoTask,
   verifyTaskDiversionSnapshot,
@@ -10,6 +11,11 @@ import {
 } from '../../../src/devtest/panqu-real-video-flow.js';
 
 describe('PanquRealVideoFlow Unit Tests', () => {
+  it('没有显式会话路径时拒绝执行，不读取机器专属默认文件', async () => {
+    vi.stubEnv('PANQU_SESSION_COOKIES_FILE', '');
+    try { await expect(loadPanquSession()).rejects.toThrow('SESSION_CONFIG_REQUIRED'); }
+    finally { vi.unstubAllEnvs(); }
+  });
   const mockBaseUrl = 'https://test.panqu.com';
   const mockCookies = 'PHPSESSID=mock_session_id; auth=%7B%22user%22%3A%7B%22id%22%3A1%7D%7D';
 

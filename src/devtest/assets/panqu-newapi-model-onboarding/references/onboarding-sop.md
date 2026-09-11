@@ -32,7 +32,7 @@
 ### 1. 静态与单元测试快速核查
 在 `test-flow` 仓库下执行自动化分流流程测试：
 ```bash
-node ./dist/bin/run-devtest.js flow api-diversion --project-root /Users/mac/agents/panqu-ai
+node ./dist/bin/run-devtest.js flow api-diversion --project-root /path/to/panqu-ai
 ```
 核对输出的 21 项契约用例是否全数 PASS。
 
