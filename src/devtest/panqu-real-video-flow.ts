@@ -155,10 +155,10 @@ export async function loadPanquSession(
 /**
  * 带有重试和防连接重置的通用 JSON 请求封装
  */
-async function fetchWithRetry(
+export async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  retries = 2
+  retries = 3
 ): Promise<Response> {
   const headers = {
     Connection: 'close',
@@ -168,11 +168,18 @@ async function fetchWithRetry(
   let lastError: Error | undefined;
   for (let i = 0; i <= retries; i++) {
     try {
-      return await fetch(url, { ...options, headers });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      try {
+        const response = await fetch(url, { ...options, headers, signal: controller.signal });
+        return response;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch (err) {
       lastError = err as Error;
       if (i < retries) {
-        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
       }
     }
   }

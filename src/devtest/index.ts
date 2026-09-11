@@ -175,3 +175,29 @@ export {
   type TaskStatusSnapshot,
   type RealVideoSubmitEvidence,
 } from './panqu-real-video-flow.js';
+export {
+  runPanquRealImageFlow,
+  submitRealImageTask,
+  verifyImageDiversionSnapshot,
+  pollImageTaskStatus,
+  renderRealImageReportMarkdown,
+  type PanquRealImageFlowOptions,
+  type PanquRealImageReport,
+  type ImageDiversionSnapshotCheck,
+  type ImageTaskStatusSnapshot,
+} from './panqu-real-image-flow.js';
+export {
+  runPanquRealCanvasFlow,
+  submitCanvasNodeTask,
+  type PanquRealCanvasFlowOptions,
+  type CanvasTaskReport,
+} from './panqu-real-canvas-flow.js';
+export {
+  runPanquBusinessSuite,
+  renderBusinessSuiteReportMarkdown,
+  type PanquBusinessSuiteOptions,
+  type PanquBusinessSuiteReport,
+  type BusinessModuleType,
+  type ModuleExecutionSummary,
+} from './panqu-business-suite.js';
+

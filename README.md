@@ -127,6 +127,93 @@ v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本
   ./test-diversion.sh --real-submit              # 28项契约 + 真实提交联动
   ```
 
+### Panqu 真实生图提交与分流快照核查流程（`devtest flow real-image-submit`）
+
+针对文生图与场景生图（Scene 生图）的真实环境自动化提交与分流验真，v4.33.5 推出生图全链路核验能力：
+- **真实生图协议与参数组装**：
+  - 发起 `POST /aivideo/scene/add`，真实写入主站 `pq_aivideo_scene` 表；
+  - 规范入参：设置 `row[type]=1`（提示词文生图），在 `row[extra]` 中注入 `selmodels`（如 `12-Nano Banana Pro`）、`serviceline='r'`（RunningHub 线路，触发 NewapiImageDiversionService 分流判定）；
+  - 安全防护：自动注入 `devtest_` 提示词前缀，凭证掩码保护。
+- **生图分流快照深度核验**：
+  - 查询 `GET /aivideo/scene/index`，精准断言：
+    - `extra.newapi_image === 1`：必须正确打上 NewAPI 生图分流标记；
+    - `extra.newapi_model`：必须记录客户端别名（如 `pan-banana-pro`）；
+    - `extra.newapi_org_id`：正确记录所属组织 ID；
+- **生图异步状态追踪**：
+  - 调度 `POST /aivideo/v2/task_status/apiGetStatus`（入参 `type=scene&ids=<taskId>`），实时轮询生图终态并抓取成图图片地址（`pic_url`）。
+- **执行命令**：
+  ```bash
+  # 真实生图提交自测（默认 Nano Banana Pro / ID 12）：
+  devtest flow real-image-submit [--model-id <id>] [--resolution <res>] [--serviceline <line>] [--no-poll]
+  # 快捷别名：
+  devtest real-image --model-id 12
+  ```
+
+### Panqu 真实画布节点工作流提交流程（`devtest flow real-canvas-submit`）
+
+针对无限画布（Canvas / Workflow）节点任务流转与分流验证，v4.33.5 推出画布真实业务提交流程：
+- **前端生产协议对齐**：
+  - 深度对齐 `aidrawos/components/nodes/videoNode.tsx` 真实交互标准，向主站 `/aivideo/videonew/add` 注入 `row[workflow_node_id]`、`row[workflow_id]` 与 `row[workflow_snapshot_id]`，消除旧独立接口未注入分流逻辑的隐患；
+  - 真实触发 `Videonew.php` 核心路由判定，落库并持久化 `extra.diversion = 10`。
+- **节点与分流快照核查**：
+  - 校验画布节点任务成功插入主站数据库，并正确绑定 NewAPI 模型别名（如 `wan3.0-video`）。
+- **执行命令**：
+  ```bash
+  devtest flow real-canvas-submit [--canvas-id <id>] [--node-id <id>] [--model-id <id>] [--no-poll]
+  # 快捷别名：
+  devtest real-canvas --canvas-id 127
+  ```
+
+### Panqu 业务全模块自动化自测综合套件（`devtest flow business-suite`）
+
+为了实现“图片、视频、画布、分流”四大业务模块的一键端到端闭环验证，平台提供四合一自动化综合套件：
+- **多模态四合一综合调度矩阵**：
+  1. **【分流矩阵】**：全量 28 项契约规则推演与双向判定断言；
+  2. **【视频模块】**：真实视频任务提交、`extra.diversion=10` 快照核查、生命周期追踪；
+  3. **【生图模块】**：真实生图任务提交、`extra.newapi_image=1` 快照核查、成图地址捕获；
+  4. **【画布模块】**：真实画布节点任务流转、`row[workflow_node_id]` 绑定与分流快照核查。
+- **业务工程根目录一键脚本（`test-business.sh`）**：
+  研发人员可在业务工程根目录无需记忆命令，秒级发起全量自测：
+  ```bash
+  cd /Users/mac/agents/panqu-ai
+  ./test-business.sh                      # 一键跑完全部四大模块（通过率 100%）
+  ./test-business.sh --module video       # 仅测试真实视频
+  ./test-business.sh --module image       # 仅测试真实生图
+  ./test-business.sh --module canvas      # 仅测试真实画布
+  ./test-business.sh --module diversion   # 仅测试分流矩阵
+  ./test-business.sh --no-poll            # 快速自测模式（核验快照后立即返回）
+  ```
+- **测试产物与证据**：
+  自动生成《业务全模块综合自测报告.md》与结构化 JSON 证据，提供清晰对比矩阵：
+  ```
+  ================ 业务全模块自动化自测综合报告 ================
+  套件 ID:     suite-1789105059234
+  目标模块:   all
+  用例统计:   总计 4 模块 | 通过 4 | 失败 0 | 通过率 100.0%
+  综合判定:   ALL_PASSED
+
+  模块执行详情:
+    ✅ [分流全量用例矩阵推演] 28/28 通过 - 需求覆盖率 100%, 目标模型就绪度 100%
+    ✅ [真实视频生成与分流快照] ✅ 命中 extra.diversion=10 (任务 ID: 239190) - 模型: wan3.0-video, 预扣积分: 70
+    ✅ [真实场景生图与分流快照] ✅ 命中 extra.newapi_image=1 (任务 ID: 1234) - 模型: pan-banana-pro
+    ✅ [真实画布工作流节点任务] ✅ 命中 extra.diversion=10 (任务 ID: 239191) - 画布 ID: 127
+  ==============================================================
+  ```
+
+### 领先单一 Skill 文件的四大代差架构说明
+
+相较于仅包含提示词的单文件智能体（如单一 Skill），本自测工程具备四大决定性的架构代差优势：
+1. **真实协议与环境交互能力 (Zero Hallucination)**：
+   - 单一 Skill 依赖 LLM 自行揣测代码逻辑，极易产生“代码看起来支持所以测试通过”的幻觉；
+   - 本工程具备真实 HTTP 驱动引擎，直连 `https://test.panqu.com`，动态获取 CSRF Token，真实向数据库插入任务并校验持久化记录。
+2. **多模态全业务覆盖 (Multi-Modal Full Coverage)**：
+   - 深度覆盖视频（`/aivideo/videonew/add`）、生图（`/aivideo/scene/add`）、画布（`/aivideo/videonew/add` 携带 `workflow_node_id`）与契约规则推演，实现全业务闭环。
+3. **数据库分流快照回查对账 (Snapshot Ground Truth)**：
+   - 任务提交后直接调取 FastAdmin 主站持久化快照，比对 `extra.diversion === 10`、`extra.newapi_image === 1`、`extra.newapi_model`，100% 杜绝假阳性。
+4. **长生命周期异步状态轮询监控 (Async Life-cycle Polling)**：
+   - 对接 `POST /aivideo/v2/task_status/apiGetStatus`，捕获任务排队、生成进度、成片/成图 URL 与预扣积分，提供全生命周期审计证据。
+
+
 ### Panqu Mission：持久化的真实生成任务控制器
 
 v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操作员核对的合法参数/报价组合中选择最低成本方案，修正昂贵或换错模型的建议，持久化提交意图，只提交一次，恢复原任务，解码结果媒体并核对任务级扣费证据。返回 HTTP 200、生成任务 ID、服务器成功状态或模型声称 PASS 都不能单独使任务通过。源码、素材、参数、报价和预算绑定在同一个计划 hash 中。

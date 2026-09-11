@@ -6,7 +6,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { redactSensitiveText } from '../src/core/redact.js';
-import { runDevTest, runPanquDiversionFlow, runPanquRealVideoFlow } from '../src/devtest/index.js';
+import {
+  runDevTest,
+  runPanquDiversionFlow,
+  runPanquRealVideoFlow,
+  runPanquRealImageFlow,
+  runPanquRealCanvasFlow,
+  runPanquBusinessSuite,
+} from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
 import { runPanquMissionCommand } from '../src/devtest/panqu-mission-cli.js';
@@ -46,7 +53,13 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest run --requirement <file> --env test [--github]
   devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--model-id <id>] [--model-type <video|image>] [--real-submit]
   devtest flow real-video-submit [--model-id <id>] [--duration <sec>] [--resolution <res>] [--aspect-ratio <ratio>] [--poll-timeout <sec>] [--no-poll]
+  devtest flow real-image-submit [--model-id <id>] [--resolution <res>] [--serviceline <line>] [--poll-timeout <sec>] [--no-poll]
+  devtest flow real-canvas-submit [--canvas-id <id>] [--node-id <id>] [--model-id <id>] [--poll-timeout <sec>] [--no-poll]
+  devtest flow business-suite [--module all|video|image|canvas|diversion] [--env test|preonline]
+  devtest business-suite [--module all|video|image|canvas|diversion]
   devtest real-video [--model-id <id>]
+  devtest real-image [--model-id <id>]
+  devtest real-canvas [--canvas-id <id>]
   devtest status [--run <id>]
 
 兼容入口:
@@ -594,10 +607,197 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
       return report.diversionCheck?.isDiverted ? 0 : 1;
     }
+
+    if (argv[0] === 'real-image' || (argv[0] === 'flow' && argv[1] === 'real-image-submit')) {
+      let modelId: number | undefined;
+      let resolution: string | undefined;
+      let serviceline: string | undefined;
+      let prompt: string | undefined;
+      let pollTimeoutSec: number | undefined;
+      let noPoll = false;
+      let env: 'test' | 'preonline' = 'test';
+      let outputDir: string | undefined;
+      const startIndex = argv[0] === 'real-image' ? 1 : 2;
+
+      for (let i = startIndex; i < argv.length; i++) {
+        if (argv[i] === '--model-id' && argv[i + 1]) {
+          modelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--resolution' && argv[i + 1]) {
+          resolution = argv[++i];
+        } else if (argv[i] === '--serviceline' && argv[i + 1]) {
+          serviceline = argv[++i];
+        } else if (argv[i] === '--prompt' && argv[i + 1]) {
+          prompt = argv[++i];
+        } else if (argv[i] === '--poll-timeout' && argv[i + 1]) {
+          pollTimeoutSec = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--no-poll') {
+          noPoll = true;
+        } else if (argv[i] === '--env' && argv[i + 1]) {
+          env = argv[++i].toLowerCase() as 'test' | 'preonline';
+        } else if (argv[i] === '--output' && argv[i + 1]) {
+          outputDir = path.resolve(root, argv[++i]);
+        }
+      }
+
+      console.log(`[DevTest Flow] 🚀 发起真实生图提交与分流快照核查流程 (real-image-submit)...`);
+      console.log(`[DevTest Flow] 环境: ${env} | 模型 ID: ${modelId ?? 12} | 线路: ${serviceline ?? 'r'} | 分辨率: ${resolution ?? '2K'}`);
+      const report = await runPanquRealImageFlow({
+        env,
+        modelId,
+        resolution,
+        serviceline,
+        prompt,
+        pollTimeoutSec,
+        noPoll,
+        outputDir,
+        verbose: true,
+      });
+
+      console.log(`\n================ 真实生图提交与分流验证报告 ================`);
+      console.log(`运行 ID:     ${report.runId}`);
+      console.log(`目标环境:   ${report.environment} (${report.targetUrl})`);
+      console.log(`测试账号:   ${report.accountMasked}`);
+      console.log(`提交状态:   任务 ID = ${report.summary.taskId ?? '失败'} (耗时 ${report.submission.durationMs}ms)`);
+      console.log(`分流快照:   extra.newapi_image = ${report.diversionCheck?.newapiImageFlag} (${report.diversionCheck?.isDiverted ? '✅ 命中 NewAPI 生图分流' : '❌ 未命中'})`);
+      console.log(`模型别名:   ${report.diversionCheck?.newapiModel || '(未写入)'}`);
+      if (report.polling) {
+        console.log(`生成状态:   ${report.polling.finalStatus.statusLabel} (进度 ${report.polling.finalStatus.progress}%)`);
+        if (report.polling.finalStatus.picUrl) {
+          console.log(`成片地址:   ${report.polling.finalStatus.picUrl}`);
+        }
+      }
+      console.log(`\n自测报告:   ${report.artifacts.reportMd}`);
+      console.log(`结构化证据: ${report.artifacts.evidenceJson}`);
+      console.log(`============================================================\n`);
+
+      return report.diversionCheck?.isDiverted ? 0 : 1;
+    }
+
+    if (argv[0] === 'real-canvas' || (argv[0] === 'flow' && argv[1] === 'real-canvas-submit')) {
+      let canvasId: string | undefined;
+      let nodeId: string | undefined;
+      let modelId: number | undefined;
+      let prompt: string | undefined;
+      let pollTimeoutSec: number | undefined;
+      let noPoll = false;
+      let env: 'test' | 'preonline' = 'test';
+      let outputDir: string | undefined;
+      const startIndex = argv[0] === 'real-canvas' ? 1 : 2;
+
+      for (let i = startIndex; i < argv.length; i++) {
+        if (argv[i] === '--canvas-id' && argv[i + 1]) {
+          canvasId = argv[++i];
+        } else if (argv[i] === '--node-id' && argv[i + 1]) {
+          nodeId = argv[++i];
+        } else if (argv[i] === '--model-id' && argv[i + 1]) {
+          modelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--prompt' && argv[i + 1]) {
+          prompt = argv[++i];
+        } else if (argv[i] === '--poll-timeout' && argv[i + 1]) {
+          pollTimeoutSec = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--no-poll') {
+          noPoll = true;
+        } else if (argv[i] === '--env' && argv[i + 1]) {
+          env = argv[++i].toLowerCase() as 'test' | 'preonline';
+        } else if (argv[i] === '--output' && argv[i + 1]) {
+          outputDir = path.resolve(root, argv[++i]);
+        }
+      }
+
+      console.log(`[DevTest Flow] 🚀 发起真实画布节点任务流转与分流快照核查 (real-canvas-submit)...`);
+      console.log(`[DevTest Flow] 环境: ${env} | 画布 ID: ${canvasId ?? '127'} | 模型 ID: ${modelId ?? 84}`);
+      const report = await runPanquRealCanvasFlow({
+        env,
+        canvasId,
+        nodeId,
+        modelId,
+        prompt,
+        pollTimeoutSec,
+        noPoll,
+        outputDir,
+        verbose: true,
+      });
+
+      console.log(`\n================ 真实画布任务与分流验证报告 ================`);
+      console.log(`运行 ID:     ${report.runId}`);
+      console.log(`目标环境:   ${report.environment}`);
+      console.log(`画布/节点:  ${report.canvasId} / ${report.nodeId}`);
+      console.log(`主站任务:   ID = ${report.taskId ?? '失败'} (耗时 ${report.submission.durationMs}ms)`);
+      console.log(`分流快照:   extra.diversion = ${report.diversionCheck?.diversionValue} (${report.diversionCheck?.isDiverted ? '✅ 命中 NewAPI' : '❌ 未命中'})`);
+      console.log(`模型别名:   ${report.diversionCheck?.newapiModel || '(未写入)'}`);
+      console.log(`\n自测报告:   ${report.artifacts.reportMd}`);
+      console.log(`结构化证据: ${report.artifacts.evidenceJson}`);
+      console.log(`============================================================\n`);
+
+      return report.diversionCheck?.isDiverted ? 0 : 1;
+    }
+
+    if (argv[0] === 'business-suite' || (argv[0] === 'flow' && argv[1] === 'business-suite')) {
+      let moduleType: 'all' | 'video' | 'image' | 'canvas' | 'diversion' = 'all';
+      let env: 'test' | 'preonline' = 'test';
+      let outputDir: string | undefined;
+      let noPoll = false;
+      let pollTimeoutSec: number | undefined;
+      let videoModelId: number | undefined;
+      let imageModelId: number | undefined;
+      let canvasModelId: number | undefined;
+      const startIndex = argv[0] === 'business-suite' ? 1 : 2;
+
+      for (let i = startIndex; i < argv.length; i++) {
+        if (argv[i] === '--module' && argv[i + 1]) {
+          moduleType = argv[++i].toLowerCase() as any;
+        } else if (argv[i] === '--env' && argv[i + 1]) {
+          env = argv[++i].toLowerCase() as 'test' | 'preonline';
+        } else if (argv[i] === '--output' && argv[i + 1]) {
+          outputDir = path.resolve(root, argv[++i]);
+        } else if (argv[i] === '--no-poll') {
+          noPoll = true;
+        } else if (argv[i] === '--poll-timeout' && argv[i + 1]) {
+          pollTimeoutSec = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--video-model-id' && argv[i + 1]) {
+          videoModelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--image-model-id' && argv[i + 1]) {
+          imageModelId = parseInt(argv[++i], 10);
+        } else if (argv[i] === '--canvas-model-id' && argv[i + 1]) {
+          canvasModelId = parseInt(argv[++i], 10);
+        }
+      }
+
+      console.log(`[DevTest Flow] 🌟 启动全模块业务自测综合套件 (business-suite)...`);
+      console.log(`[DevTest Flow] 环境: ${env} | 目标模块: ${moduleType}`);
+      const report = await runPanquBusinessSuite({
+        module: moduleType,
+        env,
+        projectRoot: root,
+        outputDir,
+        noPoll,
+        pollTimeoutSec,
+        videoModelId,
+        imageModelId,
+        canvasModelId,
+        verbose: true,
+      });
+
+      console.log(`\n================ 业务全模块自动化自测综合报告 ================`);
+      console.log(`套件 ID:     ${report.suiteId}`);
+      console.log(`目标模块:   ${report.targetModule}`);
+      console.log(`用例统计:   总计 ${report.summary.total} 模块 | 通过 ${report.summary.passed} | 失败 ${report.summary.failed} | 通过率 ${report.summary.passRate}`);
+      console.log(`综合判定:   ${report.summary.overallStatus}`);
+      console.log(`\n模块执行详情:`);
+      report.moduleSummaries.forEach((m) => {
+        console.log(`  ${m.passed ? '✅' : '❌'} [${m.title}] ${m.diversionResult} (耗时: ${m.durationMs}ms, 任务 ID: ${m.taskId ?? 'N/A'}) - ${m.details}`);
+      });
+      console.log(`\n综合自测报告: ${report.artifacts.reportMd}`);
+      console.log(`结构化证据:   ${report.artifacts.evidenceJson}`);
+      console.log(`==============================================================\n`);
+
+      return report.summary.overallStatus === 'ALL_PASSED' ? 0 : 1;
+    }
+
     if (argv[0] === 'flow') {
       const flowName = argv[1];
       if (flowName !== 'api-diversion') {
-        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion 或 real-video-submit，收到: ${flowName ?? '(空)'}`);
+        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion, real-video-submit, real-image-submit, real-canvas-submit, 或 business-suite，收到: ${flowName ?? '(空)'}`);
       }
       let projectRoot = root;
       let outputDir: string | undefined;
