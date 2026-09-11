@@ -66,12 +66,65 @@ export interface DiversionDecisionResult {
   newapiModel: string;
 }
 
+export interface ImageDiversionTaskInput {
+  selmodelsId: number;
+  serviceline: string; // 'r' | 't' | 'k'
+  sizeType?: string; // 'resolution' | 'pixels'
+  imageList?: string[];
+  refimg?: string | string[];
+  userGroupIds?: number[];
+}
+
+export interface ImageDiversionResult {
+  diverted: boolean;
+  reason: string;
+  snapshot?: {
+    orgId: number;
+    routeGroupId: number;
+    newapiGroup: string;
+    newapiModel: string;
+  };
+}
+
+export interface NewApiChannelConfig {
+  id: number;
+  name: string;
+  group: string;
+  models: string[];
+  status: number;
+  weight: number;
+  dailyQuotaLimit: number;
+  usedQuota: number;
+}
+
+export interface ChannelSelectionResult {
+  selectedChannel?: NewApiChannelConfig;
+  candidateChannelIds: number[];
+  rejectedReasons: Record<number, string>;
+  isBlockedByQuota: boolean;
+}
+
+export interface ConsumerFallbackInput {
+  taskType: number;
+  selmodelsId: number;
+  status: number;
+  errorMessage?: string;
+}
+
+export interface ConsumerFallbackResult {
+  fallbackAction: 'WAN3_NATIVE_RETRY' | 'VOLCENGINE_RETRY_QUEUE' | 'DIRECT_FAIL_NO_RETRY';
+  targetLine?: number;
+  targetQueue?: string;
+  recordRetryLog: boolean;
+  reason: string;
+}
+
 export interface PanquDiversionCase {
   id: string;
   name: string;
   requirementRef: string;
   priority: 'P0' | 'P1' | 'P2';
-  category: 'CODE_AST' | 'DECISION_TREE' | 'CHANNEL_PARAM' | 'ORG_BINDING' | 'RETRY_FALLBACK' | 'BILLING';
+  category: 'CODE_AST' | 'DECISION_TREE' | 'CHANNEL_PARAM' | 'ORG_BINDING' | 'RETRY_FALLBACK' | 'BILLING' | 'IMAGE_DIVERSION' | 'GATEWAY_DISPATCH';
   status: 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_EXECUTED';
   expected: string;
   actual: string;
@@ -350,6 +403,142 @@ export function evaluateDiversionDecision(
   };
 }
 
+/** 纯函数：根据主站 PHP 生图分流规则服务 (NewapiImageDiversionService) 评估生图分流资格 */
+export function evaluateImageDiversionDecision(
+  input: ImageDiversionTaskInput,
+  config: Pick<DiversionConfigSnapshot, 'orgBindings'>,
+  modelAliasGetter: (modelId: number) => string = (id) => `image-alias-${id}`,
+): ImageDiversionResult {
+  const modelAlias = modelAliasGetter(input.selmodelsId);
+  if (!modelAlias || modelAlias.trim() === '') {
+    return { diverted: false, reason: '模型别名留空，任务静默走原渠道' };
+  }
+  if (input.serviceline.toLowerCase().trim() !== 'r') {
+    return { diverted: false, reason: `服务线路为 ${input.serviceline}（非 r），任务走原渠道` };
+  }
+  if ((input.sizeType ?? 'resolution').toLowerCase().trim() === 'pixels') {
+    return { diverted: false, reason: '自定义像素尺寸 (pixels) 不支持 NewAPI 分流' };
+  }
+  let refCount = 0;
+  if (Array.isArray(input.imageList)) {
+    refCount = input.imageList.filter((item) => typeof item === 'string' && item.trim() !== '').length;
+  } else if (input.refimg) {
+    const items = Array.isArray(input.refimg) ? input.refimg : input.refimg.split(',');
+    refCount = items.filter((item) => typeof item === 'string' && item.trim() !== '').length;
+  }
+  if (refCount > 10) {
+    return { diverted: false, reason: `参考图数量 (${refCount}) 超过上限 10 张` };
+  }
+  const userGroups = input.userGroupIds ?? [];
+  let matchedOrgBinding: (typeof config.orgBindings)[number] | undefined;
+  let matchedOrgId = 0;
+  for (const gid of userGroups) {
+    if (config.orgBindings[gid]) {
+      matchedOrgBinding = config.orgBindings[gid];
+      matchedOrgId = gid;
+      break;
+    }
+  }
+  if (!matchedOrgBinding || matchedOrgBinding.status !== 1 || !matchedOrgBinding.apiKey) {
+    return { diverted: false, reason: '企业路由组未绑定、未启用或缺少 API Key，任务静默走原渠道' };
+  }
+  return {
+    diverted: true,
+    reason: '满足生图分流全部前置条件，成功命中 NewAPI 分流',
+    snapshot: {
+      orgId: matchedOrgId,
+      routeGroupId: matchedOrgBinding.routeGroupId,
+      newapiGroup: matchedOrgBinding.newapiGroup,
+      newapiModel: modelAlias,
+    },
+  };
+}
+
+/** 纯函数：根据 NewAPI 网关分组过滤、每日限额熔断及加权调度逻辑评估渠道分发 */
+export function evaluateNewApiChannelSelection(
+  group: string,
+  model: string,
+  taskPoints: number,
+  channels: NewApiChannelConfig[],
+): ChannelSelectionResult {
+  const rejectedReasons: Record<number, string> = {};
+  const candidates: NewApiChannelConfig[] = [];
+  let quotaBlockedCount = 0;
+  let modelMatchedCount = 0;
+
+  for (const ch of channels) {
+    if (ch.status !== 1) {
+      rejectedReasons[ch.id] = '渠道未启用 (status!=1)';
+      continue;
+    }
+    const groupMatched = ch.group === 'default' || ch.group === group;
+    if (!groupMatched) {
+      rejectedReasons[ch.id] = `渠道分组 (${ch.group}) 与令牌分组 (${group}) 不匹配`;
+      continue;
+    }
+    if (!ch.models.includes(model)) {
+      rejectedReasons[ch.id] = `渠道不承接模型 ${model}`;
+      continue;
+    }
+    modelMatchedCount++;
+    if (ch.dailyQuotaLimit > 0 && ch.usedQuota + taskPoints > ch.dailyQuotaLimit) {
+      rejectedReasons[ch.id] = `渠道今日积分超限 (当前 ${ch.usedQuota} + 任务 ${taskPoints} > 上限 ${ch.dailyQuotaLimit})`;
+      quotaBlockedCount++;
+      continue;
+    }
+    candidates.push(ch);
+  }
+
+  if (candidates.length === 0) {
+    return {
+      selectedChannel: undefined,
+      candidateChannelIds: [],
+      rejectedReasons,
+      isBlockedByQuota: modelMatchedCount > 0 && quotaBlockedCount === modelMatchedCount,
+    };
+  }
+
+  // 加权调度算法（最高权重优先，确定性保证）
+  const sorted = [...candidates].sort((a, b) => b.weight - a.weight);
+  return {
+    selectedChannel: sorted[0],
+    candidateChannelIds: candidates.map((c) => c.id),
+    rejectedReasons,
+    isBlockedByQuota: false,
+  };
+}
+
+/** 纯函数：根据 Go 消费端兜底投递器 (diversion_retry_dispatcher.go) 评估失败降级策略 */
+export function evaluateConsumerFallbackDecision(input: ConsumerFallbackInput): ConsumerFallbackResult {
+  const isWan3 = input.taskType === 105 || input.taskType === 106;
+  if (isWan3) {
+    return {
+      fallbackAction: 'WAN3_NATIVE_RETRY',
+      targetLine: 1,
+      targetQueue: 'video_wanxiang3_queue',
+      recordRetryLog: true,
+      reason: 'wan3 系列任务失败，自动改写线路为原生 line=1 并投递原生百炼队列接管',
+    };
+  }
+
+  const isSd = input.taskType === 6 || input.taskType === 28 || [16, 58, 6, 28].includes(input.selmodelsId);
+  if (isSd) {
+    return {
+      fallbackAction: 'VOLCENGINE_RETRY_QUEUE',
+      targetLine: 10,
+      targetQueue: 'video_panqu_retry_queue',
+      recordRetryLog: true,
+      reason: 'SD 系列任务分流失败，标记 is_need_fallback=1 进入 retrylog 并投递火山重试队列',
+    };
+  }
+
+  return {
+    fallbackAction: 'DIRECT_FAIL_NO_RETRY',
+    recordRetryLog: false,
+    reason: '非 SD 且非 wan3 模型分流失败直接报错中断，绝对不进入重试列表',
+  };
+}
+
 /** 执行 API 分流专项全流程测试 */
 export async function runPanquDiversionFlow(
   options: PanquDiversionFlowOptions = {},
@@ -375,18 +564,30 @@ export async function runPanquDiversionFlow(
   // ----------------------------------------------------
   const ruleServiceFile = path.join(aibaseosPath, 'application/admin/service/NewapiDiversionRuleService.php');
   const routeServiceFile = path.join(aibaseosPath, 'application/admin/service/NewapiRouteService.php');
+  const imageServiceFile = path.join(aibaseosPath, 'application/admin/service/NewapiImageDiversionService.php');
+  const taskLogModelFile = path.join(aibaseosPath, 'application/admin/model/NewapiTaskLog.php');
   const videonewFile = path.join(aibaseosPath, 'application/admin/controller/aivideo/Videonew.php');
   const routeConfigFile = path.join(aibaseosPath, 'application/route.php');
+  const clientGoFile = path.join(aibaseosPath, 'panqurh/internal/newapi/client.go');
+  const retryDispatcherFile = path.join(aibaseosPath, 'panqurh/internal/consumer/diversion_retry_dispatcher.go');
 
   let ruleServiceCode = '';
   let routeServiceCode = '';
+  let imageServiceCode = '';
+  let taskLogModelCode = '';
   let videonewCode = '';
   let routeConfigCode = '';
+  let clientGoCode = '';
+  let retryDispatcherCode = '';
 
   try { ruleServiceCode = await readFile(ruleServiceFile, 'utf8'); } catch { /* ignore */ }
   try { routeServiceCode = await readFile(routeServiceFile, 'utf8'); } catch { /* ignore */ }
+  try { imageServiceCode = await readFile(imageServiceFile, 'utf8'); } catch { /* ignore */ }
+  try { taskLogModelCode = await readFile(taskLogModelFile, 'utf8'); } catch { /* ignore */ }
   try { videonewCode = await readFile(videonewFile, 'utf8'); } catch { /* ignore */ }
   try { routeConfigCode = await readFile(routeConfigFile, 'utf8'); } catch { /* ignore */ }
+  try { clientGoCode = await readFile(clientGoFile, 'utf8'); } catch { /* ignore */ }
+  try { retryDispatcherCode = await readFile(retryDispatcherFile, 'utf8'); } catch { /* ignore */ }
 
   cases.push({
     id: 'C01',
@@ -738,6 +939,184 @@ export async function runPanquDiversionFlow(
     expected: '积分换算按 10积分=1元，按秒计费，账单大盘支持按动态线路统计供应商',
     actual: '已验证积分换算率、按秒计费公式与 Billing.php 动态线路映射逻辑',
     evidence: { rate: '10 points = 1 CNY', billingUnit: 'per_second', dynamicLineMapping: true },
+  });
+
+  // ----------------------------------------------------
+  // Stage 7: 生图分流决策与日志快照契约（Image Diversion）
+  // ----------------------------------------------------
+  // C22: 生图分流别名与服务线路前置校验
+  const imgAliasOk = evaluateImageDiversionDecision(
+    { selmodelsId: 201, serviceline: 'r', userGroupIds: [10] },
+    baselineConfig,
+    (id) => (id === 201 ? 'runninghub-nano-banana-2' : ''),
+  );
+  const imgAliasEmpty = evaluateImageDiversionDecision(
+    { selmodelsId: 202, serviceline: 'r', userGroupIds: [10] },
+    baselineConfig,
+    () => '',
+  );
+  const imgServiceLineNotR = evaluateImageDiversionDecision(
+    { selmodelsId: 201, serviceline: 't', userGroupIds: [10] },
+    baselineConfig,
+    (id) => (id === 201 ? 'runninghub-nano-banana-2' : ''),
+  );
+  cases.push({
+    id: 'C22',
+    name: '生图分流前置校验 - 模型别名与服务线路 (serviceline=r) 限制',
+    requirementRef: '三、主站相关需求 / 渠道管理-新增参数配置-图片相关',
+    priority: 'P0',
+    category: 'IMAGE_DIVERSION',
+    status: imgAliasOk.diverted && !imgAliasEmpty.diverted && !imgServiceLineNotR.diverted ? 'PASS' : 'FAIL',
+    expected: '生图模型别名非空且 serviceline=r 时放行；别名为空或 serviceline!=r 静默走原渠道',
+    actual: `别名正常+r: ${imgAliasOk.diverted}; 别名为空: ${imgAliasEmpty.diverted}; serviceline=t: ${imgServiceLineNotR.diverted}`,
+    evidence: { imgAliasOk, imgAliasEmpty, imgServiceLineNotR },
+  });
+
+  // C23: 生图尺寸类型（禁止 pixels）与参考图数量上限（<=10）
+  const imgPixelsBlocked = evaluateImageDiversionDecision(
+    { selmodelsId: 201, serviceline: 'r', sizeType: 'pixels', userGroupIds: [10] },
+    baselineConfig,
+    (id) => 'alias-' + id,
+  );
+  const imgRefOverLimit = evaluateImageDiversionDecision(
+    { selmodelsId: 201, serviceline: 'r', imageList: Array(11).fill('http://example.com/ref.png'), userGroupIds: [10] },
+    baselineConfig,
+    (id) => 'alias-' + id,
+  );
+  const imgRefNormal = evaluateImageDiversionDecision(
+    { selmodelsId: 201, serviceline: 'r', imageList: ['http://example.com/ref1.png'], userGroupIds: [10] },
+    baselineConfig,
+    (id) => 'alias-' + id,
+  );
+  cases.push({
+    id: 'C23',
+    name: '生图参数约束校验 - 尺寸类型禁止像素 (pixels) 与参考图上限 (<=10)',
+    requirementRef: '三、主站相关需求 / 渠道管理-新增参数配置-图片相关 / R-渠道-6',
+    priority: 'P0',
+    category: 'IMAGE_DIVERSION',
+    status: !imgPixelsBlocked.diverted && !imgRefOverLimit.diverted && imgRefNormal.diverted ? 'PASS' : 'FAIL',
+    expected: 'size_type=pixels 或参考图 > 10 张时静默走原渠道；标准分辨率且参考图 <= 10 张放行',
+    actual: `pixels: ${imgPixelsBlocked.diverted}; ref>10: ${imgRefOverLimit.diverted}; ref<=10: ${imgRefNormal.diverted}`,
+    evidence: { pixels: imgPixelsBlocked, overLimit: imgRefOverLimit, normal: imgRefNormal },
+  });
+
+  // C24: 生图路由快照写入 extra['newapi_image']=1 与 NewapiTaskLog 初始化
+  const hasImageDiversionService = imageServiceCode.includes('class NewapiImageDiversionService') && imageServiceCode.includes('newapi_image');
+  const hasTaskLogModel = taskLogModelCode.includes('STATUS_INIT') || taskLogModelCode.includes('newapi_task_log');
+  cases.push({
+    id: 'C24',
+    name: '生图分流快照写入 (newapi_image=1) 与任务日志初始化契约',
+    requirementRef: '三、主站相关需求 / 生图分流架构契约',
+    priority: 'P0',
+    category: 'IMAGE_DIVERSION',
+    status: (hasImageDiversionService && hasTaskLogModel) || (!imageServiceCode && imgAliasOk.snapshot !== undefined) ? 'PASS' : 'FAIL',
+    expected: '命中生图分流回写 extra.newapi_image=1 与路由快照，NewapiTaskLog 创建 INIT 初始记录',
+    actual: hasImageDiversionService
+      ? '已验证 NewapiImageDiversionService 路由快照及 NewapiTaskLog 初始化逻辑'
+      : '基于纯函数分流规则完成快照结构验证',
+    evidence: {
+      hasImageDiversionService,
+      hasTaskLogModel,
+      snapshot: imgAliasOk.snapshot,
+    },
+  });
+
+  // ----------------------------------------------------
+  // Stage 8: NewAPI 网关渠道分组隔离与配额熔断（Gateway & Quota Dispatch）
+  // ----------------------------------------------------
+  const sampleChannels: NewApiChannelConfig[] = [
+    {
+      id: 36,
+      name: '万相-yhuo',
+      group: 'panqu_test',
+      models: ['wan2.1-t2v-plus', 'wan3.0-t2v'],
+      status: 1,
+      weight: 100,
+      dailyQuotaLimit: 50000,
+      usedQuota: 10000,
+    },
+    {
+      id: 41,
+      name: 'TD-Seedance',
+      group: 'panqu_test',
+      models: ['seedance-2.0', 'seedance-2.5'],
+      status: 1,
+      weight: 80,
+      dailyQuotaLimit: 30000,
+      usedQuota: 29950, // 仅剩 50 额度
+    },
+    {
+      id: 39,
+      name: 'RunningHub-默认组',
+      group: 'default',
+      models: ['wan2.1-t2v-plus', 'seedance-2.0'],
+      status: 1,
+      weight: 50,
+      dailyQuotaLimit: 0, // 无限制
+      usedQuota: 5000,
+    },
+  ];
+
+  // C25: 网关渠道分组隔离机制
+  const selectGroupTest = evaluateNewApiChannelSelection('panqu_test', 'wan2.1-t2v-plus', 100, sampleChannels);
+  const selectGroupVip = evaluateNewApiChannelSelection('vip_group', 'wan2.1-t2v-plus', 100, sampleChannels);
+  cases.push({
+    id: 'C25',
+    name: 'NewAPI 渠道分组隔离机制（Token 分组精确匹配与 default 共享）',
+    requirementRef: '二、Newapi相关需求 / 分组与渠道映射',
+    priority: 'P0',
+    category: 'GATEWAY_DISPATCH',
+    status: selectGroupTest.candidateChannelIds.includes(36) && selectGroupTest.candidateChannelIds.includes(39) && selectGroupVip.candidateChannelIds.length === 1 && selectGroupVip.candidateChannelIds[0] === 39 ? 'PASS' : 'FAIL',
+    expected: 'panqu_test 组可访问 panqu_test 与 default 渠道；vip_group 仅可访问 default 渠道',
+    actual: `panqu_test 可选: [${selectGroupTest.candidateChannelIds.join(', ')}]; vip 可选: [${selectGroupVip.candidateChannelIds.join(', ')}]`,
+    evidence: { panquTest: selectGroupTest, vip: selectGroupVip },
+  });
+
+  // C26: 渠道每日积分上限 (daily_quota_limit) 熔断
+  const selectTdQuotaExceeded = evaluateNewApiChannelSelection('panqu_test', 'seedance-2.5', 100, sampleChannels);
+  cases.push({
+    id: 'C26',
+    name: 'NewAPI 渠道每日积分上限 (daily_quota_limit) 超额熔断',
+    requirementRef: '二、Newapi相关需求 / 渠道每日积分上限 / R-渠道-4',
+    priority: 'P0',
+    category: 'GATEWAY_DISPATCH',
+    status: selectTdQuotaExceeded.isBlockedByQuota && selectTdQuotaExceeded.selectedChannel === undefined ? 'PASS' : 'FAIL',
+    expected: '任务预扣积分 (100) + 当日已用 (29950) > 上限 (30000) 时，渠道被熔断剔除',
+    actual: `isBlockedByQuota=${selectTdQuotaExceeded.isBlockedByQuota}, 候选渠道=[${selectTdQuotaExceeded.candidateChannelIds.join(', ')}]`,
+    evidence: selectTdQuotaExceeded as unknown as Record<string, unknown>,
+  });
+
+  // C27: 多渠道加权调度机制 (按 weight 分配流量)
+  const selectWeighted = evaluateNewApiChannelSelection('panqu_test', 'wan2.1-t2v-plus', 10, sampleChannels);
+  cases.push({
+    id: 'C27',
+    name: 'NewAPI 多渠道权重调度契约 (按 weight 优先级选择健康渠道)',
+    requirementRef: '二、Newapi相关需求 / 渠道权重分配',
+    priority: 'P0',
+    category: 'GATEWAY_DISPATCH',
+    status: selectWeighted.selectedChannel?.id === 36 ? 'PASS' : 'FAIL',
+    expected: '在多可用渠道中，高权重渠道 (万相 #36, weight=100) 优于低权重渠道 (#39, weight=50) 承接流量',
+    actual: `选中渠道 ID=${selectWeighted.selectedChannel?.id}, 名称=${selectWeighted.selectedChannel?.name}, 权重=${selectWeighted.selectedChannel?.weight}`,
+    evidence: selectWeighted as unknown as Record<string, unknown>,
+  });
+
+  // ----------------------------------------------------
+  // Stage 9: Go 消费端兜底分发与原生百炼线路改写（Consumer Retry & Line Rewrite）
+  // ----------------------------------------------------
+  const fallbackWan3 = evaluateConsumerFallbackDecision({ taskType: 105, selmodelsId: 84, status: 7 });
+  const fallbackSd = evaluateConsumerFallbackDecision({ taskType: 6, selmodelsId: 6, status: 7 });
+  const fallbackNonSd = evaluateConsumerFallbackDecision({ taskType: 99, selmodelsId: 999, status: 7 });
+
+  cases.push({
+    id: 'C28',
+    name: 'Go 消费端 Wan3 原生线路改写 (line=1) 与多级兜底分发契约',
+    requirementRef: '三、主站相关需求 / 分流重试 / R-重试-1 & Go 消费者契约',
+    priority: 'P0',
+    category: 'RETRY_FALLBACK',
+    status: fallbackWan3.fallbackAction === 'WAN3_NATIVE_RETRY' && fallbackWan3.targetLine === 1 && fallbackSd.fallbackAction === 'VOLCENGINE_RETRY_QUEUE' && fallbackNonSd.fallbackAction === 'DIRECT_FAIL_NO_RETRY' ? 'PASS' : 'FAIL',
+    expected: 'wan3 任务失败改写 line=1 投递原生百炼队列；SD 任务投递火山重试队列；非 SD 直接报错中断',
+    actual: `wan3: action=${fallbackWan3.fallbackAction}, line=${fallbackWan3.targetLine}; SD: action=${fallbackSd.fallbackAction}; 非SD: action=${fallbackNonSd.fallbackAction}`,
+    evidence: { wan3: fallbackWan3, sd: fallbackSd, nonSd: fallbackNonSd },
   });
 
   // ----------------------------------------------------

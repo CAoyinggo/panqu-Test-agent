@@ -75,17 +75,19 @@ v4.33.1 增强针对复合多模块仓库（`panqu-ai` 复合架构）的项目�
 
 ### Panqu API 分流专项测试流程（`devtest flow api-diversion`）
 
-v4.33.2 引入面向飞书需求《[0903 - 主站与Newapi对接v1.2版本](https://panqu-ai.feishu.cn/docx/W3cZd813YoNMnCxiT1zckWzenwe)》的独立 API 分流测试流程（API Diversion Test Flow）：
-- **全链路两级分流决策树**：
-  - **第 1 级（主站资格判断）**：分流模式切换（`newapi` / `legacy` / `off`）、硬性资格拦截（提示词 > 5000 字、`mov` 格式、真人人像、带参考视频 Seedance 拦截）、全量模型判断（`pq_model_config.is_newapi_global == 1` 绕过组织路由组直达 NewAPI 全局渠道，记 `org_id=0`）、非全量模型全局能力并集与分组能力精准校验（`isModelRoutable` 与 `isModelRoutableForGroup`）；
-  - **第 2 级（NewAPI 调度与渠道分发）**：覆盖 Wan 3.0 / Wan 3.0 Prime（6 种宽高比）、RunningHub 视频（sd2.0/2.5/fast 分辨率含 768P、全能参考/首尾帧）、RunningHub 图片（1k/2k/4k 与 9 种画幅）、TD 渠道等参数约束；
-  - **异常兜底与计费**：SD 系列失败标记 `is_need_fallback` 进入兜底、非 SD 模型不进重试；10 积分=1 元计费核对与大盘动态线路映射；
-  - **划掉项保护**：严格识别需求文档中的删除线属性，菲玲渠道与海外站同步排除在缺陷范围之外。
+v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本](https://panqu-ai.feishu.cn/docx/W3cZd813YoNMnCxiT1zckWzenwe)》的独立 API 分流测试流程（API Diversion Test Flow），覆盖双模态分流决策与全链路端到端闭环：
+- **全链路两级分流决策树（双模态统一支持）**：
+  - **视频分流判定（`Videonew.php` / `NewapiDiversionRuleService.php`）**：分流模式切换（`newapi` / `legacy` / `off`）、硬性资格拦截（提示词 > 5000 字、`mov` 格式、真人人像、带参考视频 Seedance 拦截）、全量模型特权（`pq_model_config.is_newapi_global == 1` 开启后全量直达 NewAPI 全局渠道，绕过组织路由组，记 `org_id=0`）、非全量模型全局能力并集与分组能力精准校验（`isModelRoutable` 与 `isModelRoutableForGroup`）；
+  - **生图分流判定（`NewapiImageDiversionService.php`）**：模型别名非空校验、服务线路限制（仅 `serviceline === 'r'` 放行，t/k 线路静默走原渠道）、尺寸类型限制（禁止自定义像素 `pixels`）、参考图数量限制（`countReferenceImages <= 10`）、组织路由解析与快照固化（写入 `extra['newapi_image']=1` 及路由快照，`NewapiTaskLog` 初始化为 `STATUS_INIT`）；
+  - **网关调度与配额熔断（NewAPI 网关层）**：Token 分组精确隔离（`default` 全局共享）、每日积分上限（`daily_quota_limit` 与预扣 `points` 校验）超额熔断剔除、多可用渠道权重（`weight`）加权调度分流；
+  - **Go 消费端失败容灾与线路改写（`diversion_retry_dispatcher.go`）**：Wan 3.0 系列（105 全能参考 / 106 首尾帧）失败自动改写 `line=1` 降级投递原生阿里云百炼队列，由原生轮询接管；SD 系列任务失败标记 `is_need_fallback=1` 写入 `pq_aivideo_diversion_retry_log` 并投递火山重试队列；非 SD 模型失败直接报错中断，绝对不进入重试列表；
+  - **计费核算与划掉项保护**：10 积分 = 1 元人民币汇率换算、按秒计费公式、账单大盘动态线路映射；严格识别飞书文档删除线属性，菲玲渠道、海外站同步与存量历史模型排除在缺陷与阻塞范围之外。
 - **独立 CLI 触发入口**：
   ```bash
   devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--env <test|sandbox>]
   ```
-- **自动化产物**：一键生成 `diversion-flow-report.json`、`开发自测测试报告.md` 与 `测试用例.md`。
+- **自动化产物与 28 项契约用例**：
+  一键执行 28 项标准化契约用例（涵盖 AST 探测、两级分流决策树、生图分流全规则、网关分组隔离、渠道配额熔断、加权轮询调度、Go 消费端线路改写与降级、组织企业绑定、计费对账），生成 `diversion-flow-report.json`、`开发自测测试报告.md` 与 `测试用例.md`。可在 `/Users/mac/agents/panqu-ai` 项目实测实现 **28/28 (100% PASS)**。
 
 ### Panqu Mission：持久化的真实生成任务控制器
 

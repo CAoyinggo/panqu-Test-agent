@@ -4,8 +4,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   evaluateDiversionDecision,
+  evaluateImageDiversionDecision,
+  evaluateNewApiChannelSelection,
+  evaluateConsumerFallbackDecision,
   runPanquDiversionFlow,
   type DiversionConfigSnapshot,
+  type NewApiChannelConfig,
 } from '../../../src/devtest/panqu-diversion-flow.js';
 
 const roots: string[] = [];
@@ -138,6 +142,148 @@ describe('Panqu API Diversion Flow', () => {
     });
   });
 
+  describe('evaluateImageDiversionDecision - 生图分流资格前置校验', () => {
+    it('别名为空时静默走原渠道 (diverted=false)', () => {
+      const res = evaluateImageDiversionDecision(
+        { selmodelsId: 201, serviceline: 'r', userGroupIds: [10] },
+        baseConfig,
+        () => '',
+      );
+      expect(res.diverted).toBe(false);
+      expect(res.reason).toContain('模型别名留空');
+    });
+
+    it('服务线路非 r 时静默走原渠道', () => {
+      const res = evaluateImageDiversionDecision(
+        { selmodelsId: 201, serviceline: 't', userGroupIds: [10] },
+        baseConfig,
+        (id) => `alias-${id}`,
+      );
+      expect(res.diverted).toBe(false);
+      expect(res.reason).toContain('非 r');
+    });
+
+    it('尺寸类型为 pixels 时不分流', () => {
+      const res = evaluateImageDiversionDecision(
+        { selmodelsId: 201, serviceline: 'r', sizeType: 'pixels', userGroupIds: [10] },
+        baseConfig,
+        (id) => `alias-${id}`,
+      );
+      expect(res.diverted).toBe(false);
+      expect(res.reason).toContain('pixels');
+    });
+
+    it('参考图数量超过 10 张时拦截不分流', () => {
+      const res = evaluateImageDiversionDecision(
+        {
+          selmodelsId: 201,
+          serviceline: 'r',
+          imageList: Array(11).fill('http://example.com/ref.png'),
+          userGroupIds: [10],
+        },
+        baseConfig,
+        (id) => `alias-${id}`,
+      );
+      expect(res.diverted).toBe(false);
+      expect(res.reason).toContain('超过上限 10 张');
+    });
+
+    it('满足全部规则时成功分流并返回路由快照', () => {
+      const res = evaluateImageDiversionDecision(
+        {
+          selmodelsId: 201,
+          serviceline: 'r',
+          sizeType: 'resolution',
+          imageList: ['http://example.com/ref1.png'],
+          userGroupIds: [10],
+        },
+        baseConfig,
+        (id) => `alias-${id}`,
+      );
+      expect(res.diverted).toBe(true);
+      expect(res.snapshot).toBeDefined();
+      expect(res.snapshot?.orgId).toBe(10);
+      expect(res.snapshot?.routeGroupId).toBe(1);
+      expect(res.snapshot?.newapiGroup).toBe('panqu_test');
+      expect(res.snapshot?.newapiModel).toBe('alias-201');
+    });
+  });
+
+  describe('evaluateNewApiChannelSelection - 网关渠道分组与每日限额熔断', () => {
+    const testChannels: NewApiChannelConfig[] = [
+      {
+        id: 36,
+        name: '万相-yhuo',
+        group: 'panqu_test',
+        models: ['wan2.1-t2v-plus'],
+        status: 1,
+        weight: 100,
+        dailyQuotaLimit: 50000,
+        usedQuota: 10000,
+      },
+      {
+        id: 41,
+        name: 'TD-Seedance',
+        group: 'panqu_test',
+        models: ['seedance-2.0'],
+        status: 1,
+        weight: 80,
+        dailyQuotaLimit: 20000,
+        usedQuota: 19950,
+      },
+      {
+        id: 39,
+        name: 'RunningHub-默认',
+        group: 'default',
+        models: ['wan2.1-t2v-plus'],
+        status: 1,
+        weight: 50,
+        dailyQuotaLimit: 0,
+        usedQuota: 1000,
+      },
+    ];
+
+    it('非 default 分组渠道严格隔离，跨分组请求不可见', () => {
+      const res = evaluateNewApiChannelSelection('vip_group', 'wan2.1-t2v-plus', 10, testChannels);
+      expect(res.candidateChannelIds).toEqual([39]); // 仅 default 可见
+    });
+
+    it('渠道每日积分超限时触发配额熔断剔除', () => {
+      const res = evaluateNewApiChannelSelection('panqu_test', 'seedance-2.0', 100, testChannels);
+      expect(res.isBlockedByQuota).toBe(true);
+      expect(res.selectedChannel).toBeUndefined();
+    });
+
+    it('多可用渠道中优先选择高权重渠道', () => {
+      const res = evaluateNewApiChannelSelection('panqu_test', 'wan2.1-t2v-plus', 10, testChannels);
+      expect(res.selectedChannel?.id).toBe(36);
+    });
+  });
+
+  describe('evaluateConsumerFallbackDecision - 消费端失败兜底策略', () => {
+    it('Wan 3.0 系列任务失败自动改写 line=1 投递原生百炼队列', () => {
+      const res = evaluateConsumerFallbackDecision({ taskType: 105, selmodelsId: 84, status: 7 });
+      expect(res.fallbackAction).toBe('WAN3_NATIVE_RETRY');
+      expect(res.targetLine).toBe(1);
+      expect(res.targetQueue).toBe('video_wanxiang3_queue');
+      expect(res.recordRetryLog).toBe(true);
+    });
+
+    it('SD 系列任务失败投递火山重试队列并写入 retrylog', () => {
+      const res = evaluateConsumerFallbackDecision({ taskType: 6, selmodelsId: 6, status: 7 });
+      expect(res.fallbackAction).toBe('VOLCENGINE_RETRY_QUEUE');
+      expect(res.targetLine).toBe(10);
+      expect(res.targetQueue).toBe('video_panqu_retry_queue');
+      expect(res.recordRetryLog).toBe(true);
+    });
+
+    it('非 SD 且非 wan3 模型失败直接报错中断，不进重试列表', () => {
+      const res = evaluateConsumerFallbackDecision({ taskType: 99, selmodelsId: 999, status: 7 });
+      expect(res.fallbackAction).toBe('DIRECT_FAIL_NO_RETRY');
+      expect(res.recordRetryLog).toBe(false);
+    });
+  });
+
   describe('runPanquDiversionFlow - 全流程执行与产物生成', () => {
     it('在模拟 fixture 仓库中执行分流测试流程并生成完整产物', async () => {
       const root = await mkdtemp(path.join(await realpath(tmpdir()), 'panqu-divflow-'));
@@ -168,6 +314,30 @@ class NewapiRouteService {
 
       await put(
         root,
+        'aibaseos/application/admin/service/NewapiImageDiversionService.php',
+        `<?php
+namespace app\\admin\\service;
+class NewapiImageDiversionService {
+  public const MAX_REFERENCE_IMAGES = 10;
+  public function applySnapshot(array $extra, int $selmodelsId, string $serviceline, array $groupIds): array {
+    $extra['newapi_image'] = 1;
+    return $extra;
+  }
+}`,
+      );
+
+      await put(
+        root,
+        'aibaseos/application/admin/model/NewapiTaskLog.php',
+        `<?php
+namespace app\\admin\\model;
+class NewapiTaskLog {
+  const STATUS_INIT = 'INIT';
+}`,
+      );
+
+      await put(
+        root,
         'aibaseos/application/admin/controller/aivideo/Videonew.php',
         `<?php
 namespace app\\admin\\controller\\aivideo;
@@ -191,8 +361,8 @@ Route::get('aivideo/channel', 'admin/aivideo.Channel/index');`,
         outputDir: outDir,
       });
 
-      expect(report.summary.total).toBe(21);
-      expect(report.summary.pass).toBeGreaterThanOrEqual(20);
+      expect(report.summary.total).toBe(28);
+      expect(report.summary.pass).toBe(28);
       expect(report.summary.fail).toBe(0);
       expect(report.artifacts.reportJson).toContain('diversion-flow-report.json');
       expect(report.artifacts.reportMd).toContain('开发自测测试报告.md');
@@ -205,8 +375,8 @@ Route::get('aivideo/channel', 'admin/aivideo.Channel/index');`,
         projectRoot: realRoot,
         outputDir: path.join(tmpdir(), 'real-panqu-flow-out'),
       });
-      expect(report.summary.total).toBe(21);
-      expect(report.summary.pass).toBe(21);
+      expect(report.summary.total).toBe(28);
+      expect(report.summary.pass).toBe(28);
       expect(report.summary.fail).toBe(0);
       expect(report.summary.passRate).toBe('100%');
     }, 20000);
