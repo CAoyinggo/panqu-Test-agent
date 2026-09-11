@@ -15,6 +15,48 @@
 
 [DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [交接/发布检查清单](docs/testing/developer-handoff-release-checklist.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
+## 本次更新：Playwright 执行与独立证据核验
+
+本次新增浏览器/API 执行组件、媒体检查器、计费与供应商成本 Oracle、分流决策与跨系统证据采集器，并接入 CLI 和业务综合套件。npm 包版本仍为 `4.33.0`；本节描述源码更新，不代表发布新 npm 版本或已更新成员电脑上的 MCP。
+
+| 组件 | 功能与边界 |
+| --- | --- |
+| `panqu-playwright-engine.ts` / `panqu-playwright-fixture.ts` | 区分 `MOCK`、`API_INTEGRATION` 和 `UI_E2E`；浏览器不可用时阻断 UI 模式。当前页面模式仍含 API 提交逻辑，不等于已覆盖真实表单点击和上传交互 |
+| `media-inspector.ts` | 检查 MP4 容器和 PNG/JPEG/WebP 元数据；合成文件和容器解析通过不等于真实媒体可解码，像素/播放验证单独记录 |
+| `billing-oracle.ts` | 按任务关联积分流水，检查预扣、结算、退款及重复/缺失记录；默认模型价格是代码规则，不代表实时刊例价 |
+| `supplier-cost-oracle.ts` | 将用户积分与供应商成本分离，支持充值批次与多次上游调用；估算、真实账单和证据缺失分开记录，退款不等于供应商成本为零 |
+| `routing-oracle.ts` / `routing-evidence-collector.ts` | 区分主站分流与网关选路，按 task/request/trace 标识关联证据；默认渠道配置需在真实运行前核对 |
+| 图片/视频详情关联 | 移除“找不到指定任务时取列表第一条”的兜底，避免把其他任务结果当成本次证据 |
+
+### 本地离线验证
+
+```bash
+npm ci
+npm run build
+npx --no-install vitest run tests/unit/devtest/billing-oracle.test.ts tests/unit/devtest/media-inspector.test.ts tests/unit/devtest/panqu-playwright-engine.test.ts tests/unit/devtest/routing-evidence-collector.test.ts tests/unit/devtest/routing-oracle.test.ts tests/unit/panqu-playwright-flow.test.ts
+```
+
+本次上述 6 个测试文件的 79 项测试通过，构建通过；这是本地受控/Mock 验证，不是测试站真实生成、NewAPI 路由或最终结算验收，也不是 GitHub CI 结果。
+
+以下入口明确使用 Mock，不用于证明真实业务通过：
+
+```bash
+npm run panqu:playwright -- --mock --media video
+npm run panqu:playwright -- --mock --media image
+npm run panqu:playwright -- --mock --media video --expect-failure
+```
+
+独立 CLI 写入 Markdown 报告，执行引擎写入结构化证据。必须核对报告中的 `executionMode`、`testAssertionStatus`、`businessTaskStatus` 与证据等级，不能只用进程退出码判定业务通过。
+
+### 真实执行与 TRAE 接入边界
+
+- `devtest flow api-diversion --playwright`、`devtest flow business-suite --module playwright` 以及不带 `--mock` 的独立 Playwright CLI 可能提交真实任务并消耗积分。综合套件的 `all` 现在包含 Playwright 模块，不应当作无副作用的健康检查。
+- 本轮没有运行真实生图/视频、队列、数据库写入或部署。运行前必须另行确认账号、环境、模型、次数、费用及清理范围。
+- **NewAPI 只能使用环境明确为“测试”的资源，禁止操作正式数据。** `--env test`、测试站域名或 `devtest_` 名称前缀不能单独证明网关资源隔离；需核对真实资源归属，无法确认时不要运行。
+- Trace 可能包含请求头、页面内容和业务信息，不能假定原始 Trace 已脱敏；真实运行的 Trace、会话文件、Cookie 和 Token 禁止提交或公开上传。
+- 更新 GitHub 源码不会自动更新 TRAE 中的本地 MCP、远程 Worker 或 Actions 固定 SHA。管理员需按各入口的安装方式更新版本，再在 TRAE 新会话核验实际工具、版本和完整执行/报告链路。
+- GitHub 同步不代表 npm 发布、远程部署或所有成员已升级。
+
 ## 目录
 
 - [项目简介](#项目简介)
@@ -97,9 +139,9 @@ v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本
 
 针对“拒绝纸上谈兵、必须在被测环境真实提交业务任务并验真分流快照”的生产级要求，v4.33.4 推出**真实视频提交与分流核验闭环引擎**：
 - **真实环境自动注入与凭证脱敏**：
-  - 自动从配置中加载被测环境会话（`https://test.panqu.com/`，账号 `DEL01_panqu_439`）；
+  - 从本机受保护配置中加载获准的测试环境会话（`https://test.panqu.com/`），不在仓库保存账号凭证；
   - 铁律安全防护：任何终端输出、Markdown 报告与 JSON 证据中，严禁泄露明文 Cookie、JWT Token 或密码，统一使用掩码（`eyJh******`，`sk******`）；
-  - 隔离测试流量：提交的所有任务名称与 Prompt 强制自动注入 `devtest_` 前缀（如 `devtest_wan3_smoke_<timestamp>`），与线上真实用户数据彻底隔离。
+  - 标识测试流量：提交任务名称与 Prompt 注入 `devtest_` 前缀（如 `devtest_wan3_smoke_<timestamp>`）；此前缀仅便于追踪，不构成权限或数据隔离。
 - **端到端 6 步真实闭环链路**：
   1. **会话探活与凭据解析**：校验 Session 有效性与账户可用积分；
   2. **CSRF Token 动态刷新**：发起 `GET /ajax/refreshtoken`，获取主站安全令牌 `__token__`；
@@ -176,7 +218,7 @@ v4.33.3 深度完善面向飞书需求《[0903 - 主站与Newapi对接v1.2版本
   研发人员可在业务工程根目录无需记忆命令，秒级发起全量自测：
   ```bash
   cd /Users/mac/agents/panqu-ai
-  ./test-business.sh                      # 一键跑完全部四大模块（通过率 100%）
+  ./test-business.sh                      # 真实执行综合套件（当前 all 还包含 Playwright；可能扣费）
   ./test-business.sh --module video       # 仅测试真实视频
   ./test-business.sh --module image       # 仅测试真实生图
   ./test-business.sh --module canvas      # 仅测试真实画布

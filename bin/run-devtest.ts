@@ -13,6 +13,8 @@ import {
   runPanquRealImageFlow,
   runPanquRealCanvasFlow,
   runPanquBusinessSuite,
+  runPanquPlaywrightFlow,
+  createSyntheticValidMp4,
 } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
@@ -796,8 +798,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
     if (argv[0] === 'flow') {
       const flowName = argv[1];
-      if (flowName !== 'api-diversion') {
-        throw new Error(`DEVTEST_ARG_INVALID: flow 当前仅支持 api-diversion, real-video-submit, real-image-submit, real-canvas-submit, 或 business-suite，收到: ${flowName ?? '(空)'}`);
+      if (flowName !== 'api-diversion' && flowName !== 'playwright-diversion') {
+        throw new Error(`DEVTEST_ARG_INVALID: flow 当前支持 api-diversion, playwright-diversion, real-video-submit, real-image-submit, real-canvas-submit, 或 business-suite，收到: ${flowName ?? '(空)'}`);
       }
       let projectRoot = root;
       let outputDir: string | undefined;
@@ -805,6 +807,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       let targetModelId: number | undefined;
       let targetModelType: 'video' | 'image' | undefined;
       let realSubmit = false;
+      let usePlaywright = flowName === 'playwright-diversion';
+
       for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--project-root' && argv[i + 1]) {
           projectRoot = path.resolve(root, argv[++i]);
@@ -818,8 +822,73 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           targetModelType = argv[++i].toLowerCase() as 'video' | 'image';
         } else if (argv[i] === '--real-submit') {
           realSubmit = true;
+        } else if (argv[i] === '--playwright') {
+          usePlaywright = true;
         }
       }
+
+      if (usePlaywright) {
+        console.log(`[DevTest Flow] 🎭 启动 Playwright NewAPI 分流全链路闭环测试 (playwright-diversion)...`);
+        console.log(`[DevTest Flow] 模式: ${realSubmit ? '真实环境 E2E' : '受控沙箱/Mock验证'} | 环境: ${env}`);
+        const pwReport = await runPanquPlaywrightFlow({
+          mediaType: targetModelType || 'video',
+          modelId: targetModelId,
+          env: env === 'sandbox' ? 'test' : 'test',
+          executionMode: realSubmit ? 'REAL_EXECUTION' : 'MOCK_VERIFICATION',
+          outputDir,
+          // 若为受控模式提供标准正向 mock
+          mockSubmitResponse: realSubmit ? undefined : { status: 200, body: { code: 1, msg: 'ok', data: { id: 88888 } } },
+          mockStatusResponses: realSubmit ? undefined : [{ status: 200, body: { code: 1, task_status: 2, progress: 100 } }],
+          mockTaskDetails: realSubmit ? undefined : {
+            id: 88888,
+            line: 10,
+            status: 2,
+            extra: {
+              diversion: 10,
+              newapi_image: targetModelType === 'image' ? 1 : 0,
+              newapi_org_id: (targetModelType === 'image' || targetModelId === 15) ? 10 : 0,
+              newapi_route_group_id: (targetModelType === 'image' || targetModelId === 15) ? 1 : 0,
+              newapi_group: (targetModelType === 'image' || targetModelId === 15) ? 'panqu_test' : '',
+              newapi_model: targetModelType === 'image' ? 'pan-banana-pro' : (targetModelId === 15 ? 'seedance-2.0' : targetModelId === 88 ? 'wan3.0-video-prime' : 'wan3.0-video'),
+              channel_name: targetModelType === 'image' ? 'RH-图片' : (targetModelId === 15 ? 'TD' : '万相—yhuo'),
+              channel_id: targetModelType === 'image' ? 40 : (targetModelId === 15 ? 41 : 36),
+            },
+          },
+          mockAssetBuffer: realSubmit ? undefined : (
+            targetModelType === 'image'
+              ? Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d4948445200000400000004000806000000', 'hex'), Buffer.alloc(32)])
+              : createSyntheticValidMp4({ width: 854, height: 480, durationSeconds: 4 })
+          ),
+        });
+
+        console.log(`\n================ Playwright 全链路分流闭环测试报告 ================`);
+        console.log(`用例编号:   ${pwReport.caseId}`);
+        console.log(`运行标识:   ${pwReport.runId}`);
+        console.log(`任务编号:   ${pwReport.taskId ?? 'N/A'}`);
+        console.log(`执行模式:   ${pwReport.executionMode}`);
+        console.log(`综合判定:   ${pwReport.overallStatus === 'PASS' ? '✅ PASS' : pwReport.overallStatus === 'BLOCKED' ? '⏸ BLOCKED' : '❌ FAIL'}`);
+        console.log(`\n分项闭环核查结论:`);
+        console.log(`  1. 接口提交:   ${pwReport.submission.responseCode === 1 ? '✅ PASS' : '❌ FAIL'} (HTTP ${pwReport.submission.responseStatus}, 耗时 ${pwReport.submission.durationMs}ms)`);
+        console.log(`  2. 任务状态:   ${pwReport.taskTracking.terminalStatus === 'SUCCESS' ? '✅ PASS' : '❌ ' + pwReport.taskTracking.terminalStatus} (轮询 ${pwReport.taskTracking.pollCount} 次, 耗时 ${pwReport.taskTracking.durationMs}ms)`);
+        console.log(`  3. 路由验真:   ${pwReport.diversion.status === 'PASS' ? '✅ PASS' : '❌ FAIL'} (证据态: ${pwReport.diversion.evidenceState}, 实际渠道: ${pwReport.diversion.actualChannel})`);
+        if (pwReport.diversion.reasons.length) {
+          console.log(`     - 路由原因: ${pwReport.diversion.reasons.join('; ')}`);
+        }
+        console.log(`  4. 产物物理:   ${pwReport.artifact.status === 'PASS' ? '✅ PASS' : '❌ FAIL'} (${pwReport.artifact.qualityClassification}, 格式: ${pwReport.artifact.format ?? 'N/A'})`);
+        if (pwReport.artifact.reasons.length) {
+          console.log(`     - 产物原因: ${pwReport.artifact.reasons.join('; ')}`);
+        }
+        console.log(`  5. 账务对账:   ${pwReport.billing.status === 'PASS' ? '✅ PASS' : '❌ FAIL'} (预扣: ${pwReport.billing.preDeductedPoints} pts, 净扣: ${pwReport.billing.netDeductedPoints} pts, 预期: ${pwReport.billing.expectedPoints} pts)`);
+        if (pwReport.billing.reasons.length) {
+          console.log(`     - 账务原因: ${pwReport.billing.reasons.join('; ')}`);
+        }
+        if (pwReport.tracePath) {
+          console.log(`\nPlaywright Trace: ${pwReport.tracePath}`);
+        }
+        console.log(`===================================================================\n`);
+        return pwReport.overallStatus === 'PASS' ? 0 : 1;
+      }
+
       console.log(`[DevTest Flow] 启动 API 分流专项测试流程 (api-diversion)...`);
       if (targetModelId) {
         console.log(`[DevTest Flow] 🎯 目标模型定向接入诊断: Model ID = ${targetModelId} (${targetModelType ?? 'auto'})`);

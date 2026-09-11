@@ -204,9 +204,9 @@ export async function verifyImageDiversionSnapshot(
     rows?: Array<{ id: number; extra?: string | Record<string, unknown> }>;
   };
 
-  const taskRow = jsonResp.rows?.find((r) => Number(r.id) === Number(taskId)) || jsonResp.rows?.[0];
+  const taskRow = jsonResp.rows?.find((r) => Number(r.id) === Number(taskId));
   if (!taskRow) {
-    throw new Error(`SCENE_TASK_NOT_FOUND: 列表中未找到生图任务 ID: ${taskId}`);
+    throw new Error(`SCENE_TASK_NOT_FOUND: 列表中未找到生图任务 ID: ${taskId}，严格拒绝猜测归属`);
   }
 
   let extraObj: Record<string, unknown> = {};

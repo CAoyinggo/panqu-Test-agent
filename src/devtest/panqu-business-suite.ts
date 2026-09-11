@@ -19,8 +19,9 @@ import { runPanquRealVideoFlow, type PanquRealVideoReport } from './panqu-real-v
 import { runPanquRealImageFlow, type PanquRealImageReport } from './panqu-real-image-flow.js';
 import { runPanquRealCanvasFlow, type CanvasTaskReport } from './panqu-real-canvas-flow.js';
 import { runPanquDiversionFlow, type PanquDiversionFlowReport } from './panqu-diversion-flow.js';
+import { runPanquPlaywrightFlow, type FlowRunEvidence } from './panqu-playwright-engine.js';
 
-export type BusinessModuleType = 'all' | 'video' | 'image' | 'canvas' | 'diversion';
+export type BusinessModuleType = 'all' | 'video' | 'image' | 'canvas' | 'diversion' | 'playwright';
 
 export interface PanquBusinessSuiteOptions {
   module?: BusinessModuleType;
@@ -78,6 +79,10 @@ export interface PanquBusinessSuiteReport {
     canvas?: {
       passed: boolean;
       report: CanvasTaskReport;
+    };
+    playwright?: {
+      passed: boolean;
+      report: FlowRunEvidence;
     };
   };
   moduleSummaries: ModuleExecutionSummary[];
@@ -269,6 +274,47 @@ export async function runPanquBusinessSuite(
         passed: false,
         durationMs: Date.now() - t0,
         diversionResult: '提交异常',
+        details: errorMsg,
+        error: errorMsg,
+      });
+    }
+  }
+
+  // 5. Playwright 闭环测试 (Playwright Flow: 视频/生图/分流/产物/对账)
+  if (shouldRun('playwright')) {
+    const t0 = Date.now();
+    try {
+      if (options.verbose) {
+        console.log(`\n[Suite] 🎭 执行 Playwright 端到端闭环测试 (Playwright Flow)...`);
+      }
+      const pwReport = await runPanquPlaywrightFlow({
+        env: env === 'preonline' ? 'preonline' : 'test',
+        sessionFile: options.sessionFile,
+        modelId: options.videoModelId ?? 84,
+        prompt: options.prompt,
+        outputDir: outDir,
+      });
+      const passed = pwReport.overallStatus === 'PASS';
+      modulesResult.playwright = { passed, report: pwReport };
+      moduleSummaries.push({
+        name: 'playwright',
+        title: 'Playwright 提交/分流/产物/账单闭环',
+        executed: true,
+        passed,
+        durationMs: Date.now() - t0,
+        taskId: pwReport.taskId,
+        diversionResult: pwReport.diversion.passed ? `✅ ${pwReport.diversion.actualChannel}` : `❌ ${pwReport.diversion.reasons[0] || '分流失败'}`,
+        details: `产物: ${pwReport.artifact.qualityClassification}, 账单: 实扣 ${pwReport.billing.netDeductedPoints} 积分 (预期 ${pwReport.billing.expectedPoints})`,
+      });
+    } catch (err) {
+      const errorMsg = (err as Error).message;
+      moduleSummaries.push({
+        name: 'playwright',
+        title: 'Playwright 提交/分流/产物/账单闭环',
+        executed: true,
+        passed: false,
+        durationMs: Date.now() - t0,
+        diversionResult: '执行异常',
         details: errorMsg,
         error: errorMsg,
       });

@@ -200,4 +200,73 @@ export {
   type BusinessModuleType,
   type ModuleExecutionSummary,
 } from './panqu-business-suite.js';
-
+export {
+  createPanquPlaywrightFixture,
+  parseCookieString,
+  type PanquSessionCookie,
+  type PlaywrightFixtureOptions,
+  type PlaywrightFixtureContext,
+} from './panqu-playwright-fixture.js';
+export {
+  runPanquPlaywrightFlow,
+  calculateExpectedPoints,
+  deriveExpectedDiversion,
+  inspectBufferMedia,
+  createSyntheticValidMp4,
+  type FlowMediaType,
+  type FlowExecutionMode,
+  type FlowStepStatus,
+  type TaskTerminalStatus,
+  type TaskFailureCategory,
+  type DiversionCheckResult,
+  type ArtifactCheckResult,
+  type BillingReconciliation,
+  type FlowRunEvidence,
+  type PlaywrightFlowRunOptions,
+} from './panqu-playwright-engine.js';
+export {
+  RoutingOracle,
+  type DiversionRouteMode,
+  type VideoRoutingInput,
+  type ImageRoutingInput,
+  type MainSiteRouteRules,
+  type GroupRouteRules,
+  type OrgBindingConfig,
+  type MainSiteConfigSnapshot,
+  type MainSiteRoutingVerdict,
+  type GatewayChannelConfig,
+  type GatewayRoutingVerdict,
+  type BatchDistributionResult,
+  type FallbackRoutingVerdict,
+} from './routing-oracle.js';
+export {
+  RoutingEvidenceCollector,
+  type MainSiteTaskRowEvidence,
+  type GatewayTaskLogEvidence,
+  type FallbackRetryLogEvidence,
+  type CrossSystemIdMap,
+  type CollectedRoutingEvidence,
+} from './routing-evidence-collector.js';
+export {
+  BillingOracle,
+  type ScoreLogEntry,
+  type BillingAuditReport,
+} from './billing-oracle.js';
+export {
+  SupplierCostOracle,
+  type SupplierCostVerdict,
+  type CostPricingUnit,
+  type SupplierEvidenceLevel,
+  type SupplierCostAuditParams,
+  type RechargeBatch,
+  type UpstreamExecutionState,
+  type UpstreamCallRecord,
+  STANDARD_RECHARGE_PRESETS,
+  FALLBACK_POINTS_PER_CNY,
+  FALLBACK_CNY_PER_POINT,
+} from './supplier-cost-oracle.js';
+export {
+  sanitizeSensitiveText,
+  sanitizeObject,
+  type ArtifactVerificationLevel,
+} from './panqu-playwright-engine.js';
