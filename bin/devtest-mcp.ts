@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { DevTestMcpService, DEVTEST_MCP_TOOL } from '../src/devtest/mcp-service.js';
+import { PLATFORM_VERSION } from '../src/platform/version.js';
 
 /** stdio transport only. Reuses the current TEST_CASE_V2 kernel; never shells out with model input. */
 export async function serveDevTestMcp(projectRoot = process.cwd()): Promise<void> {
@@ -19,7 +20,7 @@ export async function serveDevTestMcp(projectRoot = process.cwd()): Promise<void
     if (request.id === undefined) return;
     const response = (result: unknown) => send({ jsonrpc: '2.0', id: request.id, result });
     if (request.method === 'initialize') {
-      response({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'devtest', version: '4.29.2' } });
+      response({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'devtest', version: PLATFORM_VERSION } });
     } else if (request.method === 'ping') response({});
     else if (request.method === 'tools/list') response({ tools: [DEVTEST_MCP_TOOL] });
     else if (request.method === 'tools/call' && request.params?.name === 'devtest') {

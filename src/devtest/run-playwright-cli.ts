@@ -53,6 +53,43 @@ const MOCK_PNG_HEADER = Buffer.from([
   0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ]);
 
+const CLI_VALUE_FLAGS = new Set(['--media','--mode','--task-id','--model','--task-type','--prompt',
+  '--duration','--resolution','--aspect','--serviceline','--env','--timeout','--output','--session-file',
+  '--model-id','--model-type','--poll-timeout','--aspect-ratio','--project-root']);
+
+export function isLegacyPlaywrightCommand(argv: string[]): boolean {
+  if (argv[0] !== 'flow') return false;
+  if (argv[1] === 'playwright-diversion') return true;
+  if (argv[1] !== 'api-diversion') return false;
+  for (let i = 2; i < argv.length; i++) {
+    if (argv[i] === '--playwright') return true;
+    if (CLI_VALUE_FLAGS.has(argv[i])) i++;
+  }
+  return false;
+}
+
+/** Preserve legacy Mock-by-default semantics while forwarding all supported options. */
+export function normalizeLegacyPlaywrightArgs(args: string[]): string[] {
+  const aliases: Record<string,string> = {'--model-id':'--model','--model-type':'--media',
+    '--poll-timeout':'--timeout','--aspect-ratio':'--aspect'};
+  const normalized: string[] = [];
+  let real = false, explicitMode = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--playwright') continue;
+    if (arg === '--real-submit') { real = true; continue; }
+    if (arg === '--project-root') throw new Error('PLAYWRIGHT_ARG_INVALID: use the working directory or MCP project_root, not --project-root');
+    if (arg === '--mode' || arg === '--mock') explicitMode = true;
+    normalized.push(aliases[arg] ?? arg);
+    if (CLI_VALUE_FLAGS.has(arg) && args[i + 1] !== undefined) {
+      const value = args[++i];
+      normalized.push(arg === '--env' && value === 'sandbox' ? 'test' : value);
+    }
+  }
+  if (!explicitMode) normalized.unshift(real ? '--mode' : '--mock', ...(real ? ['api'] : []));
+  return normalized;
+}
+
 export function parseCliArgs(args: string[]): PlaywrightFlowRunOptions & { isMock: boolean } {
   const options: PlaywrightFlowRunOptions & { isMock: boolean } = {
     mediaType: 'video',

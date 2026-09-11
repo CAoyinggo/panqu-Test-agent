@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,symlink,realpath} from 'node:fs/promises';
+import {mkdtemp,writeFile,symlink,realpath,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,6 +8,9 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {NativeCli,CLI_TOOL} from './native-cli.mjs';
 import {localReport} from './local-artifacts.mjs';
+import {JobStore} from './job-store.mjs';
+import {randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 const engineRoot=fileURLToPath(new URL('../../',import.meta.url));
 const engineSha='0'.repeat(40);
 const create=options=>new NativeCli({engineRoot,engineSha,...options});
@@ -19,6 +22,13 @@ test('requires a pinned engine and exposes the full Playwright program',async()=
  assert.equal(catalog.engineSha,engineSha);assert.equal(catalog.programs.playwright,'run-playwright-cli');
  assert.ok(catalog.devtestCommands.includes('playwright --help'));
  assert.ok(CLI_TOOL.inputSchema.properties.session_file);
+});
+test('generic MCP handshake reports the current package version',async()=>{
+ const projectRoot=await mkdtemp(path.join(tmpdir(),'panqu-mcp-version-'));
+ const expected=JSON.parse(await readFile(path.join(engineRoot,'package.json'),'utf8')).version;
+ const output=execFileSync(process.execPath,[path.join(engineRoot,'dist/bin/devtest-mcp.js'),'--project-root',projectRoot],
+  {encoding:'utf8',input:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize'})+'\n',timeout:10000});
+ assert.equal(JSON.parse(output.trim()).result.serverInfo.version,expected);
 });
 test('help and mock-only execution produce accessible evidence and Markdown',async()=>{
  const artifactRoot=await mkdtemp(path.join(tmpdir(),'panqu-mcp-mock-'));
@@ -44,6 +54,45 @@ test('a prompt containing --mock cannot bypass real-execution confirmation',asyn
  for(const args of [['flow','playwright-diversion','--real-submit'],['business-suite','--module','playwright']]){
   await assert.rejects(cli.invoke({action:'start',program:'devtest',project_root:engineRoot,args}),/REAL_EXECUTION_CONFIRMATION_REQUIRED/);
  }
+ for(const kind of ['video','image','canvas'])for(const args of [[`real-${kind}`],['flow',`real-${kind}-submit`]]){
+  await assert.rejects(cli.invoke({action:'start',program:'devtest',project_root:engineRoot,args}),/REAL_EXECUTION_CONFIRMATION_REQUIRED/);
+ }
+ await assert.rejects(cli.invoke({action:'start',program:'devtest',project_root:engineRoot,
+  args:['flow','playwright-diversion','--mode','browser']}),/REAL_EXECUTION_CONFIRMATION_REQUIRED/);
+});
+
+test('real-flow aliases expose synthetic reports and restore completed jobs after restart without re-execution',async()=>{
+ const artifactRoot=await mkdtemp(path.join(tmpdir(),'panqu-mcp-restore-'));
+ for(const kind of ['video','image','canvas']){
+  let starts=0;
+  const cli=create({artifactRoot,spawnProcess:(command,args)=>{
+   starts++;const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();
+   const directory=args[args.lastIndexOf('--output')+1];
+   setImmediate(async()=>{await writeFile(path.join(directory,`real-${kind}-flow-report.json`),JSON.stringify({mode:'SYNTHETIC',kind}));child.emit('close',0,null);});
+   return child;
+  }});
+  const job=await cli.invoke({action:'start',program:'devtest',project_root:engineRoot,args:[`real-${kind}`],confirm_real_execution:true});
+  assert.equal((await wait(cli,job.jobId)).state,'COMPLETED');
+  const restarted=create({artifactRoot,engineSha:'1'.repeat(40),spawnProcess:()=>{throw Error('MUST_NOT_REEXECUTE');}});
+  const status=await restarted.invoke({action:'status',job_id:job.jobId});
+  assert.equal(status.state,'COMPLETED');assert.equal(status.engineSha,engineSha);assert.equal(status.restored,true);
+  const report=await restarted.report(job.jobId);assert.ok(report.files.includes(`real-${kind}-flow-report.json`));
+  assert.equal(JSON.parse((await restarted.report(job.jobId,{file:report.files[0]})).content).mode,'SYNTHETIC');
+  assert.equal((await restarted.cases(job.jobId)).protocol,'PANQU_FLOW_EVIDENCE');assert.equal(starts,1);
+  const record=JSON.parse(await readFile(path.join(artifactRoot,'.jobs',job.jobId+'.json'),'utf8'));
+  for(const key of ['args','output','env','session_file'])assert.equal(record[key],undefined);
+ }
+});
+
+test('a running job restored after restart is unknown, never fabricated completed or restarted',async()=>{
+ const artifactRoot=await mkdtemp(path.join(tmpdir(),'panqu-mcp-interrupted-'));
+ const id=randomUUID(),store=new JobStore(artifactRoot);
+ await store.save({id,program:'devtest',state:'RUNNING',engineSha,createdAt:Date.now()});
+ const cli=create({artifactRoot,spawnProcess:()=>{throw Error('MUST_NOT_REEXECUTE');}});
+ assert.equal((await cli.invoke({action:'status',job_id:id})).state,'UNKNOWN_AFTER_RESTART');
+ await assert.rejects(store.load('../session'),/LOCAL_JOB_NOT_FOUND/);
+ const linkId=randomUUID();await symlink(path.join(artifactRoot,'.jobs',id+'.json'),path.join(artifactRoot,'.jobs',linkId+'.json'));
+ await assert.rejects(store.load(linkId),/LOCAL_JOB_NOT_FOUND/);
 });
 test('only a session path enters the child environment and credentials are not read',async()=>{
  const root=await mkdtemp(path.join(tmpdir(),'panqu-mcp-session-'));

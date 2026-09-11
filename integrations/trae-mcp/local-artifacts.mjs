@@ -2,7 +2,11 @@ import {open,readdir,realpath} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
 
-const allowed=name=>/^[A-Za-z0-9_-]+-(?:evidence\.json|playwright-report\.md)$/.test(name)||['panqu-business-suite-report.json','业务全模块综合自测报告.md'].includes(name);
+const flowReports=['panqu-business-suite-report.json','业务全模块综合自测报告.md',
+ 'real-video-flow-report.json','真实视频提交流程测试报告.md',
+ 'real-image-flow-report.json','真实生图提交流程测试报告.md',
+ 'real-canvas-flow-report.json','真实画布节点提交流程测试报告.md'];
+const allowed=name=>/^[A-Za-z0-9_-]+-(?:evidence\.json|playwright-report\.md)$/.test(name)||flowReports.includes(name);
 export const redactLocal=text=>text
  .replace(/(Bearer\s+)[^\s"']+/gi,'$1[REDACTED]')
  .replace(/((?:PHPSESSID|fastadmin_sid)=)[^\s;"']+/gi,'$1[REDACTED]')
@@ -21,7 +25,7 @@ export async function localReport(job,{file,offset=0,limit=32768}={}) {
  if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>65536)throw Error('INPUT_DENIED');
  const names=(await readdir(job.artifactDirectory)).filter(allowed).sort();
  if(file!==undefined&&(!allowed(file)||!names.includes(file)))throw Error('LOCAL_ARTIFACT_DENIED');
- const base={localJobId:job.id,executionLocation:'LOCAL_MAC',engineSha:job.engineSha,files:names,
+ const base={localJobId:job.id,executionLocation:'LOCAL_MAC',engineSha:job.engineSha,files:names,directory:job.artifactDirectory,state:job.state,incomplete:job.state==='UNKNOWN_AFTER_RESTART',
   note:'仅提供本地任务产生的脱敏 Markdown/JSON；不读取原始 trace、会话文件或任意路径。'};
  if(file===undefined)return {...base,available:names.length>0};
  // Never follow a symlink to a session/config file, even if it uses an allowed filename.
@@ -42,9 +46,9 @@ export async function localReport(job,{file,offset=0,limit=32768}={}) {
 export async function localCases(job,{offset=0,limit=5}={}) {
  if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>20)throw Error('INPUT_DENIED');
  const listing=await localReport(job);
- const files=listing.files.filter(f=>f.endsWith('-evidence.json'));
+ const files=listing.files.filter(f=>f.endsWith('.json'));
  // Each flow is an evidence record, not a fabricated TEST_CASE_V2 case.
- return {...listing,protocol:'PLAYWRIGHT_FLOW_EVIDENCE',total:files.length,offset,
+ return {...listing,protocol:files.every(f=>f.endsWith('-evidence.json'))?'PLAYWRIGHT_FLOW_EVIDENCE':'PANQU_FLOW_EVIDENCE',total:files.length,offset,
   cases:files.slice(offset,offset+limit).map(file=>({file,readWith:'panqu_report',local_job_id:job.id})),
   nextOffset:offset+limit<files.length?offset+limit:null};
 }

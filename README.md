@@ -68,7 +68,17 @@ npm run panqu:playwright -- --mock --media video --expect-failure
 协议标记为 `PLAYWRIGHT_FLOW_EVIDENCE`，不冒充 TEST_CASE_V2。`local_job_id` 与云端
 `submission_id` 互斥；没有指定本地 ID 时，旧云端报告接口保持原语义。
 本地输出位于专属 `mcp-<jobId>` 子目录（提供 `--output` 时以该目录为父目录），不读取原始 Trace。
-本地任务索引目前在 MCP 进程内存中；进程重启后需按返回路径读取留存报告文件。
+任务索引以 0600 权限原子保存，不保存命令参数、stdout、环境变量或会话路径。
+重启后可继续用原 `jobId` 查询状态、报告和证据；历史任务保留其原始引擎 SHA。
+未记录终态的任务返回 `UNKNOWN_AFTER_RESTART`，不会自动重跑或伪造成功。
+旧版从未持久化的索引不能凭空恢复，旧报告文件仍保留。
+
+`real-video`、`real-image`、`real-canvas` 及对应 `flow real-*-submit` 入口同样要求
+`confirm_real_execution: true`，其 Markdown/JSON 报告接入上述本地读取机制。
+旧 `flow playwright-diversion` 和 `flow api-diversion --playwright` 复用完整参数解析器，
+兼容 `--model-id`、`--model-type`、`--poll-timeout`、`--aspect-ratio` 别名。
+旧入口仍默认 Mock；明确 `--mode api|browser` 或 `--real-submit` 才请求真实执行，显式 `--mock` 优先。
+未知参数会拒绝；以前未生效的 Playwright `--project-root` 不再静默忽略，应使用工作目录或 MCP 的 `project_root`。
 
 仓库内的 `integrations/trae-mcp/` 保存本地适配实现；部署端必须指定已构建的固定提交目录及 SHA。
 完整 Playwright 入口属于 LOCAL_MAC；云端 `panqu_run` 仍按自己的 schema 提供 DevTest/agent 动作，
