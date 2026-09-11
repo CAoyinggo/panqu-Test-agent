@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.33.0` |
+| 版本 | `v4.34.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -17,7 +17,7 @@
 
 ## 本次更新：Playwright 执行与独立证据核验
 
-本次新增浏览器/API 执行组件、媒体检查器、计费与供应商成本 Oracle、分流决策与跨系统证据采集器，并接入 CLI 和业务综合套件。npm 包版本仍为 `4.33.0`；本节描述源码更新，不代表发布新 npm 版本或已更新成员电脑上的 MCP。
+本次新增浏览器/API 执行组件、媒体检查器、计费与供应商成本 Oracle、分流决策与跨系统证据采集器，并接入 CLI、业务综合套件和本地 Trae MCP。源码包版本已更新为 `4.34.0`；这不代表已经公开发布 npm 包或更新成员电脑上的 MCP。
 
 | 组件 | 功能与边界 |
 | --- | --- |
@@ -47,6 +47,32 @@ npm run panqu:playwright -- --mock --media video --expect-failure
 ```
 
 独立 CLI 写入 Markdown 报告，执行引擎写入结构化证据。必须核对报告中的 `executionMode`、`testAssertionStatus`、`businessTaskStatus` 与证据等级，不能只用进程退出码判定业务通过。
+
+### Playwright 完整 CLI 与本地 MCP
+
+`devtest playwright --help` 与 `npm run panqu:playwright -- --help` 是无业务请求的帮助入口。
+完整参数包括 `--mode api|browser|mock`、`--media video|image`、`--task-id`、`--model`、
+`--task-type`、`--prompt`、`--duration`、`--resolution`、`--aspect`、`--serviceline`、
+`--env test|preonline`、`--timeout`、`--session-file <绝对路径>`、`--output` 和 `--expect-failure`。
+未知参数或缺少参数值会拒绝执行；`--mock` 不会被后面的 `--mode api` 覆盖。
+执行完成后，只有 `testAssertionStatus=PASS` 返回退出码 0，FAIL/BLOCKED 返回 1。
+
+已配置混合适配器的 TRAE 使用 `panqu_native_cli` 的 `program: playwright`；这不是
+通用 `devtest-mcp` 自动新增的工具。先 `args: ["--help"]`，离线验证明确传 `--mock`。
+真实操作需用户逐次授权并传 `confirm_real_execution: true`，此字段不能代替费用/环境确认。
+会话只通过顶层 `session_file` 绝对路径、CLI `--session-file`，或白名单环境变量
+`PANQU_SESSION_COOKIES_FILE` 传递，禁止把 Cookie/API Key 内容放入参数或聊天。
+
+本地任务返回 `jobId`；`panqu_report` 传 `local_job_id` 列文件，再传 `file`、`offset`、
+`limit`（最多 65536 字符）读取脱敏全文。`panqu_cases` 传 `local_job_id` 列出证据文件，
+协议标记为 `PLAYWRIGHT_FLOW_EVIDENCE`，不冒充 TEST_CASE_V2。`local_job_id` 与云端
+`submission_id` 互斥；没有指定本地 ID 时，旧云端报告接口保持原语义。
+本地输出位于专属 `mcp-<jobId>` 子目录（提供 `--output` 时以该目录为父目录），不读取原始 Trace。
+本地任务索引目前在 MCP 进程内存中；进程重启后需按返回路径读取留存报告文件。
+
+仓库内的 `integrations/trae-mcp/` 保存本地适配实现；部署端必须指定已构建的固定提交目录及 SHA。
+完整 Playwright 入口属于 LOCAL_MAC；云端 `panqu_run` 仍按自己的 schema 提供 DevTest/agent 动作，
+升级内核 SHA 不等于自动增加云端浏览器、模型凭据、数据库或多账号配置。
 
 ### 真实执行与 TRAE 接入边界
 
@@ -304,7 +330,7 @@ v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-eviden
 
 ```bash
 # 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
-npm install --save-dev ./test-flow-4.33.0.tgz
+npm install --save-dev ./test-flow-4.34.0.tgz
 
 # 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
 npx devtest init --github --trae

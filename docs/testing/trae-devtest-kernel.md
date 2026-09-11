@@ -11,7 +11,7 @@
 先在 test-flow 运行 `npm ci`、`npm run build`、`npm pack`。在目标业务 Git 仓库安装生成的 tarball：
 
 ```bash
-npm install --save-dev /path/to/test-flow-4.29.2.tgz
+npm install --save-dev /path/to/test-flow-4.34.0.tgz
 npx --no-install devtest init --github --trae
 npx --no-install devtest doctor
 ```

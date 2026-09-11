@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.34.0] - 2026-09-11
+
+### Panqu 全链路业务自测与本地 MCP
+
+- 增强 `panqu-ai` 复合仓库发现、ThinkPHP 路由解析和项目源码绑定，并新增画布、图片、视频及 NewAPI 模型接入专项 Skill；代码观察只作为测试设计证据，不替代真实业务验收。
+- 新增独立 API 分流测试流程、模型定向诊断以及视频、生图、画布真实业务提交与分流快照核验流程，并由业务综合套件统一编排。
+- 新增 Playwright 浏览器/API/Mock 执行引擎、媒体检查、计费与供应商成本 Oracle、路由决策和跨系统证据采集；Mock、HTTP 成功或任务 ID 均不能单独判定业务通过。
+- 补齐 `devtest playwright` 完整参数、退出码和帮助入口，并将 Playwright 模块接入 `business-suite`；未知参数、非法环境、无效数值和相对会话路径会拒绝执行。
+- 新增 Trae 本地 MCP 原生 CLI 适配、固定引擎 SHA、真实执行确认、独立任务目录、报告分页读取和凭证脱敏；会话仅允许通过绝对文件路径传递，禁止在参数中携带凭据正文。
+
+### 文档与版本
+
+- README 补充 Playwright、本地 MCP、真实执行授权、费用风险、报告读取和部署边界说明。
+- 版本统一升级为 v4.34.0，并同步 `package.json`、`package-lock.json`、`src/platform/version.ts`、README、安装示例和 CHANGELOG。
+
 ## [4.33.0] - 2026-09-09
 
 ### Panqu 联合验证与 Markdown 交付门禁

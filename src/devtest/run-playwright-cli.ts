@@ -23,6 +23,28 @@ import {
 } from './panqu-playwright-engine.js';
 import { STANDARD_RECHARGE_PRESETS } from './supplier-cost-oracle.js';
 
+export const PLAYWRIGHT_HELP = `Panqu Playwright flow
+
+Usage: devtest playwright [options]
+  --help                         Show this help; no test or network request
+  --mock                         Use synthetic evidence only
+  --mode api|browser|mock         Default: api (real requests, may incur charges)
+  --media video|image            Default: video
+  --task-id <id>                 Inspect an existing task
+  --model <id> --task-type <id>   Select model and task type
+  --prompt <text>                Test prompt; never include credentials
+  --duration <seconds> --resolution <value> --aspect <ratio>
+  --serviceline <value>          Image service line
+  --env test|preonline           Default: test
+  --timeout <seconds>            Poll timeout
+  --session-file <absolute-path> Session JSON path, not its contents
+  --output <directory>           Markdown report and JSON evidence directory
+  --expect-failure               Assert the expected failure/refund branch
+
+Real execution requires explicit task authorization and budget. Mock is not
+business acceptance. Browser mode does not imply complete form/upload UI coverage.
+`;
+
 // 标准测试媒体 Buffer（用于受控快速自验，包含完整容器与元数据）
 const MOCK_MP4_HEADER = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
 
@@ -55,6 +77,8 @@ export function parseCliArgs(args: string[]): PlaywrightFlowRunOptions & { isMoc
       } else if (modeStr === 'mock') {
         options.executionMode = 'MOCK';
         options.isMock = true;
+      } else {
+        throw new Error('PLAYWRIGHT_ARG_INVALID: --mode must be api, browser, or mock');
       }
     } else if (arg === '--task-id' && args[i + 1]) {
       options.taskId = Number(args[++i]);
@@ -78,12 +102,33 @@ export function parseCliArgs(args: string[]): PlaywrightFlowRunOptions & { isMoc
       options.pollTimeoutSec = Number(args[++i]);
     } else if (arg === '--output' && args[i + 1]) {
       options.outputDir = path.resolve(args[++i]);
+    } else if (arg === '--session-file' && args[i + 1]) {
+      const sessionFile = args[++i];
+      if (!path.isAbsolute(sessionFile)) throw new Error('PLAYWRIGHT_ARG_INVALID: --session-file must be absolute');
+      options.sessionFile = sessionFile;
     } else if (arg === '--mock') {
       options.isMock = true;
       options.executionMode = 'MOCK';
     } else if (arg === '--expect-failure') {
       options.expectFailure = true;
+    } else {
+      throw new Error('PLAYWRIGHT_ARG_INVALID: unknown option or missing value');
     }
+  }
+
+  if (!['video', 'image'].includes(options.mediaType ?? 'video')
+    || !['test', 'preonline'].includes(options.env ?? 'test')) {
+    throw new Error('PLAYWRIGHT_ARG_INVALID: unsupported media or environment');
+  }
+  for (const value of [options.taskId, options.modelId, options.taskType, options.duration, options.pollTimeoutSec]) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+      throw new Error('PLAYWRIGHT_ARG_INVALID: numeric options must be positive');
+    }
+  }
+  // An explicit mock flag cannot be undone by later mode arguments.
+  if (options.isMock) {
+    options.executionMode = 'MOCK';
+    options.useBrowserPage = false;
   }
 
   return options;
@@ -218,8 +263,12 @@ ${report.tracePath ? `- **Playwright Trace 档案**: \`${report.tracePath}\` (�
 `;
 }
 
-export async function main() {
-  const cliOptions = parseCliArgs(process.argv.slice(2));
+export async function main(args = process.argv.slice(2)): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(PLAYWRIGHT_HELP);
+    return 0;
+  }
+  const cliOptions = parseCliArgs(args);
   console.log(`\n======================================================`);
   console.log(`🎭 Panqu Playwright 闭环测试智能体启动`);
   console.log(`模式: ${cliOptions.isMock ? '模拟受控验证 (MOCK)' : '真实环境执行 (REAL)'}`);
@@ -327,11 +376,12 @@ export async function main() {
   console.log(`供应商成本核算: ${evidence.supplierCost.evidenceLevel !== 'UNVERIFIED' ? '✅ 完成' : '⚠️ 待对账'} (预估成本 ¥${evidence.supplierCost.expectedCostCny}, 毛利 ¥${evidence.supplierCost.estimatedGrossProfitCny} [${evidence.supplierCost.grossMarginLabel}], 凭证等级: ${evidence.supplierCost.evidenceLevel})`);
   console.log(`详细报告文件: ${reportPath}`);
   console.log(`======================================================\n`);
+  return evidence.testAssertionStatus === 'PASS' ? 0 : 1;
 }
 
 // CLI 直调支持
 if (process.argv[1]?.endsWith('run-playwright-cli.js') || process.argv[1]?.endsWith('run-playwright-cli.ts')) {
-  main().catch((err) => {
+  main().then((code) => { process.exitCode = code; }).catch((err) => {
     console.error('CLI 执行异常:', err);
     process.exit(1);
   });

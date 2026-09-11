@@ -53,12 +53,14 @@ export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
   devtest mission materials --folder <directory> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest mission prepare-media --folder <directory> --spec <file> --ffprobe <absolute-path> --ffmpeg <absolute-path>
   devtest run --requirement <file> --env test [--github]
+  devtest playwright --help      Playwright 完整入口：--mode、--task-id、--expect-failure、--session-file 等
   devtest flow api-diversion [--project-root <directory>] [--output <directory>] [--model-id <id>] [--model-type <video|image>] [--real-submit]
+  devtest flow playwright-diversion [--model-id <id>] [--model-type <video|image>] [--output <directory>] [--real-submit]
   devtest flow real-video-submit [--model-id <id>] [--duration <sec>] [--resolution <res>] [--aspect-ratio <ratio>] [--poll-timeout <sec>] [--no-poll]
   devtest flow real-image-submit [--model-id <id>] [--resolution <res>] [--serviceline <line>] [--poll-timeout <sec>] [--no-poll]
   devtest flow real-canvas-submit [--canvas-id <id>] [--node-id <id>] [--model-id <id>] [--poll-timeout <sec>] [--no-poll]
-  devtest flow business-suite [--module all|video|image|canvas|diversion] [--env test|preonline]
-  devtest business-suite [--module all|video|image|canvas|diversion]
+  devtest flow business-suite [--module all|video|image|canvas|diversion|playwright] [--env test|preonline]
+  devtest business-suite [--module all|video|image|canvas|diversion|playwright]
   devtest real-video [--model-id <id>]
   devtest real-image [--model-id <id>]
   devtest real-canvas [--canvas-id <id>]
@@ -504,6 +506,10 @@ async function printStatus(root: string, config: DevTestProjectConfig, runId?: s
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
+  if (argv[0] === 'playwright') {
+    const { main: runPlaywrightCli } = await import('../src/devtest/run-playwright-cli.js');
+    return runPlaywrightCli(argv.slice(1));
+  }
   if (argv.includes('--help') || argv.includes('-h') || argv.length === 0) {
     console.log(DEVTEST_HELP);
     return 0;
