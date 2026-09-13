@@ -1,6 +1,11 @@
 /** UI guidance, not proof of human authorization. Runtime gates remain authoritative. */
 export function devTestNextAction(result: Record<string, unknown>, input: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (input.action === 'doctor') return undefined;
+  if ([
+    'doctor', 'quick_verify', 'audit_billing', 'diagnose_diversion', 'self_test_plan',
+    'probe_environment', 'export_repro', 'extract_model_matrix',
+    'analyze_git_impact', 'watch_task', 'simulate_chaos', 'audit_config_drift',
+    'audit_margin', 'review_pr', 'export_ci_workflow', 'propose_fix_pr', 'report_check_run', 'handle_pr_command', 'post_merge_release',
+  ].includes(String(input.action))) return undefined;
   const planId = typeof result.plan_id === 'string' ? result.plan_id : input.plan_id;
   const statusArguments = typeof planId === 'string' ? { action: 'status', plan_id: planId } : undefined;
   if (result.status === 'RUNNING' || String(result.message ?? '').startsWith('RUN_IN_PROGRESS')) {

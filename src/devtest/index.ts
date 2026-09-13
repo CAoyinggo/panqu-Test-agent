@@ -131,6 +131,15 @@ export type {
   DevTestIdempotencyCheckKind,
   DevTestQualityGateName,
   DevTestQualityGateResult,
+  NewapiModelOnboardingSpec,
+  DevTestFlowType,
+  DevTestSelfTestInput,
+  DevTestScenarioKind,
+  DevTestRiskItem,
+  DevTestScenario,
+  DevTestExecutableStep,
+  DevTestExecutionDag,
+  DevTestSelfTestPlan,
   DevTestStateObservation,
   DevTestStateConsistencyResult,
   DevTestRegressionGuard,
@@ -336,3 +345,25 @@ export {
   type AutonomousVerificationResult,
   type ScenarioExecutionRecord,
 } from './autonomous-verifier.js';
+export {
+  SelfTestPlanner,
+} from './self-test-planner.js';
+export {
+  ScenarioPlanner,
+  type ScenarioPlanningContext,
+} from './scenario-planner.js';
+export {
+  ExecutionPlanner,
+} from './execution-planner.js';
+export {
+  GitHubCheckRunAdapter,
+  type GitHubCheckRunAnnotation,
+  type GitHubCheckRunOutput,
+  type GitHubCheckRunPayload,
+  type GitHubCommitStatusPayload,
+  type CheckRunGenerationInput,
+  type CheckRunGenerationResult,
+  type CheckAnnotationLevel,
+  type CheckRunStatus,
+  type CheckRunConclusion,
+} from './github-check-run.js';

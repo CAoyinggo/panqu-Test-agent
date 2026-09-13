@@ -2,6 +2,8 @@
 
 本目录的当前标准只服务于需求驱动生成，不绑定产品、项目、功能、接口或技术实现。
 
+当前发布版本为 `v4.37.0`。根项目的完整入口和安全边界见[主 README](../README.md)，版本变化见[CHANGELOG](CHANGELOG.md)。
+
 ## 唯一标准入口
 
 1. [通用测试流程 SOP](01-测试流程SOP.md)
@@ -15,6 +17,16 @@
 9. [测试设计智能标准](testing/test-design-intelligence.md)
 10. [开发自测智能体 Prompt](prompts/dev-selftest-agent.prompt.md)
 11. [DevTest 持续优化 Prompt](prompts/devtest-implementation-agent.prompt.md)
+12. [Developer Self-Test 使用指南](testing/developer-self-test.md)
+13. [TestCase V2 Schema](testing/testcase-v2-schema.md)
+14. [开发交接与发布检查清单](testing/developer-handoff-release-checklist.md)
+
+## v4.37.0 能力导航
+
+- 规划与执行：自主场景规划、执行 DAG、模型规格矩阵、Git 改动影响分析。
+- 诊断与证据：测试环境只读探针、任务受控监视、失败复现包、计费与毛利核算。
+- 协作与门禁：PR 综合审查、Check Run/Commit Status 载荷、评论命令、CI 工作流和合并后发布动作载荷。
+- 安全边界：MCP 默认 Mock，不接收明文 Cookie；真实探针仅允许受信测试环境；仿真能力不能当作真实系统结果；GitHub 动作均需外部 MCP 显式执行。
 
 ## 标准链
 

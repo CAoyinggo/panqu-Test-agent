@@ -147,7 +147,53 @@ describe('BillingOracle - 独立计费预估与流水级对账器', () => {
       expect(report.passed).toBe(false);
       expect(report.status).toBe('FAIL');
       expect(report.duplicateRefunded).toBe(true);
-      expect(report.reasons.some((r) => r.includes('重复退款'))).toBe(true);
+      expect(report.refundIdempotency).toBe(false);
+      expect(report.reasons.some((r) => r.includes('REFUND_IDEMPOTENCY'))).toBe(true);
+    });
+
+    it('严格核验失败任务 NET_CHARGE_ZERO 不变量（超额退款亦违背不变量）', () => {
+      const report = BillingOracle.reconcileTaskLedger({
+        taskId,
+        expectedPoints: 28,
+        terminalStatus: 'FAILED',
+        scoreLogs: [
+          { task_id: taskId, type: 2, score: -28 },
+          { task_id: taskId, type: 1, score: 56 }, // 扣28退56，超退
+        ],
+      });
+
+      expect(report.passed).toBe(false);
+      expect(report.status).toBe('FAIL');
+      expect(report.netChargeZero).toBe(false);
+      expect(report.reasons.some((r) => r.includes('NET_CHARGE_ZERO') && r.includes('超额退款'))).toBe(true);
+    });
+
+    it('严格核验网络重发同一 clientToken 的 ANTI_DOUBLE_BILLING 防重扣不变量', () => {
+      const report = BillingOracle.reconcileTaskLedger({
+        taskId,
+        expectedPoints: 28,
+        terminalStatus: 'SUCCESS',
+        scoreLogs: [
+          { task_id: taskId, type: 2, score: -28, client_token: 'retry-token-xyz' },
+          { task_id: taskId, type: 2, score: -28, client_token: 'retry-token-xyz' },
+        ],
+      });
+
+      expect(report.passed).toBe(false);
+      expect(report.status).toBe('FAIL');
+      expect(report.antiDoubleBilling).toBe(false);
+      expect(report.duplicateCharged).toBe(true);
+      expect(report.reasons.some((r) => r.includes('ANTI_DOUBLE_BILLING'))).toBe(true);
+    });
+
+    it('支持 GPT Image 2.5 (ID 205) 以及任意新模型自定义刊例价', () => {
+      // Image 2.5 1k 默认为 10 积分，2k/flare 为 15 积分
+      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'image', modelId: 205, resolution: '1k' })).toBe(10);
+      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'image', modelId: 205, resolution: '2k' })).toBe(15);
+
+      // 自定义刊例价优先级最高
+      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 999, customPoints: 99 })).toBe(99);
+      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 999, duration: 5, pointsPerSecond: 12 })).toBe(60);
     });
   });
 });

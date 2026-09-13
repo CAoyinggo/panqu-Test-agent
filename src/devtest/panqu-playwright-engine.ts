@@ -150,6 +150,9 @@ export interface BillingReconciliation {
   duplicateRefunded: boolean;
   missingRefund?: boolean;
   asyncSettlementPending: boolean;
+  netChargeZero?: boolean;
+  antiDoubleBilling?: boolean;
+  refundIdempotency?: boolean;
   ledgerEntries: Array<{
     id?: string;
     type: 'PRE_DEDUCT' | 'SETTLE' | 'REFUND';
@@ -543,7 +546,7 @@ export async function runPanquPlaywrightFlow(
   const defaultMainConfig: MainSiteConfigSnapshot = {
     routeMode: 'newapi',
     globalModelIds: [84, 88, 12],
-    globalApiKey: 'sk-test-global-key',
+    globalApiKey: 'test-global',
     globalRouteRules: {
       video: {
         84: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
@@ -559,7 +562,7 @@ export async function runPanquPlaywrightFlow(
       },
     },
     orgBindings: {
-      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'sk-test-org-key' },
+      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'test-org' },
     },
     ...options.mainSiteConfig,
   };
@@ -1438,6 +1441,9 @@ export async function runPanquPlaywrightFlow(
     settledPoints: billingAudit.settledPoints,
     refundedPoints: billingAudit.refundedPoints,
     netDeductedPoints: billingAudit.netDeductedPoints,
+    netChargeZero: billingAudit.netChargeZero,
+    antiDoubleBilling: billingAudit.antiDoubleBilling,
+    refundIdempotency: billingAudit.refundIdempotency,
     underCharged: billingAudit.underCharged,
     overCharged: billingAudit.overCharged,
     duplicateCharged: billingAudit.duplicateCharged,

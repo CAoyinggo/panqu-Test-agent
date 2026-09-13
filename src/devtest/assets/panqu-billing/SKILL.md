@@ -50,3 +50,42 @@ description: 处理 Panqu/盼趣的计费、积分预估、消费明细、账单
 10. **零余额与余额不足拦截**：用户钱包可用积分小于 `required_points` 时，接口必须直接返回 402/错误码，禁止透支生成。
 11. **多租户/分组隔离**：不同企业组织下的积分配置与消费明细必须严格数据隔离，禁止越权查询。
 12. **账单大盘与明细总和一致性**：在指定时间窗口内，大盘汇总的消费积分总值必须等于明细列表中单笔积分扣减之和。
+
+## 四、三大核心账务不变量（Billing Invariants）机器断言标准
+
+在对账与自测过程中，系统通过 `BillingOracle` 与 `IdempotencyOracle` 强制核验以下三大数学不变量，任何一项违背均判定测试 FAIL：
+
+| 不变量名称 | 机器判定条件 | 业务意义与防资损目标 | 违背判定表现 |
+| :--- | :--- | :--- | :--- |
+| **ANTI_DOUBLE_BILLING**<br>*(防二次扣费)* | `preDeductCount <= 1`<br>且相同 `clientToken` 仅 1 笔扣费 | 网络抖动、超时重试或并发重复点击时，绝不能对用户重复预扣积分 | 触发 `[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING]`，判定 `duplicateCharged=true` |
+| **NET_CHARGE_ZERO**<br>*(失败净扣归零)* | `terminalStatus === 'FAILED'` 时：<br>`preDeduct - refunded === 0` | 上游渠道异常、超时、黑屏或业务失败的任务，用户净扣额严格为 0 pt | 若净扣 > 0 触发漏退款；若净扣 < 0 触发超额退款，均判定资金平衡违背 |
+| **REFUND_IDEMPOTENCY**<br>*(退款幂等性)* | `refundCount <= 1` | 网关重复推送回调事件或人工/补偿多次触发时，退款流水严格只能入账 1 次 | 触发 `[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY]`，防范重复退款薅羊毛资金漏洞 |
+
+## 五、面向公司同事的 Trae + MCP / CLI 自测实操指南
+
+本测试体系已被封装为通用 Skill，供团队同事在日常模型接入、分流调整与账单改动时自主调用：
+
+### 5.1 方式一：在 Trae 中结合 MCP 智能体对话使用
+
+1. **Trae 环境配置**（首次使用在项目根目录运行一次初始化）：
+   ```bash
+   node -e "import('./dist/src/devtest/trae-setup.js').then(m => m.initializeDevTestTrae(process.cwd()))"
+   ```
+   该命令会自动在 `.trae/mcp.json` 中注入 `devtest` MCP 服务，并将本 Skill 同步到 `.trae/skills/` 目录。
+2. **在 Trae 聊天中直接向 AI 发送指令**：
+   - *对账自测*：“`请调用 devtest 工具，针对 Wan 3.0 视频模型（ID 84）接入进行失败退款与防二次扣款自测`”
+   - *分流自测*：“`请使用 devtest 检查已有模型分流方案，重点核查准入规则、反向降级回退与账单不变量`”
+   - *新模型上线*：“`请使用 devtest 规划新图片模型 Image 2.5（ID 201）直连上线的全套测试方案`”
+
+### 5.2 方式二：命令行自测（极速免配置，开箱即用）
+
+```bash
+# 1. 快速核验失败退款分支与 NET_CHARGE_ZERO 不变量（模拟受控闭环）
+node dist/src/devtest/run-playwright-cli.js --mock --expect-failure
+
+# 2. 快速核验新模型直接接入（DIRECT 模式，含全规格矩阵与账单）
+node dist/src/devtest/run-playwright-cli.js --flow direct --model 84 --media video --plan-only
+
+# 3. 快速核验已有模型分流（DIVERSION 模式，含两级决策与降级回退）
+node dist/src/devtest/run-playwright-cli.js --flow diversion --model 84 --media video --plan-only
+```

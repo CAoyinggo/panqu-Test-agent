@@ -42,8 +42,15 @@ export async function initializeDevTestTrae(root: string): Promise<string[]> {
   const entry = { command: 'node', args: [
     '${workspaceFolder}/node_modules/test-flow/dist/bin/devtest-mcp.js', '--project-root', '${workspaceFolder}',
   ] };
+  const repoEntry = { command: 'node', args: [
+    '${workspaceFolder}/dist/bin/devtest-mcp.js', '--project-root', '${workspaceFolder}',
+  ] };
   const existing = config.mcpServers?.devtest;
-  if (existing && JSON.stringify(existing) !== JSON.stringify(entry)) throw new Error('DEVTEST_TRAE_CONFIG_CONFLICT: existing devtest MCP entry differs');
+  const isAllowedExisting = existing && (
+    JSON.stringify(existing) === JSON.stringify(entry) ||
+    JSON.stringify(existing) === JSON.stringify(repoEntry)
+  );
+  if (existing && !isAllowedExisting) throw new Error('DEVTEST_TRAE_CONFIG_CONFLICT: existing devtest MCP entry differs');
   const changed: string[] = [];
   if (!existing) {
     config.mcpServers = { ...config.mcpServers, devtest: entry };

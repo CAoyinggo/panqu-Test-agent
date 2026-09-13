@@ -32,19 +32,29 @@ description: 处理 Panqu 主站与 NewAPI 网关对接、两级分流决策、�
 
 ## 二、关键业务规则与必测项
 
-1. **全量开放开关（is_newapi_global）**：
-   - 默认为开启状态；
-   - 开启时：拥有分流资格的用户请求直接进入 NewAPI 分流；
-   - 关闭时：该模型降级回退走主站历史直连线路，不走 NewAPI。
-2. **组织管理与密钥绑定**：
-   - 默认分组包含主站所有普通用户，必须关联 NewAPI 对应 group 的 API 密钥；
-   - 禁止在前端明文暴露 API Key。
-3. **渠道参数与能力校验**：
-   - 视频渠道参数：模型能力（全能参考/首尾帧）、分辨率（480P/720P/768P/1080P）、宽高比；
-   - 图片渠道参数：分辨率（1k/2k/4k）、比例（1:1, 4:3, 16:9, 9:16 等）。
-4. **异常分流与降级重试**：
-   - 若选中的供应商渠道返回不可用/超时，验证是否有兜底线路重试；
-   - 验证重试过程中的任务 ID 唯一性与积分扣费幂等性。
+### 2.1 分流模式（DIVERSION）vs 直接接入模式（DIRECT）的明确划分
+
+在测试过程中必须明确区分两大流派，严禁混淆测试要求：
+
+1. **已有模型分流模式（DIVERSION）**：
+   - 针对主站已有模型进行流量劫持与分流调度；
+   - **核心必测**：
+     - 两级准入判定（非真人、task_type=28、serviceline='r'）；
+     - 满足条件正向命中切流（视频 `LINE=10`，图片 `newapi_image=1`）；
+     - 资格不符或渠道异常时**平滑降级回退原直连链路**（`DIVERSION_FALLBACK_DIRECT`）；
+     - 多企业路由组绑定鉴权与组织隔离（`PERMISSION_ISOLATION`）。
+2. **新模型直接接入模式（DIRECT）**：
+   - 针对新上线模型（如 Image 2.5、新视频直连模型），在业务端为**代码写死直连**；
+   - **核心必测**：
+     - **免路由组鉴权与免分流表配置**（路由快照记为 `route_group_id=0, org_id=0`）；
+     - 代码白名单映射与全规格参数矩阵覆盖（`DIRECT_SPEC_MATRIX`，涵盖全部画幅与分辨率）；
+     - 产物物理结构解析（MP4 Box 树 / PNG IHDR）；
+     - 单模型刊例核销与失败退款净扣归零（`NET_CHARGE_ZERO`）。
+
+### 2.2 异常分流、降级与幂等审计
+
+- 若选中的供应商渠道返回不可用/超时，必须核验是否有兜底线路安全回退；
+- 严格遵循 `BillingOracle` 与 `IdempotencyOracle` 的三大账务不变量（防重复扣费、退款幂等、失败净扣为 0）。
 
 ## 三、测试数据规范与回滚约定
 
@@ -56,3 +66,21 @@ description: 处理 Panqu 主站与 NewAPI 网关对接、两级分流决策、�
 - **数据回滚与清理**：
   - 测试创建的临时测试渠道参数或开关，在验证完成后必须恢复原状；
   - 生产出的测试视频/图片任务若无需留存，通过 `/aivideo/videonew/delete` 进行软删除清理。
+
+## 四、面向公司同事的 Trae + MCP / CLI 自测指南
+
+### 4.1 Trae MCP 智能体调用
+
+同事在 Trae 中配置 MCP 服务后，可直接通过自然语言指示智能体执行：
+- *已有模型分流测试*：“`请使用 devtest 测试 Wan 3.0 已有模型分流，验证正向切流与降级回退`”
+- *新模型上线测试*：“`请使用 devtest 针对新模型执行直接接入测试，覆盖所有分辨率和画幅`”
+
+### 4.2 极速 CLI 调用
+
+```bash
+# 已有模型分流测试（DIVERSION）
+node dist/src/devtest/run-playwright-cli.js --flow diversion --model 84 --media video --plan-only
+
+# 新模型直接接入测试（DIRECT）
+node dist/src/devtest/run-playwright-cli.js --flow direct --model 99 --media video --alias "new-video-model" --plan-only
+```

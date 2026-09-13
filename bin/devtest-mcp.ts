@@ -23,8 +23,53 @@ export async function serveDevTestMcp(projectRoot = process.cwd()): Promise<void
       response({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'devtest', version: PLATFORM_VERSION } });
     } else if (request.method === 'ping') response({});
     else if (request.method === 'tools/list') response({ tools: [DEVTEST_MCP_TOOL] });
-    else if (request.method === 'tools/call' && request.params?.name === 'devtest') {
-      const result = await service.call(request.params.arguments);
+    else if (request.method === 'tools/call') {
+      const toolName = request.params?.name;
+      const args = (request.params?.arguments as Record<string, unknown>) || {};
+      let action = args.action;
+      if (toolName === 'devtest') {
+        // use args.action as-is
+      } else if (toolName === 'quick_verify' || toolName === 'panqu_model_quick_verify') {
+        action = 'quick_verify';
+      } else if (toolName === 'audit_billing' || toolName === 'panqu_audit_billing_ledger') {
+        action = 'audit_billing';
+      } else if (toolName === 'diagnose_diversion' || toolName === 'panqu_diversion_rule_diagnose') {
+        action = 'diagnose_diversion';
+      } else if (toolName === 'self_test_plan' || toolName === 'panqu_self_test_plan') {
+        action = 'self_test_plan';
+      } else if (toolName === 'probe_environment' || toolName === 'panqu_probe_environment') {
+        action = 'probe_environment';
+      } else if (toolName === 'export_repro' || toolName === 'panqu_export_repro_package') {
+        action = 'export_repro';
+      } else if (toolName === 'extract_model_matrix' || toolName === 'panqu_extract_model_matrix') {
+        action = 'extract_model_matrix';
+      } else if (toolName === 'analyze_git_impact' || toolName === 'panqu_analyze_git_impact') {
+        action = 'analyze_git_impact';
+      } else if (toolName === 'watch_task' || toolName === 'panqu_watch_task') {
+        action = 'watch_task';
+      } else if (toolName === 'simulate_chaos' || toolName === 'panqu_simulate_chaos') {
+        action = 'simulate_chaos';
+      } else if (toolName === 'audit_config_drift' || toolName === 'panqu_audit_config_drift') {
+        action = 'audit_config_drift';
+      } else if (toolName === 'audit_margin' || toolName === 'panqu_audit_margin') {
+        action = 'audit_margin';
+      } else if (toolName === 'review_pr' || toolName === 'panqu_review_pr' || toolName === 'run_ci_gate') {
+        action = 'review_pr';
+      } else if (toolName === 'export_ci_workflow' || toolName === 'panqu_export_ci_workflow') {
+        action = 'export_ci_workflow';
+      } else if (toolName === 'propose_fix_pr' || toolName === 'panqu_propose_fix_pr' || toolName === 'generate_fix_pr') {
+        action = 'propose_fix_pr';
+      } else if (toolName === 'report_check_run' || toolName === 'create_check_run' || toolName === 'panqu_check_run') {
+        action = 'report_check_run';
+      } else if (toolName === 'handle_pr_command' || toolName === 'pr_command' || toolName === 'panqu_pr_command') {
+        action = 'handle_pr_command';
+      } else if (toolName === 'post_merge_release' || toolName === 'close_issue_release' || toolName === 'panqu_release') {
+        action = 'post_merge_release';
+      } else {
+        send({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Unsupported method or tool; use devtest' } });
+        return;
+      }
+      const result = await service.call({ ...args, action });
       response({ content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: result.ok === false });
     } else send({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Unsupported method or tool; use devtest' } });
   };

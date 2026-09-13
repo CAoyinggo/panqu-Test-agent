@@ -89,9 +89,18 @@ describe('npm tarball installation acceptance', () => {
       expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
     }
     expect(entries).not.toContain('integrations/trae-mcp/native-cli.test.mjs');
-    // Reviewed 4.34 CLI/MCP additions, four 4.35 and five 4.36 runtime modules; retain strict path and size checks.
+    // Reviewed through 4.37: planner, probe, PR lifecycle, pricing and resilience modules; retain strict path and size checks.
+    for (const module of [
+      'auto-fix-pr', 'chaos-simulator', 'ci-pr-gate', 'config-drift-auditor',
+      'env-probe', 'execution-planner', 'git-impact-analyzer', 'github-check-run',
+      'github-mcp-review', 'margin-auditor', 'model-matrix-extractor', 'post-merge-lifecycle',
+      'pr-comment-command', 'repro-exporter', 'scenario-planner', 'self-test-planner', 'task-watcher',
+    ]) {
+      expect(entries).toContain(`dist/src/devtest/${module}.js`);
+      expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
+    }
     expect(entries).toContain('dist/src/platform/version.js');
-    expect(entries.length).toBeLessThanOrEqual(365);
+    expect(entries.length).toBeLessThanOrEqual(399);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');

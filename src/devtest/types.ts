@@ -99,7 +99,6 @@ export interface DevTestBusinessFlowStep {
     expression: string;
   }>;
 }
-
 export type DevTestBusinessFlowKind =
   | 'MAIN_HAPPY_PATH'
   | 'FAILURE_REFUND'
@@ -977,4 +976,105 @@ export interface DevTestRunResult {
     report: AcceptanceReport;
     contracts: ContractPreflight;
   };
+}
+
+export interface NewapiModelOnboardingSpec {
+  modelId: number;
+  modelType: 'video' | 'image';
+  alias?: string;
+  isGlobal?: boolean;
+  taskType?: number;
+  resolutions?: string[];
+  aspectRatios?: string[];
+  durations?: number[];
+  pointsPerUnit?: number;
+  serviceLine?: string;
+}
+
+export type DevTestFlowType = 'DIVERSION' | 'DIRECT';
+
+export interface DevTestSelfTestInput {
+  requirement?: string;
+  requirementFile?: string;
+  featureDescription?: string;
+  modelSpec?: NewapiModelOnboardingSpec;
+  flowType?: DevTestFlowType;
+  changedFiles?: string[];
+  environment?: 'test' | 'sandbox' | 'preonline';
+  browserAvailable?: boolean;
+  preferExecutionMode?: 'API_INTEGRATION' | 'UI_E2E' | 'MOCK';
+}
+
+export type DevTestScenarioKind =
+  | 'MAIN_HAPPY_PATH'
+  | 'ROUTING_DIVERSION'
+  | 'DIVERSION_FALLBACK_DIRECT'
+  | 'DIRECT_SPEC_MATRIX'
+  | 'BILLING_RECONCILIATION'
+  | 'FAILURE_REFUND'
+  | 'RETRY_IDEMPOTENCY'
+  | 'MEDIA_ASSET_VERIFICATION'
+  | 'PERMISSION_ISOLATION'
+  | 'INVALID_INPUT_BOUNDARY';
+
+export interface DevTestRiskItem {
+  id: string;
+  category: 'BILLING' | 'ROUTING' | 'FAILURE_RECOVERY' | 'MEDIA_INTEGRITY' | 'IDEMPOTENCY' | 'PERMISSION';
+  description: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  mitigationScenarioKind: DevTestScenarioKind;
+}
+
+export interface DevTestScenario {
+  id: string;
+  name: string;
+  kind: DevTestScenarioKind;
+  whySelected: string;
+  relatedRequirement: string;
+  relatedRisk: string;
+  requiredEvidence: string[];
+  requiredOracles: string[];
+  modelId?: number;
+  payloadProfile?: Record<string, unknown>;
+}
+
+export interface DevTestExecutableStep {
+  id: string;
+  name: string;
+  operation: string;
+  dependsOn: string[];
+  inputFrom: Array<{ fromStepId: string; fromField: string; toField: string }>;
+  output: string[];
+  requiredEvidence: string[];
+  oracle: string;
+  failurePolicy: 'ABORT' | 'BRANCH' | 'CONTINUE';
+}
+
+export interface DevTestExecutionDag {
+  scenarioId: string;
+  steps: DevTestExecutableStep[];
+  entryStepId: string;
+  terminalStepId: string;
+}
+
+export interface DevTestSelfTestPlan {
+  flowType: DevTestFlowType;
+  domain: 'VIDEO' | 'IMAGE' | 'CANVAS' | 'MULTI_MODAL';
+  scope: string;
+  targetModels: Array<{
+    id: number;
+    type: 'video' | 'image';
+    alias: string;
+    isGlobal: boolean;
+    capabilities?: Record<string, unknown>;
+  }>;
+  preconditions: string[];
+  executionMode: 'API_INTEGRATION' | 'UI_E2E' | 'MOCK';
+  modeReason: string;
+  requiredOracles: string[];
+  requiredEvidence: string[];
+  mandatoryBranches: string[];
+  risks: DevTestRiskItem[];
+  scenarios: DevTestScenario[];
+  executionDags: DevTestExecutionDag[];
 }

@@ -14,6 +14,8 @@ import type { FlowMediaType, FlowStepStatus, TaskTerminalStatus } from './panqu-
 export interface ScoreLogEntry {
   id?: number | string;
   task_id?: number | string;
+  client_token?: string;
+  idempotency_key?: string;
   type: number | string; // 2: 扣费/预扣, 1: 充值/退款
   score: number; // 积分值 (扣费通常为负数或正数绝对值)
   memo?: string;
@@ -34,12 +36,17 @@ export interface BillingAuditReport {
   duplicateRefunded: boolean;
   missingRefund: boolean;
   asyncSettlementPending: boolean;
+  // 核心账务不变量
+  netChargeZero?: boolean;           // 失败任务净扣归零不变量 (terminalStatus === 'FAILED' 时 netDeducted === 0)
+  antiDoubleBilling?: boolean;       // 重试/并发防重复扣费不变量 (扣费流水严格 <= 1)
+  refundIdempotency?: boolean;       // 退款幂等不变量 (退款流水严格 <= 1)
   ledgerEntries: Array<{
     id?: string;
     type: 'PRE_DEDUCT' | 'SETTLE' | 'REFUND';
     points: number;
     time?: string;
     memo?: string;
+    clientToken?: string;
   }>;
   balanceAuxiliary?: {
     balanceBefore?: number;
@@ -60,16 +67,33 @@ export class BillingOracle {
     duration?: number;
     resolution?: string;
     hasReferenceVideo?: boolean;
+    customPoints?: number;
+    pointsPerSecond?: number;
   }): number {
+    // 若显式传入自定义刊例单价或总积分，直接遵从
+    if (params.customPoints !== undefined && params.customPoints >= 0) {
+      return Math.round(params.customPoints);
+    }
+    if (params.pointsPerSecond !== undefined && params.pointsPerSecond > 0) {
+      const duration = Math.max(1, params.duration ?? 4);
+      return Math.round(params.pointsPerSecond * duration);
+    }
+
     if (params.mediaType === 'image') {
       // 依据 aibaseos Points.php 与 FastAdmin 真实刊例：
-      // 基础图片模型标准刊例价为 5 积分/张
-      // 若为 Model 12 (Pan Banana Pro) 且指定 1k/2k 高清场景图：实收 10 积分；4k 为 15 积分
+      // Model 205 (GPT Image 2.5): 基础/1k 10 积分；2k/flare 15 积分
+      if (params.modelId === 205) {
+        const res = (params.resolution || '').toLowerCase().trim();
+        if (res.includes('2k') || res.includes('flare') || res.includes('hd') || res.includes('4k')) return 15;
+        return 10;
+      }
+      // 若为 Model 12 (Pan Banana Pro) 且指定 2k/4k 高清场景图：2k 实收 10 积分；4k 为 15 积分
       if (params.modelId === 12 && params.resolution) {
         const res = params.resolution.toLowerCase().trim();
         if (res.includes('4k')) return 15;
-        if (res.includes('1k') || res.includes('2k')) return 10;
+        if (res.includes('2k')) return 10;
       }
+      // 基础图片模型（包含 Model 201 runninghub-nano-banana-2 等）标准刊例价为 5 积分/张
       return 5;
     }
 
@@ -192,7 +216,7 @@ export class BillingOracle {
 
     const netDeducted = preDeduct - refunded;
 
-    // 2. 核心异常审计
+    // 2. 核心异常审计与关键不变量判定
     let duplicateCharged = false;
     let duplicateRefunded = false;
     let underCharged = false;
@@ -200,20 +224,41 @@ export class BillingOracle {
     let missingRefund = false;
     let asyncSettlementPending = false;
 
-    // 防重扣
+    let antiDoubleBilling = preDeductCount <= 1;
+    let refundIdempotency = refundCount <= 1;
+    let netChargeZero = true;
+
+    // 2.1 防重扣不变量（ANTI_DOUBLE_BILLING）
     if (preDeductCount > 1) {
       duplicateCharged = true;
-      reasons.push(`检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣记录 (总扣 ${preDeduct} pts)`);
+      antiDoubleBilling = false;
+      reasons.push(
+        `[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水 (总扣 ${preDeduct} pts)，违反防二次扣费不变量`,
+      );
     }
 
-    // 防重退
+    // 检查是否有基于同一 client_token / idempotency_key 的并发双重扣费
+    const clientTokens = taskLogs
+      .map((l) => l.client_token || l.idempotency_key)
+      .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
+    if (clientTokens.length > 1 && preDeductCount > 1) {
+      antiDoubleBilling = false;
+      reasons.push(
+        `[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`,
+      );
+    }
+
+    // 2.2 退款幂等不变量（REFUND_IDEMPOTENCY）
     if (refundCount > 1) {
       duplicateRefunded = true;
-      reasons.push(`检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录 (总退 ${refunded} pts)`);
+      refundIdempotency = false;
+      reasons.push(
+        `[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录 (总退 ${refunded} pts)，违反退款幂等不变量，存在资金漏洞风险`,
+      );
     }
 
-    // 依据终态核对实扣
     if (terminalStatus === 'SUCCESS') {
+      netChargeZero = true; // 成功任务正常扣费结算，不涉及失败净扣归零不变量违背
       if (preDeductCount === 0) {
         if (params.allowAsyncPending) {
           asyncSettlementPending = true;
@@ -229,6 +274,7 @@ export class BillingOracle {
         reasons.push(`多扣费: 依据刊例价应扣 ${expectedPoints} 积分，实际净扣除 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`);
       }
     } else if (terminalStatus === 'FAILED') {
+      netChargeZero = netDeducted === 0;
       if (preDeductCount === 0 && expectedPoints > 0) {
         if (params.allowAsyncPending) {
           asyncSettlementPending = true;
@@ -238,7 +284,13 @@ export class BillingOracle {
         }
       } else if (netDeducted > 0) {
         missingRefund = true;
-        reasons.push(`任务失败漏退款: 任务已生成失败，但仍有净扣除 ${netDeducted} 积分未退回`);
+        reasons.push(
+          `[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 任务已生成失败，但仍有净扣除 ${netDeducted} 积分未退回，违反失败全额退款不变量`,
+        );
+      } else if (netDeducted < 0) {
+        reasons.push(
+          `[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 任务退款总额 (${refunded} pts) 超过预扣总额 (${preDeduct} pts)，违反资金对账平衡`,
+        );
       }
     } else if (terminalStatus === 'TIMEOUT') {
       reasons.push(`任务处于 TIMEOUT 超时未决状态，保留最后账务快照 (净扣 ${netDeducted} pts)`);
@@ -275,6 +327,9 @@ export class BillingOracle {
       duplicateRefunded,
       missingRefund,
       asyncSettlementPending,
+      netChargeZero,
+      antiDoubleBilling,
+      refundIdempotency,
       ledgerEntries: structuredEntries,
       balanceAuxiliary: {
         balanceBefore: params.balanceBefore,

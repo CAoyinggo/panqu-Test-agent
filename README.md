@@ -4,7 +4,7 @@
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 版本 | `v4.36.0` |
+| 版本 | `v4.37.0` |
 | 运行时 | Node.js `>= 24.11.0` |
 | 后端 | TypeScript + ESM + NodeNext |
 | Web | React + Vite |
@@ -15,7 +15,33 @@
 
 [DevTest TestCase V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [交接/发布检查清单](docs/testing/developer-handoff-release-checklist.md) · [Legacy 断言 DSL](docs/assertion-dsl.md) · [开发验收使用指南](docs/developer-acceptance.md) · [部署指南](docs/operations/deployment.md)
 
-## 本次更新：v4.36.0 自主变更验证与问题诊断
+## 本次更新：v4.37.0 自助测试、PR 门禁与发布协作
+
+本版把 Developer Self-Test 扩展为“规划、验证、诊断、PR 审查、发布协作”一体化工具链。新增能力同时开放为 TypeScript API、CLI 或 `devtest` MCP action；所有未显式选择真实模式的动作默认使用受控仿真。
+
+| 能力 | 已接入范围与限制 |
+| --- | --- |
+| 自主规划 | 根据需求、模型类型和直连/分流模式生成风险场景与执行 DAG；规划是确定性建议，不替代需求确认或真实执行证据 |
+| 环境与任务诊断 | 提供只读环境探针、模型规格提取、Git 影响分析、任务监视和最小复现包；环境探针默认 Mock，真实探针只允许明确的 test/preonline/sandbox HTTPS 地址 |
+| 账务与韧性 | 提供计费对账、毛利门禁、配置漂移和渠道故障演练；任务监视、混沌与跨环境漂移当前只实现受控仿真，传真实模式会 fail closed |
+| PR 质量闭环 | 生成 PR 综合审查、逐行评论、Check Run/Commit Status、评论指令和调价修复 PR 的 GitHub MCP 载荷；本地代码只生成动作，不会自行写 GitHub、关闭 Issue 或发布 Release |
+| CI 工作流 | 导出 Node.js 24 的 GitHub Actions 质量门禁；输出路径必须位于当前项目内，项目外绝对路径与 `..` 穿越均拒绝 |
+| 凭据与路径 | MCP 不接受明文 Cookie，只接受当前项目内的会话文件相对路径；仓库、评论和工作流路径全部限制在当前项目内并校验符号链接 |
+
+常用受控入口：
+
+```bash
+npm run build
+node dist/src/devtest/run-playwright-cli.js --self-test-plan --requirement "为 Wan 3.0 增加 1080p 分流"
+node dist/src/devtest/run-playwright-cli.js --ci-gate --mock
+node dist/src/devtest/run-playwright-cli.js --export-ci-workflow
+```
+
+2026-09-14 发布前复核：TypeScript 构建通过；全仓 Vitest 336 个测试文件、3336 项测试通过，4 个文件/21 项依赖显式环境或外部源码的检查跳过；其中 57 个 DevTest 单元文件为 452 项通过、2 项跳过；npm tarball 安装验收通过。以上均为本地受控验证，不代表测试站真实生成、真实路由、真实账单或 GitHub 动作已执行。
+
+TRAE 升级需使用本提交构建的 `test-flow-4.37.0.tgz` 更新每个项目的隔离运行时，重启 MCP 会话后核对版本、工具清单和基本握手。GitHub 源码更新不会自动更新历史任务、远程 Worker 或其他电脑。
+
+## v4.36.0 更新：自主变更验证与问题诊断
 
 本版新增 `devtest verify` 受控验证入口，将需求文本依次送入变更影响分析、风险驱动场景规划、Mock 工作流执行、证据/Oracle 门禁和结构化问题诊断，并输出 Markdown 报告与 JSON 证据。版本号表示源码与安装包版本；是否安装、部署成功仍需核对实际入口，不能仅凭 README 判断。
 
@@ -227,7 +253,7 @@ v4.30.0 新增独立于模型推理的 `devtest mission` 执行闭环：从操�
 
 v4.31.0 新增 `mission readiness/prepare`：在 Nuxt 文生视频单节点范围，内核读取当前能力和已保存节点、枚举确认范围内的合法组合、逐一询价并编译最低成本计划，不再要求模型手写 catalog、执行 payload 或 JSON 指针。提交前重新核对能力、节点和全部候选价格，漂移即阻断。同一逻辑任务重规划与执行共享持久化锁；已提交任务只恢复，不重新生成。读取授权和付费执行审批分离。PHP 自动准备、参考输入、UI 和语义质量仍未覆盖。详见 [自主任务准备](docs/testing/panqu-mission-preparation.md)。
 
-### 历史验证基线（不代表 v4.36.0 本轮全量结果）
+### 历史验证基线（不代表 v4.37.0 本轮全量结果）
 
 v4.33.0 明确[代码、校验与页面联合测试](src/devtest/assets/devtest/references/combined-validation.md)：每条规则串联代码/边界/API/页面/真实结果；允许审查后运行已有安全本地测试并单独记录，不冒充 MCP 执行结果。代码回归候选未执行会出现在报告缺口。沿用[固定七章单表格式](src/devtest/assets/devtest/references/markdown-handoff.md)，内核写文件前校验章节、表头、用例 ID/状态、统计、证据行和发布建议一致性。格式校验不是业务 Oracle，也没有新增自动运行任意仓库脚本的权限。
 
@@ -265,7 +291,7 @@ v4.32.0 新增[业务证据协调器](docs/testing/panqu-mission-business-eviden
 
 ```bash
 # 发布前先使用 npm pack 生成的 tarball 做项目内安装验收
-npm install --save-dev ./test-flow-4.36.0.tgz
+npm install --save-dev ./test-flow-4.37.0.tgz
 
 # 初始化通用配置及 GitHub Actions；不会生成项目专属 Case 或新协议
 npx devtest init --github --trae

@@ -103,7 +103,7 @@ describe('Panqu Playwright Flow Engine - 全链路闭环与质量门禁', () => 
         },
         mockAssetBuffer: validPngBuffer,
         mockScoreLogs: [
-          { task_id: 20002, type: 2, score: -10, memo: '生图扣费' },
+          { task_id: 20002, type: 2, score: -5, memo: '生图扣费' },
         ],
       });
 
@@ -111,7 +111,7 @@ describe('Panqu Playwright Flow Engine - 全链路闭环与质量门禁', () => 
       expect(evidence.taskId).toBe(20002);
       expect(evidence.diversion.isDiverted).toBe(true);
       expect(evidence.artifact.format).toBe('png');
-      expect(evidence.billing.netDeductedPoints).toBe(10);
+      expect(evidence.billing.netDeductedPoints).toBe(5);
     });
   });
 

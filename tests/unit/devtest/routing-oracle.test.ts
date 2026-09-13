@@ -9,7 +9,7 @@ describe('RoutingOracle - 独立分流真理判定器', () => {
   const baseConfig: MainSiteConfigSnapshot = {
     routeMode: 'newapi',
     globalModelIds: [84, 88, 12],
-    globalApiKey: 'sk-test-global-key',
+    globalApiKey: 'test-global',
     globalRouteRules: {
       video: {
         84: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
@@ -25,7 +25,7 @@ describe('RoutingOracle - 独立分流真理判定器', () => {
       },
     },
     orgBindings: {
-      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'sk-test-org-key' },
+      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'test-org' },
     },
     modelAliases: {
       84: 'wan3.0-video',

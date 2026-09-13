@@ -680,7 +680,7 @@ export async function runPanquDiversionFlow(
   const baselineConfig: DiversionConfigSnapshot = {
     routeMode: 'newapi',
     globalModelIds: [84, 88], // 84 (Wan 3.0), 88 (Wan 3.0 Prime)
-    globalApiKey: 'sk-test-global-key',
+    globalApiKey: 'test-global',
     globalRouteRules: {
       video: {
         105: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
@@ -695,7 +695,7 @@ export async function runPanquDiversionFlow(
       },
     },
     orgBindings: {
-      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'sk-test-org-key' },
+      10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'test-org' },
     },
   };
 

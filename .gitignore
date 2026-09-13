@@ -30,6 +30,8 @@ reports/mutation/
 /reports/
 /devtest-results/
 /package-artifacts/
+/.devtest.json
+/.trae/skills/
 
 # Playwright E2E artifacts (Phase 41)
 test-results/

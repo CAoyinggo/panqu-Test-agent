@@ -7,6 +7,8 @@ panqu-Test-agent 的单命令本地代码验证 CLI：用 **TraeCode CLI（`trae
 > 分发源是 GitHub 仓库 `CAoyinggo/panqu-Test-agent`，**推理运行时是本地已登录的 TraeCode CLI**。
 > 本工具不包含、不安装、不读取任何外部 LLM SDK 或 API Key。
 
+该目录是 `test-flow v4.37.0` 安装包内保留的兼容 CLI（自身包版本仍为 `0.1.0`），用于隔离快照上的本地代码检查。它不等同于 `devtest` MCP 的模型测试、计费/毛利、PR 门禁或发布协作动作；需要这些能力时使用根包的 `devtest` / `devtest-mcp` 入口。
+
 ## 安装 / 使用
 
 ```bash

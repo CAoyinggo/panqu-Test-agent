@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.37.0] - 2026-09-14
+
+- 新增需求驱动的自测规划、风险场景与执行 DAG，以及模型规格提取、Git 改动影响分析、环境探针、任务监视和失败复现包。
+- 新增计费/毛利审计、受控混沌与配置漂移检查、PR 综合门禁、自动修复建议、GitHub Check Run/评论命令和合并后发布协作载荷。
+- `devtest` MCP 默认采用 Mock；任务监视、混沌和配置漂移的真实模式在尚未接入真实证据源前明确阻断，GitHub 生命周期动作仅生成待执行载荷。
+- MCP 移除明文 Cookie 输入，只允许当前项目内的会话文件；仓库、评论、输出和 CI 工作流路径限制在当前项目内并防止符号链接逃逸。
+- CI 工作流升级为 Node.js 24；npm 发布白名单逐项纳入 17 个新运行时模块，保持体积、路径和机器专属内容门禁。
+- 更新 `fast-uri` 与 `qs` 的传递依赖锁定版本，发布审计无 high/critical 漏洞；仍保留 5 个仅开发链路的 moderate 告警待上游版本修复。
+- 更新全部 README 与 Trae 专项 Skill，版本统一升级到 v4.37.0。
+
 ## [4.36.0] - 2026-09-13
 
 - 新增 `devtest verify` 受控 Mock 入口，串联需求变更影响分析、风险驱动场景规划、工作流编排、证据/Oracle 校验及 Markdown/JSON 报告。
