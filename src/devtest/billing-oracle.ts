@@ -136,6 +136,10 @@ export class BillingOracle {
       }
       return false;
     });
+    const hasMismatchedTaskLogs = scoreLogs.length > 0 && taskLogs.length === 0;
+    if (hasMismatchedTaskLogs) {
+      reasons.push(`提供了 ${scoreLogs.length} 条积分流水，但没有任何记录匹配任务 ID ${taskId}`);
+    }
 
     let preDeduct = 0;
     let settled = 0;
@@ -251,7 +255,11 @@ export class BillingOracle {
     }
 
     const passed = reasons.length === 0;
-    const status: FlowStepStatus = passed ? 'PASS' : 'FAIL';
+    const status: FlowStepStatus = passed
+      ? 'PASS'
+      : taskLogs.length === 0 && !hasMismatchedTaskLogs
+      ? 'BLOCKED'
+      : 'FAIL';
 
     return {
       passed,

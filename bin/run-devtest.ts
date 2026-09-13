@@ -13,6 +13,7 @@ import {
   runPanquRealImageFlow,
   runPanquRealCanvasFlow,
   runPanquBusinessSuite,
+  runAutonomousVerification,
 } from '../src/devtest/index.js';
 import { inspectPanquProject } from '../src/devtest/panqu-project.js';
 import { artifactSafe } from '../src/devtest/artifacts.js';
@@ -39,6 +40,7 @@ import type { DevTestCaseDimension, DevTestMode } from '../src/devtest/types.js'
 export const DEVTEST_HELP = `DevTest — 需求驱动 · 开发者自助测试
 
 用法:
+  devtest verify --requirement <file> [--env test] [--mock] [--output <dir>]
   devtest init --github [--trae]
   devtest doctor [--github]
   devtest inspect-project
@@ -866,8 +868,59 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
       return report.summary.fail === 0 ? 0 : 1;
     }
-    const command = ['init', 'doctor', 'run', 'status', 'inspect-project'].includes(argv[0]) ? argv[0] : 'legacy-run';
+    const command = ['init', 'doctor', 'run', 'status', 'inspect-project', 'verify'].includes(argv[0]) ? argv[0] : 'legacy-run';
     const rest = command === 'legacy-run' ? [...argv] : argv.slice(1);
+    if (command === 'verify') {
+      let requirementFile: string | undefined;
+      let env: 'test' | 'preonline' | 'sandbox' = 'test';
+      let outputDir: string | undefined;
+      let verbose = true;
+
+      for (let i = 0; i < rest.length; i++) {
+        const arg = rest[i];
+        if (arg === '--help' || arg === '-h') {
+          console.log(`DevTest Verify — 业务测试智能体自主规划与执行验证\n\n用法:\n  devtest verify --requirement <file> [--env test] [--mock] [--output <dir>]\n\n说明:\n  当前仅执行受控 Mock 验证，不提交真实生图/视频任务，也不能替代真实业务验收。\n\n阶段闭环:\n  [1. 变更理解与影响分析] -> [2. 风险评估与用例规划] -> [3. 执行路径与工作流编排] -> [4. 证据收集与 Oracle 校验] -> [5. 最终结构化质量报告与诊断建议]\n`);
+          return 0;
+        }
+        if (arg === '--requirement' || arg === '-r') {
+          const value = rest[++i];
+          if (!value || value.startsWith('--')) throw new Error(`DEVTEST_ARG_MISSING: ${arg} 缺少文件路径`);
+          requirementFile = value;
+        } else if (arg === '--env') {
+          const val = rest[++i];
+          if (val !== 'test' && val !== 'preonline' && val !== 'sandbox') {
+            throw new Error('DEVTEST_ARG_INVALID: --env 仅支持 test、preonline 或 sandbox');
+          }
+          env = val;
+        } else if (arg === '--mock') {
+          // verify 目前固定为受控 Mock；保留显式参数便于脚本表达执行边界。
+        } else if (arg === '--output' || arg === '-o') {
+          const value = rest[++i];
+          if (!value || value.startsWith('--')) throw new Error(`DEVTEST_ARG_MISSING: ${arg} 缺少目录路径`);
+          outputDir = value;
+        } else if (arg === '--silent') {
+          verbose = false;
+        } else if (!requirementFile && !arg.startsWith('--')) {
+          requirementFile = arg;
+        } else {
+          throw new Error(`DEVTEST_ARG_UNKNOWN: verify 不支持 ${arg}`);
+        }
+      }
+
+      if (!requirementFile) {
+        throw new Error('DEVTEST_ARG_MISSING: verify 命令必须通过 --requirement <file> 指定需求或变更文件');
+      }
+
+      const result = await runAutonomousVerification({
+        requirementFile,
+        env,
+        isMock: true,
+        outputDir,
+        verbose,
+      });
+
+      return result.status === 'READY' ? 0 : 1;
+    }
     if (command === 'inspect-project') {
       if (rest.length) throw new Error('DEVTEST_ARG_UNKNOWN: inspect-project accepts no arguments');
       console.log(JSON.stringify(artifactSafe(await inspectPanquProject(root)), null, 2));

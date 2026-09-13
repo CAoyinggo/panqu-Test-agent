@@ -84,10 +84,14 @@ describe('npm tarball installation acceptance', () => {
       expect(entries).toContain(`dist/src/devtest/${module}.js`);
       expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
     }
+    for (const module of ['autonomous-verifier', 'business-capability-knowledge', 'change-impact-analyzer', 'historical-execution-feedback', 'problem-diagnosis']) {
+      expect(entries).toContain(`dist/src/devtest/${module}.js`);
+      expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
+    }
     expect(entries).not.toContain('integrations/trae-mcp/native-cli.test.mjs');
-    // Reviewed 4.34 CLI/MCP additions plus four 4.35 runtime modules; retain strict path and size checks.
+    // Reviewed 4.34 CLI/MCP additions, four 4.35 and five 4.36 runtime modules; retain strict path and size checks.
     expect(entries).toContain('dist/src/platform/version.js');
-    expect(entries.length).toBeLessThanOrEqual(355);
+    expect(entries.length).toBeLessThanOrEqual(365);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');

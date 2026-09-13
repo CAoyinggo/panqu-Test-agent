@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 语义，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [4.36.0] - 2026-09-13
+
+- 新增 `devtest verify` 受控 Mock 入口，串联需求变更影响分析、风险驱动场景规划、工作流编排、证据/Oracle 校验及 Markdown/JSON 报告。
+- 新增版本化业务能力知识、历史脆弱链路画像与结构化问题诊断，覆盖视频/图片、NewAPI 分流、计费、退款、供应商成本和非法参数组合。
+- 明确 `verify` 不支持真实执行；需求文件不可读、参数缺值、非法环境和未知参数均 fail closed，Mock `READY` 不代表真实业务验收。
+- 修复缺少计费任务流水时错误归为 `FAIL` 的问题，并确保预期失败流程优先保留分流、计费和供应商成本的 `BLOCKED` 结论。
+- README 补充能力边界、CLI 示例与 TRAE 隔离运行时升级说明；版本统一升级到 v4.36.0。
+
 ## [4.35.0] - 2026-09-11
 
 - 新增跨步骤主键与因果审计、幂等 Oracle、八项质量门禁，并接入 DevTest 最终结论和 JSON/HTML 报告。

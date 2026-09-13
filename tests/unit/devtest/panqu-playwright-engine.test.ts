@@ -313,7 +313,7 @@ describe('Panqu Playwright Flow Engine - 全链路闭环与质量门禁', () => 
       expect(evidence.overallStatus).toBe('BLOCKED');
     });
 
-    it('错误注入 6：任务成功但账单流水完全缺失预扣记录 (mockScoreLogs: [])，严禁虚假放行，精确判 FAIL', async () => {
+    it('错误注入 6：任务成功但账单流水完全缺失预扣记录 (mockScoreLogs: [])，严禁虚假放行，精确判 BLOCKED', async () => {
       const evidence = await runPanquPlaywrightFlow({
         caseId: 'TC-NEGATIVE-MISSING-SCORE-LOGS',
         mediaType: 'video',
@@ -341,9 +341,9 @@ describe('Panqu Playwright Flow Engine - 全链路闭环与质量门禁', () => 
         mockScoreLogs: [], // 故意传入空流水，模拟未发生记账
       });
 
-      expect(evidence.billing.status).toBe('FAIL');
+      expect(evidence.billing.status).toBe('BLOCKED');
       expect(evidence.billing.reasons.some((r) => r.includes('预扣流水'))).toBe(true);
-      expect(evidence.overallStatus).toBe('FAIL');
+      expect(evidence.overallStatus).toBe('BLOCKED');
     });
 
     it('错误注入 7：任务失败但退款流水缺失 (missingRefund)，BillingOracle 精确拦截并判 FAIL', async () => {

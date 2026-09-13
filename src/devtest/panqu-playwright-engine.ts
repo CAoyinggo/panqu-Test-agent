@@ -1484,10 +1484,14 @@ export async function runPanquPlaywrightFlow(
   if (submissionEvidence.submissionState === 'UNKNOWN' || failureCategory === 'SUBMISSION_UNKNOWN') {
     testAssertionStatus = 'BLOCKED';
   } else if (options.expectFailure) {
-    if (terminalStatus !== 'FAILED' || !billingResult.passed || supplierCostVerdict.status === 'FAIL') {
-      testAssertionStatus = 'FAIL';
-    } else if (billingResult.status === 'BLOCKED' || supplierCostVerdict.status === 'BLOCKED') {
+    if (
+      diversionResult.status === 'BLOCKED' ||
+      billingResult.status === 'BLOCKED' ||
+      supplierCostVerdict.status === 'BLOCKED'
+    ) {
       testAssertionStatus = 'BLOCKED';
+    } else if (terminalStatus !== 'FAILED' || !billingResult.passed || supplierCostVerdict.status === 'FAIL') {
+      testAssertionStatus = 'FAIL';
     } else {
       testAssertionStatus = 'PASS';
     }

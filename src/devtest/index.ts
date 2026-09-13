@@ -299,3 +299,40 @@ export {
   type TraceabilityItem,
   type TraceabilityMatrixSummary,
 } from './traceability-matrix.js';
+export {
+  BUSINESS_CAPABILITY_REGISTRY,
+  getCapabilityByModel,
+  validateBusinessCombination,
+  type BusinessCapabilitySpec,
+  type BusinessCombinationInput,
+  type BusinessCombinationValidationResult,
+} from './business-capability-knowledge.js';
+export {
+  assessHistoricalFragility,
+  type FragilityAssessment,
+  type FragilityProfile,
+} from './historical-execution-feedback.js';
+export {
+  analyzeChangeImpact,
+  type ChangeImpactAnalysisResult,
+  type ChangeImpactAnalysisInput,
+  type RecommendedScenario,
+  type BusinessDomain,
+  type TestScenarioKind,
+  type AffectedApiSpec,
+  type RequiredOracle,
+} from './change-impact-analyzer.js';
+export {
+  diagnoseFlowEvidence,
+  mapProblemToDiagnosis,
+  type StructuredProblemDiagnosis,
+  type ProblemDiagnosisCategory,
+  type RetryStrategy,
+} from './problem-diagnosis.js';
+export {
+  runAutonomousVerification,
+  renderAutonomousReportMarkdown,
+  type AutonomousVerificationOptions,
+  type AutonomousVerificationResult,
+  type ScenarioExecutionRecord,
+} from './autonomous-verifier.js';

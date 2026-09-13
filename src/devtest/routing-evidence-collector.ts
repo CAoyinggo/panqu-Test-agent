@@ -149,24 +149,26 @@ export class RoutingEvidenceCollector {
     let gatewayEvidence: GatewayTaskLogEvidence | undefined;
     if (params.gatewayLog) {
       // 强校验 ai_task_id 或 newapi_log_id
-      const matchesTaskId = params.gatewayLog.ai_task_id && Number(params.gatewayLog.ai_task_id) === Number(taskId);
+      const gatewayTaskId = params.gatewayLog.ai_task_id ?? params.gatewayLog.aiTaskId;
+      const gatewayLogId = params.gatewayLog.id ?? params.gatewayLog.logId;
+      const matchesTaskId = gatewayTaskId !== undefined && Number(gatewayTaskId) === Number(taskId);
       const matchesLogId =
         mainSiteEvidence?.parsedExtra.newapi_log_id &&
-        params.gatewayLog.id &&
-        Number(params.gatewayLog.id) === Number(mainSiteEvidence.parsedExtra.newapi_log_id);
+        gatewayLogId &&
+        Number(gatewayLogId) === Number(mainSiteEvidence.parsedExtra.newapi_log_id);
 
       if (!matchesTaskId && !matchesLogId) {
-        reasons.push(`网关日志与主任务未建立显式 ID 绑定 (logTaskId=${params.gatewayLog.ai_task_id})，拒绝归属`);
+        reasons.push(`网关日志与主任务未建立显式 ID 绑定 (logTaskId=${gatewayTaskId})，拒绝归属`);
       } else {
         gatewayEvidence = {
-          logId: params.gatewayLog.id,
-          aiTaskId: params.gatewayLog.ai_task_id,
-          newapiTaskId: params.gatewayLog.newapi_task_id,
-          channelId: params.gatewayLog.channel_id,
-          channelName: params.gatewayLog.channel_name,
-          providerCode: params.gatewayLog.provider_code,
-          upstreamModelName: params.gatewayLog.upstream_model_name,
-          upstreamTaskId: params.gatewayLog.upstream_task_id,
+          logId: gatewayLogId,
+          aiTaskId: gatewayTaskId,
+          newapiTaskId: params.gatewayLog.newapi_task_id ?? params.gatewayLog.newapiTaskId,
+          channelId: params.gatewayLog.channel_id ?? params.gatewayLog.channelId,
+          channelName: params.gatewayLog.channel_name ?? params.gatewayLog.channelName,
+          providerCode: params.gatewayLog.provider_code ?? params.gatewayLog.providerCode,
+          upstreamModelName: params.gatewayLog.upstream_model_name ?? params.gatewayLog.upstreamModelName,
+          upstreamTaskId: params.gatewayLog.upstream_task_id ?? params.gatewayLog.upstreamTaskId,
           status: params.gatewayLog.status,
         };
       }
