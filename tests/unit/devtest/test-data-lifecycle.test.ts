@@ -132,7 +132,7 @@ describe('TestDataLifecycleManager', () => {
       expect(problem.severity).toBe('HIGH');
       expect(problem.reasonCode).toBe('CLEANUP_FAILED');
       expect(problem.message).toContain('deleteStorageFile');
-      expect(problem.judgement).toBe('CONFIRMED_BUG');
+      expect(problem.judgement).toBe('TEST_ISSUE');
     });
   });
 });

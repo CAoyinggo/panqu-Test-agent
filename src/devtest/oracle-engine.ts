@@ -112,14 +112,15 @@ function transientSignal(result: AcceptanceCaseExecutionResult): DevTestOracleRe
 export function buildTestOracleResults(input: {
   testCases: readonly TestCase[];
   results: readonly AcceptanceCaseExecutionResult[];
-  invariants: readonly DevTestInvariant[];
-  consistency: readonly DevTestStateConsistencyResult[];
+  invariants?: readonly DevTestInvariant[];
+  consistency?: readonly DevTestStateConsistencyResult[];
   uiResults?: readonly DevTestUiExecutionResult[];
   snapshots?: readonly DevTestEnvironmentSnapshot[];
   baseline?: DevTestBaselineSnapshot;
+  runId?: string;
 }): DevTestOracleResult[] {
   const caseById = new Map(input.testCases.map((item) => [item.id, item]));
-  const consistencyByCase = new Map(input.consistency.map((item) => [item.caseId, item]));
+  const consistencyByCase = new Map((input.consistency ?? []).map((item) => [item.caseId, item]));
   const baselineByCase = new Map((input.baseline?.cases ?? []).map((item) => [item.caseId, item]));
   const resultByCase = new Map(input.results.map((item) => [item.caseId, item]));
   const uiByCase = new Map((input.uiResults ?? []).map((item) => [item.caseId, item]));
@@ -127,10 +128,13 @@ export function buildTestOracleResults(input: {
     const result = resultByCase.get(caseId);
     const testCase = caseById.get(caseId);
     const ui = uiByCase.get(caseId);
+    const runId = input.runId ?? result?.runId ?? 'RUN-DEFAULT';
+
+    const computeResult = (): DevTestOracleResult => {
     const expected = {
       requirement: testCase?.design?.expectedOutcome ? [testCase.design.expectedOutcome] : [],
       contract: (testCase?.contractDependencies ?? []).map((item) => `${item.contractId}@${item.version ?? 'unknown'}:${item.fingerprint ?? 'unknown'}`),
-      invariants: input.invariants.filter((item) => item.linkedCaseIds.includes(caseId)).map((item) => item.statement),
+      invariants: (input.invariants ?? []).filter((item) => item.linkedCaseIds.includes(caseId)).map((item) => item.statement),
       historicalBaseline: baselineByCase.get(caseId)?.status,
     };
     if (ui && testCase?.testType === 'UI') {
@@ -188,11 +192,12 @@ export function buildTestOracleResults(input: {
     const assertionsComplete = !oracleAssertionIds || (oracleAssertionIds.size === observedAssertionIds.length
       && new Set(observedAssertionIds).size === observedAssertionIds.length
       && [...oracleAssertionIds].every((id) => observedAssertionIds.includes(id)));
-    const relatedInvariants = input.invariants.filter((item) => item.linkedCaseIds.includes(result.caseId));
+    const relatedInvariants = (input.invariants ?? []).filter((item) => item.linkedCaseIds.includes(result.caseId));
     const consistency = consistencyByCase.get(result.caseId);
     const oracleEvidenceIds = testCase?.schemaVersion === 'TEST_CASE_V2'
       ? new Set(testCase.oracle?.evidenceRequirementIds ?? []) : undefined;
-    const requirements = (testCase?.evidenceRequirements ?? []).filter((item) => item.required
+    const rawRequirements = Array.isArray(testCase?.evidenceRequirements) ? testCase.evidenceRequirements : [];
+    const requirements = rawRequirements.filter((item) => item.required
       && (!oracleEvidenceIds || Boolean(item.id && oracleEvidenceIds.has(item.id))));
     const required = requirements.map(evidenceKey);
     const evidenceResult = apiCollectedEvidence({ result, consistency, snapshots: input.snapshots ?? [], requirements });
@@ -251,5 +256,8 @@ export function buildTestOracleResults(input: {
     };
     return { caseId: result.caseId, verdict: 'UNKNOWN', expected, actual: result.evidence?.response ?? result.error,
       evidence, reason: 'Expected/Actual/Evidence 不完整，保持 UNKNOWN' };
+    };
+
+    return computeResult();
   });
 }

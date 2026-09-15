@@ -168,7 +168,7 @@ export const shadow = (requestPHPApi: Function) => requestPHPApi('/shadow');`);
     await put(root, 'test/node.test.ts', `import { add } from '../components/nodes/useAddFlowNode'; import assert from 'node:assert'; assert.ok(add);`);
     const context = await inspectPanquProject(root, { changedFiles: ['lib/api/request.ts'] });
     expect(context.affectedFiles).toEqual(expect.arrayContaining(['lib/api/node.ts', 'components/nodes/useAddFlowNode.ts', 'test/node.test.ts']));
-    expect(context.regressionCandidates).toContainEqual(expect.objectContaining({ file: 'test/node.test.ts', status: 'NOT_EXECUTED' }));
+    expect(context.regressionCandidates).toContainEqual(expect.objectContaining({ file: 'test/node.test.ts', status: 'DISCOVERED_CANDIDATE' }));
   });
 
   it('keeps discovered local regressions visible in the report without executing repository code', async () => {

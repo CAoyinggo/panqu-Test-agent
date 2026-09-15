@@ -645,6 +645,28 @@ export function renderRealVideoReportMarkdown(report: PanquRealVideoReport): str
   const check = report.diversionCheck;
   const poll = report.polling?.finalStatus;
 
+  const isSuccess = report.summary.status === 'SUCCESS' && check?.isDiverted;
+  const assertionExplanation = isSuccess
+    ? '任务提交与分流快照检查通过；不证明消费者实际路由、媒体可播放或最终账务结算。'
+    : report.summary.status === 'SUBMIT_FAILED'
+      ? '前置认证或接口提交异常导致任务未成功创建，未能完成任务分流核验。'
+      : '视频任务已提交，但底层分流决策快照未命中 NewAPI 专线。';
+  const diversionExplanation = check?.isDiverted
+    ? `已成功命中 NewAPI 专线 (diversion=${check.diversionValue}, model=${check.newapiModel || '默认'})。`
+    : `未命中预期专线，分流值=${check?.diversionValue ?? 0}。商用流量可能错误流入原厂高价线路。`;
+  const pointsExplanation = check?.points && check.points > 0
+    ? `任务快照记录 ${check.points} 积分；尚未由独立账务流水验证预扣及最终结算。`
+    : '快照未提供正数积分；不能据此判断是否产生扣费流水。';
+  const pollingExplanation = poll?.videoUrl
+    ? '轮询返回视频地址；尚未验证下载、解码、播放与内容质量。'
+    : poll?.error
+      ? `异步生成中断: ${poll.error}`
+      : `当前终态: ${poll?.statusLabel || '未追踪或轮询中'}`;
+  const nextRole = isSuccess ? '测试负责人 / 产品经理' : '算法与通道调度研发';
+  const nextStepAction = isSuccess
+    ? '继续补验实际路由、媒体可播放与最终结算；本报告不作为完整生产验收结论。'
+    : '对照下方提交参数、分流诊断项及轮询时间线进行断点排查。';
+
   return `# 真实视频提交与分流验证自测报告
 
 **执行时间**: ${report.startedAt} ~ ${report.finishedAt}
@@ -654,7 +676,21 @@ export function renderRealVideoReportMarkdown(report: PanquRealVideoReport): str
 
 ---
 
-## 1. 真实任务提交结果
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **测试断言结论** | **${report.summary.status}** | ${assertionExplanation} |
+| **分流安全核查** | ${check?.isDiverted ? '🟢 命中 NewAPI 专线' : '🔴 未命中分流'} | ${diversionExplanation} |
+| **积分快照（非账务流水）** | ${check?.points && check.points > 0 ? '已记录积分字段' : '缺少正数积分字段'} | ${pointsExplanation} |
+| **异步成片跟踪** | ${poll?.videoUrl ? '已取得地址，媒体未验证' : (poll?.error ? '🔴 生成异常' : '🟡 轮询未结束/未追踪')} | ${pollingExplanation} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+## 🛠️ 二、研发执行取证与现场详情 (Developer View)
+
+### 1. 真实任务提交结果
 
 | 指标项 | 结果数据 | 说明 |
 | :--- | :--- | :--- |
@@ -667,7 +703,7 @@ export function renderRealVideoReportMarkdown(report: PanquRealVideoReport): str
 
 ---
 
-## 2. 主站分流决策快照深度核验
+### 2. 主站分流决策快照深度核验
 
 > [!NOTE]
 > 分流快照是由后端在任务创建事务中执行 \`check_diversion()\` 并固化在 \`extra\` JSON 中的关键证据，用于向 Go 消费端下发线路选择。
@@ -681,13 +717,13 @@ export function renderRealVideoReportMarkdown(report: PanquRealVideoReport): str
 
 ${
   check?.mismatches && check.mismatches.length > 0
-    ? `\n### ⚠️ 分流未达成诊断项\n${check.mismatches.map((m) => `- ${m}`).join('\n')}\n`
+    ? `\n#### ⚠️ 分流未达成诊断项\n${check.mismatches.map((m) => `- ${m}`).join('\n')}\n`
     : ''
 }
 
 ---
 
-## 3. 异步生成状态与轮询追踪
+### 3. 异步生成状态与轮询追踪
 
 - **轮询次数**: ${report.polling?.totalPolls ?? 0} 次
 - **最终状态**: \`${poll?.statusLabel ?? '未开启轮询'}\`
@@ -697,7 +733,7 @@ ${poll?.error ? `- **错误信息**: \`${poll.error}\`` : ''}
 
 ${
   report.polling?.timeline && report.polling.timeline.length > 0
-    ? `\n### 轮询时间线\n| 耗时 | 状态码 | 进度 |\n| :--- | :--- | :--- |\n${report.polling.timeline
+    ? `\n#### 轮询时间线\n| 耗时 | 状态码 | 进度 |\n| :--- | :--- | :--- |\n${report.polling.timeline
         .map((t) => `| +${t.timeMs}ms | ${t.status} | ${t.progress}% |`)
         .join('\n')}\n`
     : ''
@@ -705,23 +741,26 @@ ${
 
 ---
 
-## 4. 根因分析与排查指引
+### 4. 根因分析与排查指引
 
 ${
   report.rootCauseAnalysis
-    ? `### 发现问题: ${report.rootCauseAnalysis.detectedIssue}
-#### 常见原因分析:
+    ? `#### 发现问题: ${report.rootCauseAnalysis.detectedIssue}
+> [!NOTE]
+> 根因诊断依据真实提交响应与分流决策快照比对得出，请对照排查：
+
+##### 诊断原因分析:
 ${report.rootCauseAnalysis.possibleReasons.map((r) => `1. ${r}`).join('\n')}
 
-#### 推荐解决措施:
+##### 推荐解决措施:
 ${report.rootCauseAnalysis.suggestedActions.map((a) => `- ${a}`).join('\n')}
 `
-    : '✅ **该任务已成功命中 NewAPI 分流链路，快照完整固化，全链路运转正常。**'
+    : '✅ **任务快照命中 NewAPI 分流；消费者实际路由、媒体与最终结算需独立验证。**'
 }
 
 ---
 
-## 5. 安全脱敏审计
+### 5. 安全脱敏审计
 
 - **认证 Token**: 全部脱敏处理，无明文 JWT 或 Cookie 泄露。
 - **任务隔离**: 提示词强制使用 \`devtest_\` 前缀，主站可自动区分测试流量。

@@ -31,19 +31,32 @@ export interface PanquProjectContext {
   changedFiles: string[];
   affectedFiles: string[];
   submodules?: string[];
-  regressionCandidates: Array<{ file: string; status: 'NOT_EXECUTED'; evidenceLevel: 'SOURCE_CONTRACT' | 'UNCLASSIFIED_LOCAL_TEST' }>;
+  regressionCandidates: Array<{ file: string; status: 'DISCOVERED_CANDIDATE' | 'NOT_EXECUTED'; evidenceLevel: 'SOURCE_CONTRACT' | 'UNCLASSIFIED_LOCAL_TEST' }>;
   diagnostics: Array<{ code: string; file?: string; message: string }>;
 }
 
+export type DevTestBlockerScope = 'GLOBAL' | 'DIMENSION' | 'OPERATION' | 'CASE' | 'STEP';
+
+export interface DevTestProjectBlocker {
+  code: string;
+  message: string;
+  operationKey?: string;
+  scope?: DevTestBlockerScope;
+  dimension?: string;
+  caseId?: string;
+  stepId?: string;
+  affectedCases?: string[];
+}
+
 export interface PanquProjectAssessment {
-  sourceDiagnostics: PanquProjectContext['diagnostics'];
   overview: { inspectedFiles: number; requestCallSites: number; nodeKinds: string[] };
   host: PanquHost;
   submodules?: string[];
   fingerprint: string;
   provenance: 'SOURCE_OBSERVATION_ONLY';
+  sourceDiagnostics?: PanquProjectContext['diagnostics'];
   relevantActions: PanquSourceAction[];
-  blockers: Array<{ code: string; message: string; operationKey?: string }>;
+  blockers: DevTestProjectBlocker[];
   regressionCandidates: PanquProjectContext['regressionCandidates'];
   limitations: string[];
 }

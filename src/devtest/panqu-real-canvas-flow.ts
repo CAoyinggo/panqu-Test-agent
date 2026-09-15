@@ -205,23 +205,105 @@ export async function runPanquRealCanvasFlow(
   };
 
   await writeFile(report.artifacts.evidenceJson, JSON.stringify(report, null, 2), 'utf8');
-  await writeFile(
-    report.artifacts.reportMd,
-    `# 真实画布节点工作流提交流程测试报告
+  await writeFile(report.artifacts.reportMd, renderRealCanvasReportMarkdown(report, baseUrl), 'utf8');
 
-**画布 ID**: \`${canvasId}\` | **节点 ID**: \`${nodeId}\` | **主站任务 ID**: \`${taskId}\`
-**运行环境**: ${env} (${baseUrl})
-**分流状态**: extra.diversion = \`${diversionVal}\` (${diversionVal === 10 ? '✅ 命中 NewAPI' : '未命中'})
+  return report;
+}
+
+/**
+ * 渲染真实画布节点提交流程自测报告
+ */
+export function renderRealCanvasReportMarkdown(report: CanvasTaskReport, baseUrl?: string): string {
+  const isDiverted = report.diversionCheck?.isDiverted ?? false;
+  const isSuccess = !!report.taskId && isDiverted;
+  const targetUrl = baseUrl || `https://${report.environment === 'preonline' ? 'pre' : 'test'}.panqu.com`;
+
+  const assertionExplanation = isSuccess
+    ? '已取得任务 ID 且分流快照命中；节点绑定持久化、实际路由、媒体及账务仍需独立验证。'
+    : !report.taskId
+      ? '画布工作流节点提交接口失败，未能成功创建主站底层任务。'
+      : '画布工作流节点已提交，但底层任务分流快照未命中 NewAPI 专线。';
+  const diversionExplanation = isDiverted
+    ? `已成功命中画布专线 (diversion=${report.diversionCheck?.diversionValue}, model=${report.diversionCheck?.newapiModel || '默认'})。`
+    : `未命中画布专线 (diversion=${report.diversionCheck?.diversionValue ?? 0})。节点渲染可能回退到非专线通道。`;
+  const nextRole = isSuccess ? '测试负责人 / 产品经理' : '画布工作流与通道研发';
+  const nextStepAction = isSuccess
+    ? '继续补验节点绑定持久化、任务终态、媒体及最终结算；不能据此判定工作流交付通过。'
+    : '对照下方实际请求路径、提交参数与分流快照，检查分流判定与绑定事务。';
+
+  return `# 真实画布节点工作流提交流程测试报告
+
+**执行时间**: ${report.startedAt} ~ ${report.finishedAt}
+**运行环境**: ${report.environment} (${targetUrl})
+**运行状态**: **${isSuccess ? 'SUCCESS' : !report.taskId ? 'SUBMIT_FAILED' : 'DIVERSION_FAILED'}**
 
 ---
 
-## 提交日志证据
-- **请求路径**: \`${evidence.requestUrl}\`
-- **响应码**: \`${evidence.responseCode}\` (${evidence.responseMsg})
-- **网络耗时**: \`${evidence.durationMs}ms\`
-`,
-    'utf8'
-  );
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
 
-  return report;
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **提交与快照断言（非端到端结论）** | **${isSuccess ? '✅ 通过' : '❌ 失败'}** | ${assertionExplanation} |
+| **画布节点绑定** | \`画布: ${report.canvasId} / 节点: ${report.nodeId}\` | 底层主站任务 ID: \`${report.taskId ?? '未生成'}\` |
+| **分流安全核查** | ${isDiverted ? '🟢 命中 NewAPI 专线' : '🔴 未命中专线'} | ${diversionExplanation} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+## 🛠️ 二、研发执行取证与现场详情 (Developer View)
+
+### 1. 画布与节点绑定结果
+
+| 指标项 | 结果数据 | 说明 |
+| :--- | :--- | :--- |
+| **画布 ID (canvasId)** | \`${report.canvasId}\` | 所属工作流画布 |
+| **节点 ID (nodeId)** | \`${report.nodeId}\` | 触发执行的工作流节点 |
+| **项目 ID (projectId)** | \`${report.projectId}\` | 归属工程项目 |
+| **主站任务 ID (taskId)** | \`${report.taskId ?? 'N/A'}\` | 插入主站 \`pq_aivideo_new\` 任务 ID |
+
+---
+
+### 2. 节点任务提交日志与证据
+
+- **请求路径**: \`${report.submission.requestUrl}\`
+- **响应码**: \`${report.submission.responseCode}\` (${report.submission.responseMsg})
+- **网络耗时**: \`${report.submission.durationMs}ms\`
+
+---
+
+### 3. 画布节点分流快照核验
+
+| 核验字段 | 期望值 | 实际值 | 判定 |
+| :--- | :--- | :--- | :--- |
+| \`extra.diversion\` | \`10\` (NewAPI 专线) | \`${report.diversionCheck?.diversionValue ?? 0}\` | ${isDiverted ? '✅ 通过' : '❌ 失败'} |
+| \`extra.newapi_model\` | \`非空\` | \`${report.diversionCheck?.newapiModel || '(未写入)'}\` | ${report.diversionCheck?.newapiModel ? '✅ 通过' : '❌ 失败'} |
+
+${
+  report.status
+    ? `---
+
+### 4. 异步状态与成片追踪
+
+- **最终状态**: \`${report.status.statusLabel}\` (code: ${report.status.taskStatus})
+- **进度**: \`${report.status.progress}%\`
+${report.status.videoUrl ? `- **成片地址**: [点击查看](${report.status.videoUrl})` : ''}
+${report.status.error ? `- **错误信息**: \`${report.status.error}\`` : ''}
+`
+    : ''
+}
+
+---
+
+### 5. 根因排查指引
+
+${
+  isSuccess
+    ? '✅ **画布工作流节点已成功提交并绑定底层任务，分流决策快照已固化。**'
+    : `> [!NOTE]
+> 诊断依据真实提交与快照比对得出：
+> 1. 确认接口 \`POST /aivideo/workflow_videonew/add\` 是否返回 \`code: 1\` 且携带有效 \`task_id\`。
+> 2. 确认后端任务创建事务中是否调用 \`check_diversion()\` 并写入 \`extra\` JSON。
+> 3. 检查当前用户与画布所属组织是否处于 NewAPI 专线生效名单。`
+}
+`;
 }

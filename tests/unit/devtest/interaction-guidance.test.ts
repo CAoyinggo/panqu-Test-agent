@@ -70,4 +70,48 @@ describe('deterministic Trae next-action guidance', () => {
     const next = devTestNextAction({ status: 'BLOCKED', message: 'RUN_IN_PROGRESS: locked' }, { action: 'plan' });
     expect(next?.kind).toBe('RESOLVE_BLOCKER'); expect(next).not.toHaveProperty('status_arguments');
   });
+
+  it('Scenario B: allows CONFIRM_EXECUTION when there are runnable cases alongside partial blockers', () => {
+    const planWithPartial = {
+      ...plan,
+      counts: { executable: 2 },
+      selected_case_ids: ['CASE-1', 'CASE-2'],
+      test_blockers: [{
+        case_id: 'CASE-2',
+        reason_code: 'SAFE_POLICY_BLOCKED',
+        reason: '写操作被 SAFE 只读策略阻断',
+      }],
+    };
+    const next = devTestNextAction(planWithPartial, { action: 'plan' });
+    expect(next).toMatchObject({
+      kind: 'CONFIRM_EXECUTION',
+      requires_user_confirmation: true,
+      runnable_cases: ['CASE-1'],
+      blocked_cases: [
+        { case_id: 'CASE-2', reason_code: 'SAFE_POLICY_BLOCKED' },
+      ],
+      execute_arguments: {
+        action: 'execute',
+        plan_id: plan.plan_id,
+      },
+    });
+  });
+
+  it('Scenario D: segregates unselected/pruned cases in unselected_cases', () => {
+    const planWithUnselected = {
+      ...plan,
+      untested_items: [
+        { case_id: 'CASE-UNSELECTED-1', reason_code: 'NOT_SELECTED:MAX_CASES', reason: '超出预算上限裁剪' },
+        { case_id: 'CASE-UNSELECTED-2', reason_code: 'NOT_SELECTED:DIMENSION_DISABLED', reason: 'UI 维度未启用' },
+      ],
+    };
+    const next = devTestNextAction(planWithUnselected, { action: 'plan' });
+    expect(next).toMatchObject({
+      kind: 'CONFIRM_EXECUTION',
+      unselected_cases: [
+        { case_id: 'CASE-UNSELECTED-1', reason_code: 'NOT_SELECTED:MAX_CASES' },
+        { case_id: 'CASE-UNSELECTED-2', reason_code: 'NOT_SELECTED:DIMENSION_DISABLED' },
+      ],
+    });
+  });
 });

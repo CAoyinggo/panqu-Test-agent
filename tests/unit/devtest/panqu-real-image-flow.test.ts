@@ -206,5 +206,8 @@ describe('PanquRealImageFlow Unit Tests', () => {
     expect(markdown).toContain('extra.newapi_image');
     expect(markdown).toContain('nano-banana-pro');
     expect(markdown).toContain('https://img.panqu.com/scene/output.jpg');
+    expect(markdown).toContain('尚未验证下载、解码及内容质量');
+    expect(markdown).not.toContain('成片链接有效');
+    expect(markdown).not.toContain('可归档作为生图专线交付依据');
   });
 });

@@ -116,23 +116,13 @@ export class GitHubCheckRunAdapter {
               const matched = addedLines.find((al) => al.content.toLowerCase().includes(kw.toLowerCase()));
               if (matched) return { path: filename, line: matched.line };
             }
-            return { path: filename, line: addedLines[0].line };
+            // No keyword evidence: preserve an unknown location.
           }
         }
       }
 
-      const matchedFile = input.changedFiles && input.changedFiles.length > 0
-        ? input.changedFiles.find((f) => filePattern.test(f))
-        : undefined;
-      if (matchedFile) {
-        return { path: matchedFile, line: 1 };
-      }
-
-      // 3. 兜底回退到模型标准业务控制器路径，确保 GitHub Check Runs 拥有有效的 path 进行代码注记
-      if (filePattern.test('Image25') || filePattern.test('ImageService')) {
-        return { path: 'application/admin/controller/aivideo/Image25Service.php', line: 1 };
-      }
-      return { path: 'application/admin/controller/aivideo/PlotService.php', line: 1 };
+      // 严格无猜测：若没有 Patch 增量代码行，严禁回退到 line: 1 或默认控制器！
+      return undefined;
     };
 
     // 1. 价格倒挂与毛利过低 Annotations
@@ -225,26 +215,6 @@ export class GitHubCheckRunAdapter {
       }
     }
 
-    // 3. 核心计费安全 Annotations (Score.php)
-    const scoreFile = input.changedFiles.find((f) => /Score\.php/i.test(f));
-    if (scoreFile) {
-      const location = locateLine(/Score\.php/i, ['function', 'score', 'deduct']);
-      annotations.push({
-        path: location ? location.path : scoreFile,
-        start_line: location ? location.line : 1,
-        end_line: location ? location.line : 1,
-        annotation_level: 'notice',
-        title: `账务安全合规防线 (四大不变量已通过)`,
-        message: [
-          `🛡️【产品/测试确认】核心计费流水逻辑变更已通过四大安全不变量自动化验证：`,
-          `  1. ANTI_DOUBLE_BILLING (单任务仅扣 1 次，重试去重)`,
-          `  2. NET_CHARGE_ZERO (任务失败必须全额退款，净扣归零)`,
-          `  3. REFUND_IDEMPOTENCY (退款流水至多 1 次，防重复退款)`,
-          `  4. BREAK_EVEN (结算单价覆盖供应商成本)`,
-        ].join('\n'),
-      });
-    }
-
     return annotations;
   }
 
@@ -266,6 +236,28 @@ export class GitHubCheckRunAdapter {
     const warningCount = annotations.filter((a) => a.annotation_level === 'warning').length;
     const noticeCount = annotations.filter((a) => a.annotation_level === 'notice').length;
 
+    const unlocatedBlockers: string[] = [];
+    for (const audit of input.marginAudits) {
+      for (const res of audit.resolutions) {
+        if (res.status === 'NEGATIVE_MARGIN_LOSS') {
+          const hasAnno = annotations.some((a) => a.raw_details && a.raw_details.includes(res.resolution) && a.raw_details.includes(String(audit.modelId)));
+          if (!hasAnno) {
+            unlocatedBlockers.push(`- **[价格倒挂资损]** 模型 #${audit.modelId} (${audit.modelName}) 规格 \`${res.resolution}\` (单笔净亏 ¥${Math.abs(res.grossProfitYuan).toFixed(2)}) | \`file: null, line: null, symbol: null, locationStatus: 'UNKNOWN'\` *(当前 PR 变更集未修改该模型定价代码，未生成行级 Annotation，请参见 Summary 指引修复)*`);
+          }
+        }
+      }
+    }
+    for (const issue of input.configDrift.issues) {
+      if (issue.category === 'UNPRICED_MODEL') {
+        const hasAnno = annotations.some((a) => a.title.includes('缺失刊例价') && a.message.includes(`#${issue.modelId}`));
+        if (!hasAnno) {
+          unlocatedBlockers.push(`- **[缺失刊例白嫖漏洞]** 模型 #${issue.modelId} 未定价 | \`file: null, line: null, symbol: null, locationStatus: 'UNKNOWN'\` *(FastAdmin 数据库刊例缺失，非代码改动，请在后台补齐)*`);
+        }
+      }
+    }
+
+    const totalBlockerCount = failureCount + unlocatedBlockers.length;
+
     // 映射结论：BLOCKED -> failure, NEEDS_ATTENTION -> neutral, APPROVED -> success
     const conclusion: CheckRunConclusion = input.conclusion === 'BLOCKED'
       ? 'failure'
@@ -275,11 +267,16 @@ export class GitHubCheckRunAdapter {
 
     let outputTitle = '';
     if (conclusion === 'failure') {
-      outputTitle = `BLOCKED: 发现 ${failureCount} 项资损阻断缺陷 (价格倒挂/白嫖漏洞，需研发调价修复)`;
+      outputTitle = `BLOCKED: 发现 ${totalBlockerCount} 项资损阻断缺陷 (价格倒挂/白嫖漏洞，需研发调价修复)`;
     } else if (conclusion === 'neutral') {
       outputTitle = `NEEDS_ATTENTION: 发现 ${warningCount} 项低毛利或降级风险需关注 (无致命阻断)`;
     } else {
-      outputTitle = `SUCCESS: 8 大质量与毛利门禁全部通过 (合规率 100%，允许合入)`;
+      outputTitle = `SUCCESS: 本次已执行的检查通过；未执行门禁不计为通过`;
+    }
+
+    let checkRunSummary = input.markdownReport;
+    if (unlocatedBlockers.length > 0) {
+      checkRunSummary += `\n\n### ⚠️ 未定位到代码行的审查项 (未生成行级 Annotation)\n${unlocatedBlockers.join('\n')}\n`;
     }
 
     const checkRunPayload: GitHubCheckRunPayload = {
@@ -291,7 +288,7 @@ export class GitHubCheckRunAdapter {
       completed_at: new Date().toISOString(),
       output: {
         title: outputTitle,
-        summary: input.markdownReport,
+        summary: checkRunSummary,
         annotations,
       },
     };
@@ -299,8 +296,8 @@ export class GitHubCheckRunAdapter {
     // Commit Status API 备选载荷
     const commitStatusState = conclusion === 'failure' ? 'failure' : 'success';
     const commitStatusDescription = conclusion === 'failure'
-      ? `Gate BLOCKED: ${failureCount} 阻断项 (毛利倒挂/未定价)`
-      : `Gate PASSED: 8 大质量门禁全部通过`;
+      ? `Gate BLOCKED: ${totalBlockerCount} 阻断项 (毛利倒挂/未定价)`
+      : `Gate PASSED: 本次已执行的检查通过`;
 
     const commitStatusPayload: GitHubCommitStatusPayload = {
       state: commitStatusState,

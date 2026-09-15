@@ -179,7 +179,7 @@ export async function inspectPanquProject(projectRoot: string, options: { change
           const testFiles = await readdir(path.join(subDir, 'test')).catch(() => []);
           for (const tf of testFiles) {
             if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(tf)) {
-              context.regressionCandidates.push({ file: `aiworkflow/test/${tf}`, status: 'NOT_EXECUTED', evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' });
+              context.regressionCandidates.push({ file: `aiworkflow/test/${tf}`, status: 'DISCOVERED_CANDIDATE', evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' });
             }
           }
         } catch {}
@@ -336,7 +336,7 @@ export async function inspectPanquProject(projectRoot: string, options: { change
   while (expanded) { expanded = false; for (const source of context.sources) if (!affected.has(source.file) && source.imports.some(file => affected.has(file))) { affected.add(source.file); expanded = true; } }
   context.affectedFiles = [...affected].sort();
   const localCandidates = context.sources.filter(source => /(?:^|\/)(?:test|tests)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(source.file) && (!context.changedFiles.length || affected.has(source.file)))
-    .map(source => ({ file: source.file, status: 'NOT_EXECUTED' as const, evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' as const }));
+    .map(source => ({ file: source.file, status: 'DISCOVERED_CANDIDATE' as const, evidenceLevel: 'UNCLASSIFIED_LOCAL_TEST' as const }));
   context.regressionCandidates = [...new Map([...context.regressionCandidates, ...localCandidates].map(c => [c.file, c])).values()];
   return context;
 }

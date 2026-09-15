@@ -147,7 +147,7 @@ export class TestDataLifecycleManager {
           affectedCases: [],
           rootCause: `CLEANUP:${handler.name}`,
           failureClass: 'TEST_ISSUE',
-          judgement: 'CONFIRMED_BUG',
+          judgement: 'TEST_ISSUE',
           reproducible: true,
           evidence: { handler: handler.name, error: msg },
           remediation: '检查测试资源销毁接口或清理权限，确保临时产生的测试数据完全回滚或软删。',

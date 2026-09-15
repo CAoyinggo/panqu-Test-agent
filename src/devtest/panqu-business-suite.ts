@@ -361,12 +361,25 @@ export async function runPanquBusinessSuite(
 }
 
 export function renderBusinessSuiteReportMarkdown(report: PanquBusinessSuiteReport): string {
+  const isAllPassed = report.summary.overallStatus === 'ALL_PASSED';
   const statusEmoji =
     report.summary.overallStatus === 'ALL_PASSED'
       ? '✅ ALL PASSED'
       : report.summary.overallStatus === 'PARTIAL_SUCCESS'
       ? '⚠️ PARTIAL SUCCESS'
       : '❌ FAILED';
+
+  const suiteExplanation = isAllPassed
+    ? '业务套件各核心模块端到端流转、分流决策及状态流转均校验通过。'
+    : report.summary.overallStatus === 'PARTIAL_SUCCESS'
+      ? `部分模块执行失败 (${report.summary.failed}/${report.summary.total})，核心链路存在部分降级或受阻。`
+      : '所有被测业务模块均未能通过断言，主站核心生成与分流链路存在严重缺陷。';
+
+  const failedModules = report.moduleSummaries.filter((m) => !m.passed);
+  const nextRole = isAllPassed ? '测试负责人 / 业务产品经理' : '对应未通过模块负责研发';
+  const nextStepAction = isAllPassed
+    ? '业务全链路自测通过，可推进提测与部署交付。'
+    : `重点排查失败模块: [${failedModules.map((m) => m.title).join(', ')}]，对照现场日志定位修复。`;
 
   const rows = report.moduleSummaries
     .map(
@@ -384,7 +397,19 @@ export function renderBusinessSuiteReportMarkdown(report: PanquBusinessSuiteRepo
 
 ---
 
-## 1. 核心四大业务模块核验矩阵
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **综合断言结论** | **${statusEmoji}** | ${suiteExplanation} |
+| **模块通过概况** | **${report.summary.passed}/${report.summary.total}** (${report.summary.passRate}) | ${report.summary.failed > 0 ? `存在 ${report.summary.failed} 个模块未通过，需阻断上线。` : '全部四大核心业务模块端到端链路均通过。'} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+## 🛠️ 二、研发执行取证与现场详情 (Developer View)
+
+### 1. 核心四大业务模块核验矩阵
 
 | 序号 | 业务模块与能力 | 测试判定 | 真实任务 ID | 分流快照核验 | 耗时 | 详细业务上下文 |
 | :---: | :--- | :---: | :---: | :--- | :---: | :--- |
@@ -392,22 +417,22 @@ ${rows}
 
 ---
 
-## 2. 领先单一 Skill 文件的四大代差架构落地说明
+### 2. 领先单一 Skill 文件的四大代差架构落地说明
 
-本测试工程相比于单一 Skill 提示词文件，具备以下不可替代的核心技术优势：
+本测试工程直连环境真实协议交互，执行多模态闭环验证：
 
 1. **真实协议与环境交互能力 (Zero Hallucination)**：
-   - 不停留在静态代码推测，直连 \`https://test.panqu.com\`，真实获取 CSRF Token、调度接口、插入数据库记录。
+   - 直连真实目标环境，获取 CSRF Token、调度接口、插入数据库记录，杜绝静态推测。
 2. **多模态全业务覆盖 (Multi-Modal Full Coverage)**：
-   - 视频（\`POST /aivideo/videonew/add\`）、生图（\`POST /aivideo/scene/add\`）、画布（\`POST /aivideo/workflow_videonew/add\`）、规则推演四维一体。
+   - 覆盖视频、生图、画布节点流转及规则推演四大维度。
 3. **数据库分流快照回查对账 (Snapshot Ground Truth)**：
-   - 深入 FastAdmin 接口精准核验 \`extra.diversion === 10\`、\`extra.newapi_image === 1\`、\`extra.newapi_model\`，杜绝假阳性。
+   - 精准核验 \`extra.diversion\`、\`extra.newapi_model\` 等快照字段，杜绝假阳性。
 4. **长生命周期异步状态轮询监控 (Async Life-cycle Polling)**：
-   - 对接 \`POST /aivideo/v2/task_status/apiGetStatus\`，捕获任务排队、生成中、成片地址、积分扣减全链路证据。
+   - 追踪异步生成状态、成片地址与积分扣减。
 
 ---
 
-## 3. 产物与证据归档
+### 3. 产物与证据归档
 
 - **综合测试报告**: \`${report.artifacts.reportMd}\`
 - **结构化 JSON 证据**: \`${report.artifacts.evidenceJson}\`

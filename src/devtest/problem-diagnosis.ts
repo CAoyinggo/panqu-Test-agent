@@ -11,7 +11,15 @@
  */
 
 import type { FlowRunEvidence } from './panqu-playwright-engine.js';
-import type { DevTestProblem } from './types.js';
+import type {
+  DevTestProblem,
+  ConfirmationStatus,
+  ProblemEpistemicStatus,
+  ProblemBusinessImpact,
+  ProblemViolationJudgment,
+  ProblemRemediationSpec,
+  ProblemVerificationSpec,
+} from './types.js';
 
 export type ProblemDiagnosisCategory =
   | 'PRODUCT_ERROR'
@@ -36,6 +44,14 @@ export interface StructuredProblemDiagnosis {
   remediation: string;
   retryStrategy: RetryStrategy;
   evidenceSnapshot?: Record<string, unknown>;
+
+  // 扩展：开发修复单要素
+  confirmationStatus?: ConfirmationStatus;
+  epistemicStatus?: ProblemEpistemicStatus;
+  businessImpact?: ProblemBusinessImpact;
+  violationJudgment?: ProblemViolationJudgment;
+  remediationSpec?: ProblemRemediationSpec;
+  verificationSpec?: ProblemVerificationSpec;
 }
 
 /**
@@ -243,7 +259,7 @@ export function diagnoseFlowEvidence(evidence: FlowRunEvidence): StructuredProbl
   return {
     problemId,
     category: 'PRODUCT_ERROR',
-    rootCause: 'UNCLASSIFIED_FLOW_FAILURE',
+    rootCause: 'UNKNOWN (未归因执行异常，需研发结合日志排查)',
     affectedFlow: flowName,
     summary: '全链路执行异常未通过门禁',
     expected: '全链路断言与证据门禁 100% 通过',
@@ -266,15 +282,60 @@ export function mapProblemToDiagnosis(problem: DevTestProblem): StructuredProble
     category = 'DATA_INCONSISTENCY';
   }
 
+  // 严禁盲猜根因：未明确提供已验证 rootCause 时严格输出 UNKNOWN，绝不回退到 reasonCode 或 type
+  const verifiedRootCause = problem.rootCause && problem.rootCause.trim().length > 0
+    ? problem.rootCause
+    : 'UNKNOWN (根因未知，需研发进一步排查)';
+
+  const confirmationStatus = problem.confirmationStatus
+    || (problem.judgement === 'CONFIRMED_BUG' && problem.rootCause ? 'CONFIRMED'
+      : (problem.location?.locationStatus === 'CONFIRMED' || problem.rootCause) ? 'PARTIALLY_CONFIRMED' : 'UNKNOWN');
+
   return {
     problemId: problem.id,
     category,
-    rootCause: problem.rootCause || problem.reasonCode || problem.type,
-    affectedFlow: problem.affectedBusinessFlows?.join(', ') || problem.affectedFeature || '主业务流',
+    rootCause: verifiedRootCause,
+    affectedFlow: problem.affectedBusinessFlows?.join(', ') || problem.affectedFeature || 'UNKNOWN (未归属特定业务链路)',
     summary: problem.message,
     expected: problem.expected || '业务规则满足且证据完整',
     actual: problem.actual || problem.message,
     remediation: problem.remediation || '查看问题详情并修复产品代码或测试环境配置。',
     retryStrategy: category === 'ENVIRONMENT_ERROR' ? 'EXPONENTIAL_BACKOFF' : 'NO_RETRY_CODE_FIX',
+    confirmationStatus,
+    epistemicStatus: problem.epistemicStatus || {
+      status: confirmationStatus,
+      confirmedFacts: [problem.actual || problem.message],
+      unknowns: problem.location?.locationStatus === 'UNKNOWN' ? ['代码错误行号尚未精确定位，需复查现场日志调用栈'] : [],
+      missingEvidence: problem.missingEvidence ? [problem.missingEvidence] : [],
+    },
+    businessImpact: problem.businessImpact || {
+      affectedBusinessFlows: problem.affectedBusinessFlows || (problem.affectedFeature ? [problem.affectedFeature] : ['UNKNOWN']),
+      severity: problem.severity,
+      businessDamage: problem.severity === 'CRITICAL'
+        ? '可能导致线上资金资损、严重规格跑偏或核心流程中断'
+        : '导致部分用例或特定规格业务逻辑未达预期',
+    },
+    violationJudgment: problem.violationJudgment || {
+      violatedRuleOrInvariant: problem.reasonCode || problem.category || problem.type,
+      expected: problem.expected || '业务规则满足且证据完整',
+      actual: problem.actual || problem.message,
+      judgmentBasis: problem.why || '依据断言规则和现场抓包比对得出',
+    },
+    remediationSpec: problem.remediationSpec || {
+      fixType: 'CODE_FIX',
+      targetComponent: problem.affectedFeature || 'UNKNOWN (待根据日志调用栈排查)',
+      targetLocation: problem.location || { file: null, line: null, symbol: null, locationStatus: 'UNKNOWN' },
+      remediationGuidance: problem.remediation || '根据关联 Case 抓包参数与断言信息排查业务逻辑并修复。',
+      regressionRisks: ['需针对关联接口或数据链路执行复测。'],
+      rollbackPlan: '若复测不通过，回退本次变更代码或配置至上一稳定版本。',
+    },
+    verificationSpec: problem.verificationSpec || {
+      preconditions: ['确保测试环境连通，测试账号具备有效测试权限与点数'],
+      retestCommand: problem.minimalReproduction?.command || null,
+      acceptanceCriteria: [
+        `实际行为符合契约要求: ${problem.expected || '断言通过'}`,
+        '执行复测后无未捕获异常、无资损流水产生',
+      ],
+    },
   };
 }

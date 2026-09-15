@@ -41,6 +41,29 @@ import type {
   DevTestDeliveryCoverage,
 } from './types.js';
 import type { DevTestSourceSyncResult } from './source-sync.js';
+import type { ConfirmationStatus } from './types.js';
+
+export function formatConfirmationBadge(status: ConfirmationStatus = 'UNKNOWN'): string {
+  switch (status) {
+    case 'CONFIRMED':
+      return '🟢 **已确认 (CONFIRMED)**';
+    case 'PARTIALLY_CONFIRMED':
+      return '🟡 **部分确认 (PARTIALLY_CONFIRMED)**';
+    case 'UNKNOWN':
+    default:
+      return '⚪ **未确认/存疑 (UNKNOWN)**';
+  }
+}
+import {
+  renderCoverageLedgerMarkdownTable,
+  renderFourParallelListsMarkdown,
+  renderRequirementFactLedgerMarkdownTable,
+  type TestPointCoverageLedgerItem,
+  type RequirementFactCoverageLedgerItem,
+  type CoverageLedgerSummary,
+  type SevenItemQuickView,
+  type CoverageLedgerReconciliation,
+} from './coverage-ledger.js';
 
 export const DEVTEST_REPORT_SCHEMA = 'devtest.report.v8';
 
@@ -101,6 +124,18 @@ export interface DevTestRenderInput {
   crossStepAudits?: import('./types.js').DevTestCrossStepAuditResult[];
   idempotencyChecks?: import('./types.js').DevTestIdempotencyCheck[];
   qualityGates?: import('./types.js').DevTestQualityGateResult[];
+  coverageLedger?: TestPointCoverageLedgerItem[];
+  coverageRequirementLedger?: RequirementFactCoverageLedgerItem[];
+  coverageLedgerSummary?: CoverageLedgerSummary;
+  coverageQuickView?: SevenItemQuickView;
+  coverageFourLists?: {
+    confirmedBugs: TestPointCoverageLedgerItem[];
+    testBlocked: TestPointCoverageLedgerItem[];
+    untested: TestPointCoverageLedgerItem[];
+    passed: TestPointCoverageLedgerItem[];
+  };
+  coverageReconciliation?: CoverageLedgerReconciliation;
+  canonicalResult?: import('../contracts/execution-result.js').RunResult;
 }
 
 function escapeHtml(value: unknown): string {
@@ -203,7 +238,7 @@ export function formatReportDate(value: string, timeZone = Intl.DateTimeFormat()
 }
 
 function unknownsOf(report: AcceptanceReport): Array<{ type: string; id: string; message: string }> {
-  const observationUnknowns = report.observationGaps.flatMap((gap) => {
+  const observationUnknowns = (report.observationGaps ?? []).flatMap((gap) => {
     const context = `${gap.testType} ${gap.requiredCapability} ${gap.missingObservation} ${gap.requirement.join(' ')}`.toUpperCase();
     const types: string[] = [];
     if (context.includes('UI') || context.includes('BROWSER') || context.includes('页面')) types.push('UNKNOWN_UI');
@@ -217,15 +252,15 @@ function unknownsOf(report: AcceptanceReport): Array<{ type: string; id: string;
     }));
   });
   return [
-    ...report.coverage.unverifiedFacts.map((fact) => ({ type: 'UNVERIFIED_REQUIREMENT', id: fact.id, message: fact.statement })),
+    ...(report.coverage?.unverifiedFacts ?? []).map((fact) => ({ type: 'UNVERIFIED_REQUIREMENT', id: fact.id, message: fact.statement })),
     ...observationUnknowns,
-    ...report.bindingIssues.map((issue) => ({ type: 'UNKNOWN_CONTRACT', id: issue.code, message: issue.message })),
+    ...(report.bindingIssues ?? []).map((issue) => ({ type: 'UNKNOWN_CONTRACT', id: issue.code, message: issue.message })),
   ];
 }
 
 function contractRowsOf(input: DevTestRenderInput) {
-  const dependencyById = new Map(input.contracts.dependencies.map((dependency) => [dependency.contractId, dependency]));
-  return input.contracts.resolutions.map((resolution) => {
+  const dependencyById = new Map((input.contracts?.dependencies ?? []).map((dependency) => [dependency.contractId, dependency]));
+  return (input.contracts?.resolutions ?? []).map((resolution) => {
     const id = resolution.contract?.id ?? resolution.query.id ?? resolution.candidates[0]?.id;
     const dependency = id ? dependencyById.get(id) : undefined;
     const candidate = resolution.contract ?? resolution.candidates.find((item) => item.fingerprint === dependency?.fingerprint)
@@ -247,12 +282,14 @@ function caseRows(input: DevTestRenderInput) {
   const uiByCase = new Map(input.uiExecutions.map((execution) => [execution.caseId, execution]));
   const reportByCase = new Map(input.report.cases.map((item) => [item.caseId, item]));
   const traceByCase = new Map(input.acceptanceTraces.map((trace) => [trace.caseId, trace]));
+  const ledgerByCase = new Map((input.coverageLedger ?? []).map((item) => [item.caseId, item]));
   // 全量候选是唯一用例台账；未被选择/执行的 Case 也必须有一行和明确原因。
   return input.testCases.map((canonical) => {
     const item = reportByCase.get(canonical.id);
     const execution = executionByCase.get(canonical.id);
     const uiExecution = uiByCase.get(canonical.id);
     const trace = traceByCase.get(canonical.id);
+    const ledgerItem = ledgerByCase.get(canonical.id);
     const assertions = execution?.evidence.assertions ?? [];
     const requiredEvidence = [
       canonical?.executionMode === 'EXECUTABLE' ? 'REQUEST' : undefined,
@@ -279,24 +316,24 @@ function caseRows(input: DevTestRenderInput) {
       assertions: canonical?.assertions ?? [],
       requiredEvidence,
       executionMode: item?.executionMode ?? canonical.executionMode ?? 'DESIGNED_ONLY',
-      status: trace?.result === 'NOT_TESTED' ? 'NOT_EXECUTED' : trace?.result ?? 'BLOCKED',
+      status: ledgerItem?.finalStatus ?? (trace?.result === 'NOT_TESTED' ? 'NOT_EXECUTED' : trace?.result ?? 'BLOCKED'),
       rawStatus: uiExecution?.status ?? execution?.status ?? item?.executionStatus ?? 'NOT_EXECUTED',
-      blockedReason: !trace
+      blockedReason: ledgerItem?.statusReason ?? (!trace
         ? 'ACCEPTANCE_TRACE_MISSING：用例未进入可审计验收链'
         : trace.result === 'BLOCKED' || trace.result === 'NOT_TESTED'
-          ? trace.explanation.join('；') : uiExecution?.error ?? execution?.attribution.reason ?? item?.qualityIssues.join('；') ?? '',
-      executed: uiExecution?.executed ?? execution?.executed === true,
+          ? trace.explanation.join('；') : uiExecution?.error ?? execution?.attribution?.reason ?? item?.qualityIssues?.join('；') ?? ''),
+      executed: ledgerItem?.executed ?? (uiExecution?.executed ?? execution?.executed === true),
       processor: uiExecution ? 'PlaywrightBrowserProcessor' : execution?.processor ?? '',
       assertionEvidence: uiExecution?.assertions ?? assertions,
       evidence: uiExecution?.evidence ?? execution?.evidence,
-      contractStatus: input.contracts.validation.status,
+      contractStatus: input.contracts?.validation?.status ?? (input.contracts as { status?: string })?.status ?? 'VALID',
       valueScore: input.testValueScores[canonical.id],
       core: input.caseProfiles[canonical.id]?.core ?? false,
       coreKind: input.caseProfiles[canonical.id]?.coreKind,
       problemIds: input.problems.filter((problem) => problem.affectedCases.includes(canonical.id)).map((problem) => problem.id),
       confidence: input.problems.filter((problem) => problem.affectedCases.includes(canonical.id))
         .reduce((highest, problem) => Math.max(highest, problem.confidence ?? 0), 0),
-      actual: uiExecution?.error ?? execution?.error ?? execution?.attribution.reason ?? uiExecution?.status ?? execution?.status ?? item?.executionStatus ?? 'NOT_EXECUTED',
+      actual: uiExecution?.error ?? execution?.error ?? execution?.attribution?.reason ?? uiExecution?.status ?? execution?.status ?? item?.executionStatus ?? 'NOT_EXECUTED',
     };
   });
 }
@@ -313,12 +350,21 @@ function dimensionsObject(input: DevTestRenderInput): Record<string, unknown> {
 }
 
 function evidenceProof(input: DevTestRenderInput, channels: readonly string[]): { required: number; collected: number; verified: number } {
-  const traces = input.acceptanceTraces.filter((trace) => trace.evidence.required.some((channel) => channels.includes(channel)));
+  const traces = (input.acceptanceTraces ?? []).filter((trace) => {
+    const req = trace.evidence?.required ?? (trace.evidence as { requiredItems?: string[] })?.requiredItems ?? [];
+    return req.some((channel) => channels.includes(channel));
+  });
   return {
     required: traces.length,
-    collected: traces.filter((trace) => trace.evidence.collected.some((channel) => channels.includes(channel))).length,
-    verified: traces.filter((trace) => (trace.result === 'PASS' || trace.result === 'FAIL')
-      && trace.evidence.collected.some((channel) => channels.includes(channel))).length,
+    collected: traces.filter((trace) => {
+      const col = trace.evidence?.collected ?? (trace.evidence as { collectedItems?: string[] })?.collectedItems ?? [];
+      return col.some((channel) => channels.includes(channel));
+    }).length,
+    verified: traces.filter((trace) => {
+      const col = trace.evidence?.collected ?? (trace.evidence as { collectedItems?: string[] })?.collectedItems ?? [];
+      return (trace.result === 'PASS' || trace.result === 'FAIL')
+        && col.some((channel) => channels.includes(channel));
+    }).length,
   };
 }
 
@@ -344,11 +390,11 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
       devConfidence: input.devConfidence,
       coreAcCoverage: input.requirementCoverage.coreCoverage,
       businessFlowCoverage: input.businessFlowGraph.applicable === false ? null : input.businessFlowGraph.coverage,
-      totalCases: input.deliveryCoverage.cases.generated,
-      pass: input.deliveryCoverage.cases.passed,
-      fail: input.deliveryCoverage.cases.failed,
-      blocked: input.deliveryCoverage.cases.blocked,
-      notExecuted: input.deliveryCoverage.cases.notTested,
+      totalCases: input.coverageLedgerSummary?.totalPlanned ?? input.deliveryCoverage.cases.generated,
+      pass: input.coverageLedgerSummary?.totalPassed ?? input.deliveryCoverage.cases.passed,
+      fail: input.coverageLedgerSummary?.totalConfirmedBugs ?? input.deliveryCoverage.cases.failed,
+      blocked: input.coverageLedgerSummary?.totalTestBlocked ?? input.deliveryCoverage.cases.blocked,
+      notExecuted: input.coverageLedgerSummary?.totalUntested ?? input.deliveryCoverage.cases.notTested,
       confirmedBugs: input.problems.filter((item) => item.judgement === 'CONFIRMED_BUG').length,
       likelyProblems: input.problems.filter((item) => item.judgement === 'LIKELY_BUG').length,
       testReliability: input.reliability.score,
@@ -418,6 +464,75 @@ export function buildDevTestReportEnvelope(input: DevTestRenderInput): Record<st
     baseline: input.baseline,
     unknowns: unknownsOf(input.report),
     acceptanceTrust: input.report.trust,
+    coverageLedger: input.coverageLedger,
+    coverageLedgerSummary: input.coverageLedgerSummary,
+    quickView: input.coverageQuickView,
+    fourLists: input.coverageFourLists ? {
+      confirmedBugs: input.coverageFourLists.confirmedBugs.map((i) => i.caseId),
+      testBlocked: input.coverageFourLists.testBlocked.map((i) => i.caseId),
+      untested: input.coverageFourLists.untested.map((i) => i.caseId),
+      passed: input.coverageFourLists.passed.map((i) => i.caseId),
+    } : undefined,
+    requirementLedger: input.coverageRequirementLedger,
+    reconciliation: input.coverageReconciliation,
+    presentation: {
+      level1: {
+        conclusion: input.conclusion === 'READY' ? 'PASS' : input.conclusion === 'NOT_READY' ? 'FAIL' : 'BLOCKED',
+        oneLineConclusion: input.conclusion === 'READY'
+          ? '核心业务流验证闭环，各项指标均合规达标，具备提测条件。'
+          : input.conclusion === 'NOT_READY'
+            ? '存在确定性业务缺陷或阻断项，上线将影响核心流程或引发异常，暂不可提测。'
+            : '存在未执行用例或待确认项，未达成充分验证，需补齐条件后再提测。',
+        businessImpact: input.conclusion === 'READY'
+          ? '业务功能正常，未检测到资损或不可用风险。'
+          : input.conclusion === 'NOT_READY'
+            ? '存在产品逻辑错误或流程阻断，可能造成用户操作失败或系统资损。'
+            : '部分场景未经验证，潜在环境或契约问题尚不明确。',
+        topIssues: input.problems.slice(0, 3).map((p) => ({
+          id: p.id,
+          title: p.message,
+          severity: p.severity,
+          impact: p.why || p.expected || '需要修复缺陷',
+        })),
+        actionOwner: input.conclusion === 'READY' ? '测试负责人 / 产品经理' : '研发负责人 / 对应模块开发',
+        nextStep: input.conclusion === 'READY'
+          ? '推进准入测试或集成验收；重点核验线上数据库迁移脚本。'
+          : input.conclusion === 'NOT_READY'
+            ? '研发修复问题后重新发起自测。'
+            : '补全测试环境与未覆盖项证据。',
+        unverifiedItems: unknownsOf(input.report).map((u) => ({
+          item: u.id,
+          reason: u.message,
+          requiredMaterial: u.type,
+        })),
+      },
+      level2: input.problems.map((p) => ({
+        issueId: p.id,
+        severity: p.severity,
+        category: p.category ?? p.type,
+        phenomenon: p.message,
+        expected: p.expected ?? '满足契约与业务规则',
+        actual: p.actual ?? p.message,
+        confirmedRootCause: p.rootCause || '根因未知 (UNKNOWN)',
+        location: p.location ?? {
+          file: null,
+          line: null,
+          symbol: null,
+          locationStatus: 'UNKNOWN',
+          missingEvidence: '缺少精确定位证据',
+        },
+        evidenceSource: p.evidenceSource ?? 'DevTest 断言证据',
+        reproSteps: p.reproduction ?? [],
+        retestCommand: p.verificationSpec?.retestCommand || p.minimalReproduction?.command || null,
+        missingEvidence: p.missingEvidence ? [p.missingEvidence] : undefined,
+        confirmationStatus: p.confirmationStatus,
+        epistemicStatus: p.epistemicStatus,
+        businessImpact: p.businessImpact,
+        violationJudgment: p.violationJudgment,
+        remediationSpec: p.remediationSpec,
+        verificationSpec: p.verificationSpec,
+      })),
+    },
     trust: {
       resultScope: 'DEVTEST_DELIVERY_ACCEPTANCE',
       requirementVerification: input.deliveryCoverage.requirements.total > 0
@@ -455,40 +570,210 @@ export function renderCasesCsv(input: DevTestRenderInput): string {
 
 export function renderProblemsMarkdown(
   problems: readonly DevTestProblem[],
-  meta: { conclusion: DevTestFeatureResult; unknowns: readonly { type: string; id: string; message: string }[] },
+  meta: {
+    conclusion: DevTestFeatureResult;
+    unknowns: readonly { type: string; id: string; message: string }[];
+    fourLists?: {
+      confirmedBugs: TestPointCoverageLedgerItem[];
+      testBlocked: TestPointCoverageLedgerItem[];
+      untested: TestPointCoverageLedgerItem[];
+      passed: TestPointCoverageLedgerItem[];
+    };
+    coverageLedger?: TestPointCoverageLedgerItem[];
+  },
 ): string {
+  const confirmedBugs = problems.filter((problem) =>
+    problem.judgement === 'CONFIRMED_BUG' || problem.failureClass === 'PRODUCT_BUG');
+  const testBlockedProblems = problems.filter((problem) => !confirmedBugs.includes(problem));
+  const untestedLedgerItems = meta.fourLists?.untested ?? [];
+  const testBlockedLedgerItems = meta.fourLists?.testBlocked ?? [];
+
   const count = (severity: DevTestProblem['severity']) => problems.filter((problem) => problem.severity === severity).length;
+  const businessImpact = meta.conclusion === 'READY'
+    ? '当前已采集证据范围内满足门禁；不代表未测试范围或真实账务无风险。'
+    : meta.conclusion === 'NOT_READY'
+      ? '高风险：存在确定性产品缺陷或资损隐患，需研发排查修复。'
+      : '待补测：存在未验证项或受阻维度，尚未达成充分覆盖。';
+
   const lines = [
-    '# DevTest Problems', '', '## Summary', '',
-    `Feature Result: ${meta.conclusion}`,
-    `Critical: ${count('CRITICAL')}`,
-    `High: ${count('HIGH')}`,
-    `Medium: ${count('MEDIUM')}`,
-    `Low: ${count('LOW')}`, '', '## Root Problems', '',
+    '# DevTest Problems', '',
+    '## ⏱️ 一、30 秒业务影响与质量速览 (Product & Ops View)', '',
+    `- **Feature Result**: ${meta.conclusion}`,
+    `- **Business Impact**: ${businessImpact}`,
+    `- **🔴 清单 A（确认产品缺陷）**: **${confirmedBugs.length}** 项（需研发定位修复）`,
+    `- **🟡 清单 B（测试阻断）**: **${testBlockedProblems.length + testBlockedLedgerItems.length}** 项（前置环境/安全策略/凭据阻断）`,
+    `- **⚪ 清单 C（未测试项）**: **${untestedLedgerItems.length}** 项（批次未选或缺少测试数据）`,
+    `- **严重度统计**: Critical: ${count('CRITICAL')} | High: ${count('HIGH')} | Medium: ${count('MEDIUM')} | Low: ${count('LOW')}`, '',
+    '## Root Problems', '',
+    '### 🛠️ 二、清单 A：确认产品缺陷【开发修复单】 (Confirmed Bugs - Dev Action Required)', '',
   ];
-  if (!problems.length) lines.push('No root problems in the currently observable scope.', '');
-  for (const problem of problems) {
-    lines.push(`### ${problem.id} ${problem.message}`, '', `Severity: ${problem.severity}`,
-      `Confidence: ${(problem.confidence ?? 0).toFixed(2)} (${problem.confidenceLabel ?? 'UNKNOWN'})`,
-      `Classification: ${problem.issueClassification ?? 'EXECUTION_ERROR'}`,
-      `Judgement: ${problem.judgement ?? 'UNKNOWN'}`, `Lifecycle: ${problem.lifecycle ?? 'OPEN'}`,
-      `Category: ${problem.category ?? problem.type}`, `Feature: ${problem.affectedFeature ?? '当前功能'}`,
-      `Business Flow: ${problem.businessFlowId ?? 'N/A'}`,
-      `Safe to Retry: ${problem.type === 'DATA_CONSISTENCY_BUG' || problem.reasonCode === 'CROSS_STEP_CORRELATION_ERROR' ? 'NO (Fix Primary Key / State Mismatch First)' : 'YES (with Idempotency Key)'}`,
-      `Requires Developer Action: ${['PRODUCT_BUG', 'REQUIREMENT_GAP', 'DATA_CONSISTENCY_BUG'].includes(problem.failureClass ?? '') ? 'YES' : 'NO'}`,
-      `Why: ${problem.why ?? '证据不足，保持 UNKNOWN'}`, '', 'Reproduction:', '');
-    lines.push(`Failure Class: ${problem.failureClass ?? 'UNSUPPORTED'}`, `Reproducible: ${String(problem.reproducible === true)}`, '');
-    lines.push(`Root Cause: ${problem.rootCause ?? 'UNKNOWN'}`, '');
-    lines.push(...(problem.reproduction?.length ? problem.reproduction.map((step, index) => `${index + 1}. ${step}`) : ['1. 执行 DevTest 并查看关联 Case。']));
-    lines.push('', `Expected: ${problem.expected ?? '满足 Requirement/Contract'}`, `Actual: ${problem.actual ?? problem.message}`, '', 'Affected Cases:', '');
-    lines.push(...(problem.affectedCases.length ? problem.affectedCases.map((caseId) => `- ${caseId}`) : ['- none']));
-    lines.push('', 'Request / Response / Evidence:', '', '```json', JSON.stringify(artifactSafe({
-      request: problem.request, response: problem.response, evidence: problem.evidence,
-      confidenceFactors: problem.confidenceFactors, minimalReproduction: problem.minimalReproduction,
-    }), null, 2), '```', '', `Suggested Priority: ${problem.severity}`,
-      `Remediation: ${problem.remediation ?? '补齐权威契约/执行/证据后重跑。'}`, '');
+
+  if (!confirmedBugs.length) {
+    lines.push('当前可观察范围内无已确认产品缺陷（所有已执行用例未发生确定性规则违背或已归入阻断/未测）。', '');
+  } else {
+    for (const problem of confirmedBugs) {
+      const loc = problem.location?.file && problem.location?.line
+        ? `${problem.location.file}:${problem.location.line}`
+        : 'file: null, line: null, symbol: null, locationStatus: "UNKNOWN" (缺少确切代码行改动证据)';
+      const confStatus = problem.confirmationStatus
+        || (problem.judgement === 'CONFIRMED_BUG' && problem.rootCause ? 'CONFIRMED'
+          : problem.location?.locationStatus === 'CONFIRMED' || problem.rootCause ? 'PARTIALLY_CONFIRMED' : 'UNKNOWN');
+
+      lines.push(`### 🛠️ [开发修复单] [${problem.severity}] ${problem.id} - ${problem.message}`, '');
+      lines.push(`> **结论确认度**: ${formatConfirmationBadge(confStatus)} | **分类**: \`${problem.category ?? problem.type}\` | **证据来源**: ${problem.evidenceSource ?? 'DevTest 断言现场'}`);
+      lines.push('');
+      lines.push(`Severity: ${problem.severity}`);
+      lines.push(`Confidence: ${(problem.confidence ?? 0).toFixed(2)} (${problem.confidenceLabel ?? 'UNKNOWN'})`);
+      lines.push(`Classification: ${problem.issueClassification ?? 'PRODUCT_BUG'}`);
+      lines.push(`Judgement: ${problem.judgement ?? 'CONFIRMED_BUG'}`);
+      lines.push(`Lifecycle: ${problem.lifecycle ?? 'OPEN'}`);
+      lines.push(`Category: ${problem.category ?? problem.type}`);
+      lines.push(`Feature: ${problem.affectedFeature ?? 'UNKNOWN (未声明子模块)'}`);
+      lines.push(`Business Flow: ${problem.businessFlowId ?? 'N/A'}`);
+      lines.push(`Safe to Retry: ${problem.type === 'DATA_CONSISTENCY_BUG' || problem.reasonCode === 'CROSS_STEP_CORRELATION_ERROR' ? 'NO (Fix Primary Key / State Mismatch First)' : 'YES (with Idempotency Key)'}`);
+      lines.push(`Requires Developer Action: YES`);
+      lines.push(`Why: ${problem.why ?? '证据不足，保持 UNKNOWN'}`);
+      lines.push(`Failure Class: ${problem.failureClass ?? 'PRODUCT_BUG'}`);
+      lines.push(`Reproducible: ${String(problem.reproducible === true)}`);
+      lines.push(`Root Cause: ${problem.rootCause || 'UNKNOWN (根因未知)'}`);
+      lines.push(`Confirmed Location: ${loc}`);
+      lines.push('');
+
+      // 1. 判定依据与规则违背
+      lines.push('#### 1. ⚖️ 判定依据与规则违背 (Violation & Rationale)');
+      lines.push(`- **违背规则/不变量**: \`${problem.violationJudgment?.violatedRuleOrInvariant || problem.reasonCode || problem.category || problem.type}\``);
+      lines.push(`- **预期行为 (Expected)**: ${problem.expected ?? '满足 Requirement/Contract'}`);
+      lines.push(`- **实际结果 (Actual)**: ${problem.actual ?? problem.message}`);
+      lines.push(`- **判定依据**: ${problem.violationJudgment?.judgmentBasis || problem.why || '依据断言规则对比得出。'}`);
+      lines.push('');
+
+      // 2. 业务影响与波及面
+      lines.push('#### 2. 💥 业务影响与波及范围 (Blast Radius & Impact)');
+      lines.push(`- **受影响业务链路**: \`${problem.businessImpact?.affectedBusinessFlows?.join(', ') || problem.affectedFeature || 'UNKNOWN (未归属特定业务链路)'}\``);
+      if (problem.businessImpact?.affectedUsersOrTenants) {
+        lines.push(`- **受影响用户/租户**: ${problem.businessImpact.affectedUsersOrTenants}`);
+      }
+      lines.push(`- **危害评估**: ${problem.businessImpact?.businessDamage || (problem.severity === 'CRITICAL' ? '可能导致线上资金资损或核心业务中断' : '导致业务逻辑或界面展示不符合预期')}`);
+      lines.push('');
+
+      // 3. 事实边界与确认状态
+      lines.push('#### 3. 🧭 事实边界与确认状态 (Epistemic Boundary)');
+      lines.push(`- **确认状态**: ${formatConfirmationBadge(confStatus)}`);
+      lines.push('- **已确认事实**:');
+      lines.push(...(problem.epistemicStatus?.confirmedFacts?.length ? problem.epistemicStatus.confirmedFacts.map((f) => `  - ✅ ${f}`) : [`  - ✅ 实测结果: ${problem.actual || problem.message}`]));
+      if (problem.epistemicStatus?.unknowns?.length || problem.location?.locationStatus === 'UNKNOWN') {
+        lines.push('- **未确认/待排查项**:');
+        lines.push(...(problem.epistemicStatus?.unknowns?.length ? problem.epistemicStatus.unknowns.map((u) => `  - ❓ ${u}`) : ['  - ❓ 具体代码行号未定位，需结合调用栈排查']));
+      }
+      if (problem.missingEvidence || problem.epistemicStatus?.missingEvidence?.length) {
+        lines.push('- **缺失的关键证据**:');
+        const missings = [...(problem.missingEvidence ? [problem.missingEvidence] : []), ...(problem.epistemicStatus?.missingEvidence || [])];
+        missings.forEach((m) => lines.push(`  - ⚠️ ${m}`));
+      }
+      lines.push('');
+
+      // 4. 开发修复指引 (无套话)
+      lines.push('#### 4. 🛠️ 开发修复指引 (Remediation Guidance)');
+      lines.push(`- **目标组件/模块**: \`${problem.remediationSpec?.targetComponent || problem.affectedFeature || 'UNKNOWN (待根据日志调用栈排查定位)'}\``);
+      lines.push(`- **修复类型**: \`${problem.remediationSpec?.fixType || 'CODE_FIX'}\``);
+      lines.push(`- **修改指引**: ${problem.remediationSpec?.remediationGuidance || problem.remediation || '定位对应业务逻辑，修复状态流转或参数校验规则。'}`);
+      if (problem.remediationSpec?.codeDiffOrConfigExample) {
+        lines.push('```php', problem.remediationSpec.codeDiffOrConfigExample, '```');
+      }
+      lines.push('');
+
+      // 5. 潜在回归风险与回滚方案
+      lines.push('#### 5. ⚠️ 潜在回归风险与回滚方案 (Risk & Rollback)');
+      lines.push('- **潜在回归风险**:');
+      lines.push(...(problem.remediationSpec?.regressionRisks?.length ? problem.remediationSpec.regressionRisks.map((r) => `  - ⚠️ ${r}`) : ['  - ⚠️ 需针对关联接口或数据链路执行复测。']));
+      lines.push(`- **回滚操作方案**: ${problem.remediationSpec?.rollbackPlan || '若复测异常，回退本次变更代码或配置至上一稳定版本。'}`);
+      lines.push('');
+
+      // 6. 详细复现步骤与复测命令
+      lines.push('#### 6. 🧪 详细复现步骤与复测命令 (Reproduction & Retest)');
+      lines.push('Reproduction:');
+      lines.push(...(problem.reproduction?.length ? problem.reproduction.map((step, index) => `${index + 1}. ${step}`) : (problem.affectedCases?.length ? problem.affectedCases.map((c, i) => `${i + 1}. 重跑复测关联用例: ${c}`) : ['1. 检查失败断言并以相同参数发起重测。'])));
+      lines.push('');
+      lines.push(`Expected: ${problem.expected ?? '满足 Requirement/Contract'}`);
+      lines.push(`Actual: ${problem.actual ?? problem.message}`);
+      lines.push('');
+      lines.push('Affected Cases:');
+      lines.push(...(problem.affectedCases.length ? problem.affectedCases.map((caseId) => `- ${caseId}`) : ['- none']));
+      lines.push('');
+      if (problem.minimalReproduction?.command || problem.verificationSpec?.retestCommand) {
+        lines.push('Retest Command:');
+        lines.push('```bash');
+        lines.push(problem.verificationSpec?.retestCommand || problem.minimalReproduction?.command || '');
+        lines.push('```');
+        lines.push('');
+      }
+
+      // 7. 真正解决的验收标准 (DoD)
+      lines.push('#### 7. 🎯 真正解决的验收标准 (Definition of Done - DoD)');
+      const criteria = problem.verificationSpec?.acceptanceCriteria?.length
+        ? problem.verificationSpec.acceptanceCriteria
+        : [
+            `复测接口返回正常，且业务状态码符合预期`,
+            `实际输出满足: ${problem.expected ?? '满足契约要求'}`,
+            `数据表持久化状态及资金扣退流水完全合规`,
+          ];
+      criteria.forEach((c, idx) => lines.push(`- [ ] **DoD-${idx + 1}**: ${c}`));
+      lines.push('');
+
+      lines.push('Request / Response / Evidence:', '', '```json', JSON.stringify(artifactSafe({
+        request: problem.request, response: problem.response, evidence: problem.evidence,
+        confidenceFactors: problem.confidenceFactors, minimalReproduction: problem.minimalReproduction,
+      }), null, 2), '```', '', `Suggested Priority: ${problem.severity}`,
+        `Remediation: ${problem.remediation ?? '补齐权威契约/执行/证据后重跑。'}`, '');
+    }
   }
-  lines.push('## Unknowns', '');
+
+  // 三、清单 B：测试阻断【测试阻断单】
+  lines.push('## Unknowns', '', '### 🟡 三、清单 B：测试阻断【测试阻断单】 (Test Blocked - Ops/Env Remediation)', '');
+  if (!testBlockedProblems.length && !testBlockedLedgerItems.length) {
+    lines.push('当前无测试阻断项。', '');
+  } else {
+    for (const problem of testBlockedProblems) {
+      lines.push(`### 🟡 [测试阻断单] [${problem.severity || 'HIGH'}] ${problem.id} - ${problem.message}`, '');
+      lines.push(`- **阻断分类**: \`${problem.category || problem.type}\` (${problem.failureClass || 'ENVIRONMENT_OR_PRECONDITION'})`);
+      lines.push(`- **阻断维度**: \`${problem.dimension || 'EXECUTION'}\``);
+      lines.push(`- **阻断原因**: ${problem.why || problem.message}`);
+      lines.push(`- **波及范围**: ${problem.affectedCases.length ? problem.affectedCases.map((c) => `\`${c}\``).join(', ') : '测试环境全局'}`);
+      lines.push(`- **已确认事实**: ${problem.epistemicStatus?.confirmedFacts?.join('; ') || problem.actual || problem.message}`);
+      lines.push(`- **解阻指引与责任方**: ${problem.remediationSpec?.remediationGuidance || problem.remediation || '检查测试环境连通性、账号鉴权凭据或数据准备。'}`);
+      if (problem.verificationSpec?.retestCommand) {
+        lines.push(`- **解阻复测命令**: \`${problem.verificationSpec.retestCommand}\``);
+      }
+      lines.push('');
+    }
+    if (testBlockedLedgerItems.length) {
+      lines.push('#### 📋 受阻测试点明细 (Blocked Test Points)');
+      lines.push('| Case ID | 需求 / 测试点 | 维度 | 阻断原因 | 处置责任方 |');
+      lines.push('|---|---|---|---|---|');
+      for (const item of testBlockedLedgerItems) {
+        lines.push(`| \`${item.caseId}\` | ${item.requirementId} / ${item.testPointId} | ${item.dimension} | ${item.statusReason} | ${item.untestedReason?.includes('数据') ? '调用方/测试人员' : '环境/运维负责人'} |`);
+      }
+      lines.push('');
+    }
+  }
+
+  // 四、清单 C：未测试项【未测试清单】
+  lines.push('## ⚪ 四、清单 C：未测试项【未测试清单】 (Untested Items - Coverage Gap)', '');
+  if (!untestedLedgerItems.length) {
+    lines.push('当前已计划测试点全部获得真实执行，无遗留未测试项。', '');
+  } else {
+    lines.push('| Case ID | 标题 | 维度 | 未测试原因代码 | 详细说明与补测指引 |');
+    lines.push('|---|---|---|---|---|');
+    for (const item of untestedLedgerItems) {
+      const missingData = item.dataBindings.filter((d) => d.bindingStatus === 'MISSING').map((d) => d.dataKey).join(', ');
+      const guidance = missingData ? `缺少测试数据: ${missingData}，调用方需在 options 中补充` : (item.untestedReason || item.statusReason);
+      lines.push(`| \`${item.caseId}\` | ${item.title} | ${item.dimension} | \`${item.untestedReasonCode ?? 'NOT_SELECTED'}\` | ${guidance} |`);
+    }
+    lines.push('');
+  }
+
+  // 五、待澄清与未决事项
+  lines.push('## ❓ 五、待澄清与未决事项 (Unknowns)', '');
   lines.push(...(meta.unknowns.length ? meta.unknowns.map((item) => `- ${item.type} / ${item.id}: ${item.message}`) : ['- none']));
   lines.push('');
   return artifactText(lines.join('\n'));
@@ -504,8 +789,56 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
     ...input.problems.slice(0, 5).map((problem) => `${problem.id}: ${problem.remediation ?? problem.message}`),
     ...unknowns.slice(0, 3).map((item) => `${item.type}: ${item.message}`),
   ];
+  const oneLineConclusion = input.conclusion === 'READY'
+    ? '核心业务流验证闭环，各项指标均合规达标，具备提测条件。'
+    : input.conclusion === 'NOT_READY'
+      ? '存在确定性业务缺陷或阻断项，上线将影响核心流程或引发异常，暂不可提测。'
+      : '存在未执行用例或待确认项，未达成充分验证，需补齐条件后再提测。';
+  const businessImpact = input.conclusion === 'READY'
+    ? '业务功能正常，未检测到资损或不可用风险。'
+    : input.conclusion === 'NOT_READY'
+      ? '存在产品逻辑错误或流程阻断，可能造成用户操作失败或系统资损。'
+      : '部分场景未经验证，潜在环境或契约问题尚不明确。';
+  const owner = input.conclusion === 'READY' ? '测试负责人 / 产品经理' : '研发负责人 / 对应模块开发';
+  const nextStep = input.conclusion === 'READY'
+    ? '推进准入测试或集成验收；重点核验线上数据库迁移脚本。'
+    : input.conclusion === 'NOT_READY'
+      ? '研发修复问题后重新发起自测。'
+      : '协调补全测试环境与未覆盖项材料。';
+
   const lines = [
-    '# Feature Acceptance', '', '## Result', '', input.conclusion, '',
+    '# Feature Acceptance', '',
+    '## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)', '',
+    `- **1. 测了什么 (Tested)**: ${input.coverageQuickView?.testedSummary ?? `${input.deliveryCoverage.cases.executed} 项测试点已真实执行验证（通过 ${input.deliveryCoverage.cases.verified} 项）`}`,
+    `- **2. 没测什么 (Untested)**: ${input.coverageQuickView?.untestedSummary ?? `${input.deliveryCoverage.cases.notTested} 项未测试`}`,
+    `- **3. 确认产品缺陷数 (Bugs)**: **${input.coverageQuickView?.confirmedBugsCount ?? confirmed.length}** 项 (严格符合判真标准)`,
+    `- **4. 测试阻断数 (Blockers)**: **${input.coverageQuickView?.testBlockedCount ?? blocked.length}** 项 (前置环境/凭证/清理/安全策略)`,
+    `- **5. 数据绑定与消费统计**: ${input.coverageQuickView?.dataBindingConsumption ?? '未配置数据绑定分析'}`,
+    `- **6. 业务结论**: **${input.conclusion}** —— ${input.coverageQuickView?.businessConclusion ?? oneLineConclusion}`,
+    `- **7. 下一步指引与责任人**: \`${input.coverageQuickView?.nextStepAndOwner.role ?? owner}\` —— ${input.coverageQuickView?.nextStepAndOwner.action ?? nextStep}`,
+    '',
+  ];
+
+  if (input.coverageFourLists) {
+    lines.push('## 📋 二、四类并列清单 (Four Parallel Lists)', '');
+    lines.push(renderFourParallelListsMarkdown(input.coverageFourLists));
+  }
+
+  if (input.coverageLedger?.length) {
+    lines.push('## 📊 三、主覆盖账本 (Coverage Ledger)', '');
+    lines.push(renderCoverageLedgerMarkdownTable(input.coverageLedger));
+    lines.push('');
+  }
+
+  if (input.coverageRequirementLedger?.length) {
+    lines.push('### 📋 需求事实与 AC 覆盖追踪 (Requirement Facts Coverage)', '');
+    lines.push(renderRequirementFactLedgerMarkdownTable(input.coverageRequirementLedger));
+    lines.push('');
+  }
+
+  lines.push(
+    '## 🛠️ 四、交付验收工程证据现场 (Engineering & Evidence View)', '',
+    '## Result', '', input.conclusion, '',
     '## Source Sync', '',
     ...(input.sourceSync ? [
       `- Status: ${input.sourceSync.status}`,
@@ -540,7 +873,7 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
     '', '## Unknowns', '',
     ...(unknowns.length ? unknowns.slice(0, 5).map((item) => `- ${item.type}: ${item.message}`) : ['- none']),
     '## Core Requirements', '',
-    ...input.requirementCoverage.behaviors.map((behavior) => `- [${behavior.status === 'COVERED' ? 'x' : ' '}] ${behavior.acId} — ${behavior.status}`),
+    ...(input.requirementCoverage?.behaviors ?? []).map((behavior) => `- [${behavior.status === 'COVERED' ? 'x' : ' '}] ${behavior.acId} — ${behavior.status}`),
     '', '## Business Flows', '',
     ...(input.businessFlowGraph.flows.length ? input.businessFlowGraph.flows.map((flow) =>
       `- [${flow.status === 'PASS' ? 'x' : ' '}] ${flow.name} — ${flow.status}${flow.reason ? `: ${flow.reason}` : ''}`) : ['- [x] No multi-operation core flow required']),
@@ -560,7 +893,7 @@ export function renderAcceptanceSummary(input: DevTestRenderInput): string {
     `- Estimated Cost: ${input.executionEstimate.estimatedCost} ${input.executionEstimate.costUnit}`,
     `- Limit Status: ${input.executionEstimate.exceeded.length ? `BLOCKED (${input.executionEstimate.exceeded.join(', ')})` : 'WITHIN_LIMIT'}`,
     '',
-  ];
+  );
   return lines.join('\n');
 }
 
@@ -661,8 +994,9 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
       }),
       labeledValue('Steps', testCase.steps),
       labeledValue('Evidence Required', {
-        required: testCase.evidenceRequirements ?? [], collected: trace?.evidence.collectedItems ?? [],
-        missing: trace?.evidence.missingItems ?? [],
+        required: testCase.evidenceRequirements ?? [],
+        collected: trace?.evidence?.collectedItems ?? (trace?.evidence as { collected?: string[] })?.collected ?? [],
+        missing: trace?.evidence?.missingItems ?? (trace?.evidence as { missing?: string[] })?.missing ?? [],
       }),
       labeledValue('Cleanup / Dependency', {
         prepare: testCase.prepare ?? [], cleanup: testCase.cleanup ?? [], dependencies: testCase.dependencies ?? [],
@@ -673,14 +1007,14 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
         `Execution=${testCase.executionMode ?? 'DESIGNED_ONLY'}/${testCase.readiness?.status ?? 'BLOCKED'}`,
         `Contract=${inferred ? '推导契约' : '需求/配置契约'}${contractSources.length
           ? `（${contractSources.map((source) => `${source.type}:${source.ref}@${source.confidence ?? 'unknown'}`).join('；')}）` : '（来源未解析）'}`,
-        `Tags=${testCase.tags.join(', ') || 'N/A（不适用）'}`,
+        `Tags=${testCase.tags?.join(', ') || 'N/A（不适用）'}`,
         row?.blockedReason || 'Oracle 与 Evidence 完整性由确定性运行链判定。',
       ].join('；')),
     ].join('；');
     return [
       testCase.id,
       input.report.requirement.title,
-      `${type} / ${testCase.priority}`,
+      `${type} / ${testCase.priority ?? 'P1'}`,
       row?.status ?? 'NOT_EXECUTED',
       scenarioAndOracle,
       executionAndEvidence,
@@ -691,7 +1025,7 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
     `- 需求文档：${markdownInline(input.meta.docSource)}`,
     `- Run ID：${markdownInline(input.runId)}`,
     `- 生成时间：${markdownInline(input.meta.finishedAt)}`,
-    `- 用例统计：共 ${rows.length} 条｜PASS ${rows.filter((row) => row.status === 'PASS').length}｜FAIL ${rows.filter((row) => row.status === 'FAIL').length}｜BLOCKED ${rows.filter((row) => row.status === 'BLOCKED').length}｜NOT_EXECUTED ${rows.filter((row) => row.status === 'NOT_EXECUTED').length}`,
+    `- 用例统计：共 ${input.coverageLedgerSummary?.totalPlanned ?? rows.length} 条｜PASS ${input.coverageLedgerSummary?.totalPassed ?? rows.filter((row) => row.status === 'PASS').length}｜FAIL ${input.coverageLedgerSummary?.totalConfirmedBugs ?? rows.filter((row) => row.status === 'FAIL').length}｜BLOCKED ${input.coverageLedgerSummary?.totalTestBlocked ?? rows.filter((row) => row.status === 'BLOCKED').length}｜NOT_EXECUTED ${input.coverageLedgerSummary?.totalUntested ?? rows.filter((row) => row.status === 'NOT_EXECUTED').length}`,
     '', '## 全部测试用例', '',
     renderFeishuMarkdownTable(['编号', '模块', '类型/优先级', '结果', '场景与 Oracle', '执行、证据与备注'],
       tableRows.length ? tableRows : [['N/A（不适用）', 'N/A（不适用）', 'N/A（不适用）', 'NOT_EXECUTED', '无用例', '用例数为 0']]), '',
@@ -702,11 +1036,11 @@ export function renderDeveloperSelfTestCases(input: DevTestRenderInput): string 
 /** 用户约定的固定七段开发自测报告。每个章节只渲染一张飞书兼容 Markdown 表格。 */
 export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string {
   const rows = caseRows(input);
-  const passed = rows.filter((row) => row.status === 'PASS').length;
-  const failed = rows.filter((row) => row.status === 'FAIL').length;
-  const blocked = rows.filter((row) => row.status === 'BLOCKED').length;
-  const notExecuted = rows.filter((row) => row.status === 'NOT_EXECUTED').length;
-  const total = passed + failed + blocked + notExecuted;
+  const passed = input.coverageLedgerSummary?.totalPassed ?? rows.filter((row) => row.status === 'PASS').length;
+  const failed = input.coverageLedgerSummary?.totalConfirmedBugs ?? rows.filter((row) => row.status === 'FAIL').length;
+  const blocked = input.coverageLedgerSummary?.totalTestBlocked ?? rows.filter((row) => row.status === 'BLOCKED').length;
+  const notExecuted = input.coverageLedgerSummary?.totalUntested ?? rows.filter((row) => row.status === 'NOT_EXECUTED').length;
+  const total = input.coverageLedgerSummary?.totalPlanned ?? (passed + failed + blocked + notExecuted);
   const unknowns = unknownsOf(input.report);
   const orderedProblems = sortedHandoffProblems(input);
   const recommendation = input.conclusion === 'READY' ? '建议发布'
@@ -742,17 +1076,36 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
 
   const caseTableRows = rows.map((row) => {
     const trace = input.acceptanceTraces.find((item) => item.caseId === row.caseId);
+    const ledgerItem = input.coverageLedger?.find((item) => item.caseId === row.caseId);
+    const consumed = ledgerItem?.dataBindings.filter(b => b.bindingStatus === 'PROVIDED_AND_CONSUMED').length ?? 0;
+    const totalBindings = ledgerItem?.dataBindings.length ?? 0;
+    const bindingNote = totalBindings > 0 ? `数据消费 ${consumed}/${totalBindings}` : '';
     const executionNote = row.status === 'PASS' || row.status === 'FAIL'
       ? `${trace?.oracle.verdict ?? row.rawStatus}；Evidence ${trace?.evidence.collectedItems?.length ?? 0}/${trace?.evidence.requiredItems?.length ?? 0}`
-      : row.blockedReason || trace?.explanation.join('；') || '未获得真实执行与证据';
+      : row.blockedReason || trace?.explanation.join('；') || ledgerItem?.statusReason || '未获得真实执行与证据';
     const contractNote = inferredContractNote(input.testCases.find((item) => item.id === row.caseId));
-    const note = [executionNote, contractNote].filter(Boolean).join('；');
+    const note = [bindingNote, executionNote, contractNote].filter(Boolean).join('；');
     return [row.caseId, input.report.requirement.title, `${testTypeLabel(row.dimension)} / ${row.priority}`,
       row.status, labeledValue('测试点/场景', row.title), labeledValue('证据/备注', note)];
   });
 
   const problemTableRows = orderedProblems.map((problem) => {
+    const isConfirmedBug = problem.judgement === 'CONFIRMED_BUG' || problem.failureClass === 'PRODUCT_BUG';
+    const isTestBlocked = ['ENVIRONMENT_ISSUE', 'CONTRACT_ISSUE', 'TEST_ISSUE', 'REQUIREMENT_ISSUE'].includes(problem.judgement ?? '')
+      || ['ENVIRONMENT_OR_PRECONDITION', 'TEST_TOOL_OR_HARNESS', 'DATA_PREPARATION_OR_SEED'].includes(problem.failureClass ?? '');
+    const natureTag = isConfirmedBug ? '【确认产品缺陷】' : isTestBlocked ? '【测试阻断】' : '【待确认项】';
+
     const reproduction = problem.reproduction?.length ? problem.reproduction.map((step, index) => `${index + 1}.${step}`).join(' ') : '补齐执行条件后按关联 Case 复现';
+    const confirmedRootCause = problem.rootCause || '根因未知 (UNKNOWN)';
+    const locText = problem.location?.file && problem.location?.line
+      ? `${problem.location.file}:${problem.location.line}`
+      : `file: null, line: null, symbol: null (${problem.location?.missingEvidence || '位置未知'})`;
+    const confStatus = problem.confirmationStatus || (problem.judgement === 'CONFIRMED_BUG' ? 'CONFIRMED' : 'UNKNOWN');
+    const guidance = problem.remediationSpec?.remediationGuidance || problem.remediation || '结合现场抓包排查业务逻辑并修复';
+    const riskAndRollback = `风险: ${problem.remediationSpec?.regressionRisks?.[0] || '需针对关联接口或数据链路执行复测'}；回滚: ${problem.remediationSpec?.rollbackPlan || '回退本次变更代码或配置至上一稳定版本'}`;
+    const dod = problem.verificationSpec?.acceptanceCriteria?.length
+      ? problem.verificationSpec.acceptanceCriteria.map((c, i) => `DoD${i + 1}:${c}`).join(';')
+      : `DoD: 实测输出满足预期(${problem.expected || '契约合规'})且流水无差错`;
     const evidence = {
       why: problem.why,
       expected: problem.expected,
@@ -761,9 +1114,13 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
       request: problem.request,
       response: problem.response,
     };
-    return [problem.id, handoffProblemLevel(problem, input), handoffProblemStatus(problem),
-      `${labeledValue('问题', problem.message)}；${labeledValue('复现步骤', reproduction)}`,
-      `${labeledValue('证据', evidence)}；${labeledValue('修复/验证要求', problem.remediation ?? 'N/A（不适用）')}`];
+    return [
+      problem.id,
+      handoffProblemLevel(problem, input),
+      `${handoffProblemStatus(problem)} · ${natureTag}`,
+      `${labeledValue('问题性质', natureTag)}；${labeledValue('问题', problem.message)}；${labeledValue('确认状态', confStatus)}；${labeledValue('已确认根因', confirmedRootCause)}；${labeledValue('已确认位置', locText)}；${labeledValue('修复方案', guidance)}；${labeledValue('复现步骤', reproduction)}`,
+      `${labeledValue('证据来源', problem.evidenceSource ?? 'DevTest 断言现场')}；${labeledValue('风险与回滚', riskAndRollback)}；${labeledValue('验收标准(DoD)', dod)}；${labeledValue('修复/验证要求', problem.remediation ?? 'N/A（不适用）')}；${labeledValue('证据', evidence)}`,
+    ];
   });
 
   const uncovered: Array<{ item: string; reason: string; material: string }> = [];
@@ -823,10 +1180,16 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
     renderFeishuMarkdownTable(['项目', '结果', '说明'], [
       ['用例统计', total, `PASS ${passed}；FAIL ${failed}；BLOCKED ${blocked}；NOT_EXECUTED ${notExecuted}`],
       ['提测建议', recommendation, input.conclusion],
+      ['业务影响与通俗结论', input.conclusion === 'READY' ? '🟢 满足提测' : input.conclusion === 'NOT_READY' ? '🔴 暂不建议发布' : '🟡 待补测',
+        input.conclusion === 'READY' ? '核心业务流验证闭环，各项指标均合规达标，具备提测条件。' : input.conclusion === 'NOT_READY' ? '存在确定性业务缺陷或阻断项，上线将影响核心流程或引发异常，暂不可提测。' : '存在未执行用例或待确认项，未达成充分验证，需补齐条件后再提测。'],
+      ['下一步与责任人', input.conclusion === 'READY' ? '测试负责人 / 产品经理' : '研发负责人 / 对应模块开发',
+        input.conclusion === 'READY' ? '推进准入测试或集成验收；重点核验线上数据库迁移脚本。' : input.conclusion === 'NOT_READY' ? '请研发对照第 4 章问题与复现定位代码并修复，完成后重新执行自测。' : '协调测试环境与账号权限，补全第 6 章未覆盖项的证据材料。'],
       ['代码与环境结论', input.conclusion, `Dev Confidence ${input.devConfidence.score}/100${input.devConfidence.failClosed ? '（Fail-Closed）' : ''}`],
       ['Requirement Coverage', `${input.deliveryCoverage.requirements.verifiedCoverage}%`,
         `Generated ${input.deliveryCoverage.requirements.generatedCoverage}%；Executed ${input.deliveryCoverage.requirements.executedCoverage}%；Evidence ${input.deliveryCoverage.evidence.coverage}%`],
       ['Top 风险', topRisks.length, topRisks.join('；') || '当前可观察范围内无已识别风险。'],
+      ['数据绑定与消费', `${input.coverageLedgerSummary?.dataBindingStats?.providedAndConsumed ?? 0}/${(input.coverageLedgerSummary?.dataBindingStats?.providedAndConsumed ?? 0) + (input.coverageLedgerSummary?.dataBindingStats?.providedButUnbound ?? 0) + (input.coverageLedgerSummary?.dataBindingStats?.missing ?? 0)}`, `已消费 ${input.coverageLedgerSummary?.dataBindingStats?.providedAndConsumed ?? 0}；未绑定 ${input.coverageLedgerSummary?.dataBindingStats?.providedButUnbound ?? 0}；缺失 ${input.coverageLedgerSummary?.dataBindingStats?.missing ?? 0}`],
+      ['未验证项统计', uniqueUncovered.length, `待补齐证据/材料 ${uniqueUncovered.length} 项（详见第 6 章）`],
     ]),
     '', '## 2. 需求与实现核对', '',
     renderFeishuMarkdownTable(['类型', '编号', '需求/问题', '状态/来源', '关联用例', '负责人/说明'], requirementTableRows),
@@ -851,7 +1214,6 @@ export function renderDeveloperSelfTestReport(input: DevTestRenderInput): string
     ]),
     '',
     '> 说明：生成不等于执行，执行不等于验证。PASS/FAIL 只来自真实执行、确定性 Oracle 与完整 Evidence；静态发现和证据不足项保持 BLOCKED/NOT_EXECUTED。',
-    '',
   ];
   return artifactText(lines.join('\n'));
 }
@@ -870,14 +1232,20 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
     return `<tr><td>${stat.dimension}</td><td>${escapeHtml(decision?.applicability)}</td><td>${stat.total}</td><td class="ok">${stat.passed}</td><td class="bad">${stat.failed}</td><td class="warn">${stat.blocked}</td><td>${stat.notExecuted}</td><td>${escapeHtml(decision?.reason)}</td></tr>`;
   }).join('');
   const caseHtml = rows.map((item) => `<tr><td>${item.caseId}</td><td>${item.dimension}</td><td>${item.priority}</td><td>${escapeHtml(item.title)}</td><td class="${statusClass(item.status)}">${item.status}</td><td>${String(item.executed)}</td><td>${escapeHtml(item.processor || '-')}</td><td>${escapeHtml(item.blockedReason || '-')}</td></tr>`).join('');
-  const problemHtml = input.problems.map((problem) => `<tr><td>${problem.id}</td><td>${problem.severity}</td><td>${escapeHtml(problem.issueClassification ?? 'EXECUTION_ERROR')}</td><td>${escapeHtml(problem.judgement ?? 'UNKNOWN')}</td><td>${escapeHtml(problem.lifecycle ?? 'OPEN')}</td><td>${escapeHtml(problem.confidenceLabel ?? 'UNKNOWN')} ${problem.confidence?.toFixed(2) ?? '-'}</td><td>${escapeHtml(problem.failureClass ?? 'UNSUPPORTED')}</td><td>${escapeHtml(problem.rootCause ?? 'UNKNOWN')}</td><td>${escapeHtml(problem.message)}</td><td>${String(problem.reproducible === true)}</td><td>${escapeHtml(problem.affectedCases.join(', ') || '-')}</td><td><code>${escapeHtml(JSON.stringify(problem.minimalReproduction ?? {}))}</code></td><td>${escapeHtml(problem.remediation ?? '-')}</td></tr>`).join('');
+  const problemHtml = input.problems.map((problem) => {
+    const rootCauseText = problem.rootCause || 'UNKNOWN (根因未知)';
+    const locText = problem.location?.file && problem.location?.line
+      ? `${problem.location.file}:${problem.location.line}`
+      : 'file: null, line: null, symbol: null (位置未知)';
+    return `<tr><td>${problem.id}</td><td>${problem.severity}</td><td>${escapeHtml(problem.issueClassification ?? 'EXECUTION_ERROR')}</td><td>${escapeHtml(problem.judgement ?? 'UNKNOWN')}</td><td>${escapeHtml(problem.lifecycle ?? 'OPEN')}</td><td>${escapeHtml(problem.confidenceLabel ?? 'UNKNOWN')} ${problem.confidence?.toFixed(2) ?? '-'}</td><td>${escapeHtml(problem.failureClass ?? 'UNSUPPORTED')}</td><td>${escapeHtml(rootCauseText)}</td><td>${escapeHtml(problem.message)}<br><small>位置: <code>${escapeHtml(locText)}</code></small></td><td>${String(problem.reproducible === true)}</td><td>${escapeHtml(problem.affectedCases.join(', ') || '-')}</td><td><code>${escapeHtml(JSON.stringify(problem.minimalReproduction ?? {}))}</code></td><td>${escapeHtml(problem.remediation ?? '-')}</td></tr>`;
+  }).join('');
   const discoveryRows = input.discovery.mappedOperations.map((operation) => `<tr><td>${operation.method}</td><td><code>${escapeHtml(operation.path)}</code></td><td>${escapeHtml(operation.source.map((item) => item.type).join(', '))}</td><td>${operation.confidence.toFixed(2)}</td><td>${escapeHtml(operation.source.map((item) => item.ref).join(', '))}</td></tr>`).join('');
   const model = input.featureModel;
   const baseline = input.baseline;
-  const pass = input.deliveryCoverage.cases.passed;
-  const fail = input.deliveryCoverage.cases.failed;
-  const blocked = input.deliveryCoverage.cases.blocked;
-  const notExecuted = input.deliveryCoverage.cases.notTested;
+  const pass = input.coverageLedgerSummary?.totalPassed ?? input.deliveryCoverage.cases.passed;
+  const fail = input.coverageLedgerSummary?.totalConfirmedBugs ?? input.deliveryCoverage.cases.failed;
+  const blocked = input.coverageLedgerSummary?.totalTestBlocked ?? input.deliveryCoverage.cases.blocked;
+  const notExecuted = input.coverageLedgerSummary?.totalUntested ?? input.deliveryCoverage.cases.notTested;
   const confirmedBugs = input.problems.filter((item) => item.judgement === 'CONFIRMED_BUG');
   const likelyProblems = input.problems.filter((item) => item.judgement === 'LIKELY_BUG');
   const requirementCoverage = input.deliveryCoverage.requirements.generatedCoverage;
@@ -887,15 +1255,15 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
   const severityRank = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
   const topProblems = [...input.problems].sort((left, right) => (right.benefitScore ?? 0) - (left.benefitScore ?? 0)
     || severityRank[right.severity] - severityRank[left.severity] || (right.confidence ?? 0) - (left.confidence ?? 0)).slice(0, 5);
-  const topProblemHtml = topProblems.map((problem) => `<article class="problem"><h3>${problem.id} · ${problem.severity} · ${escapeHtml(problem.judgement ?? 'UNKNOWN')}</h3><p><b>Root Cause：</b>${escapeHtml(problem.rootCause ?? 'UNKNOWN')}　<b>Affected Cases：</b>${problem.affectedCases.length}</p><p><b>问题：</b>${escapeHtml(problem.message)}</p><p><b>为什么判断：</b>${escapeHtml(problem.why ?? '-')}</p><p><b>怎么复现：</b>${escapeHtml(problem.reproduction?.join(' → ') ?? '-')}</p><p><b>预期：</b>${escapeHtml(problem.expected ?? '-')}<br><b>实际：</b>${escapeHtml(problem.actual ?? '-')}</p><p><b>Minimal Reproduction：</b><code>${escapeHtml(JSON.stringify(problem.minimalReproduction ?? {}))}</code></p><p><b>建议：</b>${escapeHtml(problem.remediation ?? '-')}</p></article>`).join('');
+  const topProblemHtml = topProblems.map((problem) => `<article class="problem"><h3>${problem.id} · ${problem.severity} · ${escapeHtml(problem.judgement ?? 'UNKNOWN')}</h3><p><b>Root Cause：</b>${escapeHtml(problem.rootCause || 'UNKNOWN (根因未知)')}　<b>Affected Cases：</b>${problem.affectedCases.length}</p><p><b>位置：</b><code>${escapeHtml(problem.location?.file && problem.location?.line ? `${problem.location.file}:${problem.location.line}` : 'file: null, line: null, symbol: null (位置未知)')}</code></p><p><b>问题：</b>${escapeHtml(problem.message)}</p><p><b>为什么判断：</b>${escapeHtml(problem.why ?? '-')}</p><p><b>怎么复现：</b>${escapeHtml(problem.reproduction?.join(' → ') ?? '-')}</p><p><b>预期：</b>${escapeHtml(problem.expected ?? '-')}<br><b>实际：</b>${escapeHtml(problem.actual ?? '-')}</p><p><b>Minimal Reproduction：</b><code>${escapeHtml(JSON.stringify(problem.minimalReproduction ?? {}))}</code></p><p><b>建议：</b>${escapeHtml(problem.remediation ?? '-')}</p></article>`).join('');
   const blockedWhyHtml = rows.filter((item) => item.status === 'BLOCKED' || item.status === 'NOT_EXECUTED').map((item) => {
     const problem = input.problems.find((candidate) => candidate.affectedCases.includes(item.caseId));
     return `<tr><td>${item.caseId}</td><td>${escapeHtml(item.blockedReason || problem?.message || '执行条件不完整')}</td><td>${escapeHtml(`${item.core ? '核心功能' : item.dimension} 未被真实验证`)}</td><td>${escapeHtml(problem?.remediation ?? '补齐执行环境、契约或证据能力后重跑')}</td></tr>`;
   }).join('');
   const checkMark = (status: string): string => status === 'READY' || status === 'NOT_REQUIRED' ? '✓' : status === 'UNKNOWN' ? '?' : '✗';
-  const coverageRows = input.requirementCoverage.behaviors.map((behavior) => `<tr><td>${escapeHtml(behavior.acId)}</td><td>${escapeHtml(behavior.statement)}</td><td>${escapeHtml(behavior.actor)}</td><td>${escapeHtml(behavior.action)}</td><td>${escapeHtml(behavior.input.join(', ') || '-')}</td><td>${escapeHtml(behavior.expectedResponse ?? '-')}</td><td>${escapeHtml(behavior.expectedState ?? '-')}</td><td>${escapeHtml(behavior.expectedSideEffects.join(', ') || '-')}</td><td class="${statusClass(behavior.status === 'COVERED' ? 'PASS' : behavior.status)}">${behavior.status}</td><td>${escapeHtml(behavior.linkedCaseIds.join(', ') || '-')}</td><td>${escapeHtml(behavior.missingAssertions.join(', ') || '-')}</td></tr>`).join('');
-  const invariantRows = input.invariants.map((invariant) => `<tr><td>${invariant.id}</td><td>${invariant.kind}</td><td>${escapeHtml(invariant.statement)}</td><td>${escapeHtml(invariant.requiredEvidence.join(', '))}</td><td>${escapeHtml(invariant.linkedCaseIds.join(', ') || '-')}</td><td class="${statusClass(invariant.status === 'VERIFIED' ? 'PASS' : invariant.status)}">${invariant.status}</td></tr>`).join('');
-  const extendedRows = input.plan.extendedDimensions.map((item) => `<tr><td>${item.dimension}</td><td>${item.applicable ? 'REQUIRED' : 'NOT_APPLICABLE'}</td><td>${escapeHtml(item.caseIds.join(', ') || '-')}</td><td>${escapeHtml(item.reason)}</td></tr>`).join('');
+  const coverageRows = (input.requirementCoverage?.behaviors ?? []).map((behavior) => `<tr><td>${escapeHtml(behavior.acId)}</td><td>${escapeHtml(behavior.statement)}</td><td>${escapeHtml(behavior.actor)}</td><td>${escapeHtml(behavior.action)}</td><td>${escapeHtml(behavior.input.join(', ') || '-')}</td><td>${escapeHtml(behavior.expectedResponse ?? '-')}</td><td>${escapeHtml(behavior.expectedState ?? '-')}</td><td>${escapeHtml(behavior.expectedSideEffects.join(', ') || '-')}</td><td class="${statusClass(behavior.status === 'COVERED' ? 'PASS' : behavior.status)}">${behavior.status}</td><td>${escapeHtml(behavior.linkedCaseIds.join(', ') || '-')}</td><td>${escapeHtml(behavior.missingAssertions.join(', ') || '-')}</td></tr>`).join('');
+  const invariantRows = (input.invariants ?? []).map((invariant) => `<tr><td>${invariant.id}</td><td>${invariant.kind}</td><td>${escapeHtml(invariant.statement)}</td><td>${escapeHtml(invariant.requiredEvidence.join(', '))}</td><td>${escapeHtml(invariant.linkedCaseIds.join(', ') || '-')}</td><td class="${statusClass(invariant.status === 'VERIFIED' ? 'PASS' : invariant.status)}">${invariant.status}</td></tr>`).join('');
+  const extendedRows = (input.plan?.extendedDimensions ?? []).map((item) => `<tr><td>${item.dimension}</td><td>${item.applicable ? 'REQUIRED' : 'NOT_APPLICABLE'}</td><td>${escapeHtml(item.caseIds.join(', ') || '-')}</td><td>${escapeHtml(item.reason)}</td></tr>`).join('');
   const qualityGateRows = (input.qualityGates ?? []).map((gate) => `<tr><td><b>${gate.gate}</b></td><td class="${statusClass(gate.status)}">${gate.status}</td><td>${gate.required ? 'YES' : 'NO'}</td><td>${gate.score !== undefined ? `${gate.score}%` : '-'}</td><td>${escapeHtml(gate.reason)}</td></tr>`).join('');
   const crossStepRows = (input.crossStepAudits ?? []).map((audit) => `<tr><td>${escapeHtml(audit.flowId)}</td><td class="${statusClass(audit.status)}">${audit.status}</td><td>${escapeHtml(String(audit.primaryKeys.taskId ?? '-'))}</td><td>${escapeHtml(String(audit.primaryKeys.projectId ?? '-'))}</td><td>${escapeHtml(String(audit.primaryKeys.userId ?? '-'))}</td><td>${escapeHtml(audit.primaryKeys.assetUrl ? 'VERIFIED' : '-')}</td><td>${escapeHtml(audit.inconsistencies.join('；') || 'CONSISTENT')}</td></tr>`).join('');
   const idempotencyRows = (input.idempotencyChecks ?? []).map((check) => `<tr><td>${escapeHtml(check.kind)}</td><td class="${statusClass(check.verdict)}">${check.verdict}</td><td>${escapeHtml(check.reason)}</td><td>${escapeHtml(check.evidence.collected.join(', ') || '-')}</td></tr>`).join('');
@@ -909,11 +1277,31 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
   const rootCauseRows = input.rootCauseGraph.slice(0, 10).map((item) => `<tr><td>${item.id}</td><td>${escapeHtml(item.rootCause)}</td><td>${item.benefitScore}</td><td>${escapeHtml(item.problemIds.join(', '))}</td><td>${escapeHtml(item.affectedContracts.join(', ') || '-')}</td><td>${escapeHtml(item.affectedScenarios.join(', ') || '-')}</td><td>${escapeHtml(item.affectedBusinessFlows.join(', ') || '-')}</td><td>${escapeHtml(item.affectedCases.join(', ') || '-')}</td></tr>`).join('');
   const negativeRows = input.negativeChecks.filter((item) => item.status !== 'NOT_APPLICABLE').map((item) => `<tr><td>${item.kind}</td><td>${item.status}</td><td>${escapeHtml(item.operation ?? '-')}</td><td>${escapeHtml(item.relatedCaseIds.join(', ') || '-')}</td><td>${escapeHtml(item.reason)}</td></tr>`).join('');
   const requirementModelRows = input.requirementModel.facts.map((fact) => `<tr><td>${fact.id}</td><td>${fact.knowledge}</td><td>${fact.category}</td><td>${fact.provenance}</td><td>${fact.epistemicType}</td><td>${escapeHtml(fact.statement)}</td><td>${fact.canonical.normalizationStatus}</td><td>${escapeHtml(`${fact.source.section ?? '-'}:${fact.source.lineStart}-${fact.source.lineEnd}`)}</td></tr>`).join('');
-  const traceRows = input.acceptanceTraces.map((trace) => `<tr><td>${trace.caseId}</td><td>${trace.testModel.selection}${trace.testModel.selectionReason ? `: ${trace.testModel.selectionReason}` : ''}</td><td>${trace.testModel.dimension}</td><td>${trace.execution.status}</td><td>${escapeHtml(`${trace.evidence.collected.join(', ') || '-'}${trace.evidence.missing.length ? `; missing ${trace.evidence.missing.join(', ')}` : ''}`)}</td><td>${trace.oracle.verdict}</td><td class="${statusClass(trace.result)}">${trace.result}</td><td>${trace.classification}</td><td>${escapeHtml(trace.requirement.factIds.join(', ') || '-')}</td><td>${escapeHtml(trace.problemIds.join(', ') || '-')}</td></tr>`).join('');
+  const traceRows = (input.acceptanceTraces ?? []).map((trace) => {
+    const modelSelection = trace.testModel?.selection ?? '-';
+    const modelReason = trace.testModel?.selectionReason ? `: ${trace.testModel.selectionReason}` : '';
+    const dimension = trace.testModel?.dimension ?? '-';
+    const execStatus = trace.execution?.status ?? trace.result ?? '-';
+    const collected = trace.evidence?.collected ?? (trace.evidence as { collectedItems?: string[] })?.collectedItems ?? [];
+    const missing = trace.evidence?.missing ?? (trace.evidence as { missingItems?: string[] })?.missingItems ?? [];
+    const evidenceStr = `${collected.join(', ') || '-'}${missing.length ? `; missing ${missing.join(', ')}` : ''}`;
+    const verdict = trace.oracle?.verdict ?? '-';
+    const classification = trace.classification ?? '-';
+    const facts = trace.requirement?.factIds?.join(', ') || '-';
+    const problemIds = trace.problemIds?.join(', ') || '-';
+    return `<tr><td>${trace.caseId}</td><td>${modelSelection}${modelReason}</td><td>${dimension}</td><td>${execStatus}</td><td>${escapeHtml(evidenceStr)}</td><td>${verdict}</td><td class="${statusClass(trace.result)}">${trace.result}</td><td>${classification}</td><td>${escapeHtml(facts)}</td><td>${escapeHtml(problemIds)}</td></tr>`;
+  }).join('');
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DevTest · ${escapeHtml(input.report.requirement.title)}</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f8fa;color:#1f2328;margin:0}.wrap{max-width:1500px;margin:auto;padding:24px}section,.problem{background:#fff;border:1px solid #d0d7de;border-radius:8px;margin:16px 0;padding:18px}.banner{border-left:6px solid #9a6700}.ok{color:#1a7f37;font-weight:700}.bad{color:#cf222e;font-weight:700}.warn{color:#9a6700;font-weight:700}.cards{display:flex;gap:12px;flex-wrap:wrap}.card{border:1px solid #d0d7de;padding:10px 16px;border-radius:6px}.card b{font-size:22px}table{border-collapse:collapse;width:100%;min-width:900px}th,td{border:1px solid #d0d7de;padding:7px;text-align:left;vertical-align:top}.scroll{overflow:auto}code{font-size:11px;word-break:break-all}</style></head><body><main class="wrap">
 <h1>${escapeHtml(input.report.requirement.title)}</h1>
-<section class="banner"><h2>开发首页 · Feature Acceptance</h2><p><b>Feature：</b>${escapeHtml(input.report.requirement.title)}</p><p class="${statusClass(input.conclusion)}" style="font-size:30px"><b>最终结论 / Final Result：</b>${input.conclusion}</p><div class="cards"><div class="card"><b>${input.devConfidence.score}</b><br>Dev Confidence</div><div class="card"><b>${input.requirementCoverage.coreCoverage}%</b><br>Core Coverage</div><div class="card"><b>${input.businessFlowGraph.applicable === false ? 'N/A' : `${input.businessFlowGraph.coverage}%`}</b><br>Business Flow Coverage</div><div class="card"><b>${evidenceCoverage}%</b><br>Evidence Coverage</div><div class="card bad"><b>${confirmedBugs.length}</b><br>Confirmed Bugs</div><div class="card warn"><b>${likelyProblems.length}</b><br>Likely Bugs</div><div class="card warn"><b>${blocked + notExecuted}</b><br>Blocked</div><div class="card"><b>${unknowns.length}</b><br>Unknowns</div><div class="card"><b>${input.reliability.score}</b><br>Test Reliability</div></div>${input.reproduction ? `<p><b>Reproduction ${input.reproduction.problemId}：</b>${input.reproduction.status}</p>` : ''}</section>
+<section class="banner">
+<h2>⏱️ 30 秒业务与质量速览 (Product & Ops View)</h2>
+<p class="${statusClass(input.conclusion)}" style="font-size:26px"><b>最终结论 / Result：${input.conclusion}</b> — ${escapeHtml(input.conclusion === 'READY' ? '核心业务闭环通过，具备提测发布条件' : input.conclusion === 'NOT_READY' ? '存在确定性业务缺陷或阻断项，暂不建议发布' : '存在未覆盖项，待补充测试材料')}</p>
+<p><b>业务影响评估：</b>${escapeHtml(input.conclusion === 'READY' ? '功能运行稳定，资金流水防线安全，未检测到资损隐患。' : input.conclusion === 'NOT_READY' ? '存在产品逻辑缺陷或阻断，上线将导致用户流程中断或资损异常。' : '部分场景未经验证，环境或依赖尚不完整。')}</p>
+<p><b>下一步指引：</b><code>${escapeHtml(input.conclusion === 'READY' ? '测试负责人 / 产品经理' : '研发负责人 / 对应模块开发')}</code> — ${escapeHtml(input.conclusion === 'READY' ? '推进准入测试与集成验收' : '请研发对照问题清单修复代码后重测')}</p>
+<p><b>数据绑定与消费：</b>${escapeHtml(input.coverageQuickView?.dataBindingConsumption ?? '已消费全部已绑定测试数据')}</p>
+<div class="cards"><div class="card"><b>${input.devConfidence.score}</b><br>Dev Confidence</div><div class="card"><b>${input.requirementCoverage.coreCoverage}%</b><br>Core Coverage</div><div class="card"><b>${input.businessFlowGraph.applicable === false ? 'N/A' : `${input.businessFlowGraph.coverage}%`}</b><br>Business Flow Coverage</div><div class="card"><b>${evidenceCoverage}%</b><br>Evidence Coverage</div><div class="card bad"><b>${confirmedBugs.length}</b><br>Confirmed Bugs</div><div class="card warn"><b>${likelyProblems.length}</b><br>Likely Bugs</div><div class="card warn"><b>${blocked + notExecuted}</b><br>Blocked</div><div class="card"><b>${unknowns.length}</b><br>Unknowns</div><div class="card"><b>${input.reliability.score}</b><br>Test Reliability</div></div>${input.reproduction ? `<p><b>Reproduction ${input.reproduction.problemId}：</b>${input.reproduction.status}</p>` : ''}</section>
+<section><h2>📋 核心四大清单与执行事实 (Four Parallel Lists)</h2><div class="cards"><div class="card bad"><b>${input.coverageLedgerSummary?.totalConfirmedBugs ?? confirmedBugs.length}</b><br>🔴 确认产品缺陷</div><div class="card warn"><b>${input.coverageLedgerSummary?.totalTestBlocked ?? blocked}</b><br>🟡 测试阻断</div><div class="card"><b>${input.coverageLedgerSummary?.totalUntested ?? notExecuted}</b><br>⚪ 未测试项</div><div class="card ok"><b>${input.coverageLedgerSummary?.totalPassed ?? pass}</b><br>🟢 已通过项</div></div>${input.coverageLedger?.length ? `<h3>📊 统一覆盖账本 (Coverage Ledger)</h3><div class="scroll"><table><tr><th>编号</th><th>维度</th><th>数据消费</th><th>执行状态</th><th>Oracle 结论</th><th>证据状态</th><th>最终分类</th><th>原因与处置</th></tr>${input.coverageLedger.map(i => `<tr><td><b>${escapeHtml(i.caseId)}</b><br><small>${escapeHtml(i.requirementId)}</small></td><td>${i.dimension}</td><td>${i.dataBindings.filter(b => b.bindingStatus === 'PROVIDED_AND_CONSUMED').length}/${i.dataBindings.length}</td><td class="${i.executed ? 'ok' : 'warn'}">${i.executed ? '真实执行完成' : i.dispatchAttempted ? '已派发未完成' : '未派发'}</td><td class="${statusClass(i.oracleVerdict)}">${i.oracleVerdict}</td><td>实得: ${i.collectedEvidence.length} / 缺: ${i.missingEvidence.length}</td><td class="${statusClass(i.finalClassification === 'CONFIRMED_BUG' ? 'FAIL' : i.finalClassification === 'PASSED' ? 'PASS' : 'BLOCKED')}"><b>${i.finalClassification}</b></td><td>${escapeHtml(i.statusReason)}</td></tr>`).join('')}</table></div>` : ''}</section>
 <section><h2>Worker Source Sync</h2>${input.sourceSync ? `<p class="ok"><b>${escapeHtml(input.sourceSync.status)}</b> · ${escapeHtml(input.sourceSync.root)} · ${input.sourceSync.repositories.length} repositories · ${input.sourceSync.repositories.filter((repository) => repository.updated).length} fast-forward updated</p><div class="scroll"><table><tr><th>Repository</th><th>Branch</th><th>Upstream</th><th>Before SHA</th><th>After SHA</th><th>Updated</th><th>Worktree Clean</th></tr>${sourceSyncRows}</table></div>` : '<p>NOT_REQUIRED（plan/preflight/dry-run）</p>'}</section>
 <section><h2>Top Business Risks</h2>${topRiskHtml ? `<ol>${topRiskHtml}</ol>` : '<p>none</p>'}</section>
 <section><h2>Test Reliability</h2><p><b>Score：</b>${input.reliability.score}/100　Stable ${input.reliability.stable}　Flaky ${input.reliability.flaky}　Unstable ${input.reliability.unstable}</p>${reliabilityRows ? `<div class="scroll"><table><tr><th>Case</th><th>Status</th><th>Pass Rate</th><th>Failure Rate</th><th>Flake Rate</th><th>Avg Duration ms</th></tr>${reliabilityRows}</table></div>` : '<p>No flaky or unstable test.</p>'}<h3>Environment Problems</h3>${environmentProblems ? `<ul>${environmentProblems}</ul>` : '<p>none</p>'}<h3>Test Pollution</h3>${pollutionRows ? `<div class="scroll"><table><tr><th>Case</th><th>Classification</th><th>Severity</th><th>Changed State</th><th>Reason</th></tr>${pollutionRows}</table></div>` : '<p>none</p>'}</section>
@@ -936,7 +1324,7 @@ export function renderDevTestHtml(input: DevTestRenderInput): string {
 <section><h2>Baseline Diff</h2><p>${baseline.baselineRunId ? `Compared with ${escapeHtml(baseline.baselineRunId)}` : 'First baseline'}</p><div class="cards"><div class="card bad"><b>${baseline.newProblems.length}</b><br>NEW</div><div class="card ok"><b>${baseline.resolvedProblems.length}</b><br>FIXED</div><div class="card warn"><b>${baseline.persistentProblems.length}</b><br>STILL FAIL</div><div class="card bad"><b>${baseline.regressions.length}</b><br>REGRESSION</div><div class="card warn"><b>${baseline.newlyBlocked.length}</b><br>NEWLY BLOCKED</div><div class="card"><b>${baseline.unchanged.length}</b><br>UNCHANGED</div></div></section>
 <section><h2>Versions & Data Lifecycle</h2><p><b>Requirement：</b><code>${input.versionComparison.requirementVersion}</code>　<b>Code：</b><code>${input.versionComparison.codeVersion}</code>　<b>Contract：</b><code>${input.versionComparison.contractVersion}</code>　<b>Contract Drift：</b>${String(input.versionComparison.contractDrift)}</p><p><b>新增/删除需求：</b>${escapeHtml(input.versionComparison.addedRequirements.join(', ') || '-')} / ${escapeHtml(input.versionComparison.removedRequirements.join(', ') || '-')}　<b>新增/删除 Case：</b>${input.versionComparison.addedCases.length} / ${input.versionComparison.removedCases.length}</p><p><b>Owner：</b>${escapeHtml(input.dataLifecycle.owner ?? '-')}　<b>Tenant：</b>${escapeHtml(input.dataLifecycle.tenant ?? '-')}　<b>Project：</b>${escapeHtml(input.dataLifecycle.project ?? '-')}　<b>Resource：</b>${escapeHtml(input.dataLifecycle.resource ?? '-')}　<b>createdBy：</b>${input.dataLifecycle.createdBy}</p><p><b>Prepare：</b>${input.dataLifecycle.prepareStatus}　<b>Cleanup：</b>${input.dataLifecycle.cleanupStatus}　<b>Traceable：</b>${String(input.dataLifecycle.traceable)}</p><p><b>Cleanup Issues：</b>${escapeHtml(input.dataLifecycle.cleanupIssues?.join('；') || 'NONE（清理正常）')}</p></section>
 <section><h2>Unknowns</h2>${unknowns.length ? `<ul>${unknowns.map((item) => `<li><b>${item.type}</b> / ${escapeHtml(item.id)}: ${escapeHtml(item.message)}</li>`).join('')}</ul>` : '<p>none</p>'}</section>
-<details><summary><b>Technical Details</b></summary><section><h2>Feature Model</h2><p><b>Actors:</b> ${escapeHtml(model.roles.join(', ') || '-')} · <b>Resources:</b> ${escapeHtml(model.resources.join(', ') || '-')} · <b>States:</b> ${escapeHtml(model.states.join(', ') || '-')}</p><p><b>Constraints:</b> ${escapeHtml(model.constraints.join('；') || '-')}</p></section><section><h2>API / UI Discovery</h2><p>${escapeHtml(input.discovery.scope)} · inspected ${input.discovery.inspectedFiles} files</p><div class="scroll"><table><tr><th>Method</th><th>Path</th><th>Source Type</th><th>Confidence</th><th>Source</th></tr>${discoveryRows}</table></div><ul>${input.discovery.mappingReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul></section><section><h2>Contract Status</h2><p>Gate: <b class="${statusClass(input.contracts.validation.status === 'VALID' ? 'READY' : 'BLOCKED')}">${input.contracts.validation.status}</b></p><div class="scroll"><table><tr><th>ID</th><th>Status</th><th>Version</th><th>Fingerprint</th><th>Reason</th></tr>${contractRows}</table></div></section></details>
+<details><summary><b>Technical Details</b></summary><section><h2>Feature Model</h2><p><b>Actors:</b> ${escapeHtml(model.roles.join(', ') || '-')} · <b>Resources:</b> ${escapeHtml(model.resources.join(', ') || '-')} · <b>States:</b> ${escapeHtml(model.states.join(', ') || '-')}</p><p><b>Constraints:</b> ${escapeHtml(model.constraints.join('；') || '-')}</p></section><section><h2>API / UI Discovery</h2><p>${escapeHtml(input.discovery.scope)} · inspected ${input.discovery.inspectedFiles} files</p><div class="scroll"><table><tr><th>Method</th><th>Path</th><th>Source Type</th><th>Confidence</th><th>Source</th></tr>${discoveryRows}</table></div><ul>${input.discovery.mappingReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul></section><section><h2>Contract Status</h2><p>Gate: <b class="${statusClass((input.contracts?.validation?.status ?? (input.contracts as { status?: string })?.status ?? 'VALID') === 'VALID' ? 'READY' : 'BLOCKED')}">${input.contracts?.validation?.status ?? (input.contracts as { status?: string })?.status ?? 'VALID'}</b></p><div class="scroll"><table><tr><th>ID</th><th>Status</th><th>Version</th><th>Fingerprint</th><th>Reason</th></tr>${contractRows}</table></div></section></details>
 </main></body></html>`;
   return artifactText(html);
 }

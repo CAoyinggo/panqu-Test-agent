@@ -58,6 +58,7 @@ import { adaptiveScore, assessRequirementQuality, buildNegativeIntelligence, bui
 import { readDiscoveryStageCache, workspaceCacheFingerprint, writeDiscoveryStageCache } from './stage-cache.js';
 import { inspectPanquProject, assessPanquProject } from './panqu-project.js';
 import { PanquProtocolProcessor } from './panqu-protocol-processor.js';
+import { buildCoverageLedger } from './coverage-ledger.js';
 import { synchronizeDevTestSource } from './source-sync.js';
 import {
   buildDevTestAcceptanceTraces,
@@ -324,8 +325,30 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   const requirement = parseAcceptanceRequirement(markdown, { documentId: options.documentId });
   const projectAssessment = assessPanquProject(projectContext, requirement);
   if (options.scenarioRuntime?.processors.length && projectAssessment.relevantActions.some(action => action.responseProtocol !== 'UNVERIFIED')) {
-    projectAssessment.blockers.push({ code: 'PANQU_CUSTOM_PROTOCOL_UNVERIFIED', message: 'Custom scenario processors require an explicit client-protocol evidence adapter before Panqu execution.' });
+    projectAssessment.blockers.push({ code: 'PANQU_CUSTOM_PROTOCOL_UNVERIFIED', message: 'Custom scenario processors require an explicit client-protocol evidence adapter before Panqu execution.', scope: 'GLOBAL' });
   }
+  const parameterContractConflicts = discoverParameterContractConflicts(requirement, discovery);
+  for (const conflict of parameterContractConflicts) {
+    if (conflict.operationKey) {
+      projectAssessment.blockers.push({
+        code: conflict.code,
+        message: conflict.message,
+        operationKey: conflict.operationKey,
+        scope: 'OPERATION',
+      });
+    } else {
+      projectAssessment.blockers.push({
+        code: conflict.code,
+        message: `${conflict.message}（无法确定受影响接口，fail-closed 全局拦截）`,
+        scope: 'GLOBAL',
+      });
+    }
+  }
+  const hasGlobalBlocker = projectAssessment.blockers.some((b) => b.scope === 'GLOBAL' || (!b.scope && !b.operationKey && !b.caseId && (!b.affectedCases || b.affectedCases.length === 0)));
+  const blockedOperationKeys = new Set(projectAssessment.blockers.map((b) => b.operationKey).filter((k): k is string => Boolean(k)));
+  const allApisBlocked = requirement.apis.length > 0 && requirement.apis.every((api) => blockedOperationKeys.has(`${api.method.toUpperCase()} ${api.path}`));
+  const rawPolicies = buildOperationPolicies(requirement.apis, markdown);
+  const shouldProbeNetwork = mode !== 'DRY_RUN' && !options.plan && !hasGlobalBlocker && !allApisBlocked;
   const environmentPreflight = await discoverDevTestEnvironment({
     explicitBaseUrl,
     environment,
@@ -333,9 +356,18 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     requirement,
     actorHeaders: options.actorHeaders,
     fetchImpl: options.fetchImpl,
-    probeNetwork: mode !== 'DRY_RUN' && !options.plan && projectAssessment.blockers.length === 0,
+    probeNetwork: shouldProbeNetwork,
+    blockedOperationKeys,
+    operationPolicies: rawPolicies,
   });
-  const baseUrl = environmentPreflight.selectedBaseUrl ?? explicitBaseUrl ?? STATIC_BASE_URL;
+  const isPlaceholderBaseUrl = (url?: string): boolean => Boolean(url && (url === STATIC_BASE_URL || url.includes('.invalid')));
+  const baseUrlSource: 'USER_PROVIDED' | 'ENV_PROVIDED' | 'DISCOVERED_AND_PROBED' | 'INTERNAL_PLACEHOLDER' | 'NOT_PROVIDED' =
+    options.baseUrl ? 'USER_PROVIDED'
+    : process.env.TESTFLOW_BASE_URL ? 'ENV_PROVIDED'
+    : environmentPreflight.selectedBaseUrl ? 'DISCOVERED_AND_PROBED'
+    : isPlaceholderBaseUrl(explicitBaseUrl) ? 'INTERNAL_PLACEHOLDER'
+    : 'NOT_PROVIDED';
+  const baseUrl = environmentPreflight.selectedBaseUrl ?? (baseUrlSource === 'INTERNAL_PLACEHOLDER' ? STATIC_BASE_URL : explicitBaseUrl) ?? STATIC_BASE_URL;
   const resolvedDiscovery = resolveDiscoveredOperations(discovery.mappedOperations, contractResolver, environment);
   const additionalContractDependencies = [
     ...discoverReferencedContractDependencies(originalMarkdown, contractResolver),
@@ -343,7 +375,6 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
   ].filter((item, index, all) => all.findIndex((candidate) => candidate.contractId === item.contractId
     && candidate.version === item.version && candidate.fingerprint === item.fingerprint) === index);
   let featureModel = discoveryCache.featureModel ?? buildDevTestFeatureModel(requirement, discovery);
-  const parameterContractConflicts = discoverParameterContractConflicts(requirement, discovery);
   const previousBaseline = await loadDevTestBaseline(outDir, originalMarkdown, docSource);
 
   // Preview authorizes the exact canonical plan and exposes all candidates for risk-first selection.
@@ -420,8 +451,38 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     confirmReadFailures,
     maxRuntimeMs: options.maxRuntimeMs, budget: options.budget });
   const syntheticBlocks: Array<{ code: string; message: string; affectedCases?: string[]; dimension?: 'DATA_ISOLATION' | 'EXECUTION' }> = [];
-  syntheticBlocks.push(...parameterContractConflicts);
-  syntheticBlocks.push(...projectAssessment.blockers.map(blocker => ({ ...blocker, affectedCases: selectedCaseIds, dimension: 'EXECUTION' as const })));
+  const matchCaseToOpKey = (tc: TestCase, opKey: string) => {
+    if (tc.source?.apiOperationKey === opKey) return true;
+    const parts = opKey.split(' ');
+    const method = parts[0]?.toUpperCase();
+    const p = parts[1] ?? '';
+    const norm = (s: string) => s.startsWith('/') ? s : '/' + s;
+    return tc.steps?.some(step => step.method?.toUpperCase() === method && (norm(step.url ?? '') === norm(p) || (step.url ?? '').includes(p)));
+  };
+  syntheticBlocks.push(...projectAssessment.blockers.map(blocker => {
+    let matchingCases: string[] = [];
+    if (blocker.scope === 'GLOBAL') {
+      matchingCases = [...selectedCaseIds];
+    } else if (blocker.affectedCases && blocker.affectedCases.length > 0) {
+      matchingCases = selectedCaseIds.filter(id => blocker.affectedCases!.includes(id));
+    } else if (blocker.caseId) {
+      matchingCases = selectedCaseIds.filter(id => id === blocker.caseId);
+    } else if (blocker.operationKey || blocker.scope === 'OPERATION') {
+      matchingCases = selectedCaseIds.filter(id => {
+        const tc = preview.testCases.find(c => c.id === id);
+        return tc && blocker.operationKey && matchCaseToOpKey(tc, blocker.operationKey);
+      });
+    } else if (blocker.dimension || blocker.scope === 'DIMENSION') {
+      matchingCases = selectedCaseIds.filter(id => {
+        const tc = preview.testCases.find(c => c.id === id);
+        return tc && (tc.testType === blocker.dimension || (tc as any).dimension === blocker.dimension);
+      });
+    } else {
+      matchingCases = [];
+    }
+    blocker.affectedCases = matchingCases;
+    return { ...blocker, affectedCases: matchingCases, dimension: (blocker.dimension as any) ?? 'EXECUTION' };
+  }));
   for (const behavior of preliminaryCoverage.behaviors.filter((item) => item.missingAssertions.includes('MISSING_POST_STATE_ASSERTION'))) {
     syntheticBlocks.push({
       code: 'MISSING_POST_STATE_ASSERTION',
@@ -477,7 +538,6 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     dimension: 'DATA_ISOLATION',
   });
 
-  const rawPolicies = buildOperationPolicies(requirement.apis, markdown);
   if (mode === 'SAFE') {
     const costlyCaseIds = selection.selected
       .filter((testCase) => selectedCaseIds.includes(testCase.id))
@@ -500,8 +560,13 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     // local 仅允许管线到达 Case 级 SAFE Guard；普通 Mutation 仍需下方 sandbox/cleanup + confirm 双门禁。
     allowNoCleanup: environment === 'local',
   };
+  const blockedCaseIdSet = new Set(syntheticBlocks.flatMap((b) => b.affectedCases ?? []));
+  const unaffectedExecutableCaseIds = selectedCaseIds.filter((id) => !blockedCaseIdSet.has(id));
+  const allSelectedBlocked = selectedCaseIds.length > 0 && unaffectedExecutableCaseIds.length === 0;
+
   const pipelineMode = mode === 'DRY_RUN' || options.preflight === true || options.plan === true
-    || projectAssessment.blockers.length > 0
+    || hasGlobalBlocker
+    || allSelectedBlocked
     || environmentPreflight.status === 'BLOCKED' || !selectedCaseIds.length || executionEstimate.exceeded.length > 0 ? 'dry-run' : 'execute';
   const environmentSnapshots: DevTestEnvironmentSnapshot[] = [];
   const selectedCases = selection.selected.filter((testCase) => selectedCaseIds.includes(testCase.id));
@@ -579,12 +644,25 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     ...(snapshotRuntime?.availableDependencies ?? []),
   ]);
 
+  const innerProcessor = snapshotRuntime ? safeProcessor : legacySnapshotProcessor;
+
+  const blockedCaseReasons = new Map<string, { code: string; message: string }>();
+  for (const block of syntheticBlocks) {
+    for (const id of block.affectedCases ?? []) {
+      if (!blockedCaseReasons.has(id)) {
+        blockedCaseReasons.set(id, { code: block.code, message: block.message });
+      }
+    }
+  }
+
   const result = selectedCaseIds.length
     ? await runAcceptancePipeline({
       markdown, project, documentId: options.documentId, baseUrl, environment,
-      safetyPolicy, mode: pipelineMode, processor: snapshotRuntime ? safeProcessor : legacySnapshotProcessor,
+      safetyPolicy, mode: pipelineMode, processor: innerProcessor,
       actorHeaders: options.actorHeaders, maxCases,
       caseIds: selectedCaseIds,
+      blockedCaseIds: [...blockedCaseIdSet],
+      blockedCaseReasons,
       expectedExecutionPlan: pipelineMode === 'execute' ? preview.executionPlan : undefined,
       signal: options.signal,
       timeoutMs: options.timeoutMs ?? 10_000,
@@ -658,7 +736,8 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     || item.classification === 'SHARED_STATE').map((item) => item.caseId));
   const oracleResults = buildTestOracleResults({ testCases: selection.selected, results: result.results,
     invariants: designedInvariants, consistency: flowEvaluation.consistency, uiResults: uiExecutions,
-    snapshots: environmentSnapshots, baseline: previousBaseline });
+    snapshots: environmentSnapshots, baseline: previousBaseline,
+    runId: result.report.runId });
   const oracleByCase = new Map(oracleResults.map((item) => [item.caseId, item]));
   // 已复现产品问题的定向修复复测建立新的可靠性 epoch：目标 Case 的完整 Oracle PASS
   // 用于 FIXED 判定；同 Contract/Flow 的其他 Flaky Case 仍保持阻断。
@@ -927,7 +1006,37 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     adaptiveScores: selection.adaptiveScores,
     deep: options.deep,
   });
+  const coverageLedgerResult = buildCoverageLedger({
+    requirement,
+    testCases: selection.candidates,
+    selectedCaseIds,
+    pipelineMode,
+    environmentPreflight,
+    results: result.results,
+    pipelineReport: result.report,
+    oracleResults,
+    problems,
+    dataLifecycle,
+    syntheticBlocks,
+    baseUrlSource,
+    unaffectedExecutableCaseIds,
+    selection,
+    runId: result.report.runId,
+    options: {
+      baseUrl,
+      actorHeaders: options.actorHeaders,
+      scenarioRuntime: options.scenarioRuntime,
+      ...options,
+    },
+  });
   const renderInput = {
+    coverageLedger: coverageLedgerResult.items,
+    coverageRequirementLedger: coverageLedgerResult.requirementLedger,
+    coverageLedgerSummary: coverageLedgerResult.summary,
+    coverageQuickView: coverageLedgerResult.quickView,
+    coverageFourLists: coverageLedgerResult.fourLists,
+    coverageReconciliation: coverageLedgerResult.reconciliation,
+    canonicalResult: coverageLedgerResult.canonicalResult,
     crossStepAudits: flowEvaluation.crossStepAudits,
     idempotencyChecks,
     qualityGates: qualityGateEvaluation.gates,
@@ -999,7 +1108,7 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     writeFile(artifacts.reportHtml, renderDevTestHtml(renderInput), 'utf8'),
     writeFile(artifacts.reportJson, `${JSON.stringify(buildDevTestReportEnvelope(renderInput), null, 2)}\n`, 'utf8'),
     writeFile(artifacts.casesCsv, renderCasesCsv(renderInput), 'utf8'),
-    writeFile(artifacts.problemsMd, renderProblemsMarkdown(problems, { conclusion, unknowns }), 'utf8'),
+    writeFile(artifacts.problemsMd, renderProblemsMarkdown(problems, { conclusion, unknowns, fourLists: coverageLedgerResult.fourLists, coverageLedger: coverageLedgerResult.items }), 'utf8'),
     writeFile(artifacts.evidenceJson, `${JSON.stringify(artifactSafe({
       runId: result.runId,
       acceptanceTraces: acceptanceTraces.map((trace) => ({
@@ -1101,6 +1210,14 @@ export async function runDevTest(options: DevTestOptions): Promise<DevTestRunRes
     idempotencyChecks,
     qualityGates: qualityGateEvaluation.gates,
     artifacts,
+    coverageLedger: coverageLedgerResult.items,
+    coverageLedgerSummary: coverageLedgerResult.summary,
+    coverageRequirementLedger: coverageLedgerResult.requirementLedger,
+    coverageQuickView: coverageLedgerResult.quickView,
+    coverageFourLists: coverageLedgerResult.fourLists,
+    coverageReconciliation: coverageLedgerResult.reconciliation,
+    runLevelBlockers: coverageLedgerResult.summary.runLevelBlockers,
+    canonicalResult: coverageLedgerResult.canonicalResult,
     pipeline: {
       summary: result.report.summary,
       trust: result.report.trust,

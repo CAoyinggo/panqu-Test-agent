@@ -77,6 +77,9 @@ export interface AcceptancePipelineOptions {
   additionalContractDependencies?: ContractDependency[];
   /** Optional runtime capabilities for canonical TEST_CASE_V2 → Scenario Runner execution. */
   scenarioRunnerOptions?: TestCaseScenarioAdapterOptions;
+  /** 由调用方或 Runner 预先识别的受阻用例 ID 集合（如局部 blocker 或 SAFE mutation 阻断）；管线内逐条记录阻断，不使全批次降级。 */
+  blockedCaseIds?: string[];
+  blockedCaseReasons?: Map<string, { code: string; message: string }>;
 }
 
 export const DEFAULT_ACCEPTANCE_MAX_CASES = 500;
@@ -212,11 +215,16 @@ async function runAcceptanceScenarioCases(
   testCases: TestCase[],
   options: TestCaseScenarioAdapterOptions,
   blockedRequirementCaseIds: ReadonlySet<string>,
+  blockedCaseReasons?: ReadonlyMap<string, { code: string; message: string }>,
 ) {
   const results: AcceptanceCaseExecutionResult[] = [];
   for (const testCase of testCases) {
     if (blockedRequirementCaseIds.has(testCase.id)) {
-      results.push(...(await runAcceptanceApiCases([testCase], { baseUrl: '', blockedRequirementCaseIds })).results);
+      results.push(...(await runAcceptanceApiCases([testCase], {
+        baseUrl: '',
+        blockedRequirementCaseIds,
+        blockedCaseReasons,
+      })).results);
       continue;
     }
     const execution = await runTestCaseV2WithScenarioRunner(testCase, options);
@@ -333,7 +341,10 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
   finalizeRequirementFactLedger(requirement, objectives, testCases);
   const requirementPreflight = buildRequirementAssurance({ requirement, markdown: options.markdown,
     allTestCases, selectedCaseIds: testCases.map((testCase) => testCase.id) });
-  const blockedRequirementCaseIds = new Set(requirementPreflight.blockedCaseIds);
+  const blockedRequirementCaseIds = new Set([
+    ...requirementPreflight.blockedCaseIds,
+    ...(options.blockedCaseIds ?? []),
+  ]);
   const traceIssues = validateAcceptanceTrace(requirement, testPoints, testCases, objectives);
   if (traceIssues.length) throw new Error(`Acceptance Trace 校验失败：${traceIssues.map((issue) => issue.message).join('；')}`);
 
@@ -354,9 +365,8 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
     ? `CASE_LIMIT_EXCEEDED：生成 ${executableCaseCount} 条可执行 Case，超过 maxCases=${maxCases}`
     : undefined;
   const executableOperationKeys = testCases
-    // Policy must see every concrete HTTP operation even when generated
-    // Readiness is DESIGNED_ONLY. Runtime capability resolution may upgrade it,
-    // but can never bypass SAFE/BILLABLE/approval policy.
+    // Exclude cases that are already identified as blocked from triggering global safety gate blocks
+    .filter((testCase) => !blockedRequirementCaseIds.has(testCase.id))
     .filter((testCase) => !isDesignedOnlyCase(testCase)
       || testCase.schemaVersion === 'TEST_CASE_V2' && testCase.steps.some((step) => step.type === 'HTTP_REQUEST'))
     .map((testCase) => testCase.source?.apiOperationKey)
@@ -395,12 +405,13 @@ export async function runAcceptancePipeline(options: AcceptancePipelineOptions) 
         runId,
         signal: options.signal,
         contractResolver,
-      }, blockedRequirementCaseIds)
+      }, blockedRequirementCaseIds, options.blockedCaseReasons)
       : await runAcceptanceApiCases(testCases, {
       baseUrl: options.baseUrl,
       actorHeaders: options.actorHeaders,
       processor: options.processor,
       blockedRequirementCaseIds,
+      blockedCaseReasons: options.blockedCaseReasons,
       timeoutMs: options.timeoutMs,
       deadlineMs: options.deadlineMs ?? DEFAULT_ACCEPTANCE_DEADLINE_MS,
       concurrency: options.concurrency,

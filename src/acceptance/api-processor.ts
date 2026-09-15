@@ -138,6 +138,8 @@ export type AcceptanceExecutionClassification =
 export interface ApiProcessorOptions {
   /** Computed by the requirement gate; checked before invoking any processor. */
   blockedRequirementCaseIds?: ReadonlySet<string>;
+  /** 显式受阻用例的原因与代码映射，用于精准回填归因。 */
+  blockedCaseReasons?: ReadonlyMap<string, { code: string; message: string }>;
   /** Scenario adapters can prohibit read confirmation for compound/stateful flows. */
   allowReadFailureConfirmation?: boolean;
   baseUrl: string;
@@ -819,10 +821,14 @@ export async function runAcceptanceApiCases(
     for (const testCase of testCases) {
       if (options.blockedRequirementCaseIds?.has(testCase.id)) {
         const base = resultBase(testCase, options.runId);
+        const specific = options.blockedCaseReasons?.get(testCase.id);
+        const code = specific?.code ?? 'REQUIREMENT_ASSURANCE_BLOCKED';
+        const msg = specific?.message ?? '相关要求未理解或未确认';
         results.push({ ...base, executed: false, processorInvoked: false, status: 'BLOCKED', pass: false, passRate: 0,
           classification: 'EXECUTION_BLOCKED', attribution: { classification: 'EXECUTION_BLOCKED', confidence: 'HIGH',
-            reason: 'REQUIREMENT_ASSURANCE_BLOCKED：相关要求未理解或未确认', evidenceSources: ['REQUIREMENT_ASSURANCE_GATE'] },
-          error: 'BLOCKED：REQUIREMENT_ASSURANCE_BLOCKED：先澄清要求，再生成并确认新计划' });
+            reason: `${code}：${msg}`, evidenceSources: [specific ? 'PIPELINE_GATE' : 'REQUIREMENT_ASSURANCE_GATE'] },
+          blockedReason: { code, stage: 'GATE', message: msg, recoverable: true },
+          error: `BLOCKED：${code}：${msg}` });
         continue;
       }
       if (failFastTriggered) {

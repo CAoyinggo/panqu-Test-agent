@@ -11,3 +11,4 @@ export * from './seed-contracts.js';
 export * from './contract-gate.js';
 export * from './knowledge-adapter.js';
 export * from './migration-index.js';
+export * from './execution-result.js';

@@ -552,7 +552,12 @@ export function parseAcceptanceRequirement(markdown: string, options: { document
     );
     const explicitlyPublic = lines.some((line) => {
       if (!/(?:无需|不需要|免)(?:鉴权|认证|登录)|公开接口|public\s+(?:api|endpoint)|auth(?:entication)?\s+not\s+required/i.test(line.text)) return false;
-      return apis.length === 1 || (line.text.includes(api.path) && new RegExp(`\\b${api.method}\\b`, 'i').test(line.text));
+      if (apis.length === 1) return true;
+      if (line.text.includes(api.path) && new RegExp(`\\b${api.method}\\b`, 'i').test(line.text)) return true;
+      const apiIndex = apis.indexOf(api);
+      const currentLineNum = api.source?.line ?? -1;
+      const nextLineNum = apiIndex < apis.length - 1 ? (apis[apiIndex + 1]?.source?.line ?? Infinity) : Infinity;
+      return line.number >= currentLineNum && line.number < nextLineNum;
     });
     const globalAuthentication = lines.some((line) => /^(?:authentication|auth|认证|鉴权配置)$/i.test((line.section ?? '').trim())
       && /(?:TOKEN|Bearer|JWT|API\s*Key|Cookie|认证|鉴权)/i.test(line.text));

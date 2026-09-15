@@ -10,6 +10,89 @@ import {
   type TraeNextAction,
   type FilePatchItem,
 } from './github-mcp-review.js';
+import type { CodeLocation } from './types.js';
+
+export interface PatchAddedLine {
+  line: number;
+  content: string;
+}
+
+export function parseAddedLinesFromPatch(patch: string): PatchAddedLine[] {
+  const result: PatchAddedLine[] = [];
+  if (!patch || typeof patch !== 'string') return result;
+
+  const lines = patch.split('\n');
+  let currentNewLine = 0;
+
+  for (const line of lines) {
+    const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      currentNewLine = parseInt(hunkMatch[1], 10);
+      continue;
+    }
+    if (currentNewLine === 0) continue;
+
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      result.push({ line: currentNewLine, content: line.slice(1) });
+      currentNewLine++;
+    } else if (line.startsWith(' ')) {
+      currentNewLine++;
+    }
+  }
+
+  return result;
+}
+
+export function resolveEvidenceLocation(params: {
+  filePatches?: FilePatchItem[];
+  filePattern?: RegExp;
+  keywords?: string[];
+  explicitLocation?: { file?: string; line?: number; symbol?: string };
+  missingReason?: string;
+}): CodeLocation {
+  const { filePatches, filePattern, keywords = [], explicitLocation, missingReason } = params;
+
+  if (explicitLocation?.file && typeof explicitLocation.line === 'number' && explicitLocation.line > 0) {
+    return {
+      file: explicitLocation.file,
+      line: explicitLocation.line,
+      symbol: explicitLocation.symbol ?? null,
+      locationStatus: 'CONFIRMED',
+    };
+  }
+
+  if (filePatches && filePatches.length > 0 && filePattern) {
+    for (const patchItem of filePatches) {
+      if (filePattern.test(patchItem.filename) && patchItem.patch) {
+        const addedLines = parseAddedLinesFromPatch(patchItem.patch);
+        if (addedLines.length > 0) {
+          for (const kw of keywords) {
+            if (!kw) continue;
+            const matched = addedLines.find((al) => al.content.toLowerCase().includes(kw.toLowerCase()));
+            if (matched) {
+              return {
+                file: patchItem.filename,
+                line: matched.line,
+                symbol: null,
+                locationStatus: 'CONFIRMED',
+              };
+            }
+          }
+          // A changed line without relevant evidence is not a confirmed location.
+        }
+      }
+    }
+  }
+
+  return {
+    file: null,
+    line: null,
+    symbol: null,
+    locationStatus: 'UNKNOWN',
+    missingEvidence:
+      missingReason || '当前变更集/证据链未包含对应代码行的有效改动记录，无法确切定位文件和行号',
+  };
+}
 
 export type GateConclusion = 'APPROVED' | 'NEEDS_ATTENTION' | 'BLOCKED';
 
@@ -164,6 +247,7 @@ export class CiPrGate {
       warnings,
       recommendations,
       targetMarginPercent,
+      filePatches: options.filePatches,
     });
 
     // 7. 构造适配 GitHub MCP 的代码行间批注与载荷
@@ -229,12 +313,31 @@ export class CiPrGate {
     warnings: string[];
     recommendations: string[];
     targetMarginPercent: number;
+    filePatches?: FilePatchItem[];
+    invariantsVerified?: boolean;
   }): string {
     const badge = data.conclusion === 'APPROVED'
       ? '🟢 APPROVED (门禁通过) - 允许合入'
       : data.conclusion === 'NEEDS_ATTENTION'
         ? '🟡 NEEDS ATTENTION (建议关注) - 无致命资损'
         : '🔴 BLOCKED (资损阻断) - 严禁合入';
+
+    const oneLineConclusion = data.conclusion === 'APPROVED'
+      ? 'CI 门禁全绿通过：所有评估模型毛利率合规且无资损配置漂移，建议允许合入。'
+      : data.conclusion === 'NEEDS_ATTENTION'
+        ? 'CI 门禁关注提醒：未发现价格倒挂等致命资损，但存在毛利偏低或非核心漂移项，建议确认后合入。'
+        : 'CI 门禁资损阻断：检测到负毛利价格倒挂或刊例缺失，上线后将引发平台单笔净现金亏损，严禁合并！';
+
+    const businessImpact = data.conclusion === 'BLOCKED'
+      ? '高危财务资损风险：倒挂规格每调用一次即产生净现金亏损，或 0 积分未定价导致用户免费生成，严重损害平台利益。'
+      : data.conclusion === 'NEEDS_ATTENTION'
+        ? '部分规格毛利率低于目标基准线，虽未发生亏损但毛利空间不足，建议调升刊例。'
+        : '当前输入的模型与配置检查未发现阻断；不证明真实账务流水、完整业务或全部上线模型无风险。';
+
+    const actionOwner = data.conclusion === 'BLOCKED' ? '后端开发 / 商业化运维' : '研发负责人 / 测试负责人';
+    const nextStep = data.conclusion === 'BLOCKED'
+      ? '阻断合入。先核对真实计价契约与配置，评审候选修复并在隔离环境复测；数据库变更需单独审批。'
+      : '允许合入。跟进后续合入后配置零漂移核验。';
 
     const lines: string[] = [
       '### 🤖 Panqu Test-Flow CI Quality & Margin Review',
@@ -247,9 +350,13 @@ export class CiPrGate {
       '',
       '---',
       '',
-      '## 📋 一、产品与测试看板：业务影响与资损风险排查 (Product & QA View)',
+      '## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)',
       '',
-      '本部分供 **产品经理 (PM)** 与 **QA 测试人员** 评估版本质量、上线风险与财务合规性：',
+      '| 决策项 | 评估结论 | 核心业务影响说明 |',
+      '| :--- | :---: | :--- |',
+      `| **一句话通俗结论** | **${data.conclusion}** | ${oneLineConclusion} |`,
+      `| **业务影响评估** | ${data.conclusion === 'APPROVED' ? '🟢 稳定合规' : data.conclusion === 'NEEDS_ATTENTION' ? '🟡 需关注' : '🔴 严重资损'} | ${businessImpact} |`,
+      `| **下一步行动指引** | \`${actionOwner}\` | ${nextStep} |`,
       '',
     ];
 
@@ -293,12 +400,17 @@ export class CiPrGate {
     }
     lines.push('');
 
-    // 3. 账务核心不变量与降级安全性
+    // 3. 账务核心不变量与降级安全性 (严禁未测假绿)
     lines.push('### 🛡️ 核心账务防线与不变量核验');
-    lines.push('- **防重复扣费 (ANTI_DOUBLE_BILLING)**: ✅ 单任务仅预扣 1 次流水，相同 client_token 重试严格去重；');
-    lines.push('- **失败净扣归零 (NET_CHARGE_ZERO)**: ✅ 任务失败或上游报错时自动触发全额退款，用户钱包实扣为 0 pt；');
-    lines.push('- **退款幂等性 (REFUND_IDEMPOTENCY)**: ✅ 退款流水至多触发 1 次，严防重复退款资损；');
-    lines.push('- **分流容灾平滑降级**: 验证当 NewAPI 供应商渠道 429/504 故障时，能够安全平滑回退主站直连链路。');
+    if (data.invariantsVerified) {
+      lines.push('- **防重复扣费 (ANTI_DOUBLE_BILLING)**: ✅ 单任务仅预扣 1 次流水，相同 client_token 重试严格去重 (已通过真实断言验证)；');
+      lines.push('- **失败净扣归零 (NET_CHARGE_ZERO)**: ✅ 任务失败或上游报错时自动触发全额退款，用户钱包实扣为 0 pt (已通过真实断言验证)；');
+      lines.push('- **退款幂等性 (REFUND_IDEMPOTENCY)**: ✅ 退款流水至多触发 1 次，严防重复退款资损 (已通过真实断言验证)；');
+      lines.push('- **分流容灾平滑降级**: ✅ 验证当 NewAPI 供应商渠道 429/504 故障时，能够安全平滑回退主站直连链路。');
+    } else {
+      lines.push('- **核心账务防线 (四大不变量)**: ⚪ `NOT_EXECUTED` (本次 CI 门禁未包含账务不变量自动化执行，严禁无证据假定通过)；');
+      lines.push('- **分流容灾平滑降级**: ⚪ `NOT_EXECUTED` (未运行网络故障注入降级用例)。');
+    }
     lines.push('');
 
     if (data.warnings.length > 0) {
@@ -310,36 +422,46 @@ export class CiPrGate {
     }
 
     lines.push('---', '');
-    lines.push('## 🛠️ 二、研发排查与修复指引 (Developer Action Plan)');
+    lines.push('## 🛠️ 二、研发精准定位与修复指引 (Developer Action Plan)');
     lines.push('');
-    lines.push('本部分供 **开发人员 (Dev)** 快速定位代码文件、行号并执行代码/数据库修复：');
+    lines.push('本部分供 **开发人员 (Dev)** 根据真实证据定位代码文件、行号并执行代码/数据库修复（严禁猜测位置）：');
     lines.push('');
 
-    // 1. 修改文件与行号定位
+    // 1. 修改文件与行号定位 (真实无猜测定位)
     lines.push('### 1. 📍 需排查与修改的代码位置');
-    const locationItems: Array<{ file: string; line: number; model: string; resolution: string; action: string }> = [];
+    const locationItems: Array<{
+      file: string | null;
+      line: number | null;
+      locationStatus: 'CONFIRMED' | 'UNKNOWN';
+      missingEvidence?: string;
+      model: string;
+      resolution: string;
+      action: string;
+    }> = [];
 
     for (const audit of data.marginAudits) {
-      const file = audit.mediaType === 'image'
-        ? 'app/admin/controller/aivideo/Image25Service.php'
-        : 'app/admin/controller/aivideo/PlotService.php';
+      const filePattern = audit.mediaType === 'image'
+        ? /Image25|ImageService/i
+        : /PlotService|Videonew|VideoService/i;
 
       for (const res of audit.resolutions) {
-        if (res.status === 'NEGATIVE_MARGIN_LOSS') {
-          locationItems.push({
-            file,
-            line: 46,
-            model: `${audit.modelName} (#${audit.modelId})`,
-            resolution: res.resolution,
-            action: `【价格倒挂】将刊例由 ${res.userPoints} pt 调升至至少 **${res.suggestedPoints} pt** (满足 ${data.targetMarginPercent}% 保本毛利)`,
+        if (res.status === 'NEGATIVE_MARGIN_LOSS' || res.status === 'LOW_MARGIN') {
+          const loc = resolveEvidenceLocation({
+            filePatches: data.filePatches,
+            filePattern,
+            keywords: [res.resolution, String(audit.modelId)],
           });
-        } else if (res.status === 'LOW_MARGIN') {
+          const isLoss = res.status === 'NEGATIVE_MARGIN_LOSS';
           locationItems.push({
-            file,
-            line: 46,
+            file: loc.file,
+            line: loc.line,
+            locationStatus: loc.locationStatus,
+            missingEvidence: loc.missingEvidence,
             model: `${audit.modelName} (#${audit.modelId})`,
             resolution: res.resolution,
-            action: `【毛利偏低】建议由 ${res.userPoints} pt 优化调整至 **${res.suggestedPoints} pt**`,
+            action: isLoss
+              ? `【价格倒挂】将刊例由 ${res.userPoints} pt 调升至至少 **${res.suggestedPoints} pt** (满足 ${data.targetMarginPercent}% 保本毛利)`
+              : `【毛利偏低】建议由 ${res.userPoints} pt 优化调整至 **${res.suggestedPoints} pt**`,
           });
         }
       }
@@ -347,9 +469,17 @@ export class CiPrGate {
 
     for (const issue of data.configDrift.issues) {
       if (issue.category === 'UNPRICED_MODEL' && issue.modelId) {
+        const loc = resolveEvidenceLocation({
+          filePatches: data.filePatches,
+          filePattern: /site\.php|model_point/i,
+          keywords: [String(issue.modelId)],
+          missingReason: '未定价模型需在 FastAdmin 后台配置或执行调价迁移 SQL，当前 PR 无代码文件改动',
+        });
         locationItems.push({
-          file: 'FastAdmin 后台 / application/extra/site.php',
-          line: 1,
+          file: loc.file,
+          line: loc.line,
+          locationStatus: loc.locationStatus,
+          missingEvidence: loc.missingEvidence,
           model: `模型 #${issue.modelId}`,
           resolution: '全部分辨率',
           action: '【缺失刊例】在 FastAdmin 积分配置表新增对应积分刊例，杜绝用户 0 积分白嫖生成',
@@ -360,10 +490,13 @@ export class CiPrGate {
     if (locationItems.length === 0) {
       lines.push('✅ 当前变更无需修改价格或模型代码，各规格均符合上线规范。');
     } else {
-      lines.push('| 序号 | 目标代码文件 | 参考行号 | 关联模型与规格 | 明确修改动作 |');
-      lines.push('| :---: | :--- | :---: | :---: | :--- |');
+      lines.push('| 序号 | 目标代码文件 | 参考行号 | 定位状态 | 关联模型与规格 | 明确修改动作 |');
+      lines.push('| :---: | :--- | :---: | :---: | :---: | :--- |');
       locationItems.forEach((item, idx) => {
-        lines.push(`| ${idx + 1} | \`${item.file}\` | 第 ${item.line} 行 | ${item.model} (\`${item.resolution}\`) | ${item.action} |`);
+        const fileDisplay = item.file ? `\`${item.file}\`` : '`null` (未确切定位)';
+        const lineDisplay = typeof item.line === 'number' ? `第 ${item.line} 行` : '`null`';
+        const statusDisplay = item.locationStatus === 'CONFIRMED' ? '🟢 CONFIRMED' : '⚠️ UNKNOWN';
+        lines.push(`| ${idx + 1} | ${fileDisplay} | ${lineDisplay} | ${statusDisplay} | ${item.model} (\`${item.resolution}\`) | ${item.action}${item.missingEvidence ? ` *(定位证据: ${item.missingEvidence})*` : ''} |`);
       });
     }
     lines.push('');
@@ -384,7 +517,7 @@ export class CiPrGate {
     }
 
     if (sqlStatements.length > 0) {
-      lines.push('### 2. 💾 数据库安全幂等调价 SQL (可直接在 FastAdmin 生产环境执行)');
+      lines.push('### 2. 💾 候选调价 SQL（需评审、隔离验证和独立审批，不可直接用于生产）');
       lines.push('```sql');
       lines.push(sqlStatements.join('\n\n'));
       lines.push('```');

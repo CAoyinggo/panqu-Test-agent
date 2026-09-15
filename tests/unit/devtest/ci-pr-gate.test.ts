@@ -1,11 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CiPrGate } from '../../../src/devtest/ci-pr-gate.js';
+import { CiPrGate, resolveEvidenceLocation } from '../../../src/devtest/ci-pr-gate.js';
 import { readFile, unlink, mkdtemp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
 describe('CiPrGate (GitHub Actions CI/CD & PR Quality Gate)', () => {
+  it('does not claim an unrelated changed line as a confirmed location', () => {
+    const location = resolveEvidenceLocation({
+      filePatches: [{ filename: 'VideoService.php', patch: '@@ -1 +1 @@\n-old\n+unrelated' }],
+      filePattern: /VideoService/, keywords: ['1080p'],
+    });
+    expect(location.locationStatus).toBe('UNKNOWN');
+    expect(location.line).toBeNull();
+  });
   let tempDir: string;
   let summaryFile: string;
   const originalSummary = process.env.GITHUB_STEP_SUMMARY;

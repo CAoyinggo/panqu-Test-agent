@@ -80,8 +80,15 @@ describe('GitHubCheckRunAdapter Unit Tests', () => {
     summary: '发现 1 个未定价模型',
   };
 
-  it('generates FAILURE check run payload with code annotations when margin loss exists', () => {
+  it('generates FAILURE check run payload with code annotations when margin loss exists and patch is provided', () => {
     const headSha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const samplePatches = [
+      {
+        filename: 'app/admin/controller/aivideo/PlotService.php',
+        patch: '@@ -45,6 +45,8 @@ class PlotService\n+ // Wan 2.1 1080p mapping\n+ $res = "1080p";',
+      },
+    ];
+
     const result = GitHubCheckRunAdapter.buildCheckRunResult({
       headSha,
       pullNumber: 42,
@@ -93,6 +100,7 @@ describe('GitHubCheckRunAdapter Unit Tests', () => {
       configDrift: mockConfigDrift,
       marginAudits: mockBlockedMarginAudits,
       changedFiles: mockGitImpact.changedFiles,
+      filePatches: samplePatches,
       targetMarginPercent: 30,
     });
 
@@ -126,6 +134,23 @@ describe('GitHubCheckRunAdapter Unit Tests', () => {
     const commitStatusAction = result.githubMcpActions[1];
     expect(commitStatusAction.tool).toBe('create_commit_status');
     expect(commitStatusAction.arguments.state).toBe('failure');
+  });
+
+  it('does not generate fake line: 1 annotations when patch diff evidence is missing, reports in summary instead', () => {
+    const result = GitHubCheckRunAdapter.buildCheckRunResult({
+      headSha: '123456789012',
+      conclusion: 'BLOCKED',
+      markdownReport: 'Blocked report',
+      gitImpact: mockGitImpact,
+      configDrift: mockConfigDrift,
+      marginAudits: mockBlockedMarginAudits,
+      changedFiles: mockGitImpact.changedFiles,
+      // filePatches intentionally omitted
+    });
+
+    expect(result.checkRunPayload.output.annotations).toHaveLength(0);
+    expect(result.checkRunPayload.output.summary).toContain('未定位到代码行的审查项 (未生成行级 Annotation)');
+    expect(result.checkRunPayload.output.summary).toContain('UNKNOWN');
   });
 
   it('accurately locates annotation lines from GitHub MCP diff patch hunks', () => {

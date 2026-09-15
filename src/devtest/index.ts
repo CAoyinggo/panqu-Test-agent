@@ -367,3 +367,19 @@ export {
   type CheckRunStatus,
   type CheckRunConclusion,
 } from './github-check-run.js';
+export {
+  buildCoverageLedger,
+  buildCaseDataBindings,
+  maskDataValue,
+  renderCoverageLedgerMarkdownTable,
+  renderRequirementFactLedgerMarkdownTable,
+  renderFourParallelListsMarkdown,
+  type DataBindingStatus,
+  type DataBindingRecord,
+  type LedgerFinalClassification,
+  type RequirementFactCoverageLedgerItem,
+  type TestPointCoverageLedgerItem,
+  type CoverageLedgerSummary,
+  type SevenItemQuickView,
+  type CoverageLedgerReconciliation,
+} from './coverage-ledger.js';

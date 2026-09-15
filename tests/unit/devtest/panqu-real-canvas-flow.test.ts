@@ -2,9 +2,22 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   submitCanvasNodeTask,
   runPanquRealCanvasFlow,
+  renderRealCanvasReportMarkdown,
 } from '../../../src/devtest/panqu-real-canvas-flow.js';
 
 describe('PanquRealCanvasFlow Unit Tests', () => {
+  it('任务和分流快照不证明节点持久化或完整交付', () => {
+    const markdown = renderRealCanvasReportMarkdown({
+      runId: 'snapshot-only', startedAt: '2026-09-15', finishedAt: '2026-09-15',
+      environment: 'test', canvasId: 'canvas', nodeId: 'node', projectId: 1, taskId: 2,
+      submission: { requestUrl: '/aivideo/videonew/add', requestParams: {}, responseCode: 1, responseMsg: 'ok', durationMs: 1 },
+      diversionCheck: { isDiverted: true, diversionValue: 10, newapiModel: 'fixture' },
+      artifacts: { reportMd: 'report.md', evidenceJson: 'report.json' },
+    });
+    expect(markdown).toContain('节点绑定持久化、实际路由、媒体及账务仍需独立验证');
+    expect(markdown).not.toContain('可作为工作流交付凭证');
+    expect(markdown).not.toContain('workflow_videonew/add');
+  });
   const mockBaseUrl = 'https://test.panqu.com';
   const mockCookies = 'PHPSESSID=mock_session_id; auth=%7B%22user%22%3A%7B%22id%22%3A1%7D%7D';
 

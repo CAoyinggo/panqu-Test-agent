@@ -21,6 +21,62 @@ import type {
 } from '../acceptance/requirement-ir.js';
 import type { TestEvidenceRequirement } from '../agents/test-design/testcase-schema.js';
 import type { DevTestSourceSyncOptions, DevTestSourceSyncResult } from './source-sync.js';
+export type ConfirmationStatus = 'CONFIRMED' | 'PARTIALLY_CONFIRMED' | 'UNKNOWN';
+
+export interface CodeLocation {
+  file: string | null;
+  line: number | null;
+  symbol: string | null;
+  locationStatus: 'CONFIRMED' | 'UNKNOWN';
+  missingEvidence?: string;
+}
+
+export interface ProblemEpistemicStatus {
+  status: ConfirmationStatus;
+  confirmedFacts: string[];
+  unknowns: string[];
+  missingEvidence: string[];
+}
+
+export interface ProblemBusinessImpact {
+  affectedUsersOrTenants?: string;
+  affectedBusinessFlows: string[];
+  affectedModelsOrFeatures?: string[];
+  severity: string;
+  businessDamage: string;
+}
+
+export interface ProblemViolationJudgment {
+  violatedRuleOrInvariant: string;
+  expected: string;
+  actual: string;
+  judgmentBasis: string;
+}
+
+export interface ProblemRemediationSpec {
+  fixType: 'CODE_FIX' | 'CONFIG_CHANGE' | 'DATA_CORRECTION' | 'INFRA_RETRY' | 'UNKNOWN';
+  targetComponent: string;
+  targetLocation: CodeLocation;
+  remediationGuidance: string;
+  codeDiffOrConfigExample?: string;
+  regressionRisks: string[];
+  rollbackPlan: string;
+}
+
+export interface ProblemVerificationSpec {
+  preconditions: string[];
+  retestCommand: string | null;
+  acceptanceCriteria: string[];
+}
+
+export type {
+  DataBindingStatus,
+  DataBindingRecord,
+  LedgerFinalClassification,
+  TestPointCoverageLedgerItem,
+  CoverageLedgerSummary,
+  SevenItemQuickView,
+} from './coverage-ledger.js';
 
 export const DEVTEST_CASE_DIMENSIONS = [
   'API',
@@ -801,7 +857,17 @@ export interface DevTestProblem {
     expected?: unknown;
     actual?: unknown;
     evidence?: unknown;
+    command?: string;
   };
+  location?: CodeLocation;
+  evidenceSource?: string;
+  missingEvidence?: string;
+  confirmationStatus?: ConfirmationStatus;
+  epistemicStatus?: ProblemEpistemicStatus;
+  businessImpact?: ProblemBusinessImpact;
+  violationJudgment?: ProblemViolationJudgment;
+  remediationSpec?: ProblemRemediationSpec;
+  verificationSpec?: ProblemVerificationSpec;
 }
 
 export interface DevTestDimensionStat {
@@ -976,6 +1042,19 @@ export interface DevTestRunResult {
     report: AcceptanceReport;
     contracts: ContractPreflight;
   };
+  coverageLedger?: import('./coverage-ledger.js').TestPointCoverageLedgerItem[];
+  coverageLedgerSummary?: import('./coverage-ledger.js').CoverageLedgerSummary;
+  coverageRequirementLedger?: import('./coverage-ledger.js').RequirementFactCoverageLedgerItem[];
+  coverageQuickView?: import('./coverage-ledger.js').SevenItemQuickView;
+  coverageFourLists?: {
+    confirmedBugs: import('./coverage-ledger.js').TestPointCoverageLedgerItem[];
+    testBlocked: import('./coverage-ledger.js').TestPointCoverageLedgerItem[];
+    untested: import('./coverage-ledger.js').TestPointCoverageLedgerItem[];
+    passed: import('./coverage-ledger.js').TestPointCoverageLedgerItem[];
+  };
+  coverageReconciliation?: import('./coverage-ledger.js').CoverageLedgerReconciliation;
+  runLevelBlockers?: string[];
+  canonicalResult?: import('../contracts/execution-result.js').RunResult;
 }
 
 export interface NewapiModelOnboardingSpec {

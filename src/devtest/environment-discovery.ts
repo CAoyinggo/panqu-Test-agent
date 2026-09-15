@@ -25,8 +25,20 @@ async function probeCandidate(
   candidate: Omit<DevTestEnvironmentCandidate, 'reachable'>,
   requirement: AcceptanceRequirement,
   fetchImpl: typeof fetch,
+  options?: {
+    blockedOperationKeys?: ReadonlySet<string>;
+    operationPolicies?: Record<string, { effect: string }>;
+  },
 ): Promise<DevTestEnvironmentCandidate> {
-  const safeApi = requirement.apis.find((api) => api.method === 'GET' || api.method === 'HEAD');
+  const isSafeProbeTarget = (api: AcceptanceRequirement['apis'][number]): boolean => {
+    if (api.method !== 'GET' && api.method !== 'HEAD') return false;
+    const opKey = api.operationKey || `${api.method.toUpperCase()} ${api.path}`;
+    if (options?.blockedOperationKeys?.has(opKey)) return false;
+    const policy = options?.operationPolicies?.[opKey];
+    if (policy && ['BILLABLE', 'EXTERNAL_SIDE_EFFECT', 'FORBIDDEN'].includes(policy.effect)) return false;
+    return true;
+  };
+  const safeApi = requirement.apis.find(isSafeProbeTarget);
   let healthStatus: number | undefined;
   let apiStatus: number | undefined;
   const errors: string[] = [];
@@ -70,6 +82,10 @@ export async function discoverDevTestEnvironment(input: {
   probeNetwork?: boolean;
   /** 仅供明确要求的本机约定模式使用；DevTest 默认不猜测 localhost。 */
   allowLocalDefaults?: boolean;
+  /** 显式受阻操作，禁止作为环境预检目标 */
+  blockedOperationKeys?: ReadonlySet<string>;
+  /** 接口安全策略，禁止探测非安全、计费或外部副作用接口 */
+  operationPolicies?: Record<string, { effect: string }>;
 }): Promise<DevTestEnvironmentPreflight> {
   const raw: Array<Omit<DevTestEnvironmentCandidate, 'reachable'>> = [];
   const add = (value: string | undefined, source: DevTestEnvironmentCandidate['source'], sourceRef: string): void => {
@@ -93,9 +109,14 @@ export async function discoverDevTestEnvironment(input: {
     if (!authorizedUrls.has(candidate.url)) return Promise.resolve({
       ...candidate, reachable: false, error: 'ENVIRONMENT_CANDIDATE_NOT_AUTHORIZED',
     });
-    return probeNetwork ? probeCandidate(candidate, input.requirement, input.fetchImpl ?? fetch) : Promise.resolve({
-      ...candidate, reachable: false, error: 'DRY_RUN_ENVIRONMENT_NOT_PROBED',
-    });
+    return probeNetwork
+      ? probeCandidate(candidate, input.requirement, input.fetchImpl ?? fetch, {
+        blockedOperationKeys: input.blockedOperationKeys,
+        operationPolicies: input.operationPolicies,
+      })
+      : Promise.resolve({
+        ...candidate, reachable: false, error: 'DRY_RUN_ENVIRONMENT_NOT_PROBED',
+      });
   }));
   const reachable = candidates.filter((candidate) => candidate.reachable);
   const explicit = candidates.find((candidate) => candidate.source === 'CLI');

@@ -457,6 +457,27 @@ export function renderRealImageReportMarkdown(report: PanquRealImageReport): str
   const check = report.diversionCheck;
   const poll = report.polling?.finalStatus;
 
+  const isSuccess = report.summary.status === 'SUCCESS' || (report.summary.isDiverted && report.summary.status === 'DIVERTED_RUNNING');
+  const assertionExplanation = report.summary.status === 'SUCCESS'
+    ? '任务提交与分流快照检查通过；不证明消费者实际路由、图片解码或最终结算。'
+    : report.summary.status === 'DIVERTED_RUNNING'
+      ? '真实生图分流快照命中成功，异步生图任务已进入后端队列处理中。'
+      : report.summary.status === 'DIVERSION_FAILED'
+        ? '生图任务提交成功，但未能命中 NewAPI 生图分流专线。'
+        : '生图接口提交失败，未能创建有效任务记录。';
+  const diversionExplanation = check?.isDiverted
+    ? `已成功命中图片分流专线 (newapi_image=${check.newapiImageFlag}, model=${check.newapiModel || '默认'})。`
+    : `未命中图片分流专线 (newapi_image=${check?.newapiImageFlag ?? 0})。请求未能路由到 RunningHub/NewAPI 目标线路。`;
+  const imageExplanation = poll?.picUrl
+    ? '轮询返回图片地址；尚未验证下载、解码及内容质量。'
+    : poll?.error
+      ? `异步处理异常: ${poll.error}`
+      : `当前终态: ${poll?.statusLabel ?? '处理中或未追踪'}`;
+  const nextRole = isSuccess ? '测试负责人 / 产品经理' : '生图调度与通道研发';
+  const nextStepAction = isSuccess
+    ? '继续补验任务终态、实际路由、图片解码与最终结算；尚不构成完整交付验收。'
+    : '核对下方 POST 提交参数 (serviceline/selmodelsId) 与后端分流快照字段。';
+
   return `# 真实生图提交与分流验证自测报告
 
 **执行时间**: ${report.startedAt} ~ ${report.finishedAt}
@@ -466,7 +487,20 @@ export function renderRealImageReportMarkdown(report: PanquRealImageReport): str
 
 ---
 
-## 1. 真实生图任务提交结果
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **测试断言结论** | **${report.summary.status}** | ${assertionExplanation} |
+| **分流安全核查** | ${check?.isDiverted ? '🟢 命中生图专线' : '🔴 未命中分流'} | ${diversionExplanation} |
+| **成片交付跟踪** | ${poll?.picUrl ? '已取得地址，媒体未验证' : (poll?.error ? '🔴 生成异常' : '🟡 处理中/未追踪')} | ${imageExplanation} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+## 🛠️ 二、研发执行取证与现场详情 (Developer View)
+
+### 1. 真实生图任务提交结果
 
 | 指标项 | 结果数据 | 说明 |
 | :--- | :--- | :--- |
@@ -479,7 +513,7 @@ export function renderRealImageReportMarkdown(report: PanquRealImageReport): str
 
 ---
 
-## 2. 生图分流快照核验
+### 2. 生图分流快照核验
 
 | 核验字段 | 期望值 | 实际值 | 判定 |
 | :--- | :--- | :--- | :--- |
@@ -489,10 +523,24 @@ export function renderRealImageReportMarkdown(report: PanquRealImageReport): str
 
 ---
 
-## 3. 异步状态与成片追踪
+### 3. 异步状态与成片追踪
 
 - **状态**: \`${poll?.statusLabel ?? '未轮询'}\`
 - **成片地址**: ${poll?.picUrl ? `[点击查看图片](${poll.picUrl})` : '暂无'}
 - **错误信息**: \`${poll?.error || '无'}\`
+
+---
+
+### 4. 根因排查指引
+
+${
+  check?.isDiverted
+    ? '✅ **生图分流链路各快照字段完整固化，运行正常。**'
+    : `> [!NOTE]
+> 诊断依据真实提交与快照比对得出：
+> 1. 确认请求参数中 \`row[extra][serviceline]\` 是否严格为 \`r\`。
+> 2. 确认后端 \`pq_aivideo_scene\` 添加逻辑中是否调用了生图分流规则。
+> 3. 确认模型 ID \`${report.submission.requestParams['row[extra][selmodelsId]'] || '12'}\` 是否配置在分流生效清单中。`
+}
 `;
 }

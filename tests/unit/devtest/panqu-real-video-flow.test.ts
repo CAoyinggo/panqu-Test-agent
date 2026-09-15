@@ -259,5 +259,8 @@ describe('PanquRealVideoFlow Unit Tests', () => {
     expect(markdown).toContain('wan3.0-video');
     expect(markdown).toContain('devtest_test_prompt');
     expect(markdown).toContain('DEL0******_439');
+    expect(markdown).toContain('尚未由独立账务流水验证');
+    expect(markdown).not.toContain('全链路运转正常');
+    expect(markdown).not.toContain('业务端到端合规');
   });
 });

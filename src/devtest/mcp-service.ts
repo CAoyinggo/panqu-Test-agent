@@ -10,6 +10,7 @@ import { runDevTest } from './devtest-runner.js';
 import { loadDevTestRuntime } from './runtime-loader.js';
 import type { DevTestRunResult } from './types.js';
 import { devTestNextAction } from './interaction-guidance.js';
+import { resolveBlockerRemediation } from './coverage-ledger.js';
 import { BillingOracle, type ScoreLogEntry } from './billing-oracle.js';
 import {
   RoutingOracle,
@@ -286,8 +287,113 @@ async function atomicJson(file: string, value: unknown): Promise<void> {
 }
 
 function summary(result: DevTestRunResult, root: string): Record<string, unknown> {
+  const ledgerItems = result.coverageLedger ?? [];
+  const fourLists = result.coverageFourLists ?? {
+    confirmedBugs: [],
+    testBlocked: [],
+    untested: [],
+    passed: [],
+  };
+
+  const confirmed_product_bugs = fourLists.confirmedBugs.map((c) => ({
+    case_id: c.caseId,
+    test_point: c.title,
+    operation_key: c.operationKey,
+    reason: c.statusReason,
+    evidence_refs: c.collectedEvidence,
+    remediation: c.remediationAction,
+  }));
+
+  const test_blockers = fourLists.testBlocked.map((c) => {
+    const remediationInfo = resolveBlockerRemediation(c.blockedReasonCode || c.untestedReasonCode || c.readinessStatus);
+    return {
+      case_id: c.caseId,
+      test_point: c.title,
+      operation_key: c.operationKey,
+      reason_code: c.blockedReasonCode || c.untestedReasonCode || c.readinessStatus,
+      reason: c.statusReason,
+      responsible_party: remediationInfo.responsibleParty,
+      remediation: c.remediationAction || remediationInfo.remediation,
+    };
+  });
+
+  const untested_items = fourLists.untested.map((c) => ({
+    case_id: c.caseId,
+    test_point: c.title,
+    operation_key: c.operationKey,
+    reason_code: c.untestedReasonCode || 'UNTESTED',
+    reason: c.untestedReason || c.statusReason,
+    provided_data_status: c.dataBindings[0]?.bindingStatus || 'NOT_APPLICABLE',
+    remediation: c.remediationAction || '评估调度预算与需求范围后重新执行',
+  }));
+
+  const passed_items = fourLists.passed.map((c) => ({
+    case_id: c.caseId,
+    test_point: c.title,
+    operation_key: c.operationKey,
+    oracle_verdict: c.oracleVerdict,
+    evidence_refs: c.collectedEvidence,
+  }));
+
+  const four_lists = {
+    confirmed_product_bugs,
+    test_blockers,
+    untested_items,
+    passed_items,
+  };
+
+  const test_summary = {
+    conclusion: result.conclusion,
+    total_planned: result.coverageLedgerSummary?.totalPlanned ?? 0,
+    total_selected: result.coverageLedgerSummary?.totalSelected ?? 0,
+    total_executed: result.coverageLedgerSummary?.totalExecuted ?? 0,
+    total_passed: result.coverageLedgerSummary?.totalPassed ?? 0,
+    total_confirmed_bugs: result.coverageLedgerSummary?.totalConfirmedBugs ?? 0,
+    total_test_blocked: result.coverageLedgerSummary?.totalTestBlocked ?? 0,
+    total_untested: result.coverageLedgerSummary?.totalUntested ?? 0,
+    tested_summary: result.coverageQuickView?.testedSummary ?? '',
+    untested_summary: result.coverageQuickView?.untestedSummary ?? '',
+    business_conclusion: result.coverageQuickView?.businessConclusion ?? '',
+  };
+
+  const data_usage = {
+    provided_and_consumed: result.coverageLedgerSummary?.dataBindingStats?.providedAndConsumed ?? 0,
+    provided_but_unbound: result.coverageLedgerSummary?.dataBindingStats?.providedButUnbound ?? 0,
+    bound_not_dispatched: result.coverageLedgerSummary?.dataBindingStats?.boundNotDispatched ?? 0,
+    provided_but_invalid: result.coverageLedgerSummary?.dataBindingStats?.providedButInvalid ?? 0,
+    provided_but_rejected: result.coverageLedgerSummary?.dataBindingStats?.providedButRejected ?? 0,
+    missing: result.coverageLedgerSummary?.dataBindingStats?.missing ?? 0,
+  };
+
+  const tested_items = [
+    ...passed_items.map((c) => ({
+      case_id: c.case_id,
+      test_point: c.test_point,
+      operation_key: c.operation_key,
+      status: 'PASS',
+      oracle_verdict: c.oracle_verdict,
+      evidence_refs: c.evidence_refs,
+    })),
+    ...confirmed_product_bugs.map((c) => ({
+      case_id: c.case_id,
+      test_point: c.test_point,
+      operation_key: c.operation_key,
+      status: 'FAIL',
+      reason: c.reason,
+      evidence_refs: c.evidence_refs,
+      remediation: c.remediation,
+    })),
+  ];
+
+  const relativePaths = Object.fromEntries(
+    Object.entries(result.artifacts)
+      .filter(([, value]) => typeof value === 'string')
+      .map(([name, value]) => [name, path.relative(root, value as string)]),
+  );
+
   return artifactSafe({
-    run_id: result.runId, conclusion: result.conclusion,
+    run_id: result.runId,
+    conclusion: result.conclusion,
     project_assessment: result.projectAssessment,
     counts: result.deliveryCoverage.cases,
     evidence: result.deliveryCoverage.evidence,
@@ -302,13 +408,90 @@ function summary(result: DevTestRunResult, root: string): Record<string, unknown
       .map(({ id, statement, status, source }) => ({ id, statement, status, source })),
     problems: result.problems,
     readiness: result.environmentPreflight.status,
-    readiness_detail: { target_selected: result.environmentPreflight.checks.baseUrl === 'READY',
-      reason: result.environmentPreflight.reason },
+    readiness_detail: {
+      target_selected: result.environmentPreflight.checks.baseUrl === 'READY',
+      reason: result.environmentPreflight.reason,
+    },
     dimensions: result.dimensionApplicability,
     business_flows: result.businessFlowGraph,
     data_lifecycle: result.dataLifecycle,
-    paths: Object.fromEntries(Object.entries(result.artifacts).filter(([, value]) => typeof value === 'string')
-      .map(([name, value]) => [name, path.relative(root, value as string)])),
+
+    // 事实覆盖账本与首屏速览 (兼容旧字段 coverage_summary，统一指向 test_summary)
+    coverage_summary: test_summary,
+
+    // 需求事实追踪覆盖
+    requirement_fact_coverage: (result.coverageRequirementLedger ?? []).map((f) => ({
+      fact_id: f.factId,
+      category: f.category,
+      statement: f.statement,
+      modeled: f.modeled,
+      status: f.status,
+      status_reason: f.statusReason,
+      linked_case_ids: f.linkedCaseIds,
+      selected_case_ids: f.selectedCaseIds,
+      executed_case_ids: f.executedCaseIds,
+      passed_case_ids: f.passedCaseIds,
+      failed_case_ids: f.failedCaseIds,
+    })),
+
+    // 真实数据消费状态 (兼容旧字段 data_binding_summary，统一指向 data_usage)
+    data_binding_summary: data_usage,
+
+    // 顶层收敛结构 (TRAE MCP 核心视图)
+    test_summary,
+    tested_items,
+    confirmed_product_bugs,
+    test_blockers,
+    untested_items,
+    passed_items,
+    discovered_local_candidates: (result.projectAssessment?.regressionCandidates ?? []).map((c) => ({
+      file: c.file,
+      evidence_level: c.evidenceLevel,
+      status: 'DISCOVERED_NOT_IN_PLAN',
+      note: '代码扫描发现的本地测试候选，未计入本次计划总数',
+    })),
+    data_usage,
+
+    // 严格四类互斥清单 (规范格式兼容)
+    four_lists,
+
+    // 运行级阻断
+    run_level_blockers: result.runLevelBlockers ?? result.coverageLedgerSummary?.runLevelBlockers ?? [],
+
+    // 报告与账本对账结果
+    reconciliation: result.coverageReconciliation ? {
+      status: result.coverageReconciliation.status,
+      reconciled: result.coverageReconciliation.reconciled,
+      legacy_count: result.coverageReconciliation.legacyCount,
+      ledger_count: result.coverageReconciliation.ledgerCount,
+      run_id_match: result.coverageReconciliation.runIdMatch,
+      selected_cases_match: result.coverageReconciliation.selectedCasesMatch,
+      case_id_coverage_match: result.coverageReconciliation.caseIdCoverageMatch,
+      difference_reason: result.coverageReconciliation.differenceReason,
+      mismatches: result.coverageReconciliation.mismatches ?? [],
+    } : {
+      status: 'NOT_COMPARABLE',
+      reconciled: true,
+      legacy_count: { passed: 0, failed: 0, blocked: 0, notExecuted: 0, total: 0 },
+      ledger_count: { passed: 0, confirmedBugs: 0, testBlocked: 0, untested: 0, total: 0 },
+      run_id_match: true,
+      selected_cases_match: true,
+      case_id_coverage_match: true,
+      mismatches: [],
+    },
+
+    // 执行真实性概要
+    execution_truth: {
+      executed_cases_count: result.deliveryCoverage?.cases?.executed ?? 0,
+      dispatched_cases_count: ledgerItems.filter((item) => item.dispatchAttempted).length,
+      processor_invoked_cases_count: ledgerItems.filter((item) => item.processorInvoked).length,
+      oracle_run_cases_count: ledgerItems.filter((item) => item.oracleRan).length,
+      evidence_collected_count: result.deliveryCoverage?.evidence?.collected ?? 0,
+    },
+
+    // 相对路径列表 (保留 paths 保持向后兼容)
+    paths: relativePaths,
+    report_paths: relativePaths,
   }) as Record<string, unknown>;
 }
 
@@ -1137,7 +1320,7 @@ export class DevTestMcpService {
         return { ok: run.state === 'COMPLETED', plan_id: planId, status: run.state, ...run.result };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        return { ok: true, plan_id: planId, plan_hash: record.planHash, status: 'NOT_EXECUTED', ...record.preview };
+        return { ok: true, plan_id: planId, plan_hash: record.planHash, status: 'NOT_EXECUTED', executed: false, message: '计划已生成但尚未执行，请调用 execute 触发真实执行', ...record.preview, run_id: undefined };
       }
     }
     let lock;
@@ -1196,9 +1379,16 @@ export class DevTestMcpService {
           baseUrl: process.env[config.runtime.baseUrlEnv] || undefined, environment: config.runtime.environment,
           mode: 'SAFE', confirmMutations: false, sandbox: false, expectedExecutionPlan: record.executionPlan,
           outDir: output, maxRuntimeMs: 15 * 60 * 1000 });
-        const outcome = { ...summary(result, root), status: result.conclusion === 'BLOCKED' ? 'BLOCKED' : 'COMPLETED' };
-        await atomicJson(runFile, { state: 'COMPLETED', idempotencyKey, result: outcome });
-        return { ok: true, plan_id: planId, ...outcome };
+        const isReconciledMismatch = result.coverageReconciliation?.status === 'MISMATCH';
+        const executedCount = result.coverageLedgerSummary?.totalExecuted ?? result.pipeline?.summary?.executed ?? 0;
+        const isBlocked = isReconciledMismatch || (result.conclusion === 'BLOCKED' && executedCount === 0);
+        const outcome = {
+          ...summary(result, root),
+          status: isBlocked ? 'BLOCKED' : 'COMPLETED',
+          reconciliation_mismatch: isReconciledMismatch,
+        };
+        await atomicJson(runFile, { state: isBlocked ? 'BLOCKED' : 'COMPLETED', idempotencyKey, result: outcome });
+        return { ok: !isBlocked, plan_id: planId, ...outcome };
       } catch (error) {
         const outcome = artifactSafe({ status: 'BLOCKED', message: (error as Error).message }) as Record<string, unknown>;
         await atomicJson(runFile, { state: 'BLOCKED', idempotencyKey, result: outcome });

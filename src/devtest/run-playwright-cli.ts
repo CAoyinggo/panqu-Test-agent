@@ -332,6 +332,23 @@ export function renderEvidenceMarkdown(report: FlowRunEvidence): string {
     UNVERIFIED: '❌ 未完成有效物理校验',
   };
 
+  const assertionExplanation = report.testAssertionStatus === 'PASS'
+    ? '任务端到端生成、分流与账单全部校验通过。'
+    : report.testAssertionStatus === 'BLOCKED'
+      ? '前置条件或观察凭证不足，无法完成闭环断言。'
+      : '关键业务断言或产物校验失败，存在系统缺陷。';
+  const businessImpactExplanation = report.overallStatus === 'PASS'
+    ? '用户可正常提交生成并获取合法产物，平台通道调度与资金流水合规。'
+    : '用户端可能面临生成失败、成片损坏或发生计费资损风险。';
+  const diversionExplanation = report.diversion.passed
+    ? `已成功命中预期渠道 (${report.diversion.actualChannel})。`
+    : `未命中预期渠道或缺少快照凭据 (${report.diversion.status})。`;
+  const billingExplanation = report.billing.passed
+    ? '扣费流水、退款幂等与净扣归零均校验合规。'
+    : `存在计费流水偏差或缺少对账凭据 (${report.billing.reasons.join('；') || '未完全对账'})。`;
+  const nextRole = report.overallStatus === 'PASS' ? '测试负责人 / 产品经理' : '对应业务模块研发';
+  const nextStepAction = report.overallStatus === 'PASS' ? '确认结果并归档验收凭证。' : '对照下方提交参数、状态机时间线与分流快照排查修复。';
+
   return `# Panqu Playwright 闭环自测报告
 
 - **用例编号**: \`${report.caseId}\`
@@ -345,7 +362,21 @@ export function renderEvidenceMarkdown(report: FlowRunEvidence): string {
 
 ---
 
-## 1. 页面提交与任务关联
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **测试断言结论** | **${report.testAssertionStatus}** | ${assertionExplanation} |
+| **业务可用性评估** | ${report.overallStatus === 'PASS' ? '🟢 链路正常' : '🔴 链路异常'} | ${businessImpactExplanation} |
+| **分流安全核查** | ${report.diversion.passed ? '🟢 正常命中' : '⚠️ 分流异常'} | ${diversionExplanation} |
+| **资金对账核查** | ${report.billing.passed ? '🟢 流水安全' : '🔴 账务异常'} | ${billingExplanation} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+## 🛠️ 二、研发执行取证与现场详情 (Developer View)
+
+### 1. 页面提交与任务关联
 
 | 属性 | 结果 | 说明 |
 | :--- | :--- | :--- |

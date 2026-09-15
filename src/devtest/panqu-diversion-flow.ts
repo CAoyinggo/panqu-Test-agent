@@ -1279,6 +1279,21 @@ ${targetModelCheck.recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 `
     : '';
 
+  const isSuitePass = summary.fail === 0 && summary.blocked === 0;
+  const suiteVerdict = summary.fail === 0 ? (summary.blocked > 0 ? '⏸ 部分阻塞 (BLOCKED)' : '✅ 全部通过 (PASS)') : '❌ 存在失败 (FAIL)';
+  const diversionSuiteExplanation = isSuitePass
+    ? '分流决策树、两级准入规则及模型路由推演全部符合契约预期。'
+    : summary.fail > 0
+      ? `发现 ${summary.fail} 项分流用例未达预期，可能导致生产流量误走高价原厂或阻断生成。`
+      : '部分分流前置条件缺失或用例被阻塞，未能完成全量准入推演。';
+  const securityExplanation = summary.fail === 0
+    ? '分流白名单、全量模型标识与组织隔离规则均严格生效，无越权或逃逸风险。'
+    : '存在分流不一致项，需确认组织权限与模型通道映射。';
+  const nextRole = isSuitePass ? '测试负责人 / 业务产品经理' : 'API 分流架构研发';
+  const nextStepAction = isSuitePass
+    ? '分流推演与契约核验通过，可作为规则上线与提测依据。'
+    : '对照下方用例明细中的失败项，排查 newapi_route_rules 与组织组配置。';
+
   const reportMdContent = `# ${requirementTitle} API 分流专项开发自测报告
 
 > **运行 ID**：\`${runId}\`  
@@ -1289,7 +1304,18 @@ ${targetModelCheck.recommendations.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 ---
 
-${targetCheckSection}## 一、两级分流决策树执行概况
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 评估项 | 结果判定 | 通俗业务影响说明 |
+| :--- | :---: | :--- |
+| **测试断言结论** | **${suiteVerdict}** | ${diversionSuiteExplanation} |
+| **用例通过概况** | **${summary.pass}/${summary.total}** (${summary.passRate}) | ${summary.fail > 0 ? `存在 ${summary.fail} 条用例失败，需阻断上线。` : '全部规划用例推演核验均通过。'} |
+| **商用安全与成本** | ${summary.fail === 0 ? '🟢 流量路由受控' : '🔴 存在误路由风险'} | ${securityExplanation} |
+| **下一步指引** | \`${nextRole}\` | ${nextStepAction} |
+
+---
+
+${targetCheckSection}## 二、两级分流决策树执行概况
 
 \`\`\`
 用户发起生成请求

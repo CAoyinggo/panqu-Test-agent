@@ -312,8 +312,8 @@ function inlineBodySchema(operation: DiscoveredOperation): { properties: Record<
 export function discoverParameterContractConflicts(
   requirement: AcceptanceRequirement,
   discovery: DevTestDiscoveryResult,
-): Array<{ code: string; message: string }> {
-  const conflicts: Array<{ code: string; message: string }> = [];
+): Array<{ code: string; message: string; operationKey: string; parameterName: string }> {
+  const conflicts: Array<{ code: string; message: string; operationKey: string; parameterName: string }> = [];
   for (const api of requirement.apis) {
     const operation = discovery.mappedOperations.find((item) => `${item.method} ${item.path}` === api.operationKey);
     const schema = operation && inlineBodySchema(operation);
@@ -332,6 +332,8 @@ export function discoverParameterContractConflicts(
         if (expected === undefined || actual === undefined || JSON.stringify(expected) === JSON.stringify(actual)) continue;
         conflicts.push({
           code: 'PARAMETER_CONTRACT_CONFLICT',
+          operationKey: api.operationKey,
+          parameterName: parameter.name,
           message: `${api.operationKey} 参数 ${parameter.name}.${name} 冲突：Requirement=${JSON.stringify(expected)} OpenAPI=${JSON.stringify(actual)}`,
         });
       }

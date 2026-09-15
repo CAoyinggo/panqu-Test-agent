@@ -413,6 +413,25 @@ export function renderAutonomousReportMarkdown(result: AutonomousVerificationRes
       ? '🟡 BLOCKED (存在门禁阻断/证据缺失)'
       : '🔴 NOT_READY (存在产品缺陷/断言失败)';
 
+  const oneLineConclusion = result.status === 'READY'
+    ? '自主规划与执行验证通过：所测场景断言均已闭环（受控环境验证，不代表真实业务验收）。'
+    : result.status === 'BLOCKED'
+      ? '自主执行受阻：存在前置条件、路由快照或账单流水凭证缺失，已阻断门禁。'
+      : '自主执行发现产品缺陷：断言或不变量校验失败，需研发修复。';
+
+  const businessImpact = result.status === 'READY'
+    ? '受控环境下业务流程与财务规则合规，未发现资损或逻辑倒挂。'
+    : result.status === 'BLOCKED'
+      ? '因快照或凭证不全，无法确保线上实际派发路线与对账安全。'
+      : '发现明确业务缺陷，上线将影响生成或导致扣费资损。';
+
+  const actionOwner = result.status === 'READY' ? '测试工程师 / 架构师' : '后端开发 / 测试负责人';
+  const nextStep = result.status === 'READY'
+    ? '推进真实流量灰度验证与生产配置对账。'
+    : result.status === 'BLOCKED'
+      ? '补齐缺失凭据与执行环境后再触发自主回归。'
+      : '研发对照下方诊断清单与根因排查修复代码。';
+
   const scenarioRows = result.scenariosExecuted
     .map(
       (s, idx) =>
@@ -426,7 +445,8 @@ export function renderAutonomousReportMarkdown(result: AutonomousVerificationRes
           (d, idx) =>
             `### 诊断 ${idx + 1}: [${d.category}] ${d.summary}
 - **受影响链路**: \`${d.affectedFlow}\`
-- **问题根因 (Root Cause)**: \`${d.rootCause}\`
+- **问题根因 (Root Cause)**: \`${d.rootCause || '根因未知 (UNKNOWN)'}\`
+- **已确认位置**: \`file: null, line: null, symbol: null\` *(智能体自主执行分析，未定位具体代码行)*
 - **预期要求**: ${d.expected}
 - **实际观察**: ${d.actual}
 - **修复行动指南**: ${d.remediation}
@@ -442,7 +462,19 @@ export function renderAutonomousReportMarkdown(result: AutonomousVerificationRes
 
 ---
 
-## 1. 变更理解与影响推导 (Stage 1 & 2)
+## ⏱️ 一、30 秒业务与质量速览 (Product & Ops View)
+
+| 决策项 | 评估结论 | 核心业务影响说明 |
+| :--- | :---: | :--- |
+| **通俗结论** | **${result.status}** | ${oneLineConclusion} |
+| **业务影响评估** | ${result.status === 'READY' ? '🟢 受控合规' : result.status === 'BLOCKED' ? '🟡 凭证缺失' : '🔴 业务缺陷'} | ${businessImpact} |
+| **下一步指引** | \`${actionOwner}\` | ${nextStep} |
+
+---
+
+## 🛠️ 二、研发执行取证与场景现场 (Developer View)
+
+### 1. 变更理解与影响推导 (Stage 1 & 2)
 
 - **影响领域**: ${result.impactAnalysis.affectedDomains.map((d) => `\`${d}\``).join(', ')}
 - **综合风险定级**: **${result.impactAnalysis.riskLevel}**
@@ -452,10 +484,10 @@ ${result.impactAnalysis.affectedApis.map((a) => `  - \`${a.operationKey}\`: ${a.
 
 ---
 
-## 2. 规划场景与执行矩阵 (Stage 3 & 4)
+### 2. 规划场景与执行矩阵 (Stage 3 & 4)
 
 | 序号 | 验证场景名称 | 场景类型 | 判定状态 | 任务 ID | 分流核验 | 计费对账 |
-| :---: | :--- | :---: | :---: | :---: | :---: | :---: |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 ${scenarioRows}
 
 ---

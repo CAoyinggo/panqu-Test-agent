@@ -106,12 +106,7 @@ export class GitHubMcpReviewAdapter {
         }
       }
 
-      // 2. 在 changedFiles 中找
-      const matchedFile = input.changedFiles.find((f) => filePattern.test(f));
-      if (matchedFile) {
-        return { path: matchedFile, line: 1 };
-      }
-
+      // 严格无猜测：若没有 Patch 增量修改行，严禁在未修改的代码或第 1 行发表行间评论 (避免 GitHub API 422 报错)
       return undefined;
     };
 

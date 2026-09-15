@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.37.0",
+  "version": "4.38.0",
   "description": "盼趣AI 测试执行流程（多模块通用测试框架，TypeScript 重构版）",
   "type": "module",
   "main": "./dist/src/devtest/index.js",
@@ -24,6 +24,10 @@
     "packages/panqu-agent-cli/LICENSE",
     "dist/src/platform/version.js",
     "dist/src/platform/version.d.ts",
+    "dist/src/platform/runs/canonical-adapter.js",
+    "dist/src/platform/runs/canonical-adapter.d.ts",
+    "dist/src/agents/execution/canonical-adapter.js",
+    "dist/src/agents/execution/canonical-adapter.d.ts",
     "dist/bin/devtest-mcp.js",
     "dist/bin/devtest-mcp.d.ts",
     "dist/src/devtest/assets/",

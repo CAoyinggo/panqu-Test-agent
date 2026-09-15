@@ -62,6 +62,8 @@ describe('npm tarball installation acceptance', () => {
       'integrations/trae-mcp/job-store.mjs', 'integrations/trae-mcp/local-artifacts.mjs',
       'integrations/trae-mcp/native-cli.mjs',
       'dist/src/platform/version.js', 'dist/src/platform/version.d.ts',
+      'dist/src/platform/runs/canonical-adapter.js', 'dist/src/platform/runs/canonical-adapter.d.ts',
+      'dist/src/agents/execution/canonical-adapter.js', 'dist/src/agents/execution/canonical-adapter.d.ts',
       'packages/panqu-agent-cli/README.md', 'packages/panqu-agent-cli/LICENSE',
       'dist/src/utils/run-id.js', 'dist/src/utils/run-id.d.ts',
       'dist/src/agents/execution/execution-schema.js', 'dist/src/agents/execution/execution-schema.d.ts',
@@ -100,7 +102,12 @@ describe('npm tarball installation acceptance', () => {
       expect(entries).toContain(`dist/src/devtest/${module}.d.ts`);
     }
     expect(entries).toContain('dist/src/platform/version.js');
-    expect(entries.length).toBeLessThanOrEqual(399);
+    // 4.38 adds six scoped modules, each with JavaScript and declarations.
+    for (const module of ['contracts/execution-result', 'devtest/coverage-ledger', 'devtest/canonical-adapter', 'acceptance/canonical-adapter', 'agents/execution/canonical-adapter', 'platform/runs/canonical-adapter']) {
+      expect(entries).toContain(`dist/src/${module}.js`);
+      expect(entries).toContain(`dist/src/${module}.d.ts`);
+    }
+    expect(entries.length).toBeLessThanOrEqual(411);
 
     const tarball = path.join(packRoot, metadata[0].filename);
     const extracted = path.join(packRoot, 'extracted');
