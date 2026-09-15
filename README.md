@@ -1,183 +1,115 @@
-# 盼趣 AI 测试平台
+# Panqu AI DevTest
 
-需求驱动的测试设计、受控执行、证据核验与研发自测工具链，支持通用 API 验收及 Panqu 图片、视频、画布流程。
+面向 Panqu 图片和视频链路的轻量测试副驾。源码当前为 **v4.39.0**，只有一套 TypeScript 内核，并以同一逻辑提供本地 CLI 与 TRAE MCP。
 
-| 项目 | 当前约定 |
+| 项目 | 当前状态 |
 | --- | --- |
-| 源码 / 安装包 | `test-flow@4.38.0` |
-| 运行时 | Node.js `>=24.11.0`，TypeScript / ESM |
-| 界面 | CLI、MCP、React / Vite 平台 |
-| 测试 | Vitest、Playwright |
-| 发布边界 | GitHub、TRAE 本地运行时、远程 Worker 分别更新和验证；本版本不表示已发布 npm |
-
-## 导航
-
-[快速开始](#快速开始) · [本次更新](#本次更新) · [能力边界](#能力边界) · [入口与-trae](#入口与-trae) · [状态与证据](#状态与证据) · [报告](#报告) · [测试与发布](#测试与发布) · [安全](#安全) · [文档](#文档)
+| 包名 | `test-flow@4.39.0` |
+| 运行时 | Node.js `>=20`、TypeScript、ESM |
+| 入口 | `devtest` CLI、`devtest-mcp` stdio MCP |
+| 核心动作 | `probe`、`plan`、`execute`、`verify` |
+| 发布方式 | GitHub 提交固定；不代表已发布 npm 或已完成真实业务验收 |
 
 ## 快速开始
-
-### 源码构建
 
 ```bash
 git clone https://github.com/CAoyinggo/panqu-Test-agent.git
 cd panqu-Test-agent
 npm ci
 npm run build
-node dist/bin/run-devtest.js --help
+node dist/bin/devtest-cli.js --help
 ```
 
-### 在业务项目中使用
-
-先在源码目录运行 `npm pack`，将生成的 tarball 放入目标项目：
+从源码生成安装包并安装到业务项目：
 
 ```bash
-npm install --save-dev ./test-flow-4.38.0.tgz
-npx --no-install devtest init --github --trae
-npx --no-install devtest doctor
-# 先准备需求文件；dry-run 不发送 HTTP 请求。
-npx --no-install devtest run --requirement requirements/new-feature.md --env test --mode dry-run
+npm pack
+npm install --save-dev ./test-flow-4.39.0.tgz
+npx --no-install devtest --version
 ```
 
-`init` 会写入项目配置及所选集成文件，已有配置请先核对差异。缺少有效环境时保留设计结果，不把未执行项算作通过。
+安装包并不包含仓库历史、旧平台界面或过去的并行 Agent 实现；它只包含当前 CLI/MCP 所需的运行时文件。
 
-执行前检查计划、目标、身份、预算与副作用范围：
+## 四个核心动作
 
-```bash
-npx --no-install devtest run --requirement requirements/new-feature.md --env test --plan
-npx --no-install devtest run --requirement requirements/new-feature.md --env test
-npx --no-install devtest status --run RUN-<id>
-```
-
-默认 SAFE 并非完全离线：配置完整时可能发送允许的只读请求。只有 `dry-run` 保证零 HTTP 请求。真实写操作需要显式确认及隔离/清理条件；通用自测授权不等于供应商生成或付费授权。
-
-## 本次更新
-
-v4.38.0（2026-09-15）：
-
-- 新增统一执行结果契约与 DevTest 覆盖台账，运行生命周期和用例结果分开表达。
-- 报告与 MCP 摘要区分确认产品缺陷、测试阻断、未测试、通过项，并补充数据使用与统计对账。
-- 计划与状态查询不再把未执行计划表示为已完成测试；发现的本地候选与本次正式计划分开统计。
-- 执行提示区分全局阻断、单用例阻断及未选用例，保留确认计划绑定和幂等控制。
-- 新增 Acceptance、Agent、Platform 结果适配模块，但不代表所有平台入口已完成迁移。
-- 收紧媒体、画布和门禁报告措辞：快照、地址或局部检查通过不等于完整业务验收。
-- 重组 README，历史版本细节见 [CHANGELOG](docs/CHANGELOG.md)。
-
-## 能力边界
-
-| 能力 | 当前范围 | 不应推断的能力 |
+| 动作 | 做什么 | 不代表什么 |
 | --- | --- | --- |
-| 需求与用例设计 | 需求解析、AC 关联、动态维度、TEST_CASE_V2、风险优先选择 | 自动消除需求歧义或覆盖全部业务规则 |
-| 通用 DevTest | SAFE / dry-run、确认执行、覆盖台账、Oracle、问题聚类与复测 | 未执行项通过，或环境故障自动定性为产品缺陷 |
-| 自主验证 | `verify --mock` 编排影响分析、场景与受控证据 | 真实端到端生成、在线自主学习 |
-| Panqu 流程 | 图片、视频、画布提交和任务/分流快照，部分媒体及账务 Oracle | 仅凭任务 ID、状态码或 URL 完成路由、解码和结算验收 |
-| Mission | 持久化计划、审批、幂等提交、恢复与分阶段证据 | 任意模型、PHP 自动准备、参考输入、UI 与语义质量全面覆盖 |
-| 规划与诊断 | 模型矩阵、Git 影响、执行 DAG、环境探针、复现包 | 无权限读取外部需求或业务环境 |
-| 韧性与漂移 | 任务监视、混沌及跨环境漂移的受控仿真 | 已连接真实故障注入和生产监控；未实现的真实模式会阻断 |
-| GitHub 协作 | 审查、Check Run、评论命令和发布动作载荷 | 生成载荷即已写 GitHub 或完成发布 |
-| 平台与扩展 | 场景处理器、断言、调度、评测、成本治理和 Web 界面 | 精简 npm 包包含完整平台源码与部署资源 |
+| `probe` | 探测主站、网关及会话配置状态 | 探活通过不代表业务生成通过 |
+| `plan` | 根据模型、媒体类型和规格推导 Direct / NewAPI 分流与基准积分 | 规划不会提交任务 |
+| `execute` | 运行 mock，或在显式 real 模式下提交媒体任务 | 任务 ID 不代表媒体、路由或结算均已验收 |
+| `verify` | 检查媒体容器结构，并按提供的流水核对重复扣费、失败净扣和退款幂等 | 容器检查和输入流水不能代替独立的生产账务审计 |
 
-## 入口与 TRAE
-
-### 通用 CLI
+## CLI
 
 ```bash
-npx --no-install devtest run --requirement requirements/new-feature.md --env test --repro P001
-npx --no-install devtest run --requirement requirements/new-feature.md --env test --rerun P001
-npx --no-install devtest verify --requirement requirements/new-feature.md --mock --env test
+# 受控探活：不会读取或猜测默认会话文件
+npx --no-install devtest probe --env test --mock
+
+# 只做本地分流与积分推导，不发网络请求
+npx --no-install devtest plan --model 84 --media video --resolution 720p --duration 4
+
+# 受控仿真执行
+npx --no-install devtest execute --model 84 --media video --mode mock
+
+# 对已有任务 ID、媒体数据和积分流水执行验真
+npx --no-install devtest verify --task 12345 --model 84 --media video --expected-points 56
 ```
 
-`verify` 当前仅支持受控 Mock。`READY` 是当前输入和门禁下的结论，不是生产发布批准。
+`execute --mode real` 会产生真实 HTTP 提交，必须显式给出会话文件并获得独立的业务与费用授权。没有会话文件时，real 模式应安全失败。请不要把 Cookie、Token、会话文件内容写进命令、报告或 Git。
 
-### Panqu 扩展入口
+## TRAE MCP
 
-以下命令在源码构建后运行：
+构建后以 stdio 启动：
 
 ```bash
-node dist/src/devtest/run-playwright-cli.js --self-test-plan --requirement "验证视频模型分流变更"
-node dist/src/devtest/run-playwright-cli.js --ci-gate --mock
-node dist/src/devtest/run-playwright-cli.js --export-ci-workflow
+node /absolute/path/to/test-flow/dist/bin/devtest-mcp.js --project-root /absolute/path/to/project
 ```
 
-此 CLI 包含真实执行入口，不能假设省略参数就一定是 Mock。真实模式需阅读对应帮助并确认会话、环境、费用与副作用。
+MCP 只提供一个 `devtest` 工具，`action` 可为 `probe`、`plan`、`execute` 或 `verify`。字段名称优先使用 MCP 形式，例如 `model_id`、`media_type`、`session_file`、`expected_points`。MCP 的版本握手必须与安装包版本一致。
 
-### TRAE 接入与同步
+每个项目的 `.trae/devtest-runtime` 是独立安装。更新 GitHub 或全局 MCP 不会自动更新它；升级时必须从同一 Git 提交重新构建、安装，并分别重启 MCP 会话。
 
-| 入口 | 核对方式 |
-| --- | --- |
-| 项目 `devtest` MCP | 核对项目配置的命令、运行时及 `--project-root`；由内核管理计划、确认、执行与报告 |
-| 完整 TRAE MCP | 本地 Native CLI 与远程能力分别验证；适配器版本不同于引擎版本 |
-| 项目隔离运行时 | 每个 `.trae/devtest-runtime` 独立安装，更新全局 MCP 不会自动更新它 |
+## 安全与证据边界
 
-升级时从 GitHub 同一完整提交重新构建，不复用旧 `dist`。逐项核对 GitHub SHA、本地快照 SHA、Native catalog `engineSha` 与远程 capabilities；再验证 MCP 初始化、工具清单、无副作用计划及报告链路。历史任务保留历史 SHA，不能改写。
+- `plan` 与 mock 执行是受控推导或仿真，不会证明生产业务通过。
+- 真实执行仅适用于获得授权的测试环境；不自动启动真实生成、扣费、退款、发布或通知。
+- 会话文件必须显式传入 `--session-file` 或 `PANQU_SESSION_COOKIES_FILE`；缺失、无效或环境不匹配时应阻断。
+- `verify` 分别报告媒体结构和账务不变量。没有实际路由、可播放媒体、最终账务流水或独立证据时，不能升级为端到端通过。
+- 报告和配置中不得保存明文凭据。TRAE 全局配置与项目配置要分别核对，避免一个旧安装包遮蔽另一个新版本。
 
-[TRAE 内核](docs/testing/trae-devtest-kernel.md) · [Mission](docs/testing/panqu-mission.md) · [自主准备](docs/testing/panqu-mission-preparation.md) · [业务证据](docs/testing/panqu-mission-business-evidence.md)
-
-## 状态与证据
-
-| 层级 | 状态 / 统计 | 含义 |
-| --- | --- | --- |
-| 用例结果 | `PASS / FAIL / BLOCKED / NOT_EXECUTED` | 通过、失败、受阻、未执行，互不替代 |
-| 运行生命周期 | `NOT_STARTED / RUNNING / COMPLETED / BLOCKED / FAILED` | 编排进度；完成不等于全部业务断言通过 |
-| 旧交付结论 | `READY / NOT_READY / BLOCKED` | 兼容旧入口，不是统一用例状态 |
-| 覆盖台账 | 已执行、受阻、未执行及需求关联 | 对账正式计划；发现候选不自动进入覆盖分母 |
-| 问题清单 | 产品缺陷、测试阻断、未测试、通过 | 无根因或定位证据时保留未知，不虚构代码行 |
-
-统一契约当前主要接入 DevTest 报告链路，独立适配器仍需调用方使用；不代表历史数据已无损迁移。
-
-接口响应、任务状态、消费者实际路由、媒体可访问/可解码、最终账务结算分别取证。用户积分和供应商成本分开核算；估算不是账单，退款不等于供应商成本归零。
-
-## 报告
-
-通用 DevTest 默认输出到 `devtest-results/<runId>/`：
-
-| 产物 | 用途 |
-| --- | --- |
-| `测试用例.md` | 用例范围、预期及执行状态 |
-| `开发自测测试报告.md` | 固定结构的开发交付报告 |
-| `report.json` / `report.html` | 结构化数据与浏览报告 |
-| `cases.csv` / `problems.md` | 用例导出与问题清单 |
-| `acceptance-summary.md` / `evidence.json` | 验收摘要和审计证据 |
-| `source-sync.json` | 执行模式源码溯源 |
-
-其他入口可能生成自己的产物，不保证附件完全相同。Mock、跳过、阻断、证据缺失和不适用必须如实保留。格式校验通过不等于业务验收通过。
-
-[DevTest 使用说明](docs/devtest.md) · [报告与发布检查清单](docs/testing/developer-handoff-release-checklist.md)
-
-## 测试与发布
+## 开发与验证
 
 ```bash
 npm run build
-npx --no-install vitest run --maxWorkers=2
-npx --no-install vitest run tests/integration/npm-package-acceptance.test.ts --maxWorkers=1
-node --test integrations/trae-mcp/native-cli.test.mjs
+npm test
+node dist/bin/devtest-cli.js --version
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n' \
+  | node dist/bin/devtest-mcp.js --project-root "$PWD"
 ```
 
-默认 Vitest 排除独立性能基准。发布受控回归应关闭 `RUN_REAL_E2E` / `REAL_E2E_SUBMIT`；源码快照检查仅在显式设置 `PANQU_SOURCE_FIXTURE_ROOT` 且满足前提时运行。跳过不计为通过。
+默认测试覆盖当前纯净内核及 CLI/MCP 契约，不触发真实媒体生成或扣费。提交前还应检查打包内容、安装后的 CLI 版本与 MCP 初始化版本。
 
-发布记录必须使用当轮实际测试数、跳过原因、安装包验收及 SHA，不沿用历史数字。tarball 使用运行时白名单，必须检验解包内容及安装后入口。GitHub 推送、Worker 部署、MCP 重载与项目安装分别验证。
+## 当前版本变更
 
-2026-09-15 受控回归：TypeScript 构建通过；全仓 Vitest 3382 项通过、21 项跳过（真实环境或显式源码快照前提未开启），包含安装包验收；Native MCP 8 项通过。报告定位边界另作专项复测。以上不构成真实生成、路由、账务或生产发布验收。
+### v4.39.0 — 2026-09-15
 
-## 安全
+- 将仓库收敛为单一双模内核：CLI 与 TRAE MCP 共享 `probe`、`plan`、`execute`、`verify`。
+- 移除旧的并行 Agent、平台界面、历史报告与重复入口，避免多个实现或文档描述相互冲突。
+- 保留环境探活、分流推导、媒体任务提交、媒体结构检查与积分流水不变量核对。
+- 更新 README、版本握手和打包说明，仅描述当前存在的源文件与接口。
 
-- 环境地址来自配置引用的环境变量，不猜测本机地址。凭据只通过受控环境变量或会话文件加载。
-- 项目 MCP 会话文件必须符合项目相对路径约束；Native CLI 的显式文件路径和环境变量约定不能照搬到云端输入。
-- 写请求需要明确确认和隔离/清理条件。真实生成、扣费、供应商调用、发布与通知需单独授权。
-- 校验输出、仓库、工作流路径的穿越及符号链接；不要将凭据写入命令示例、Git、报告或 tarball。
-- 幂等与恢复仅在受支持入口提供；超时应先查已有任务，不直接重发付费请求。
+旧版 v4.37 / v4.38 的预览页、报告或已安装 runtime 是历史产物；它们不会随着 GitHub 更新自动替换。
 
-[配置手册](docs/operations/configuration.md) · [部署指南](docs/operations/deployment.md) · [最低成本真实执行](docs/testing/panqu-low-cost-real-execution.md)
-
-## 文档
+## 源码结构
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/devtest/` | 自测内核、业务流程、证据与报告 |
-| `src/acceptance/` / `src/contracts/` | API 验收与共享契约 |
-| `src/agents/` / `src/platform/` | 智能体与平台 |
-| `packages/panqu-agent-cli/` | Agent CLI |
-| `integrations/trae-mcp/` | TRAE 本地适配 |
-| `tests/` | 单元、集成、契约、E2E |
-| `docs/` | 标准、指南与版本记录 |
-
-[文档索引](docs/README.md) · [CHANGELOG](docs/CHANGELOG.md) · [TEST_CASE_V2](docs/testing/testcase-v2-schema.md) · [Developer Self-Test](docs/testing/developer-self-test.md) · [开发验收](docs/developer-acceptance.md) · [断言 DSL](docs/assertion-dsl.md)
+| `src/devtest/core-kernel.ts` | 四个核心动作及组合结果 |
+| `src/devtest/env-probe.ts` | 环境与会话探测 |
+| `src/devtest/routing.ts` | 主站与网关分流推导 |
+| `src/devtest/media-flow.ts` | 媒体提交与任务轮询 |
+| `src/devtest/media-inspector.ts` | MP4 / 图片容器结构检查 |
+| `src/devtest/billing.ts` | 积分流水与三项账务不变量 |
+| `src/devtest/mcp-service.ts` | MCP 工具适配 |
+| `bin/` | CLI 与 stdio MCP 入口 |
+| `tests/unit/devtest/` | 当前核心回归测试 |
