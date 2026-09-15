@@ -1,6 +1,6 @@
 {
   "name": "test-flow",
-  "version": "4.39.0",
+  "version": "5.0.0",
   "description": "Panqu AI DevTest 纯净测试副驾（双模同源版）",
   "type": "module",
   "main": "./dist/src/devtest/index.js",

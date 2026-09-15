@@ -1,10 +1,10 @@
 # Panqu AI DevTest
 
-面向 Panqu 图片和视频链路的轻量测试副驾。源码当前为 **v4.39.0**，只有一套 TypeScript 内核，并以同一逻辑提供本地 CLI 与 TRAE MCP。
+面向 Panqu 图片和视频链路的轻量测试副驾。源码当前为 **v5.0.0**，只有一套 TypeScript 内核，并以同一逻辑提供本地 CLI 与 TRAE MCP。
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 包名 | `test-flow@4.39.0` |
+| 包名 | `test-flow@5.0.0` |
 | 运行时 | Node.js `>=20`、TypeScript、ESM |
 | 入口 | `devtest` CLI、`devtest-mcp` stdio MCP |
 | 核心动作 | `probe`、`plan`、`execute`、`verify` |
@@ -24,7 +24,7 @@ node dist/bin/devtest-cli.js --help
 
 ```bash
 npm pack
-npm install --save-dev ./test-flow-4.39.0.tgz
+npm install --save-dev ./test-flow-5.0.0.tgz
 npx --no-install devtest --version
 ```
 
@@ -91,8 +91,9 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n' \
 
 ## 当前版本变更
 
-### v4.39.0 — 2026-09-15
+### v5.0.0 — 2026-09-15
 
+- 主版本升级：旧 CLI、旧 MCP 工具名、并行 Agent、平台界面、历史报告和旧运行时不再兼容；升级前应重新安装并更新调用方式。
 - 将仓库收敛为单一双模内核：CLI 与 TRAE MCP 共享 `probe`、`plan`、`execute`、`verify`。
 - 移除旧的并行 Agent、平台界面、历史报告与重复入口，避免多个实现或文档描述相互冲突。
 - 保留环境探活、分流推导、媒体任务提交、媒体结构检查与积分流水不变量核对。
