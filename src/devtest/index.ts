@@ -85,4 +85,13 @@ export {
   type FlowRunEvidence,
 } from './types.js';
 
+export {
+  deriveVerificationTargets,
+  evaluateRequirementCoverage,
+  type CoverageStatus,
+  type VerificationTarget,
+  type TargetCoverageVerdict,
+  type RequirementCoverageReport,
+} from './verification-target.js';
+
 export { DEVTEST_VERSION, PLATFORM_VERSION } from './version.js';

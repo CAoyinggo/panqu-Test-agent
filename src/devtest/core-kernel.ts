@@ -3,6 +3,12 @@ import { RoutingOracle, type MainSiteConfigSnapshot, type GatewayRoutingVerdict,
 import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from "./billing.js";
 import { inspectMp4Buffer, inspectImageBuffer, type MediaInspectionResult } from "./media-inspector.js";
 import { submitMediaTask, pollTaskStatus, loadPanquSession, type PanquSession } from "./media-flow.js";
+import {
+  deriveVerificationTargets,
+  evaluateRequirementCoverage,
+  type VerificationTarget,
+  type RequirementCoverageReport,
+} from "./verification-target.js";
 
 export interface ProbeKernelOptions {
   env?: string; baseUrl?: string; gatewayUrl?: string; sessionFile?: string; mock?: boolean; timeoutMs?: number;
@@ -47,6 +53,7 @@ export interface PlanKernelResult {
   decision: string; willDivert: boolean; routeLine: number; expectedPoints: number;
   expectedSnapshot?: { orgId: number; routeGroupId: number; newapiGroup: string; newapiModel: string };
   gatewayRouting: GatewayRoutingVerdict; candidateChannels: string[]; reason: string;
+  targets: VerificationTarget[];
 }
 
 export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult> {
@@ -79,10 +86,12 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
   const targetGroup = mainVerdict.expectedSnapshot?.newapiGroup || "panqu_test";
   const channels: GatewayChannelConfig[] = options.channels || (mainVerdict.willDivert ? [{ id: 1, name: `${targetModel}主渠道`, group: targetGroup, models: [targetModel], status: 1, weight: 100, dailyQuotaLimit: 0, usedQuota: 0 }] : []);
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
+  const targets = deriveVerificationTargets(modelId, mediaType, options.requirement);
   return {
     ok: true, modelId, mediaType, flowType, decision: mainVerdict.decision, willDivert: mainVerdict.willDivert,
     routeLine: mainVerdict.line, expectedPoints, expectedSnapshot: mainVerdict.expectedSnapshot,
     gatewayRouting: gwVerdict, candidateChannels: gwVerdict.allowedChannels, reason: mainVerdict.reason,
+    targets,
   };
 }
 
@@ -155,6 +164,7 @@ export interface VerifyKernelResult {
   progress?: number; probeDurationMs?: number; artifact?: MediaInspectionResult; billing?: BillingAuditReport;
   billingAudit: "AUDITED" | "SKIPPED_NO_LOGS";
   invariants?: { antiDoubleBilling: boolean; netChargeZero: boolean; refundIdempotency: boolean };
+  coverageReport?: RequirementCoverageReport;
   reasons: string[];
 }
 
@@ -166,7 +176,11 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   let session: PanquSession | null = null;
   if (options.sessionFile) {
     try { session = await loadPanquSession(options.sessionFile, options.env || "test"); }
-    catch (err) { return { ok: false, passed: false, taskId, modelId, mediaType, status: "ERROR", mode: "real", billingAudit: "SKIPPED_NO_LOGS", reasons: [`加载凭据失败: ${err instanceof Error ? err.message : String(err)}`] }; }
+    catch (err) {
+      const errRes: VerifyKernelResult = { ok: false, passed: false, taskId, modelId, mediaType, status: "ERROR", mode: "real", billingAudit: "SKIPPED_NO_LOGS", reasons: [`加载凭据失败: ${err instanceof Error ? err.message : String(err)}`] };
+      errRes.coverageReport = evaluateRequirementCoverage(deriveVerificationTargets(modelId, mediaType), errRes);
+      return errRes;
+    }
   } else if (options.cookies && options.baseUrl) {
     session = { env: options.env || "test", base_url: options.baseUrl, cookie_string: options.cookies };
   }
@@ -177,16 +191,20 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   if (session) {
     const { finalSnapshot } = await pollTaskStatus(taskId, { baseUrl: session.base_url, cookies: session.cookie_string, mediaType, pollTimeoutSec: options.pollTimeoutSec ?? 10 });
     if (finalSnapshot.taskStatus === 1) {
-      return { ok: true, passed: false, taskId, modelId, mediaType, status: "PROCESSING", progress: finalSnapshot.progress, mode: "real", billingAudit: "SKIPPED_NO_LOGS", reasons: [`任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`] };
+      const procRes: VerifyKernelResult = { ok: true, passed: false, taskId, modelId, mediaType, status: "PROCESSING", progress: finalSnapshot.progress, mode: "real", billingAudit: "SKIPPED_NO_LOGS", reasons: [`任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`] };
+      procRes.coverageReport = evaluateRequirementCoverage(deriveVerificationTargets(modelId, mediaType), procRes);
+      return procRes;
     }
     if (finalSnapshot.taskStatus === 3 || finalSnapshot.taskStatus === 4) {
       terminalStatus = "FAILED";
       const bRes = options.scoreLogs?.length ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus: "FAILED", expectedPoints, scoreLogs: options.scoreLogs }) : undefined;
-      return {
-        ok: true, passed: false, taskId, modelId, mediaType, status: 'FAILED', mode: 'real', billing: bRes,
-        billingAudit: bRes ? 'AUDITED' : 'SKIPPED_NO_LOGS', invariants: bRes ? { antiDoubleBilling: bRes.antiDoubleBilling ?? true, netChargeZero: bRes.netChargeZero ?? true, refundIdempotency: bRes.refundIdempotency ?? true } : undefined,
-        reasons: [`任务执行失败: ${finalSnapshot.error || '未知服务端错误'}`, ...(bRes && !bRes.passed ? bRes.reasons : [])],
+      const failRes: VerifyKernelResult = {
+        ok: true, passed: false, taskId, modelId, mediaType, status: "FAILED", mode: "real", billing: bRes,
+        billingAudit: bRes ? "AUDITED" : "SKIPPED_NO_LOGS", invariants: bRes ? { antiDoubleBilling: bRes.antiDoubleBilling ?? true, netChargeZero: bRes.netChargeZero ?? true, refundIdempotency: bRes.refundIdempotency ?? true } : undefined,
+        reasons: [`任务执行失败: ${finalSnapshot.error || "未知服务端错误"}`, ...(bRes && !bRes.passed ? bRes.reasons : [])],
       };
+      failRes.coverageReport = evaluateRequirementCoverage(deriveVerificationTargets(modelId, mediaType), failRes);
+      return failRes;
     }
     const mediaUrl = finalSnapshot.videoUrl || finalSnapshot.imageUrl || options.videoUrl || options.imageUrl;
     if (mediaUrl && !artifactBuffer) {
@@ -199,7 +217,12 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   }
 
   if (!artifactBuffer && !options.scoreLogs?.length) {
-    return { ok: true, passed: false, taskId, modelId, mediaType, status: "UNVERIFIED", mode: session ? "real" : "mock", billingAudit: "SKIPPED_NO_LOGS", reasons: ["缺失真实媒体产物（未提供 assetBuffer 且未获取到有效的产物下载 URL），物理结构未验真 [UNVERIFIED]", "未提供账单流水，跳过账务对账 [SKIPPED_NO_LOGS]"] };
+    const unverifiedRes: VerifyKernelResult = {
+      ok: true, passed: false, taskId, modelId, mediaType, status: "UNVERIFIED", mode: session ? "real" : "mock", billingAudit: "SKIPPED_NO_LOGS",
+      reasons: ["缺失真实媒体产物（未提供 assetBuffer 且未获取到有效的产物下载 URL），物理结构未验真 [UNVERIFIED]", "未提供账单流水，跳过账务对账 [SKIPPED_NO_LOGS]"],
+    };
+    unverifiedRes.coverageReport = evaluateRequirementCoverage(deriveVerificationTargets(modelId, mediaType), unverifiedRes);
+    return unverifiedRes;
   }
   const artifact = artifactBuffer ? (mediaType === "video" ? inspectMp4Buffer(artifactBuffer) : inspectImageBuffer(artifactBuffer)) : undefined;
   const billing = options.scoreLogs?.length ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus, expectedPoints, scoreLogs: options.scoreLogs }) : undefined;
@@ -213,8 +236,10 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   if (invariants && !invariants.netChargeZero) reasons.push("违背失败净扣归零不变量: 失败任务净扣不为 0");
   if (invariants && !invariants.refundIdempotency) reasons.push("违背退款幂等核销不变量: 存在重复退款");
   const passed = Boolean(artifact && artifact.decodable && billing && billing.passed && invariants && invariants.antiDoubleBilling && invariants.netChargeZero && invariants.refundIdempotency);
-  return {
+  const baseResult: VerifyKernelResult = {
     ok: true, passed, taskId, modelId, mediaType, status: passed ? "SUCCESS" : "FAILED", mode: session ? "real" : "mock",
     probeDurationMs, artifact, billing, billingAudit: billing ? "AUDITED" : "SKIPPED_NO_LOGS", invariants, reasons,
   };
+  baseResult.coverageReport = evaluateRequirementCoverage(deriveVerificationTargets(modelId, mediaType), baseResult);
+  return baseResult;
 }
