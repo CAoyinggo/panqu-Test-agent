@@ -21,13 +21,14 @@ import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from './bi
 import {
   inspectMp4Buffer,
   inspectImageBuffer,
-  createSyntheticValidMp4,
   type MediaInspectionResult,
 } from './media-inspector.js';
 import {
   submitMediaTask,
+  pollTaskStatus,
   loadPanquSession,
   type PanquSession,
+  type TaskStatusSnapshot,
 } from './media-flow.js';
 
 // ============================================================================
@@ -127,6 +128,7 @@ export interface PlanKernelOptions {
   aspectRatio?: string;
   userGroupIds?: number[];
   mainConfig?: Partial<MainSiteConfigSnapshot>;
+  channels?: GatewayChannelConfig[];
 }
 
 export interface PlanKernelResult {
@@ -225,33 +227,31 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     );
   }
 
-  // 4. 网关渠道候选与加权推导
-  const channels: GatewayChannelConfig[] = [
-    {
-      id: 36,
-      name: '万相—yhuo',
-      group: 'panqu_test',
-      models: ['wan3.0-video', 'runninghub-nano-banana-2', 'gpt-image-2.5'],
-      status: 1,
-      weight: 60,
-      dailyQuotaLimit: 100000,
-      usedQuota: 12000,
-    },
-    {
-      id: 38,
-      name: '万相—备用渠道',
-      group: 'panqu_test',
-      models: ['wan3.0-video', 'runninghub-nano-banana-2', 'gpt-image-2.5'],
-      status: 1,
-      weight: 40,
-      dailyQuotaLimit: 50000,
-      usedQuota: 8000,
-    },
-  ];
+  // 4. 网关渠道候选与加权推导（从真实配置或当前可用渠道推导）
+  const targetModelName = mainVerdict.expectedSnapshot?.newapiModel
+    || baseConfig.modelAliases?.[modelId]
+    || (mediaType === 'video' ? 'wan3.0-video' : 'runninghub-nano-banana-2');
+  const targetGroup = mainVerdict.expectedSnapshot?.newapiGroup || 'panqu_test';
 
-  const targetModelName = baseConfig.modelAliases?.[modelId] || (mediaType === 'video' ? 'wan3.0-video' : 'runninghub-nano-banana-2');
+  const channels: GatewayChannelConfig[] = options.channels || (
+    mainVerdict.willDivert
+      ? [
+          {
+            id: 1,
+            name: `${targetModelName}主渠道`,
+            group: targetGroup,
+            models: [targetModelName],
+            status: 1,
+            weight: 100,
+            dailyQuotaLimit: 0,
+            usedQuota: 0,
+          },
+        ]
+      : []
+  );
+
   const gatewayVerdict = RoutingOracle.evaluateGatewayRouting(
-    'panqu_test',
+    targetGroup,
     targetModelName,
     expectedPoints,
     channels,
@@ -403,7 +403,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     mediaType,
     status: 'SUBMITTED',
     points: expectedPoints,
-    message: `[受控仿真] 模拟生成任务已派发，分配 Task ID #${simulatedTaskId}，预扣 ${expectedPoints} 积分`,
+    message: `[MOCK 离线仿真] 仅生成模拟 ID，未发送主站请求 (模拟任务 ID #${simulatedTaskId}，预扣 ${expectedPoints} 积分)`,
     credentialsMasked: 'PHPSESSID=***; session_env=mock_test',
   };
 }
@@ -411,6 +411,49 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
 // ============================================================================
 // 4. verify: 物理验真与防资损对账
 // ============================================================================
+
+/**
+ * 流式探测远程媒体二进制头部 (Range: bytes=0-65535)
+ */
+export async function fetchMediaRangeBuffer(url: string, timeoutMs = 10000): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Range: 'bytes=0-65535',
+        'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    if (res.body && typeof (res.body as any).getReader === 'function') {
+      const reader = (res.body as any).getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      while (totalBytes < 65536) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        chunks.push(value);
+        totalBytes += value.byteLength;
+      }
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore cancel error
+      }
+      const combined = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+      return combined.subarray(0, 65536);
+    }
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab).subarray(0, 65536);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface VerifyKernelOptions {
   taskId: number;
@@ -423,6 +466,13 @@ export interface VerifyKernelOptions {
   terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT';
   resolution?: string;
   duration?: number;
+  sessionFile?: string;
+  env?: 'test' | 'preonline';
+  baseUrl?: string;
+  cookies?: string;
+  videoUrl?: string;
+  imageUrl?: string;
+  pollTimeoutSec?: number;
 }
 
 export interface VerifyKernelResult {
@@ -431,9 +481,14 @@ export interface VerifyKernelResult {
   taskId: number;
   modelId: number;
   mediaType: 'video' | 'image';
-  artifact: MediaInspectionResult;
-  billing: BillingAuditReport;
-  invariants: {
+  status: 'SUCCESS' | 'FAILED' | 'PROCESSING' | 'UNVERIFIED' | 'ERROR';
+  mode: 'real' | 'mock';
+  progress?: number;
+  probeDurationMs?: number;
+  artifact?: MediaInspectionResult;
+  billing?: BillingAuditReport;
+  billingAudit: 'AUDITED' | 'SKIPPED_NO_LOGS';
+  invariants?: {
     antiDoubleBilling: boolean;
     netChargeZero: boolean;
     refundIdempotency: boolean;
@@ -443,7 +498,6 @@ export interface VerifyKernelResult {
 
 export async function verify(options: VerifyKernelOptions): Promise<VerifyKernelResult> {
   const { taskId, modelId, mediaType } = options;
-  const terminalStatus = options.terminalStatus || 'SUCCESS';
   const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
 
@@ -455,73 +509,218 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     resolution,
   });
 
-  // 2. 物理产物容器结构验真 (MP4 Box / PNG IHDR)
+  let mode: 'real' | 'mock' = 'mock';
+  let targetStatus: 'SUCCESS' | 'FAILED' | 'TIMEOUT' = options.terminalStatus || 'SUCCESS';
+  let resolvedVideoUrl = options.videoUrl;
+  let resolvedImageUrl = options.imageUrl;
+  let probeDurationMs: number | undefined;
   let artifactBuffer = options.assetBuffer ?? options.artifactBuffer;
-  if (!artifactBuffer) {
-    if (mediaType === 'video') {
-      artifactBuffer = createSyntheticValidMp4({
-        width: resolution.includes('1080') ? 1920 : (resolution.includes('720') ? 1280 : 854),
-        height: resolution.includes('1080') ? 1080 : (resolution.includes('720') ? 720 : 480),
-        durationSeconds: duration || 4,
-      });
-    } else {
-      artifactBuffer = Buffer.concat([
-        Buffer.from('89504e470d0a1a0a0000000d4948445200000400000004000806000000', 'hex'),
-        Buffer.alloc(32),
-      ]);
-    }
-  }
-
-  const artifact: MediaInspectionResult = mediaType === 'video'
-    ? inspectMp4Buffer(artifactBuffer)
-    : inspectImageBuffer(artifactBuffer);
-
-  // 3. 防资损对账审计（三大不变量核验）
-  let scoreLogs = options.scoreLogs;
-  if (!scoreLogs || scoreLogs.length === 0) {
-    if (terminalStatus === 'FAILED') {
-      scoreLogs = [
-        { task_id: taskId, type: 2, score: -expectedPoints, memo: '任务预扣' },
-        { task_id: taskId, type: 1, score: expectedPoints, memo: '失败全额退款' },
-      ];
-    } else {
-      scoreLogs = [
-        { task_id: taskId, type: 2, score: -expectedPoints, memo: '任务预扣' },
-      ];
-    }
-  }
-
-  const billing: BillingAuditReport = BillingOracle.reconcileTaskLedger({
-    taskId,
-    terminalStatus,
-    expectedPoints,
-    scoreLogs,
-  });
-
-  const invariants = {
-    antiDoubleBilling: billing.antiDoubleBilling ?? true,
-    netChargeZero: billing.netChargeZero ?? true,
-    refundIdempotency: billing.refundIdempotency ?? true,
-  };
-
   const reasons: string[] = [];
-  if (!artifact.decodable) {
-    reasons.push(`产物物理完整性校验失败: ${artifact.reasons.join(', ')}`);
-  }
-  if (!billing.passed) {
-    reasons.push(`账单对账审计不通过: ${billing.reasons.join(', ')}`);
-  }
-  if (!invariants.antiDoubleBilling) {
-    reasons.push('违背防重复扣费不变量: 存在多笔扣费流水');
-  }
-  if (!invariants.netChargeZero) {
-    reasons.push('违背失败净扣归零不变量: 失败任务净扣积分不为 0');
-  }
-  if (!invariants.refundIdempotency) {
-    reasons.push('违背退款幂等核销不变量: 存在重复退款流水');
+
+  // 2. 真实网络链路：检查是否提供会话以查询真实主站
+  let session: PanquSession | null = null;
+  if (options.sessionFile) {
+    mode = 'real';
+    try {
+      session = await loadPanquSession(options.sessionFile, options.env || 'test');
+    } catch (err) {
+      return {
+        ok: false,
+        passed: false,
+        taskId,
+        modelId,
+        mediaType,
+        status: 'ERROR',
+        mode: 'real',
+        billingAudit: 'SKIPPED_NO_LOGS',
+        reasons: [`加载会话凭据失败: ${err instanceof Error ? err.message : String(err)}`],
+      };
+    }
+  } else if (options.cookies && options.baseUrl) {
+    mode = 'real';
+    session = {
+      env: options.env || 'test',
+      base_url: options.baseUrl,
+      cookie_string: options.cookies,
+    };
   }
 
-  const passed = artifact.decodable && billing.passed && invariants.antiDoubleBilling && invariants.netChargeZero && invariants.refundIdempotency;
+  // 3. 若已连接会话，调用 pollTaskStatus 获取主站实时状态
+  if (session) {
+    try {
+      const { finalSnapshot } = await pollTaskStatus(taskId, {
+        baseUrl: session.base_url,
+        cookies: session.cookie_string,
+        mediaType,
+        pollTimeoutSec: options.pollTimeoutSec ?? 10,
+      });
+
+      const taskStatus = finalSnapshot.taskStatus;
+
+      // 3.1 状态 1: 排队中 / 处理中
+      if (taskStatus === 1) {
+        return {
+          ok: true,
+          passed: false,
+          taskId,
+          modelId,
+          mediaType,
+          status: 'PROCESSING',
+          progress: finalSnapshot.progress,
+          mode: 'real',
+          billingAudit: 'SKIPPED_NO_LOGS',
+          reasons: [`任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`],
+        };
+      }
+
+      // 3.2 状态 3 或 4: 失败或异常
+      if (taskStatus === 3 || taskStatus === 4) {
+        targetStatus = 'FAILED';
+        let billing: BillingAuditReport | undefined;
+        let billingAudit: 'AUDITED' | 'SKIPPED_NO_LOGS' = 'SKIPPED_NO_LOGS';
+        let invariants: VerifyKernelResult['invariants'];
+
+        if (options.scoreLogs && options.scoreLogs.length > 0) {
+          billing = BillingOracle.reconcileTaskLedger({
+            taskId,
+            terminalStatus: 'FAILED',
+            expectedPoints,
+            scoreLogs: options.scoreLogs,
+          });
+          billingAudit = 'AUDITED';
+          invariants = {
+            antiDoubleBilling: billing.antiDoubleBilling ?? true,
+            netChargeZero: billing.netChargeZero ?? true,
+            refundIdempotency: billing.refundIdempotency ?? true,
+          };
+          if (!billing.passed) {
+            reasons.push(`账单对账审计不通过: ${billing.reasons.join(', ')}`);
+          }
+        } else {
+          reasons.push('未提供账单流水，跳过账务对账 [SKIPPED_NO_LOGS]');
+        }
+
+        reasons.unshift(`任务 #${taskId} 执行失败: ${finalSnapshot.error || `主站状态为 ${finalSnapshot.statusLabel}`}`);
+
+        return {
+          ok: true,
+          passed: false,
+          taskId,
+          modelId,
+          mediaType,
+          status: 'FAILED',
+          progress: finalSnapshot.progress,
+          mode: 'real',
+          billing,
+          billingAudit,
+          invariants,
+          reasons,
+        };
+      }
+
+      // 3.3 状态 2: 成功
+      if (taskStatus === 2) {
+        targetStatus = 'SUCCESS';
+        resolvedVideoUrl = finalSnapshot.videoUrl;
+        resolvedImageUrl = finalSnapshot.imageUrl;
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        passed: false,
+        taskId,
+        modelId,
+        mediaType,
+        status: 'ERROR',
+        mode: 'real',
+        billingAudit: 'SKIPPED_NO_LOGS',
+        reasons: [`轮询任务状态异常: ${err instanceof Error ? err.message : String(err)}`],
+      };
+    }
+  }
+
+  // 4. 真实二进制流式探测 (Range: bytes=0-65535)
+  const targetUrl = mediaType === 'video' ? resolvedVideoUrl : (resolvedImageUrl || resolvedVideoUrl);
+  if (!artifactBuffer && targetUrl) {
+    mode = 'real';
+    const probeStart = Date.now();
+    try {
+      artifactBuffer = await fetchMediaRangeBuffer(targetUrl);
+      probeDurationMs = Date.now() - probeStart;
+    } catch (err) {
+      reasons.push(`流式探测产物二进制失败 (${targetUrl}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 5. 产物物理结构验真 (MP4 Box / PNG IHDR)
+  let artifact: MediaInspectionResult | undefined;
+  if (artifactBuffer) {
+    artifact = mediaType === 'video'
+      ? inspectMp4Buffer(artifactBuffer)
+      : inspectImageBuffer(artifactBuffer);
+
+    if (!artifact.decodable) {
+      reasons.push(`产物物理完整性校验失败: ${artifact.reasons.join(', ')}`);
+    }
+  } else {
+    reasons.push('缺失真实媒体产物（未提供 assetBuffer 且未获取到有效的产物下载 URL），物理结构未验真');
+  }
+
+  // 6. 防资损对账审计（三大不变量核验）
+  let billing: BillingAuditReport | undefined;
+  let billingAudit: 'AUDITED' | 'SKIPPED_NO_LOGS' = 'SKIPPED_NO_LOGS';
+  let invariants: VerifyKernelResult['invariants'];
+
+  if (options.scoreLogs && options.scoreLogs.length > 0) {
+    billing = BillingOracle.reconcileTaskLedger({
+      taskId,
+      terminalStatus: targetStatus,
+      expectedPoints,
+      scoreLogs: options.scoreLogs,
+    });
+    billingAudit = 'AUDITED';
+    invariants = {
+      antiDoubleBilling: billing.antiDoubleBilling ?? true,
+      netChargeZero: billing.netChargeZero ?? true,
+      refundIdempotency: billing.refundIdempotency ?? true,
+    };
+
+    if (!billing.passed) {
+      reasons.push(`账单对账审计不通过: ${billing.reasons.join(', ')}`);
+    }
+    if (!invariants.antiDoubleBilling) {
+      reasons.push('违背防重复扣费不变量: 存在多笔扣费流水');
+    }
+    if (!invariants.netChargeZero) {
+      reasons.push('违背失败净扣归零不变量: 失败任务净扣积分不为 0');
+    }
+    if (!invariants.refundIdempotency) {
+      reasons.push('违背退款幂等核销不变量: 存在重复退款流水');
+    }
+  } else {
+    reasons.push('未提供账单流水，跳过账务对账 [SKIPPED_NO_LOGS]');
+  }
+
+  // 7. 终极真实验收裁决：物理产物必须解码通过，账务必须经审计且不变量全部通过
+  const passed = Boolean(
+    artifact &&
+    artifact.decodable &&
+    billingAudit === 'AUDITED' &&
+    billing &&
+    billing.passed &&
+    invariants &&
+    invariants.antiDoubleBilling &&
+    invariants.netChargeZero &&
+    invariants.refundIdempotency
+  );
+
+  const status: VerifyKernelResult['status'] = passed
+    ? 'SUCCESS'
+    : targetStatus === 'FAILED'
+    ? 'FAILED'
+    : (!artifact && billingAudit === 'SKIPPED_NO_LOGS')
+    ? 'UNVERIFIED'
+    : 'FAILED';
 
   return {
     ok: true,
@@ -529,8 +728,12 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     taskId,
     modelId,
     mediaType,
+    status,
+    mode,
+    probeDurationMs,
     artifact,
     billing,
+    billingAudit,
     invariants,
     reasons,
   };

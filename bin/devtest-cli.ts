@@ -271,6 +271,10 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED') || 'SUCCESS';
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
+        const sessionFile = (options['session-file'] as string) || (options.session as string) || (options.sessionFile as string);
+        const env = (options.env as 'test' | 'preonline') || 'test';
+        const videoUrl = options['video-url'] as string | undefined;
+        const imageUrl = options['image-url'] as string | undefined;
 
         const verifyOptions: VerifyKernelOptions = {
           taskId,
@@ -280,6 +284,10 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           terminalStatus,
           resolution,
           duration,
+          sessionFile,
+          env,
+          videoUrl,
+          imageUrl,
         };
 
         const result = await verify(verifyOptions);
@@ -289,27 +297,56 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         } else {
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
           console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账${c.reset} [任务 #${result.taskId}]`);
-          console.log(`${c.bold}最终裁决:${c.reset} ${result.passed ? `${c.green}● ALL PASS (验真与账务全部通过)${c.reset}` : `${c.red}● FAILED (存在违背或缺陷)${c.reset}`}`);
-          console.log(`\n${c.bold}1. 产物物理结构验真 (Media Inspection):${c.reset}`);
-          console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 完整${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'}`);
-          console.log(`   物理尺寸: ${result.artifact.dimensions ? `${result.artifact.dimensions.width}x${result.artifact.dimensions.height}` : 'N/A'}`);
-          if (result.artifact.durationSeconds !== undefined) {
-            console.log(`   视频时长: ${result.artifact.durationSeconds} 秒`);
+
+          if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
+            console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);
           }
-          console.log(`   数据块校验: ${result.artifact.hasMdat !== false ? `${c.green}✔ 音视频裸流有效${c.reset}` : `${c.red}✖ 缺少 mdat 数据块${c.reset}`}`);
-          console.log(`   可解码状态: ${result.artifact.decodable ? `${c.green}✔ 完全符合规范${c.reset}` : `${c.red}✖ 结构异常${c.reset}`}`);
+
+          let verdictLabel: string;
+          if (result.passed) {
+            verdictLabel = `${c.green}● ALL PASS (验真与账务全部通过)${c.reset}`;
+          } else if (result.status === 'PROCESSING') {
+            verdictLabel = `${c.yellow}● PROCESSING (排队处理中: ${result.progress ?? 0}%)${c.reset}`;
+          } else if (result.status === 'UNVERIFIED') {
+            verdictLabel = `${c.yellow}● UNVERIFIED (凭据缺失，未通过线上验收)${c.reset}`;
+          } else {
+            verdictLabel = `${c.red}● FAILED (存在违背或缺陷)${c.reset}`;
+          }
+          console.log(`${c.bold}最终裁决:${c.reset} ${verdictLabel}`);
+
+          console.log(`\n${c.bold}1. 产物物理结构验真 (Media Inspection):${c.reset}`);
+          if (result.artifact) {
+            if (result.probeDurationMs !== undefined) {
+              console.log(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
+            }
+            console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 完整${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'}`);
+            console.log(`   物理尺寸: ${result.artifact.dimensions ? `${result.artifact.dimensions.width}x${result.artifact.dimensions.height}` : 'N/A'}`);
+            if (result.artifact.durationSeconds !== undefined) {
+              console.log(`   视频时长: ${result.artifact.durationSeconds} 秒`);
+            }
+            console.log(`   数据块校验: ${result.artifact.hasMdat !== false ? `${c.green}✔ 音视频裸流有效${c.reset}` : `${c.red}✖ 缺少 mdat 数据块${c.reset}`}`);
+            console.log(`   可解码状态: ${result.artifact.decodable ? `${c.green}✔ 完全符合规范${c.reset}` : `${c.red}✖ 结构异常${c.reset}`}`);
+          } else {
+            console.log(`   ${c.yellow}未获取产物二进制 Buffer (未提供 assetBuffer 且未连接主站获取产物 URL)${c.reset}`);
+          }
 
           console.log(`\n${c.bold}2. 防资损账务对账 (Billing & Invariants):${c.reset}`);
-          console.log(`   对账结果: ${result.billing.passed ? `${c.green}✔ PASS${c.reset}` : `${c.red}✖ MISMATCH${c.reset}`}`);
-          console.log(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
-          console.log(`   核心不变量核验:`);
-          console.log(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 存在多重扣费${c.reset}`}`);
-          console.log(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 失败未完全退款${c.reset}`}`);
-          console.log(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 重复退款${c.reset}`}`);
+          if (result.billing) {
+            console.log(`   对账结果: ${result.billing.passed ? `${c.green}✔ PASS${c.reset}` : `${c.red}✖ MISMATCH${c.reset}`}`);
+            console.log(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
+            if (result.invariants) {
+              console.log(`   核心不变量核验:`);
+              console.log(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 存在多重扣费${c.reset}`}`);
+              console.log(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 失败未完全退款${c.reset}`}`);
+              console.log(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 重复退款${c.reset}`}`);
+            }
+          } else {
+            console.log(`   ${c.yellow}未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]${c.reset}`);
+          }
 
           if (result.reasons.length > 0) {
-            console.log(`\n${c.bold}问题明细:${c.reset}`);
-            for (const r of result.reasons) console.log(`  ${c.red}✖ ${r}${c.reset}`);
+            console.log(`\n${c.bold}核验明细 / 告警:${c.reset}`);
+            for (const r of result.reasons) console.log(`  ${result.passed ? c.green : c.yellow}👉 ${r}${c.reset}`);
           }
           console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
         }

@@ -101,9 +101,20 @@ export class DevTestMcpService {
           scoreLogs: args.score_logs || args.scoreLogs,
           resolution: args.resolution,
           duration: args.duration,
+          sessionFile: args.session_file || args.sessionFile,
+          env: args.env,
+          videoUrl: args.video_url || args.videoUrl,
+          imageUrl: args.image_url || args.imageUrl,
+          assetBuffer: args.asset_buffer || args.assetBuffer,
+          artifactBuffer: args.artifact_buffer || args.artifactBuffer,
         });
-        const summary = `### 📋 Panqu 物理验真与防资损对账回执\n- **最终裁决**: ${res.passed ? 'ALL PASS' : 'FAILED'}\n- **产物验真**: ${res.artifact.decodable ? 'PASS (MP4/PNG容器结构完整)' : 'FAIL'}\n- **防重复扣费**: ${res.invariants.antiDoubleBilling ? 'PASS' : 'FAIL'}\n- **失败净扣归零**: ${res.invariants.netChargeZero ? 'PASS' : 'FAIL'}\n- **退款幂等核销**: ${res.invariants.refundIdempotency ? 'PASS' : 'FAIL'}${res.reasons.length > 0 ? `\n- **异常原因**: ${res.reasons.join('; ')}` : ''}`;
-        return { ok: res.ok && res.passed, action: 'verify', summary, data: res };
+        const artifactStatus = res.artifact ? (res.artifact.decodable ? 'PASS (MP4/PNG容器结构完整)' : 'FAIL') : 'UNVERIFIED (未获取真实产物)';
+        const billingStatus = res.billing ? (res.billing.passed ? 'PASS' : 'FAIL') : 'SKIPPED_NO_LOGS (未提供流水)';
+        const antiDouble = res.invariants ? (res.invariants.antiDoubleBilling ? 'PASS' : 'FAIL') : 'SKIPPED';
+        const netZero = res.invariants ? (res.invariants.netChargeZero ? 'PASS' : 'FAIL') : 'SKIPPED';
+        const refundIdem = res.invariants ? (res.invariants.refundIdempotency ? 'PASS' : 'FAIL') : 'SKIPPED';
+        const summary = `### 📋 Panqu 物理验真与防资损对账回执\n- **最终裁决**: ${res.passed ? 'ALL PASS' : res.status}\n- **产物验真**: ${artifactStatus}\n- **账务对账**: ${billingStatus}\n- **防重复扣费**: ${antiDouble}\n- **失败净扣归零**: ${netZero}\n- **退款幂等核销**: ${refundIdem}${res.reasons.length > 0 ? `\n- **核验明细**: ${res.reasons.join('; ')}` : ''}`;
+        return { ok: res.ok, action: 'verify', summary, data: res };
       }
       default:
         return { ok: false, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };

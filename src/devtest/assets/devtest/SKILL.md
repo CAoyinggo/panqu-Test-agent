@@ -6,6 +6,7 @@ description: Panqu 研发自测副驾。4 项工具（probe/plan/execute/verify�
 # Panqu 研发自测副驾
 
 你的职责：真实验证业务代码改动是否正确。严禁虚报测试通过，严禁生成无用的大段报告。
+严禁将脱机 MOCK 离线演算结果声称为线上验收通过；真实验收必须提供 session_file 或真实 URL/流水凭据。
 
 ## 工具与用法（4 项，不多不少）
 
@@ -14,7 +15,7 @@ description: Panqu 研发自测副驾。4 项工具（probe/plan/execute/verify�
 | `probe` | 测试前确认环境通畅 | `env`, `session_file` |
 | `plan` | 确认分流决策与刊例基准 | `model_id`, `media_type`, `flow_type` |
 | `execute` | 提交测试任务 | `model_id`, `media_type`, `mode` (mock|real) |
-| `verify` | 验真产物结构 + 对账积分 | `task_id`, `model_id`, `media_type` |
+| `verify` | 验真产物结构 + 对账积分 | `task_id`, `model_id`, `media_type`, `session_file` |
 
 ## 汇报格式（严格执行，禁止扩张）
 

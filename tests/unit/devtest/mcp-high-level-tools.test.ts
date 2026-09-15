@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { DevTestMcpService, DEVTEST_MCP_TOOL } from '../../../src/devtest/mcp-service.js';
+import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 
 describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
   const service = new DevTestMcpService(path.resolve('.'));
@@ -51,7 +52,7 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
       expect(res.data.mode).toBe('mock');
     });
 
-    it('action: verify 返回物理验真与对账回执', async () => {
+    it('action: verify 返回物理验真与对账回执（无凭据时如实返回 UNVERIFIED）', async () => {
       const res = await service.call({
         action: 'verify',
         task_id: 12345,
@@ -62,6 +63,24 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
       expect(res.ok).toBe(true);
       expect(res.action).toBe('verify');
       expect(res.summary).toContain('物理验真与防资损对账回执');
+      expect(res.data.passed).toBe(false);
+      expect(res.data.status).toBe('UNVERIFIED');
+      expect(res.data.billingAudit).toBe('SKIPPED_NO_LOGS');
+    });
+
+    it('action: verify 在提供有效二进制 Buffer 与流水时核验通过', async () => {
+      const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+      const res = await service.call({
+        action: 'verify',
+        task_id: 12345,
+        model_id: 84,
+        media_type: 'video',
+        expected_points: 28,
+        terminal_status: 'SUCCESS',
+        score_logs: [{ task_id: 12345, type: 2, score: -28 }],
+        artifact_buffer: validMp4,
+      });
+      expect(res.ok).toBe(true);
       expect(res.data.passed).toBe(true);
       expect(res.data.artifact.decodable).toBe(true);
       expect(res.data.invariants.antiDoubleBilling).toBe(true);

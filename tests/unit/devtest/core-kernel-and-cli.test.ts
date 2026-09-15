@@ -12,6 +12,7 @@ import {
 import { runDevTestCli } from '../../../bin/devtest-cli.js';
 import { DEVTEST_VERSION } from '../../../src/devtest/version.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
+import * as mediaFlow from '../../../src/devtest/media-flow.js';
 
 describe('DevTest 纯净内核层 (Core Kernel)', () => {
   describe('1. probe (环境探活)', () => {
@@ -135,12 +136,14 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
 
       expect(res.ok).toBe(true);
       expect(res.passed).toBe(true);
-      expect(res.artifact.decodable).toBe(true);
-      expect(res.artifact.containerIdentified).toBe(true);
-      expect(res.billing.passed).toBe(true);
-      expect(res.invariants.antiDoubleBilling).toBe(true);
-      expect(res.invariants.netChargeZero).toBe(true);
-      expect(res.invariants.refundIdempotency).toBe(true);
+      expect(res.status).toBe('SUCCESS');
+      expect(res.artifact?.decodable).toBe(true);
+      expect(res.artifact?.containerIdentified).toBe(true);
+      expect(res.billing?.passed).toBe(true);
+      expect(res.billingAudit).toBe('AUDITED');
+      expect(res.invariants?.antiDoubleBilling).toBe(true);
+      expect(res.invariants?.netChargeZero).toBe(true);
+      expect(res.invariants?.refundIdempotency).toBe(true);
     });
 
     it('不变量拦截：失败任务未退款导致 netChargeZero 不变量失败', async () => {
@@ -160,7 +163,8 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
 
       expect(res.ok).toBe(true);
       expect(res.passed).toBe(false);
-      expect(res.invariants.netChargeZero).toBe(false);
+      expect(res.status).toBe('FAILED');
+      expect(res.invariants?.netChargeZero).toBe(false);
       expect(res.reasons.some((r) => r.includes('失败净扣归零'))).toBe(true);
     });
 
@@ -181,7 +185,8 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
 
       expect(res.ok).toBe(true);
       expect(res.passed).toBe(false);
-      expect(res.invariants.antiDoubleBilling).toBe(false);
+      expect(res.status).toBe('FAILED');
+      expect(res.invariants?.antiDoubleBilling).toBe(false);
       expect(res.reasons.some((r) => r.includes('防重复扣费'))).toBe(true);
     });
 
@@ -197,8 +202,146 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
 
       expect(res.ok).toBe(true);
       expect(res.passed).toBe(false);
-      expect(res.artifact.decodable).toBe(false);
+      expect(res.artifact?.decodable).toBe(false);
       expect(res.reasons.some((r) => r.includes('物理完整性'))).toBe(true);
+    });
+
+    it('脱机无凭据拦截：未提供产物 Buffer 或流水时标记 UNVERIFIED 且拒绝谎报通过', async () => {
+      const res = await verify({
+        taskId: 12345,
+        modelId: 84,
+        mediaType: 'video',
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.passed).toBe(false);
+      expect(res.status).toBe('UNVERIFIED');
+      expect(res.mode).toBe('mock');
+      expect(res.artifact).toBeUndefined();
+      expect(res.billingAudit).toBe('SKIPPED_NO_LOGS');
+      expect(res.reasons.some((r) => r.includes('缺失真实媒体产物'))).toBe(true);
+      expect(res.reasons.some((r) => r.includes('SKIPPED_NO_LOGS'))).toBe(true);
+    });
+
+    it('真实状态轮询：状态为 1 (排队中) 时返回 PROCESSING 状态且不盲目验真', async () => {
+      const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+        finalSnapshot: {
+          taskId: 88801,
+          taskStatus: 1,
+          statusLabel: '排队中 (Queued)',
+          progress: 35,
+          pollCount: 1,
+          durationMs: 120,
+        },
+        totalPolls: 1,
+        timeline: [{ timeMs: 120, status: 1, progress: 35 }],
+      });
+
+      const res = await verify({
+        taskId: 88801,
+        modelId: 84,
+        mediaType: 'video',
+        baseUrl: 'https://test-main.example.com',
+        cookies: 'PHPSESSID=mock_session_123',
+      });
+
+      pollSpy.mockRestore();
+
+      expect(res.ok).toBe(true);
+      expect(res.passed).toBe(false);
+      expect(res.status).toBe('PROCESSING');
+      expect(res.progress).toBe(35);
+      expect(res.reasons[0]).toContain('仍在排队/生成中');
+    });
+
+    it('真实状态轮询：状态为 3 (失败) 时返回 FAILED 并带上主站错误原文', async () => {
+      const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+        finalSnapshot: {
+          taskId: 88802,
+          taskStatus: 3,
+          statusLabel: '失败 (Failed)',
+          error: '上游算力集群排队超时，已熔断',
+          progress: 0,
+          pollCount: 1,
+          durationMs: 200,
+        },
+        totalPolls: 1,
+        timeline: [],
+      });
+
+      const res = await verify({
+        taskId: 88802,
+        modelId: 84,
+        mediaType: 'video',
+        baseUrl: 'https://test-main.example.com',
+        cookies: 'PHPSESSID=mock_session_123',
+        scoreLogs: [
+          { task_id: 88802, type: 2, score: -28, memo: '预扣' },
+          { task_id: 88802, type: 1, score: 28, memo: '全额退款' },
+        ],
+      });
+
+      pollSpy.mockRestore();
+
+      expect(res.ok).toBe(true);
+      expect(res.passed).toBe(false);
+      expect(res.status).toBe('FAILED');
+      expect(res.reasons.some((r) => r.includes('上游算力集群排队超时'))).toBe(true);
+      expect(res.billing?.netChargeZero).toBe(true);
+    });
+
+    it('真实状态轮询：状态为 2 (成功) 时流式探测 Range 二进制并完成物理验真', async () => {
+      const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+      const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+        finalSnapshot: {
+          taskId: 88803,
+          taskStatus: 2,
+          statusLabel: '成功 (Success)',
+          videoUrl: 'https://cdn.example.com/videos/output_88803.mp4',
+          progress: 100,
+          pollCount: 1,
+          durationMs: 300,
+        },
+        totalPolls: 1,
+        timeline: [],
+      });
+
+      // 模拟 Range 0-65535 HTTP GET 响应
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.includes('cdn.example.com')) {
+          return {
+            ok: true,
+            status: 206,
+            statusText: 'Partial Content',
+            arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+          } as unknown as Response;
+        }
+        return originalFetch(url, init);
+      });
+
+      const res = await verify({
+        taskId: 88803,
+        modelId: 84,
+        mediaType: 'video',
+        baseUrl: 'https://test-main.example.com',
+        cookies: 'PHPSESSID=mock_session_123',
+        expectedPoints: 28,
+        scoreLogs: [
+          { task_id: 88803, type: 2, score: -28, memo: '预扣' },
+        ],
+      });
+
+      pollSpy.mockRestore();
+      global.fetch = originalFetch;
+
+      expect(res.ok).toBe(true);
+      expect(res.passed).toBe(true);
+      expect(res.status).toBe('SUCCESS');
+      expect(res.mode).toBe('real');
+      expect(res.artifact?.decodable).toBe(true);
+      expect(res.probeDurationMs).toBeDefined();
+      expect(res.billing?.passed).toBe(true);
     });
   });
 });
@@ -296,7 +439,7 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
     expect(json.taskId).toBeGreaterThan(0);
   });
 
-  it('运行 verify 验证任务并返回校验结果', async () => {
+  it('运行 verify 在无凭据时如实告警未通过线上验收且返回状态码 1', async () => {
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
       logs.push(args.join(' '));
@@ -305,11 +448,28 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
     const code = await runDevTestCli(['verify', '--task', '55555', '--model', '84', '--media', 'video', '--json']);
     spy.mockRestore();
 
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     const json = JSON.parse(logs.join(''));
     expect(json.ok).toBe(true);
     expect(json.taskId).toBe(55555);
-    expect(json.passed).toBe(true);
+    expect(json.passed).toBe(false);
+    expect(json.status).toBe('UNVERIFIED');
+    expect(json.billingAudit).toBe('SKIPPED_NO_LOGS');
+  });
+
+  it('运行 verify 文本模式输出包含脱机演算与未连接主站警告', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+
+    const code = await runDevTestCli(['verify', '--task', '55555', '--model', '84', '--media', 'video']);
+    spy.mockRestore();
+
+    expect(code).toBe(1);
+    const text = logs.join('\n');
+    expect(text).toContain('当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算');
+    expect(text).toContain('UNVERIFIED');
   });
 
   it('未知命令 fail-closed 返回 1', async () => {
