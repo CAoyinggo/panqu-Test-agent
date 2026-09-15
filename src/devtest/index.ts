@@ -1,245 +1,43 @@
 /**
- * DevTest 公共 API。
- * 业务与测试只允许从本 barrel 引入；内部文件结构可能调整。
+ * Panqu AI DevTest 公共 API
+ *
+ * 固化纯净双模内核（Core Kernel），直接由本入口统一导出：
+ * 1. probe(options)   - 环境探活
+ * 2. plan(options)    - 分流推导与测试规划
+ * 3. execute(options) - 任务执行
+ * 4. verify(options)  - 物理验真与防资损对账
  */
 
-export { runDevTest } from './devtest-runner.js';
-export { compilePanquMission } from './panqu-mission-plan.js';
-export { preparePanquMission, inspectPanquMissionPreparation } from './panqu-mission-prepare.js';
-export type { PanquMissionPreparationConfig, PanquMissionPreparationResult } from './panqu-mission-prepare.js';
-export { runPanquMission, renderPanquMission } from './panqu-mission-runtime.js';
-export { PanquHttpMissionDriver, decodePanquMissionTask } from './panqu-mission-driver.js';
-export { inventoryMissionMedia, inspectMissionMedia, prepareMissionReferenceClip } from './panqu-mission-media.js';
-export type * from './panqu-mission-types.js';
-export { buildDevTestProblems, deriveDevTestConclusion, suggestionForReasonCode } from './problem-engine.js';
 export {
-  coreKindOf,
-  deduplicateDevTestCases,
-  devTestCaseSimilarity,
-  devTestDimensionOf,
-  scoreDevTestCase,
-  selectDevTestCases,
-  tierOf,
-} from './dimension-selector.js';
-export { analyzeDevTestImpact, buildDevTestPlan } from './planning.js';
-export { buildRequirementCoverageMatrix, buildDevTestInvariants, extendedDimensionsOf } from './requirement-intelligence.js';
-export { computeDevConfidence, buildVersionComparison } from './final-assessment.js';
-export { buildBusinessFlowGraph, evaluateBusinessFlows, evaluateCrossCaseInvariants,
-  buildBusinessLevelProblems, auditCrossStepConsistency } from './business-flow-engine.js';
-export { buildExecutionEstimate, buildRegressionGuard, evaluateRegressionGuard,
-  relatedRegressionCaseIds } from './acceptance-governance.js';
-export { buildTestOracleResults } from './oracle-engine.js';
-export { buildTestReliability } from './reliability-engine.js';
-export { SnapshottingProcessor, detectTestPollution, buildPollutionProblems } from './pollution-engine.js';
-export { adaptiveScore, buildNegativeIntelligence, buildPermissionMatrix, assessRequirementQuality,
-  buildRequirementQualityProblems, buildRootCauseGraph } from './test-intelligence.js';
-export { buildDevTestRequirementModel, buildDevTestAcceptanceTraces,
-  buildDevTestDeliveryCoverage } from './delivery-acceptance.js';
-export { discoverReferencedContractDependencies } from './contract-dependencies.js';
-export { buildDevTestFeatureModel } from './feature-model.js';
-export { appendDiscoveredContracts, discoverDevTestProject } from './project-discovery.js';
-export { discoverDevTestEnvironment } from './environment-discovery.js';
-export { executeDevTestUiCases } from './ui-executor.js';
-export { synchronizeDevTestSource } from './source-sync.js';
-export { loadDevTestRuntime, type DevTestRuntimeExtension } from './runtime-loader.js';
+  probe,
+  plan,
+  execute,
+  verify,
+  type ProbeKernelOptions,
+  type ProbeKernelResult,
+  type PlanKernelOptions,
+  type PlanKernelResult,
+  type ExecuteKernelOptions,
+  type ExecuteKernelResult,
+  type VerifyKernelOptions,
+  type VerifyKernelResult,
+} from './core-kernel.js';
+
 export {
-  collectDevTestGitHubInputs,
-  githubBusinessWritePolicy,
-  publishDevTestToGitHub,
-  readDevTestGitHubContext,
-  renderGitHubDevTestSummary,
-  DevTestGitHubClient,
-} from './github-integration.js';
-export {
-  DEFAULT_DEVTEST_CONFIG,
-  DEVTEST_CONFIG_FILE,
-  DEVTEST_WORKFLOW_FILE,
-  doctorDevTestProject,
-  initializeDevTestProject,
-  loadDevTestConfig,
-  resolveRequirementFile,
-  validateDevTestConfig,
-  type DevTestProjectConfig,
-} from './cli-config.js';
-export type { DevTestSourceSyncOptions, DevTestSourceSyncResult, DevTestSourceRepositorySync } from './source-sync.js';
-export {
-  SafeMutationHoldProcessor,
-  buildOperationPolicies,
-  caseHttpMethod,
-  heldMutationResult,
-  isMutatingMethod,
-} from './safe-mode.js';
-export {
-  DEVTEST_REPORT_SCHEMA,
-  buildDevTestUnknowns,
-  buildDevTestReportEnvelope,
-  renderCasesCsv,
-  renderDevTestHtml,
-  renderProblemsMarkdown,
-  renderAcceptanceSummary,
-  renderDeveloperSelfTestCases,
-  renderDeveloperSelfTestReport,
-  type DevTestRenderInput,
-  type DevTestRenderMeta,
-} from './artifacts.js';
-export { fetchFeishuDoc, loadFeishuCredentials, parseFeishuUrl } from './feishu-fetch.js';
-export type {
-  DevTestArtifacts,
-  DevTestBaselineDiff,
-  DevTestCaseProfile,
-  DevTestCaseDimension,
-  DevTestCoreCaseKind,
-  DevTestDimensionApplicability,
-  DevTestDimensionDecision,
-  DevTestDiscoveryResult,
-  DevTestEnvironmentCandidate,
-  DevTestEnvironmentPreflight,
-  DevTestEnvironmentStatus,
-  DevTestCapabilityStatus,
-  DevTestFailureClass,
-  DevTestDimensionStat,
-  DevTestFeatureModel,
-  DevTestFeatureResult,
-  DevTestMode,
-  DevTestOptions,
-  DevTestPlan,
-  DevTestProblem,
-  DevTestProblemJudgement,
-  DevTestProblemLifecycle,
-  DevTestProblemDimension,
-  DevTestProblemSeverity,
-  DevTestProblemType,
-  DevTestRunResult,
-  DevTestReproductionStatus,
-  DevTestRerunFilter,
-  DevTestTestValueScore,
-  DevTestUiElement,
-  DevTestUiExecutionResult,
-  DevTestExpectedBehavior,
-  DevTestRequirementCoverageMatrix,
-  DevTestInvariant,
-  DevTestExtendedDimension,
-  DevTestConfidenceScore,
-  DevTestVersionComparison,
-  DevTestDataLifecycleRecord,
-  DevTestBusinessFlow,
-  DevTestBusinessFlowGraph,
-  DevTestBusinessFlowStep,
-  DevTestFlowStatus,
-  DevTestCrossStepAuditResult,
-  DevTestIdempotencyCheck,
-  DevTestIdempotencyCheckKind,
-  DevTestQualityGateName,
-  DevTestQualityGateResult,
-  NewapiModelOnboardingSpec,
-  DevTestFlowType,
-  DevTestSelfTestInput,
-  DevTestScenarioKind,
-  DevTestRiskItem,
-  DevTestScenario,
-  DevTestExecutableStep,
-  DevTestExecutionDag,
-  DevTestSelfTestPlan,
-  DevTestStateObservation,
-  DevTestStateConsistencyResult,
-  DevTestRegressionGuard,
-  DevTestExecutionEstimate,
-  DevTestTier,
-  DevTestAdaptiveTestScore,
-  DevTestOracleResult,
-  DevTestEnvironmentSnapshot,
-  DevTestPollutionFinding,
-  DevTestCaseReliability,
-  DevTestReliabilitySummary,
-  DevTestNegativeCheck,
-  DevTestPermissionMatrixRow,
-  DevTestRequirementQuality,
-  DevTestRootCauseNode,
-  DevTestRequirementKnowledge,
-  DevTestRequirementModel,
-  DevTestIssueClassification,
-  DevTestAcceptanceResult,
-  DevTestAcceptanceTrace,
-  DevTestDeliveryCoverage,
-} from './types.js';
-export { validateDeveloperHandoffMarkdown, HANDOFF_SECTIONS } from './handoff-validation.js';
-export {
-  runPanquDiversionFlow,
-  evaluateDiversionDecision,
-  type PanquDiversionFlowOptions,
-  type PanquDiversionFlowReport,
-  type PanquDiversionCase,
-  type DiversionDecision,
-  type DiversionTaskInput,
-  type DiversionConfigSnapshot,
-  type DiversionDecisionResult,
-} from './panqu-diversion-flow.js';
-export {
-  runPanquRealVideoFlow,
-  loadPanquSession,
-  fetchCsrfToken,
-  submitRealVideoTask,
-  verifyTaskDiversionSnapshot,
+  submitMediaTask,
   pollTaskStatus,
-  maskSensitive,
-  renderRealVideoReportMarkdown,
-  type PanquRealVideoFlowOptions,
-  type PanquRealVideoReport,
-  type DiversionSnapshotCheck,
+  loadPanquSession,
+  fetchWithRetry,
+  type PanquSession,
+  type SubmitMediaTaskOptions,
+  type SubmitMediaTaskResult,
   type TaskStatusSnapshot,
-  type RealVideoSubmitEvidence,
-} from './panqu-real-video-flow.js';
-export {
-  runPanquRealImageFlow,
-  submitRealImageTask,
-  verifyImageDiversionSnapshot,
-  pollImageTaskStatus,
-  renderRealImageReportMarkdown,
-  type PanquRealImageFlowOptions,
-  type PanquRealImageReport,
-  type ImageDiversionSnapshotCheck,
-  type ImageTaskStatusSnapshot,
-} from './panqu-real-image-flow.js';
-export {
-  runPanquRealCanvasFlow,
-  submitCanvasNodeTask,
-  type PanquRealCanvasFlowOptions,
-  type CanvasTaskReport,
-} from './panqu-real-canvas-flow.js';
-export {
-  runPanquBusinessSuite,
-  renderBusinessSuiteReportMarkdown,
-  type PanquBusinessSuiteOptions,
-  type PanquBusinessSuiteReport,
-  type BusinessModuleType,
-  type ModuleExecutionSummary,
-} from './panqu-business-suite.js';
-export {
-  createPanquPlaywrightFixture,
-  parseCookieString,
-  type PanquSessionCookie,
-  type PlaywrightFixtureOptions,
-  type PlaywrightFixtureContext,
-} from './panqu-playwright-fixture.js';
-export {
-  runPanquPlaywrightFlow,
-  calculateExpectedPoints,
-  deriveExpectedDiversion,
-  inspectBufferMedia,
-  createSyntheticValidMp4,
-  type FlowMediaType,
-  type FlowExecutionMode,
-  type FlowStepStatus,
-  type TaskTerminalStatus,
-  type TaskFailureCategory,
-  type DiversionCheckResult,
-  type ArtifactCheckResult,
-  type BillingReconciliation,
-  type FlowRunEvidence,
-  type PlaywrightFlowRunOptions,
-} from './panqu-playwright-engine.js';
+  type PollTaskStatusOptions,
+} from './media-flow.js';
+
 export {
   RoutingOracle,
+  RoutingEvidenceCollector,
   type DiversionRouteMode,
   type VideoRoutingInput,
   type ImageRoutingInput,
@@ -252,134 +50,53 @@ export {
   type GatewayRoutingVerdict,
   type BatchDistributionResult,
   type FallbackRoutingVerdict,
-} from './routing-oracle.js';
-export {
-  RoutingEvidenceCollector,
   type MainSiteTaskRowEvidence,
   type GatewayTaskLogEvidence,
   type FallbackRetryLogEvidence,
   type CrossSystemIdMap,
   type CollectedRoutingEvidence,
-} from './routing-evidence-collector.js';
+} from './routing.js';
+
 export {
   BillingOracle,
-  type ScoreLogEntry,
-  type BillingAuditReport,
-} from './billing-oracle.js';
-export {
   SupplierCostOracle,
-  type SupplierCostVerdict,
-  type CostPricingUnit,
-  type SupplierEvidenceLevel,
-  type SupplierCostAuditParams,
-  type RechargeBatch,
-  type UpstreamExecutionState,
-  type UpstreamCallRecord,
   STANDARD_RECHARGE_PRESETS,
   FALLBACK_POINTS_PER_CNY,
   FALLBACK_CNY_PER_POINT,
-} from './supplier-cost-oracle.js';
+  type ScoreLogEntry,
+  type BillingAuditReport,
+  type SupplierCostVerdict,
+  type CostPricingUnit,
+  type SupplierEvidenceLevel,
+  type RechargeBatch,
+  type UpstreamExecutionState,
+  type UpstreamCallRecord,
+} from './billing.js';
+
 export {
-  sanitizeSensitiveText,
-  sanitizeObject,
-  type ArtifactVerificationLevel,
-} from './panqu-playwright-engine.js';
+  inspectMp4Buffer,
+  inspectImageBuffer,
+  inspectBufferMedia,
+  createSyntheticValidMp4,
+  type MediaInspectionResult,
+} from './media-inspector.js';
+
 export {
-  IdempotencyOracle,
-  type SubmitAttemptRecord,
-  type BillingEntryRecord,
-  type TaskRecord,
-  type AssetRecord,
-  type CallbackEventRecord,
-  type FinalStateRecord,
-} from './idempotency-oracle.js';
+  EnvironmentProbe,
+  type EnvProbeOptions,
+  type EnvProbeReport,
+  type EndpointProbeResult,
+} from './env-probe.js';
+
 export {
-  TestDataLifecycleManager,
-  type TestDataScope,
-  type ManagedEntity,
-  type CleanupHandler,
-} from './test-data-lifecycle.js';
-export {
-  QualityGateEngine,
-  type QualityGateEvaluationInput,
-} from './quality-gate-engine.js';
-export {
-  TraceabilityMatrixBuilder,
-  type TraceabilityItem,
-  type TraceabilityMatrixSummary,
-} from './traceability-matrix.js';
-export {
-  BUSINESS_CAPABILITY_REGISTRY,
-  getCapabilityByModel,
-  validateBusinessCombination,
-  type BusinessCapabilitySpec,
-  type BusinessCombinationInput,
-  type BusinessCombinationValidationResult,
-} from './business-capability-knowledge.js';
-export {
-  assessHistoricalFragility,
-  type FragilityAssessment,
-  type FragilityProfile,
-} from './historical-execution-feedback.js';
-export {
-  analyzeChangeImpact,
-  type ChangeImpactAnalysisResult,
-  type ChangeImpactAnalysisInput,
-  type RecommendedScenario,
-  type BusinessDomain,
-  type TestScenarioKind,
-  type AffectedApiSpec,
-  type RequiredOracle,
-} from './change-impact-analyzer.js';
-export {
-  diagnoseFlowEvidence,
-  mapProblemToDiagnosis,
-  type StructuredProblemDiagnosis,
-  type ProblemDiagnosisCategory,
-  type RetryStrategy,
-} from './problem-diagnosis.js';
-export {
-  runAutonomousVerification,
-  renderAutonomousReportMarkdown,
-  type AutonomousVerificationOptions,
-  type AutonomousVerificationResult,
-  type ScenarioExecutionRecord,
-} from './autonomous-verifier.js';
-export {
-  SelfTestPlanner,
-} from './self-test-planner.js';
-export {
-  ScenarioPlanner,
-  type ScenarioPlanningContext,
-} from './scenario-planner.js';
-export {
-  ExecutionPlanner,
-} from './execution-planner.js';
-export {
-  GitHubCheckRunAdapter,
-  type GitHubCheckRunAnnotation,
-  type GitHubCheckRunOutput,
-  type GitHubCheckRunPayload,
-  type GitHubCommitStatusPayload,
-  type CheckRunGenerationInput,
-  type CheckRunGenerationResult,
-  type CheckAnnotationLevel,
-  type CheckRunStatus,
-  type CheckRunConclusion,
-} from './github-check-run.js';
-export {
-  buildCoverageLedger,
-  buildCaseDataBindings,
-  maskDataValue,
-  renderCoverageLedgerMarkdownTable,
-  renderRequirementFactLedgerMarkdownTable,
-  renderFourParallelListsMarkdown,
-  type DataBindingStatus,
-  type DataBindingRecord,
-  type LedgerFinalClassification,
-  type RequirementFactCoverageLedgerItem,
-  type TestPointCoverageLedgerItem,
-  type CoverageLedgerSummary,
-  type SevenItemQuickView,
-  type CoverageLedgerReconciliation,
-} from './coverage-ledger.js';
+  type FlowMediaType,
+  type FlowExecutionMode,
+  type FlowStepStatus,
+  type TaskTerminalStatus,
+  type DiversionCheckResult,
+  type ArtifactCheckResult,
+  type BillingReconciliation,
+  type FlowRunEvidence,
+} from './types.js';
+
+export { DEVTEST_VERSION, PLATFORM_VERSION } from './version.js';

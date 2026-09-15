@@ -10,7 +10,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { RoutingOracle, type GatewayChannelConfig, type MainSiteConfigSnapshot } from './routing-oracle.js';
+import { RoutingOracle, type GatewayChannelConfig, type MainSiteConfigSnapshot } from './routing.js';
 
 export interface EnvProbeOptions {
   env?: 'test' | 'preonline' | string;
@@ -72,10 +72,16 @@ export class EnvironmentProbe {
     const isMock = options.mock ?? true;
 
     if (!isMock) {
-      const allowedEnvironments = new Set(['test', 'preonline', 'sandbox']);
+      const allowedEnvironments = new Set(['test', 'preonline', 'sandbox', 'local']);
       if (!allowedEnvironments.has(env)) throw new Error(`REAL_ENV_NOT_ALLOWED: ${env}`);
-      this.assertAllowedRealUrl(baseUrl, new Set(['test.panqu.com', 'preonline.panqu.com', 'sandbox.panqu.com']));
-      this.assertAllowedRealUrl(gatewayUrl, new Set(['aiapis.panqu.com', 'test-aiapis.panqu.com', 'preonline-aiapis.panqu.com', 'sandbox-aiapis.panqu.com']));
+      if (env === 'local') {
+        const localHosts = new Set(['127.0.0.1', 'localhost']);
+        this.assertAllowedRealUrl(baseUrl, localHosts, true);
+        this.assertAllowedRealUrl(gatewayUrl, new Set([...localHosts, 'aiapis.panqu.com']), true);
+      } else {
+        this.assertAllowedRealUrl(baseUrl, new Set(['test.panqu.com', 'preonline.panqu.com', 'sandbox.panqu.com']));
+        this.assertAllowedRealUrl(gatewayUrl, new Set(['aiapis.panqu.com', 'test-aiapis.panqu.com', 'preonline-aiapis.panqu.com', 'sandbox-aiapis.panqu.com']));
+      }
     }
 
     let cookie = '';
@@ -103,11 +109,12 @@ export class EnvironmentProbe {
     return this.executeRealProbe(env, baseUrl, gatewayUrl, cookie, options, timeoutMs);
   }
 
-  private static assertAllowedRealUrl(value: string, allowedHosts: Set<string>): void {
+  private static assertAllowedRealUrl(value: string, allowedHosts: Set<string>, allowHttp = false): void {
     let parsed: URL;
     try { parsed = new URL(value); }
     catch { throw new Error(`REAL_URL_NOT_ALLOWED: ${value}`); }
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || !allowedHosts.has(parsed.hostname)) {
+    const validProtocol = allowHttp ? (parsed.protocol === 'https:' || parsed.protocol === 'http:') : parsed.protocol === 'https:';
+    if (!validProtocol || parsed.username || parsed.password || (!allowHttp && parsed.port) || !allowedHosts.has(parsed.hostname)) {
       throw new Error(`REAL_URL_NOT_ALLOWED: ${value}`);
     }
   }
