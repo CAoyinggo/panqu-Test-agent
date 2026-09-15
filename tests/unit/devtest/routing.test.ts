@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   RoutingOracle,
-  RoutingEvidenceCollector,
   type MainSiteConfigSnapshot,
-  type GatewayChannelConfig,
   type MainSiteRoutingVerdict,
-  type GatewayRoutingVerdict,
+  type GatewayChannelConfig,
 } from '../../../src/devtest/routing.js';
 
 describe('Routing - 独立分流真理判定与证据采集', () => {
@@ -168,40 +166,5 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
       expect(RoutingOracle.evaluateFallback(84).fallbackAction).toBe('DIRECT_FAIL_NO_RETRY');
     });
   });
-
-  describe('4. 全链路证据采集与核查 (RoutingEvidenceCollector)', () => {
-    const expectedMain: MainSiteRoutingVerdict = {
-      willDivert: true,
-      decision: 'NEWAPI_GLOBAL',
-      line: 10,
-      reason: '全量开放模型',
-      expectedSnapshot: { orgId: 0, routeGroupId: 0, newapiGroup: '', newapiModel: 'wan3.0-video' },
-    };
-
-    it('缺少主站 extra 快照时标记 BLOCKED', () => {
-      const res = RoutingEvidenceCollector.correlateAndVerify({
-        taskId: 12345,
-        mediaType: 'video',
-        expectedMainSite: expectedMain,
-      });
-      expect(res.hasDirectProof).toBe(false);
-      expect(res.verificationStatus).toBe('BLOCKED');
-    });
-
-    it('具备有效 extra 且与预期一致时 PASS', () => {
-      const res = RoutingEvidenceCollector.correlateAndVerify({
-        taskId: 12345,
-        mediaType: 'video',
-        expectedMainSite: expectedMain,
-        mainSiteRow: {
-          id: 12345,
-          line: 10,
-          status: 1,
-          extra: JSON.stringify({ diversion: 10, newapi_model: 'wan3.0-video' }),
-        },
-      });
-      expect(res.hasDirectProof).toBe(true);
-      expect(res.verificationStatus).toBe('PASS');
-    });
-  });
 });
+

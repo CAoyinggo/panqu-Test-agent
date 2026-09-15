@@ -23,10 +23,9 @@ afterEach(async () => {
 describe('TRAE DevTest Mandatory Execution Rules Contract', () => {
   function assertModernRules(content: string, sourceLabel: string) {
     expect(content).toContain('name: devtest');
-    expect(content).toContain('Panqu 研发测试副驾（真实 · 极简 · 拒绝虚假堆砌）');
-    expect(content).toContain('事实第一');
-    expect(content).toContain('拒绝废话堆砌');
-    expect(content).toContain('双模操作支持');
+    expect(content).toContain('Panqu 研发自测副驾');
+    expect(content).toContain('严禁虚报测试通过');
+    expect(content).toContain('禁止扩张');
     expect(content).toContain('probe');
     expect(content).toContain('plan');
     expect(content).toContain('execute');

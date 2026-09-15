@@ -18,12 +18,10 @@ export type {
 export type {
   DiversionRouteMode, VideoRoutingInput, ImageRoutingInput,
   MainSiteRoutingVerdict, GatewayRoutingVerdict, FallbackRoutingVerdict,
-  CollectedRoutingEvidence,
 } from "./routing.js";
 
 export type {
-  ScoreLogEntry, BillingAuditReport, SupplierCostVerdict,
-  RechargeBatch, UpstreamCallRecord,
+  ScoreLogEntry, BillingAuditReport,
 } from "./billing.js";
 
 export type { MediaInspectionResult } from "./media-inspector.js";

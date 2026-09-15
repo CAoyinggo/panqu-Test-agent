@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   BillingOracle,
-  SupplierCostOracle,
-  STANDARD_RECHARGE_PRESETS,
   type ScoreLogEntry,
 } from '../../../src/devtest/billing.js';
 
@@ -108,32 +106,6 @@ describe('Billing - 计费预估、流水对账与供应商成本核算', () => 
       expect(res.passed).toBe(false);
       expect(res.netChargeZero).toBe(false);
       expect(res.missingRefund).toBe(true);
-    });
-  });
-
-  describe('3. 供应商成本与毛利核算 (SupplierCostOracle)', () => {
-    it('Wan 3.0 (84) 成本单价推导', () => {
-      const cost720 = SupplierCostOracle.calculateSingleCallCost({
-        mediaType: 'video',
-        modelId: 84,
-        duration: 4,
-        resolution: '720p',
-      });
-      expect(cost720.unitCostCny).toBe(0.36);
-      expect(cost720.expectedCostCny).toBeCloseTo(1.44);
-    });
-
-    it('充值档位赠送折算有效单价与保本毛利核算', () => {
-      const preset300 = STANDARD_RECHARGE_PRESETS['300_TIER'];
-      const effective = SupplierCostOracle.calculateEffectiveCnyPerPoint(preset300);
-      expect(effective.rate).toBeCloseTo(300 / 3300);
-
-      const marginRes = SupplierCostOracle.auditSupplierMargin({
-        modelId: 84,
-        targetMarginPercent: 30,
-      });
-      expect(marginRes.targetMarginPercent).toBe(30);
-      expect(marginRes.items.length).toBe(3);
     });
   });
 });
