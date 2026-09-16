@@ -5,6 +5,7 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import type { ScoreLogEntry } from './billing.js';
 
 export interface PanquSession {
   env: string;
@@ -203,3 +204,171 @@ export async function pollTaskStatus(
   }
   return { finalSnapshot: latestSnapshot, totalPolls: pollCount, timeline };
 }
+
+export interface BillingQueryResult {
+  status: 'SUCCESS' | 'ERROR';
+  scoreLogs: ScoreLogEntry[];
+  source: string;
+  total?: number;
+  error?: string;
+}
+
+/**
+ * 真实只读查询任务积分流水 (Billing Logs)
+ * 严格零副作用：仅发起 GET 请求查询后台账单或 AdminScore 记录，绝不执行任何写操作（无提交、无扣费、无退款）。
+ */
+export async function queryTaskBillingLogs(
+  taskId: number,
+  session: PanquSession,
+  options: { timeoutMs?: number } = {}
+): Promise<BillingQueryResult> {
+  const timeoutMs = options.timeoutMs ?? 8000;
+  const baseUrl = session.base_url;
+  const cookies = session.cookie_string;
+
+  // 1. 优先尝试 FastAdmin 原生 AdminScore 控制器（以 task_id 精确过滤）
+  try {
+    const filterParam = JSON.stringify({ task_id: taskId });
+    const opParam = JSON.stringify({ task_id: '=' });
+    const adminScoreUrl = new URL(
+      `/auth/adminscore/index?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
+      baseUrl
+    ).toString();
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchWithRetry(
+        adminScoreUrl,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: cookies,
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+          },
+          signal: ctrl.signal,
+        },
+        2
+      );
+
+      if (res.ok) {
+        const text = await res.text();
+        let body: any;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // 非 JSON，尝试备用端点
+        }
+
+        if (body && Array.isArray(body.rows)) {
+          const matchedLogs: ScoreLogEntry[] = body.rows.map((r: any) => ({
+            id: r.id,
+            task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
+            type: Number(r.type ?? 2),
+            score: Number(r.score ?? 0),
+            memo: r.remark || r.source_name || r.memo,
+            createtime: r.createtime,
+          }));
+          return {
+            status: 'SUCCESS',
+            scoreLogs: matchedLogs,
+            total: body.total ?? matchedLogs.length,
+            source: 'auth_adminscore',
+          };
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // 静默尝试备用路由
+  }
+
+  // 2. 备用端点：请求 /aivideo/v2/billing/apiPersonalRecords
+  try {
+    const recordsUrl = new URL(
+      `/aivideo/v2/billing/apiPersonalRecords?page=1&limit=100&days=30&keyword=${encodeURIComponent(String(taskId))}`,
+      baseUrl
+    ).toString();
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchWithRetry(
+        recordsUrl,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: cookies,
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+          },
+          signal: ctrl.signal,
+        },
+        2
+      );
+
+      if (res.ok) {
+        const text = await res.text();
+        let body: any;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // 非 JSON
+        }
+
+        if (body && body.code === 1 && body.data && Array.isArray(body.data.rows)) {
+          const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => ({
+            id: r.id,
+            task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
+            type: Number(r.record_type ?? r.type ?? 2),
+            score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
+            memo: r.type_text || r.model || r.project,
+            createtime: r.time || r.createtime,
+          }));
+
+          return {
+            status: 'SUCCESS',
+            scoreLogs: matchedLogs,
+            total: body.data.total ?? matchedLogs.length,
+            source: 'billing_personal_records',
+          };
+        } else if (body && body.code === 0) {
+          return {
+            status: 'ERROR',
+            scoreLogs: [],
+            source: 'billing_personal_records',
+            error: body.msg || 'API returned code 0',
+          };
+        }
+      } else {
+        return {
+          status: 'ERROR',
+          scoreLogs: [],
+          source: 'api_http_error',
+          error: `HTTP ${res.status}: ${res.statusText}`,
+        };
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    return {
+      status: 'ERROR',
+      scoreLogs: [],
+      source: 'network_error',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  return {
+    status: 'ERROR',
+    scoreLogs: [],
+    source: 'unknown_error',
+    error: '无法通过已知账单端点获取流水',
+  };
+}
+

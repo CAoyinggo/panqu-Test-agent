@@ -295,8 +295,37 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         if (isJson) {
           console.log(JSON.stringify(result, null, 2));
         } else {
+          const taskStatusText = result.evidence.task.status;
+          const ownershipText = result.evidence.media.ownership;
+          const mediaStatusText = result.evidence.media.status;
+          const billingStatusText = result.evidence.billing.status;
+          const antiDoubleText = result.evidence.invariants.details?.antiDoubleBilling.status ?? (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
+          const netZeroText = result.evidence.invariants.details?.netChargeZero.status ?? (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
+          const refundIdemText = result.evidence.invariants.details?.refundIdempotency.status ?? (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
+          const finalVerdictText = result.verdict;
+
+          console.log(`\n🎯 概况：Task #${result.taskId} · [${result.executionMode.toUpperCase()}] · ${result.status}`);
+          console.log(`\n🔍 验真：`);
+          console.log(`Task <${taskStatusText}>`);
+          console.log(`Artifact ownership <${ownershipText}>`);
+          console.log(`Media <${mediaStatusText}>`);
+          console.log(`Billing <${billingStatusText}>`);
+          console.log(`antiDoubleBilling <${antiDoubleText}>`);
+          console.log(`netChargeZero <${netZeroText}>`);
+          console.log(`refundIdempotency <${refundIdemText}>`);
+          console.log(`最终裁决 <${finalVerdictText}>`);
+          console.log(`\n💻 复现：`);
+          console.log(`npm run devtest -- verify --task ${result.taskId}`);
+
+          if (!result.passed && result.reasons.length > 0) {
+            console.log(`\n⚠️ 缺陷：`);
+            for (const r of result.reasons) {
+              console.log(`- ${r}`);
+            }
+          }
+
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账${c.reset} [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
+          console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账明细${c.reset} [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
 
           if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
             console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);

@@ -841,4 +841,166 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     expect(submitSpy).not.toHaveBeenCalled();
     submitSpy.mockRestore();
   });
+
+  it('16. 账单查询异常拦截：queryTaskBillingLogs 失败时 Fail-closed 判定 UNVERIFIED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
+      status: 'ERROR',
+      scoreLogs: [],
+      source: 'network_error',
+      error: 'ETIMEDOUT: 连接账单数据库超时',
+    });
+    const statusSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 77716,
+        taskStatus: 2,
+        statusLabel: '成功',
+        progress: 100,
+        videoUrl: 'https://test.panqu.com/sample.mp4',
+        pollCount: 1,
+        durationMs: 10,
+      },
+      totalPolls: 1,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 77716,
+      baseUrl: 'https://test.panqu.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      artifactBuffer: validMp4,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.status).toBe('UNVERIFIED');
+    expect(res.evidence.billing.reason).toContain('ETIMEDOUT');
+
+    billingSpy.mockRestore();
+    statusSpy.mockRestore();
+  });
+
+  it('17. 账单流水空记录拦截：真实查询返回空流水，判定缺失预扣，Fail-closed 为 UNVERIFIED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
+      status: 'SUCCESS',
+      scoreLogs: [],
+      source: 'auth_adminscore',
+    });
+    const statusSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 77717,
+        taskStatus: 2,
+        statusLabel: '成功',
+        progress: 100,
+        videoUrl: 'https://test.panqu.com/sample.mp4',
+        pollCount: 1,
+        durationMs: 10,
+      },
+      totalPolls: 1,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 77717,
+      baseUrl: 'https://test.panqu.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      artifactBuffer: validMp4,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.status).toBe('UNVERIFIED');
+
+    billingSpy.mockRestore();
+    statusSpy.mockRestore();
+  });
+
+  it('18. 完整在线验真链路闭环：真实 Session 查询任务状态 + 产物验真 + 账务对账全部通过', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
+      status: 'SUCCESS',
+      scoreLogs: [{ task_id: 77718, type: 2, score: -28, memo: '预扣 28 pt' }],
+      source: 'auth_adminscore',
+    });
+    const statusSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 77718,
+        taskStatus: 2,
+        statusLabel: '成功',
+        progress: 100,
+        videoUrl: 'https://test.panqu.com/sample.mp4',
+        pollCount: 1,
+        durationMs: 10,
+      },
+      totalPolls: 1,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 77718,
+      baseUrl: 'https://test.panqu.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      artifactBuffer: validMp4,
+      expectedPoints: 28,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(true);
+    expect(res.status).toBe('SUCCESS');
+    expect(res.verdict).toBe('PASS');
+    expect(res.executionMode).toBe('real');
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('PASS');
+    expect(res.evidence.media.ownership).toBe('VERIFIED');
+    expect(res.evidence.billing.status).toBe('PASS');
+    expect(res.evidence.invariants.status).toBe('PASS');
+    expect(res.evidence.invariants.antiDoubleBilling).toBe(true);
+    expect(res.evidence.invariants.netChargeZero).toBe(true);
+    expect(res.evidence.invariants.refundIdempotency).toBe(true);
+
+    billingSpy.mockRestore();
+    statusSpy.mockRestore();
+  });
+
+  it('19. queryTaskBillingLogs 针对 AdminScore 与 apiPersonalRecords 真实响应格式正确解析', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/auth/adminscore/index')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            total: 1,
+            rows: [
+              { id: 991, task_id: 77719, type: 2, score: -28, remark: '预扣 28 分', createtime: '2026-09-15 12:00:00' },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      return originalFetch(url);
+    });
+
+    const queryRes = await mediaFlow.queryTaskBillingLogs(77719, {
+      env: 'test',
+      base_url: 'https://test.panqu.com',
+      cookie_string: 'PHPSESSID=mock_cookie_val',
+    });
+
+    global.fetch = originalFetch;
+
+    expect(queryRes.status).toBe('SUCCESS');
+    expect(queryRes.source).toBe('auth_adminscore');
+    expect(queryRes.scoreLogs.length).toBe(1);
+    expect(queryRes.scoreLogs[0].task_id).toBe(77719);
+    expect(queryRes.scoreLogs[0].score).toBe(-28);
+    expect(queryRes.scoreLogs[0].type).toBe(2);
+  });
 });
+

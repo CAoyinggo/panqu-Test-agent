@@ -3,7 +3,7 @@ import { EnvironmentProbe, type EnvProbeReport } from './env-probe.js';
 import { RoutingOracle, type MainSiteConfigSnapshot, type GatewayRoutingVerdict, type GatewayChannelConfig } from './routing.js';
 import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from './billing.js';
 import { inspectMp4Buffer, inspectImageBuffer, type MediaInspectionResult } from './media-inspector.js';
-import { submitMediaTask, pollTaskStatus, loadPanquSession, type PanquSession } from './media-flow.js';
+import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, type PanquSession } from './media-flow.js';
 
 export interface ProbeKernelOptions {
   env?: string; baseUrl?: string; gatewayUrl?: string; sessionFile?: string; mock?: boolean; timeoutMs?: number;
@@ -260,7 +260,9 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     session = { env: options.env || 'test', base_url: options.baseUrl, cookie_string: options.cookies };
   }
 
-  const executionMode: 'real' | 'offline' | 'fixture' = session
+  const executionMode: 'real' | 'offline' | 'fixture' = options.isSimulated
+    ? 'offline'
+    : session
     ? 'real'
     : ((options.scoreLogs && options.scoreLogs.length > 0) || Boolean(options.assetBuffer || options.artifactBuffer))
     ? 'fixture'
@@ -370,8 +372,23 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     };
   }
 
-  const hasScoreLogs = Array.isArray(options.scoreLogs) && options.scoreLogs.length > 0;
-  const billing = hasScoreLogs ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus: terminalStatus as any, expectedPoints, scoreLogs: options.scoreLogs! }) : undefined;
+  let scoreLogsToReconcile: ScoreLogEntry[] | undefined = options.scoreLogs;
+  let billingSource = options.scoreLogs ? 'score_logs' : 'missing_logs';
+  let billingQueryError: string | undefined;
+
+  if (!scoreLogsToReconcile && session) {
+    const queryRes = await queryTaskBillingLogs(taskId, session);
+    if (queryRes.status === 'SUCCESS') {
+      scoreLogsToReconcile = queryRes.scoreLogs;
+      billingSource = queryRes.source;
+    } else {
+      billingQueryError = queryRes.error || '账单接口查询失败';
+      billingSource = queryRes.source;
+    }
+  }
+
+  const hasScoreLogs = Array.isArray(scoreLogsToReconcile);
+  const billing = hasScoreLogs ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus: terminalStatus as any, expectedPoints, scoreLogs: scoreLogsToReconcile! }) : undefined;
 
   let billingEvidence: BillingEvidence;
   let invariantsEvidence: InvariantsEvidence;
@@ -379,9 +396,11 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
 
   if (billing) {
     const hasBillingViolations = Boolean(billing.duplicateCharged || billing.duplicateRefunded || billing.missingRefund || billing.underCharged || billing.overCharged);
+    const billingStatus: EvidenceStatus = hasBillingViolations ? 'FAIL' : billing.passed ? 'PASS' : 'UNVERIFIED';
+
     billingEvidence = {
-      status: hasBillingViolations ? 'FAIL' : billing.passed ? 'PASS' : 'UNVERIFIED',
-      source: 'score_logs',
+      status: billingStatus,
+      source: billingSource,
       expectedPoints,
       preDeductedPoints: billing.preDeductedPoints,
       settledPoints: billing.settledPoints,
@@ -397,19 +416,19 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     const antiDoubleItem: InvariantDetail = antiDouble === true
       ? { status: 'PASS', evidence: { preDeductCount: billing.preDeductedPoints ? 1 : 0 } }
       : antiDouble === false
-      ? { status: 'FAIL', reason: '违背防重复扣费不变量: 存在多笔扣费' }
+      ? { status: 'FAIL', reason: '违背防重复扣费不变量: 存在多笔扣费或缺失预扣' }
       : { status: 'UNVERIFIED', reason: '缺少账单流水，防重复扣费不变量未核验 [UNVERIFIED]' };
 
     const netZeroItem: InvariantDetail = netZero === true
       ? { status: 'PASS', evidence: { netDeductedPoints: billing.netDeductedPoints } }
       : netZero === false
-      ? { status: 'FAIL', reason: '违背失败净扣归零不变量: 失败任务净扣不为 0' }
+      ? { status: 'FAIL', reason: terminalStatus === 'FAILED' ? '违背失败净扣归零不变量: 失败任务净扣不为 0' : '计费不匹配预期扣费' }
       : { status: 'UNVERIFIED', reason: '任务终态未知或缺少账单流水，失败净扣归零不变量未核验 [UNVERIFIED]' };
 
     const refundIdemItem: InvariantDetail = refundIdem === true
       ? { status: 'PASS', evidence: { refundCount: billing.refundedPoints ? 1 : 0 } }
       : refundIdem === false
-      ? { status: 'FAIL', reason: '违背退款幂等核销不变量: 存在重复退款' }
+      ? { status: 'FAIL', reason: '违背退款幂等核销不变量: 存在重复退款或退款异常' }
       : { status: 'UNVERIFIED', reason: '缺少账单流水，退款幂等核销不变量未核验 [UNVERIFIED]' };
 
     const anyInvFailed = antiDoubleItem.status === 'FAIL' || netZeroItem.status === 'FAIL' || refundIdemItem.status === 'FAIL';
@@ -435,18 +454,20 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       refundIdempotency: refundIdem === true,
     } : undefined;
   } else {
-    const skipReason = terminalStatus === 'FAILED'
+    const skipReason = billingQueryError
+      ? `账单流水查询异常 (${billingQueryError})，缺少真实账务证据 [UNVERIFIED]`
+      : terminalStatus === 'FAILED'
       ? '未提供账单流水，无法核验失败退款净扣归零，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]'
       : '未提供账单流水，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]';
-    billingEvidence = { status: 'UNVERIFIED', source: 'missing_logs', expectedPoints, reason: skipReason };
+    billingEvidence = { status: 'UNVERIFIED', source: billingSource, expectedPoints, reason: skipReason };
     invariantsEvidence = {
       status: 'UNVERIFIED',
       details: {
-        antiDoubleBilling: { status: 'UNVERIFIED', reason: '未提供账单流水，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]' },
-        netChargeZero: { status: 'UNVERIFIED', reason: '未提供账单流水，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]' },
-        refundIdempotency: { status: 'UNVERIFIED', reason: '未提供账单流水，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]' },
+        antiDoubleBilling: { status: 'UNVERIFIED', reason: skipReason },
+        netChargeZero: { status: 'UNVERIFIED', reason: skipReason },
+        refundIdempotency: { status: 'UNVERIFIED', reason: skipReason },
       },
-      reason: '未提供账单流水，跳过三大账务不变量核验 [SKIPPED_NO_LOGS]',
+      reason: skipReason,
     };
   }
 
@@ -478,7 +499,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
 
   return {
     ok: true, passed: verdictStatus === 'SUCCESS', taskId, modelId, mediaType, status: verdictStatus, verdict, mode: session ? 'real' : 'mock', executionMode,
-    probeDurationMs, artifact, billing, billingAudit: billing ? 'AUDITED' : 'SKIPPED_NO_LOGS', invariants,
+    probeDurationMs, artifact, billing, billingAudit: (billing && scoreLogsToReconcile && scoreLogsToReconcile.length > 0) ? 'AUDITED' : 'SKIPPED_NO_LOGS', invariants,
     evidence: { task: taskEvidence, media: mediaEvidence, billing: billingEvidence, invariants: invariantsEvidence },
     reasons,
   };

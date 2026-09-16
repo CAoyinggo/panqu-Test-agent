@@ -194,67 +194,93 @@ export class BillingOracle {
     let missingRefund = false;
     let asyncSettlementPending = false;
 
-    let antiDoubleBilling: boolean = preDeductCount <= 1;
-    let refundIdempotency: boolean = refundCount <= 1;
+    let antiDoubleBilling: boolean | undefined = undefined;
+    let refundIdempotency: boolean | undefined = undefined;
     let netChargeZero: boolean | undefined = undefined;
-
-    if (preDeductCount > 1) {
-      duplicateCharged = true;
-      antiDoubleBilling = false;
-      reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水`);
-    }
-
-    const clientTokens = taskLogs
-      .map((l) => l.client_token || l.idempotency_key)
-      .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
-    if (clientTokens.length > 1 && preDeductCount > 1) {
-      antiDoubleBilling = false;
-      reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`);
-    }
-
-    if (refundCount > 1) {
-      duplicateRefunded = true;
-      refundIdempotency = false;
-      reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
-    }
 
     const isSuccess = terminalStatus === 'SUCCESS' || (terminalStatus as string) === 'SUCCEEDED';
     const isFailed = terminalStatus === 'FAILED';
 
-    if (isSuccess) {
-      netChargeZero = true;
-      if (preDeductCount === 0) {
-        if (params.allowAsyncPending) {
-          asyncSettlementPending = true;
-          reasons.push(`成功任务预扣流水尚未落盘，标记异步入账处理中`);
-        } else {
-          reasons.push(`成功任务缺失预扣流水记录`);
-        }
-      } else if (netDeducted < expectedPoints) {
-        underCharged = true;
-        reasons.push(`少扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分`);
-      } else if (netDeducted > expectedPoints) {
-        overCharged = true;
-        reasons.push(`多扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`);
-      }
-    } else if (isFailed) {
-      netChargeZero = netDeducted === 0;
-      if (preDeductCount === 0 && expectedPoints > 0) {
-        if (params.allowAsyncPending) {
-          asyncSettlementPending = true;
-          reasons.push(`失败任务预扣与退款流水尚未落盘，标记异步处理中`);
-        } else {
-          reasons.push(`失败任务缺失专属预扣流水记录`);
-        }
-      } else if (netDeducted > 0) {
-        missingRefund = true;
-        reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 失败仍净扣 ${netDeducted} 积分未退回`);
-      } else if (netDeducted < 0) {
-        reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
-      }
+    if (taskLogs.length === 0) {
+      reasons.push(`未找到匹配任务 ID ${taskId} 的有效流水记录 [UNVERIFIED]`);
     } else {
-      netChargeZero = undefined;
-      reasons.push(`任务终态为 ${terminalStatus}，无法核验失败净扣归零不变量 [UNVERIFIED]`);
+      antiDoubleBilling = preDeductCount === 1;
+      if (preDeductCount > 1) {
+        duplicateCharged = true;
+        antiDoubleBilling = false;
+        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水`);
+      } else if (preDeductCount === 0) {
+        antiDoubleBilling = false;
+        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 任务缺失有效预扣流水记录`);
+      }
+
+      const clientTokens = taskLogs
+        .map((l) => l.client_token || l.idempotency_key)
+        .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
+      if (clientTokens.length > 1 && preDeductCount > 1) {
+        antiDoubleBilling = false;
+        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`);
+      }
+
+      if (isSuccess) {
+        refundIdempotency = refundCount === 0;
+        if (refundCount > 0) {
+          refundIdempotency = false;
+          reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 成功任务异常触发退款: 存在 ${refundCount} 次退款记录`);
+        }
+
+        if (preDeductCount === 0) {
+          netChargeZero = false;
+          if (params.allowAsyncPending) {
+            asyncSettlementPending = true;
+            reasons.push(`成功任务预扣流水尚未落盘，标记异步入账处理中`);
+          } else {
+            reasons.push(`成功任务缺失预扣流水记录`);
+          }
+        } else if (netDeducted < expectedPoints) {
+          underCharged = true;
+          netChargeZero = false;
+          reasons.push(`少扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分`);
+        } else if (netDeducted > expectedPoints) {
+          overCharged = true;
+          netChargeZero = false;
+          reasons.push(`多扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`);
+        } else {
+          netChargeZero = true;
+        }
+      } else if (isFailed) {
+        if (preDeductCount > 0) {
+          refundIdempotency = refundCount === 1;
+          if (refundCount > 1) {
+            duplicateRefunded = true;
+            refundIdempotency = false;
+            reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
+          } else if (refundCount === 0) {
+            refundIdempotency = false;
+            reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务未执行退款`);
+          }
+        } else {
+          refundIdempotency = refundCount === 0;
+        }
+
+        netChargeZero = netDeducted === 0;
+        if (preDeductCount === 0 && expectedPoints > 0) {
+          if (params.allowAsyncPending) {
+            asyncSettlementPending = true;
+            reasons.push(`失败任务预扣与退款流水尚未落盘，标记异步处理中`);
+          } else {
+            reasons.push(`失败任务缺失专属预扣流水记录`);
+          }
+        } else if (netDeducted > 0) {
+          missingRefund = true;
+          reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 失败仍净扣 ${netDeducted} 积分未退回`);
+        } else if (netDeducted < 0) {
+          reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
+        }
+      } else {
+        netChargeZero = undefined;
+        reasons.push(`任务终态为 ${terminalStatus}，无法核验账务不变量 [UNVERIFIED]`);
+      }
     }
 
     let balanceDelta: number | undefined;
