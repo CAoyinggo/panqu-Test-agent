@@ -1122,8 +1122,42 @@ async function fetchFirst64K(url: string, timeoutMs = 8000): Promise<{ buffer: B
   try {
     const res = await fetch(url, { headers: { Range: 'bytes=0-65535', 'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0' }, signal: ctrl.signal });
     if (!res.ok && res.status !== 206) return null;
-    const buf = Buffer.from(await res.arrayBuffer()).subarray(0, 65536);
-    return { buffer: buf, durationMs: Date.now() - start };
+    const arrayBuf = await res.arrayBuffer();
+    let buf = Buffer.from(arrayBuf);
+    if (res.status === 200) {
+      if (buf.length > 65536) {
+        const head = buf.subarray(0, 65536);
+        const tail = buf.subarray(Math.max(0, buf.length - 65536));
+        (head as any).tailBuffer = tail;
+        buf = head;
+      }
+      return { buffer: buf, durationMs: Date.now() - start };
+    }
+    const headBuf = buf.subarray(0, 65536);
+    const quickInspection = inspectMp4Buffer(headBuf);
+    if (quickInspection.decodable) {
+      return { buffer: headBuf, durationMs: Date.now() - start };
+    }
+    const contentRange = res.headers.get('content-range');
+    const match = contentRange ? /\/(\d+)$/.exec(contentRange) : null;
+    const totalSize = match ? parseInt(match[1], 10) : 0;
+    if (totalSize > headBuf.length) {
+      const tailSize = Math.min(65536, totalSize);
+      const tailStart = Math.max(0, totalSize - tailSize);
+      try {
+        const tailRes = await fetch(url, {
+          headers: { Range: `bytes=${tailStart}-${totalSize - 1}`, 'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0' },
+          signal: ctrl.signal,
+        });
+        if (tailRes.ok || tailRes.status === 206) {
+          const tailBuf = Buffer.from(await tailRes.arrayBuffer());
+          (headBuf as any).tailBuffer = tailBuf;
+        }
+      } catch {
+        // 保留 headBuf 继续走既有 fail-closed 校验
+      }
+    }
+    return { buffer: headBuf, durationMs: Date.now() - start };
   } catch { return null; } finally { clearTimeout(timer); }
 }
 

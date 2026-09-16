@@ -6,7 +6,24 @@
         "${workspaceFolder}/dist/bin/devtest-mcp.js",
         "--project-root",
         "${workspaceFolder}"
-      ]
+      ],
+      "env": {
+        "NODE_OPTIONS": "",
+        "NODE_USE_ENV_PROXY": "1"
+      }
+    },
+    "panqu-test-mcp": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/dist/bin/devtest-mcp.js",
+        "--project-root",
+        "${workspaceFolder}"
+      ],
+      "env": {
+        "NODE_OPTIONS": "",
+        "NODE_USE_ENV_PROXY": "1"
+      }
     }
   }
 }
+

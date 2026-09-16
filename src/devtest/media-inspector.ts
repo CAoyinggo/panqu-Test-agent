@@ -126,9 +126,50 @@ function findSubBoxes(buffer: Buffer, parent: Mp4Box): Mp4Box[] {
 }
 
 /**
+ * 在尾部 Buffer 中寻找并严格校验合法 moov Box
+ */
+function findMoovBoxInTail(tailBuffer: Buffer): { box: Mp4Box; subBoxes: Mp4Box[] } | null {
+  let searchPos = 0;
+  while (searchPos < tailBuffer.length - 8) {
+    const idx = tailBuffer.indexOf('moov', searchPos, 'ascii');
+    if (idx === -1) break;
+    searchPos = idx + 4;
+    if (idx < 4) continue;
+    const boxStart = idx - 4;
+    let size = tailBuffer.readUInt32BE(boxStart);
+    let headerSize = 8;
+    if (size === 1) {
+      if (boxStart + 16 > tailBuffer.length) continue;
+      const hi = tailBuffer.readUInt32BE(boxStart + 8);
+      const lo = tailBuffer.readUInt32BE(boxStart + 12);
+      size = hi * 0x100000000 + lo;
+      headerSize = 16;
+    } else if (size === 0) {
+      size = tailBuffer.length - boxStart;
+    }
+    if (size < headerSize || boxStart + size > tailBuffer.length) continue;
+
+    const candidateBox: Mp4Box = {
+      type: 'moov',
+      offset: boxStart,
+      size,
+      headerSize,
+      dataOffset: boxStart + headerSize,
+    };
+    const children = findSubBoxes(tailBuffer, candidateBox);
+    const mvhd = children.find((b) => b.type === 'mvhd');
+    const trak = children.find((b) => b.type === 'trak');
+    if (mvhd && trak) {
+      return { box: candidateBox, subBoxes: children };
+    }
+  }
+  return null;
+}
+
+/**
  * 深度解析 MP4 视频媒体元数据
  */
-export function inspectMp4Buffer(buffer: Buffer): MediaInspectionResult {
+export function inspectMp4Buffer(buffer: Buffer, tailBuffer?: Buffer): MediaInspectionResult {
   const reasons: string[] = [];
   if (!buffer || buffer.length < 8) {
     return {
@@ -163,8 +204,23 @@ export function inspectMp4Buffer(buffer: Buffer): MediaInspectionResult {
   const majorBrand = buffer.slice(ftypBox.dataOffset, ftypBox.dataOffset + 4).toString('ascii').trim();
 
   // 2. 检查 moov 与 mdat
-  const moovBox = boxes.find((b) => b.type === 'moov');
+  let moovBox = boxes.find((b) => b.type === 'moov');
   const mdatBox = boxes.find((b) => b.type === 'mdat');
+  let moovBuffer = buffer;
+
+  if (!moovBox) {
+    const effectiveTail = tailBuffer || (buffer as any)?.tailBuffer || (buffer.length > 65536 ? buffer.subarray(Math.max(0, buffer.length - 65536)) : null);
+    if (effectiveTail) {
+      const tailMoov = findMoovBoxInTail(effectiveTail);
+      if (tailMoov) {
+        moovBox = tailMoov.box;
+        moovBuffer = effectiveTail;
+        if (!boxTypes.includes('moov')) {
+          boxTypes.push('moov');
+        }
+      }
+    }
+  }
 
   if (!moovBox) {
     return {
@@ -185,22 +241,22 @@ export function inspectMp4Buffer(buffer: Buffer): MediaInspectionResult {
   let hasVideoTrack = false;
   let hasAudioTrack = false;
 
-  const moovChildren = findSubBoxes(buffer, moovBox);
+  const moovChildren = findSubBoxes(moovBuffer, moovBox);
 
   // 解析 mvhd (Movie Header)
   const mvhdBox = moovChildren.find((b) => b.type === 'mvhd');
   if (mvhdBox && mvhdBox.size >= 32) {
-    const version = buffer.readUInt8(mvhdBox.dataOffset);
+    const version = moovBuffer.readUInt8(mvhdBox.dataOffset);
     if (version === 0 && mvhdBox.size >= mvhdBox.headerSize + 24) {
-      const timescale = buffer.readUInt32BE(mvhdBox.dataOffset + 12);
-      const duration = buffer.readUInt32BE(mvhdBox.dataOffset + 16);
+      const timescale = moovBuffer.readUInt32BE(mvhdBox.dataOffset + 12);
+      const duration = moovBuffer.readUInt32BE(mvhdBox.dataOffset + 16);
       if (timescale > 0) {
         durationSeconds = parseFloat((duration / timescale).toFixed(2));
       }
     } else if (version === 1 && mvhdBox.size >= mvhdBox.headerSize + 36) {
-      const timescale = buffer.readUInt32BE(mvhdBox.dataOffset + 20);
-      const hi = buffer.readUInt32BE(mvhdBox.dataOffset + 24);
-      const lo = buffer.readUInt32BE(mvhdBox.dataOffset + 28);
+      const timescale = moovBuffer.readUInt32BE(mvhdBox.dataOffset + 20);
+      const hi = moovBuffer.readUInt32BE(mvhdBox.dataOffset + 24);
+      const lo = moovBuffer.readUInt32BE(mvhdBox.dataOffset + 28);
       const duration = hi * 0x100000000 + lo;
       if (timescale > 0) {
         durationSeconds = parseFloat((duration / timescale).toFixed(2));
@@ -211,19 +267,19 @@ export function inspectMp4Buffer(buffer: Buffer): MediaInspectionResult {
   // 解析 trak (Tracks) 寻找视频轨与音频轨
   const trakBoxes = moovChildren.filter((b) => b.type === 'trak');
   for (const trak of trakBoxes) {
-    const trakChildren = findSubBoxes(buffer, trak);
+    const trakChildren = findSubBoxes(moovBuffer, trak);
     const tkhdBox = trakChildren.find((b) => b.type === 'tkhd');
     if (tkhdBox && tkhdBox.size >= 84) {
-      const version = buffer.readUInt8(tkhdBox.dataOffset);
+      const version = moovBuffer.readUInt8(tkhdBox.dataOffset);
       let width = 0;
       let height = 0;
       if (version === 0 && tkhdBox.size >= tkhdBox.headerSize + 80) {
         // 宽度和高度在 tkhd 尾部的 16.16 固定小数
-        width = buffer.readUInt32BE(tkhdBox.dataOffset + 76) >> 16;
-        height = buffer.readUInt32BE(tkhdBox.dataOffset + 80) >> 16;
+        width = moovBuffer.readUInt32BE(tkhdBox.dataOffset + 76) >> 16;
+        height = moovBuffer.readUInt32BE(tkhdBox.dataOffset + 80) >> 16;
       } else if (version === 1 && tkhdBox.size >= tkhdBox.headerSize + 92) {
-        width = buffer.readUInt32BE(tkhdBox.dataOffset + 88) >> 16;
-        height = buffer.readUInt32BE(tkhdBox.dataOffset + 92) >> 16;
+        width = moovBuffer.readUInt32BE(tkhdBox.dataOffset + 88) >> 16;
+        height = moovBuffer.readUInt32BE(tkhdBox.dataOffset + 92) >> 16;
       }
 
       if (width > 0 && height > 0) {
@@ -235,10 +291,10 @@ export function inspectMp4Buffer(buffer: Buffer): MediaInspectionResult {
     // 检查 mdia.hdlr 区分音视频
     const mdiaBox = trakChildren.find((b) => b.type === 'mdia');
     if (mdiaBox) {
-      const mdiaChildren = findSubBoxes(buffer, mdiaBox);
+      const mdiaChildren = findSubBoxes(moovBuffer, mdiaBox);
       const hdlrBox = mdiaChildren.find((b) => b.type === 'hdlr');
       if (hdlrBox && hdlrBox.size >= hdlrBox.headerSize + 12) {
-        const handlerType = buffer.slice(hdlrBox.dataOffset + 8, hdlrBox.dataOffset + 12).toString('ascii');
+        const handlerType = moovBuffer.slice(hdlrBox.dataOffset + 8, hdlrBox.dataOffset + 12).toString('ascii');
         if (handlerType === 'vide') {
           hasVideoTrack = true;
         } else if (handlerType === 'soun') {

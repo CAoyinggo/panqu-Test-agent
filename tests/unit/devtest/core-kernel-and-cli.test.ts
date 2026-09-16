@@ -1333,6 +1333,34 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     expect(vImage.contract?.pricing.customPoints?.value).toBe(10);
     expect(vImage.contract?.pricing.isPricingDetermined).toBe(true);
   });
+
+  it('Case G: verify() 对 moov 位于尾部的合法 MP4（如 Wan3.0 视频）产物正确识别 PASS', async () => {
+    const base = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const ftyp = base.subarray(0, 24);
+    const moovLen = base.readUInt32BE(24);
+    const moov = base.subarray(24, 24 + moovLen);
+    const mdat = base.subarray(24 + moovLen);
+
+    // 构造 head + tail 并附加 tailBuffer
+    const head = Buffer.concat([ftyp, mdat]);
+    (head as any).tailBuffer = moov;
+
+    const vRes = await verify({
+      taskId: 88804,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      assetBuffer: head,
+      scoreLogs: [{ task_id: 88804, type: 2, score: -56 }],
+    });
+
+    expect(vRes.evidence.media.status).toBe('PASS');
+    expect(vRes.evidence.media.format).toContain('mp4');
+    expect(vRes.evidence.media.dimensions).toEqual({ width: 1280, height: 720 });
+    expect(vRes.evidence.media.durationSeconds).toBe(4);
+    expect(vRes.evidence.media.hasMdat).toBe(true);
+    expect(vRes.evidence.media.decodable).toBe(true);
+  });
 });
 
 
