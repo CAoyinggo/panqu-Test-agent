@@ -845,7 +845,7 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
   it('16. 账单查询异常拦截：queryTaskBillingLogs 失败时 Fail-closed 判定 UNVERIFIED', async () => {
     const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
     const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
-      status: 'ERROR',
+      status: 'QUERY_ERROR',
       scoreLogs: [],
       source: 'network_error',
       error: 'ETIMEDOUT: 连接账单数据库超时',
@@ -886,7 +886,7 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
   it('17. 账单流水空记录拦截：真实查询返回空流水，判定缺失预扣，Fail-closed 为 UNVERIFIED', async () => {
     const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
     const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
-      status: 'SUCCESS',
+      status: 'QUERY_SUCCESS',
       scoreLogs: [],
       source: 'auth_adminscore',
     });
@@ -917,15 +917,16 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     expect(res.verdict).toBe('UNVERIFIED');
     expect(res.evidence.billing.status).toBe('UNVERIFIED');
     expect(res.evidence.invariants.status).toBe('UNVERIFIED');
+    expect(res.evidence.billing.reason).toContain('QUERY_SUCCESS + 0 records');
 
     billingSpy.mockRestore();
     statusSpy.mockRestore();
   });
 
-  it('18. 完整在线验真链路闭环：真实 Session 查询任务状态 + 产物验真 + 账务对账全部通过', async () => {
+  it('18. 链路协议与数据流契约 (CONTRACT / FIXTURE)：Session 流程下状态查询 + 产物验真 + 账务对账协议全通', async () => {
     const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
     const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
-      status: 'SUCCESS',
+      status: 'QUERY_SUCCESS',
       scoreLogs: [{ task_id: 77718, type: 2, score: -28, memo: '预扣 28 pt' }],
       source: 'auth_adminscore',
     });
@@ -959,7 +960,9 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     expect(res.evidence.task.status).toBe('PASS');
     expect(res.evidence.media.status).toBe('PASS');
     expect(res.evidence.media.ownership).toBe('VERIFIED');
+    expect(res.evidence.media.source).toBe('TASK_SNAPSHOT');
     expect(res.evidence.billing.status).toBe('PASS');
+    expect(res.evidence.billing.expectedChargeSource).toBe('REAL_BILLING_FACT');
     expect(res.evidence.invariants.status).toBe('PASS');
     expect(res.evidence.invariants.antiDoubleBilling).toBe(true);
     expect(res.evidence.invariants.netChargeZero).toBe(true);
@@ -995,12 +998,126 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
 
     global.fetch = originalFetch;
 
-    expect(queryRes.status).toBe('SUCCESS');
+    expect(queryRes.status).toBe('QUERY_SUCCESS');
     expect(queryRes.source).toBe('auth_adminscore');
     expect(queryRes.scoreLogs.length).toBe(1);
     expect(queryRes.scoreLogs[0].task_id).toBe(77719);
     expect(queryRes.scoreLogs[0].score).toBe(-28);
     expect(queryRes.scoreLogs[0].type).toBe(2);
+  });
+
+  it('20. queryTaskBillingLogs 严格区分 5 种状态：QUERY_SUCCESS (records=0), QUERY_TIMEOUT, AUTH_FAILED, PARSE_ERROR, QUERY_ERROR', async () => {
+    const originalFetch = global.fetch;
+    const session: mediaFlow.PanquSession = {
+      env: 'test',
+      base_url: 'https://test.panqu.com',
+      cookie_string: 'PHPSESSID=mock_val',
+    };
+
+    // Case A: AUTH_FAILED (401)
+    global.fetch = vi.fn().mockImplementation(async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => 'Unauthorized',
+    } as unknown as Response));
+    const authRes = await mediaFlow.queryTaskBillingLogs(77720, session);
+    expect(authRes.status).toBe('AUTH_FAILED');
+    expect(authRes.error).toContain('AUTH_FAILED');
+
+    // Case B: PARSE_ERROR
+    global.fetch = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => '<html><body>Gateway Error</body></html>',
+    } as unknown as Response));
+    const parseRes = await mediaFlow.queryTaskBillingLogs(77720, session);
+    expect(parseRes.status).toBe('PARSE_ERROR');
+    expect(parseRes.error).toContain('PARSE_ERROR');
+
+    // Case C: QUERY_TIMEOUT
+    global.fetch = vi.fn().mockImplementation(async () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+    const timeoutRes = await mediaFlow.queryTaskBillingLogs(77720, session);
+    expect(timeoutRes.status).toBe('QUERY_TIMEOUT');
+    expect(timeoutRes.error).toContain('QUERY_TIMEOUT');
+
+    // Case D: QUERY_SUCCESS + 0 records
+    global.fetch = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1, data: { total: 0, rows: [] } }),
+    } as unknown as Response));
+    const zeroRes = await mediaFlow.queryTaskBillingLogs(77720, session);
+    expect(zeroRes.status).toBe('QUERY_SUCCESS');
+    expect(zeroRes.scoreLogs.length).toBe(0);
+
+    global.fetch = originalFetch;
+  });
+
+  it('21. Verify 全流程严格只读锁定：禁止调用任何写操作端点（如任务创建、扣费、退款、修改等）', async () => {
+    const originalFetch = global.fetch;
+    const recordedCalls: Array<{ url: string; method: string }> = [];
+
+    global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = (init?.method || 'GET').toUpperCase();
+      recordedCalls.push({ url, method });
+
+      if (url.includes('/apiGetStatus')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 1,
+            data: [{ id: 77721, task_status: 2, video_url: 'https://test.panqu.com/video.mp4', progress: 100 }],
+          }),
+        } as unknown as Response;
+      }
+      if (url.includes('/video.mp4')) {
+        const mp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+        return {
+          ok: true,
+          status: 206,
+          arrayBuffer: async () => mp4.buffer.slice(mp4.byteOffset, mp4.byteOffset + mp4.byteLength),
+        } as unknown as Response;
+      }
+      if (url.includes('/auth/adminscore/index')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            total: 1,
+            rows: [{ id: 1, task_id: 77721, type: 2, score: -28, remark: '预扣 28', createtime: '2026-09-15 12:00:00' }],
+          }),
+        } as unknown as Response;
+      }
+      return { ok: false, status: 404, text: async () => 'not found' } as unknown as Response;
+    });
+
+    await verify({
+      taskId: 77721,
+      baseUrl: 'https://test.panqu.com',
+      cookies: 'PHPSESSID=mock_val',
+      expectedPoints: 28,
+    });
+
+    global.fetch = originalFetch;
+
+    expect(recordedCalls.length).toBeGreaterThan(0);
+    for (const call of recordedCalls) {
+      if (call.method === 'POST') {
+        expect(call.url).toContain('/aivideo/v2/task_status/apiGetStatus');
+      } else {
+        expect(call.method).toBe('GET');
+      }
+      expect(call.url).not.toContain('/generate');
+      expect(call.url).not.toContain('/refund');
+      expect(call.url).not.toContain('/charge');
+      expect(call.url).not.toContain('/submit');
+    }
   });
 });
 

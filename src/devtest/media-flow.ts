@@ -205,8 +205,15 @@ export async function pollTaskStatus(
   return { finalSnapshot: latestSnapshot, totalPolls: pollCount, timeline };
 }
 
+export type BillingQueryStatus =
+  | 'QUERY_SUCCESS'
+  | 'QUERY_ERROR'
+  | 'QUERY_TIMEOUT'
+  | 'AUTH_FAILED'
+  | 'PARSE_ERROR';
+
 export interface BillingQueryResult {
-  status: 'SUCCESS' | 'ERROR';
+  status: BillingQueryStatus;
   scoreLogs: ScoreLogEntry[];
   source: string;
   total?: number;
@@ -216,6 +223,13 @@ export interface BillingQueryResult {
 /**
  * 真实只读查询任务积分流水 (Billing Logs)
  * 严格零副作用：仅发起 GET 请求查询后台账单或 AdminScore 记录，绝不执行任何写操作（无提交、无扣费、无退款）。
+ *
+ * 严格区分状态：
+ * - QUERY_SUCCESS + records > 0 / = 0
+ * - QUERY_ERROR
+ * - QUERY_TIMEOUT
+ * - AUTH_FAILED
+ * - PARSE_ERROR
  */
 export async function queryTaskBillingLogs(
   taskId: number,
@@ -225,6 +239,10 @@ export async function queryTaskBillingLogs(
   const timeoutMs = options.timeoutMs ?? 8000;
   const baseUrl = session.base_url;
   const cookies = session.cookie_string;
+
+  let lastStatus: BillingQueryStatus = 'QUERY_ERROR';
+  let lastError: string = '无法通过已知账单端点获取流水';
+  let lastSource = 'unknown';
 
   // 1. 优先尝试 FastAdmin 原生 AdminScore 控制器（以 task_id 精确过滤）
   try {
@@ -253,13 +271,23 @@ export async function queryTaskBillingLogs(
         2
       );
 
-      if (res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        lastStatus = 'AUTH_FAILED';
+        lastError = `HTTP ${res.status}: FastAdmin 鉴权失败或 Session 会话已失效 [AUTH_FAILED]`;
+        lastSource = 'auth_adminscore';
+      } else if (!res.ok) {
+        lastStatus = 'QUERY_ERROR';
+        lastError = `HTTP ${res.status}: ${res.statusText} [QUERY_ERROR]`;
+        lastSource = 'auth_adminscore';
+      } else {
         const text = await res.text();
         let body: any;
         try {
           body = JSON.parse(text);
         } catch {
-          // 非 JSON，尝试备用端点
+          lastStatus = 'PARSE_ERROR';
+          lastError = 'FastAdmin AdminScore 响应非有效 JSON 文本 [PARSE_ERROR]';
+          lastSource = 'auth_adminscore';
         }
 
         if (body && Array.isArray(body.rows)) {
@@ -272,18 +300,28 @@ export async function queryTaskBillingLogs(
             createtime: r.createtime,
           }));
           return {
-            status: 'SUCCESS',
+            status: 'QUERY_SUCCESS',
             scoreLogs: matchedLogs,
             total: body.total ?? matchedLogs.length,
             source: 'auth_adminscore',
           };
         }
       }
+    } catch (innerErr) {
+      const errStr = String(innerErr);
+      if (innerErr instanceof Error && innerErr.name === 'AbortError') {
+        lastStatus = 'QUERY_TIMEOUT';
+        lastError = `FastAdmin AdminScore 请求超时 (${timeoutMs}ms) [QUERY_TIMEOUT]`;
+      } else {
+        lastStatus = 'QUERY_ERROR';
+        lastError = `网络请求异常: ${errStr} [QUERY_ERROR]`;
+      }
+      lastSource = 'auth_adminscore';
     } finally {
       clearTimeout(timer);
     }
   } catch {
-    // 静默尝试备用路由
+    // 准备进入备用端点
   }
 
   // 2. 备用端点：请求 /aivideo/v2/billing/apiPersonalRecords
@@ -311,64 +349,95 @@ export async function queryTaskBillingLogs(
         2
       );
 
-      if (res.ok) {
-        const text = await res.text();
-        let body: any;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          // 非 JSON
-        }
-
-        if (body && body.code === 1 && body.data && Array.isArray(body.data.rows)) {
-          const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => ({
-            id: r.id,
-            task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
-            type: Number(r.record_type ?? r.type ?? 2),
-            score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
-            memo: r.type_text || r.model || r.project,
-            createtime: r.time || r.createtime,
-          }));
-
-          return {
-            status: 'SUCCESS',
-            scoreLogs: matchedLogs,
-            total: body.data.total ?? matchedLogs.length,
-            source: 'billing_personal_records',
-          };
-        } else if (body && body.code === 0) {
-          return {
-            status: 'ERROR',
-            scoreLogs: [],
-            source: 'billing_personal_records',
-            error: body.msg || 'API returned code 0',
-          };
-        }
-      } else {
+      if (res.status === 401 || res.status === 403) {
         return {
-          status: 'ERROR',
+          status: 'AUTH_FAILED',
           scoreLogs: [],
-          source: 'api_http_error',
-          error: `HTTP ${res.status}: ${res.statusText}`,
+          source: 'billing_personal_records',
+          error: `HTTP ${res.status}: 个人账单端点鉴权失败或 Session 已失效 [AUTH_FAILED]`,
         };
       }
+
+      if (!res.ok) {
+        return {
+          status: 'QUERY_ERROR',
+          scoreLogs: [],
+          source: 'billing_personal_records',
+          error: `HTTP ${res.status}: ${res.statusText} [QUERY_ERROR]`,
+        };
+      }
+
+      const text = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        return {
+          status: 'PARSE_ERROR',
+          scoreLogs: [],
+          source: 'billing_personal_records',
+          error: '个人账单端点响应非有效 JSON 文本 [PARSE_ERROR]',
+        };
+      }
+
+      if (body && body.code === 1 && body.data && Array.isArray(body.data.rows)) {
+        const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => ({
+          id: r.id,
+          task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
+          type: Number(r.record_type ?? r.type ?? 2),
+          score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
+          memo: r.type_text || r.model || r.project,
+          createtime: r.time || r.createtime,
+        }));
+
+        return {
+          status: 'QUERY_SUCCESS',
+          scoreLogs: matchedLogs,
+          total: body.data.total ?? matchedLogs.length,
+          source: 'billing_personal_records',
+        };
+      } else if (body && body.code === 0) {
+        const msg = body.msg || 'API returned code 0';
+        const isAuthMsg = msg.includes('登录') || msg.includes('login') || msg.includes('token');
+        return {
+          status: isAuthMsg ? 'AUTH_FAILED' : 'QUERY_ERROR',
+          scoreLogs: [],
+          source: 'billing_personal_records',
+          error: `${msg} [${isAuthMsg ? 'AUTH_FAILED' : 'QUERY_ERROR'}]`,
+        };
+      }
+    } catch (innerErr) {
+      if (innerErr instanceof Error && innerErr.name === 'AbortError') {
+        return {
+          status: 'QUERY_TIMEOUT',
+          scoreLogs: [],
+          source: 'billing_personal_records',
+          error: `个人账单端点请求超时 (${timeoutMs}ms) [QUERY_TIMEOUT]`,
+        };
+      }
+      return {
+        status: 'QUERY_ERROR',
+        scoreLogs: [],
+        source: 'billing_personal_records',
+        error: `${innerErr instanceof Error ? innerErr.message : String(innerErr)} [QUERY_ERROR]`,
+      };
     } finally {
       clearTimeout(timer);
     }
   } catch (err) {
     return {
-      status: 'ERROR',
+      status: 'QUERY_ERROR',
       scoreLogs: [],
       source: 'network_error',
-      error: err instanceof Error ? err.message : String(err),
+      error: `${err instanceof Error ? err.message : String(err)} [QUERY_ERROR]`,
     };
   }
 
   return {
-    status: 'ERROR',
+    status: lastStatus,
     scoreLogs: [],
-    source: 'unknown_error',
-    error: '无法通过已知账单端点获取流水',
+    source: lastSource,
+    error: lastError,
   };
 }
 

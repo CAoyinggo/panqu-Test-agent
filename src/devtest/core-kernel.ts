@@ -181,6 +181,7 @@ export interface BillingEvidence {
   status: EvidenceStatus;
   source: string;
   expectedPoints?: number;
+  expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
   preDeductedPoints?: number;
   settledPoints?: number;
   refundedPoints?: number;
@@ -236,6 +237,9 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
   const expectedPoints = options.expectedPoints ?? BillingOracle.calculateExpectedPoints({ mediaType, modelId, duration, resolution });
+  const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedPoints !== undefined
+    ? 'REAL_BILLING_FACT'
+    : 'DEVTEST_EXPECTATION';
 
   let session: PanquSession | null = null;
   const autoSession = options.sessionFile || process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
@@ -248,7 +252,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         evidence: {
           task: { status: 'FAIL', source: 'session_error', error: msg },
           media: { status: 'UNVERIFIED', source: 'missing_session', ownership: 'UNVERIFIED', reason: msg },
-          billing: { status: 'UNVERIFIED', source: 'missing_session', expectedPoints, reason: msg },
+          billing: { status: 'UNVERIFIED', source: 'missing_session', expectedPoints, expectedChargeSource, reason: msg },
           invariants: { status: 'UNVERIFIED', reason: msg },
         },
         reasons: [msg],
@@ -272,6 +276,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   let probeDurationMs: number | undefined;
   let terminalStatus: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
   let taskEvidence: TaskEvidence;
+  let mediaArtifactSource = artifactBuffer ? 'FIXTURE_BUFFER' : 'missing_buffer';
   let artifactOwnership: 'VERIFIED' | 'UNVERIFIED' = options.artifactOwnership === 'UNVERIFIED' || options.artifactOwnership === 'UNBOUND' ? 'UNVERIFIED' : 'VERIFIED';
 
   if (session) {
@@ -282,7 +287,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         evidence: {
           task: { status: 'PROCESSING', source: 'live_polling', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: finalSnapshot.progress },
           media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
-          billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, reason: '任务生成中，终态账单未对账' },
+          billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
           invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
         },
         reasons: [`任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`],
@@ -296,6 +301,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       taskEvidence = { status: 'PASS', source: 'live_polling', terminalStatus: 'SUCCESS', taskStatus: 2, progress: finalSnapshot.progress, videoUrl: finalSnapshot.videoUrl, imageUrl: finalSnapshot.imageUrl };
       const mediaUrl = finalSnapshot.videoUrl || finalSnapshot.imageUrl;
       if (mediaUrl) {
+        mediaArtifactSource = 'TASK_SNAPSHOT';
         artifactOwnership = 'VERIFIED';
         if (!artifactBuffer) {
           const probeRes = await fetchFirst64K(mediaUrl);
@@ -306,7 +312,8 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       terminalStatus = 'UNKNOWN';
       taskEvidence = { status: 'UNVERIFIED', source: 'task_not_found', terminalStatus: 'UNKNOWN', taskStatus: 0, error: `未能从主站获取到任务 #${taskId} 状态 (任务不存在或超时) [UNVERIFIED]`, progress: 0 };
       if ((options.videoUrl || options.imageUrl) && !artifactBuffer) {
-        artifactOwnership = 'UNVERIFIED';
+        mediaArtifactSource = 'EXTERNAL_URL';
+        artifactOwnership = options.artifactOwnership === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED';
         const probeRes = await fetchFirst64K(options.videoUrl || options.imageUrl!);
         if (probeRes) { artifactBuffer = probeRes.buffer; probeDurationMs = probeRes.durationMs; }
       }
@@ -323,6 +330,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     if (options.videoUrl || options.imageUrl) {
       taskEvidence.videoUrl = options.videoUrl;
       taskEvidence.imageUrl = options.imageUrl;
+      mediaArtifactSource = 'EXTERNAL_URL';
       if (options.artifactOwnership !== 'VERIFIED') {
         artifactOwnership = 'UNVERIFIED';
       }
@@ -330,6 +338,8 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         const probeRes = await fetchFirst64K(options.videoUrl || options.imageUrl!);
         if (probeRes) { artifactBuffer = probeRes.buffer; probeDurationMs = probeRes.durationMs; }
       }
+    } else if (artifactBuffer) {
+      mediaArtifactSource = options.artifactOwnership === 'UNVERIFIED' || options.artifactOwnership === 'UNBOUND' ? 'EXTERNAL_BUFFER' : 'FIXTURE_BUFFER';
     }
   }
 
@@ -341,7 +351,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     if (artifactOwnership === 'UNVERIFIED') {
       mediaEvidence = {
         status: 'UNVERIFIED',
-        source: probeDurationMs !== undefined ? 'range_binary' : 'buffer',
+        source: mediaArtifactSource,
         ownership: 'UNVERIFIED',
         format: artifact.format, dimensions: artifact.dimensions, durationSeconds: artifact.durationSeconds,
         hasMdat: artifact.hasMdat, decodable: artifact.decodable,
@@ -350,7 +360,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     } else if (artifact.decodable) {
       mediaEvidence = {
         status: 'PASS',
-        source: probeDurationMs !== undefined ? 'range_binary' : 'buffer',
+        source: mediaArtifactSource,
         ownership: 'VERIFIED',
         format: artifact.format, dimensions: artifact.dimensions, durationSeconds: artifact.durationSeconds,
         hasMdat: artifact.hasMdat, decodable: artifact.decodable,
@@ -358,7 +368,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     } else {
       mediaEvidence = {
         status: 'FAIL',
-        source: probeDurationMs !== undefined ? 'range_binary' : 'buffer',
+        source: mediaArtifactSource,
         ownership: 'VERIFIED',
         format: artifact.format, dimensions: artifact.dimensions, durationSeconds: artifact.durationSeconds,
         hasMdat: artifact.hasMdat, decodable: false,
@@ -378,17 +388,17 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
 
   if (!scoreLogsToReconcile && session) {
     const queryRes = await queryTaskBillingLogs(taskId, session);
-    if (queryRes.status === 'SUCCESS') {
+    if (queryRes.status === 'QUERY_SUCCESS') {
       scoreLogsToReconcile = queryRes.scoreLogs;
       billingSource = queryRes.source;
     } else {
-      billingQueryError = queryRes.error || '账单接口查询失败';
+      billingQueryError = queryRes.error || `账单查询异常 [${queryRes.status}]`;
       billingSource = queryRes.source;
     }
   }
 
   const hasScoreLogs = Array.isArray(scoreLogsToReconcile);
-  const billing = hasScoreLogs ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus: terminalStatus as any, expectedPoints, scoreLogs: scoreLogsToReconcile! }) : undefined;
+  const billing = hasScoreLogs ? BillingOracle.reconcileTaskLedger({ taskId, terminalStatus: terminalStatus as any, expectedPoints, expectedChargeSource, scoreLogs: scoreLogsToReconcile! }) : undefined;
 
   let billingEvidence: BillingEvidence;
   let invariantsEvidence: InvariantsEvidence;
@@ -398,15 +408,23 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     const hasBillingViolations = Boolean(billing.duplicateCharged || billing.duplicateRefunded || billing.missingRefund || billing.underCharged || billing.overCharged);
     const billingStatus: EvidenceStatus = hasBillingViolations ? 'FAIL' : billing.passed ? 'PASS' : 'UNVERIFIED';
 
+    const isSuccessEmpty = scoreLogsToReconcile && scoreLogsToReconcile.length === 0;
+    const reason = !billing.passed
+      ? (isSuccessEmpty
+          ? '真实数据源明确确认该任务在查询范围内无流水记录 [QUERY_SUCCESS + 0 records]'
+          : billing.reasons.join(', '))
+      : undefined;
+
     billingEvidence = {
       status: billingStatus,
       source: billingSource,
       expectedPoints,
+      expectedChargeSource,
       preDeductedPoints: billing.preDeductedPoints,
       settledPoints: billing.settledPoints,
       refundedPoints: billing.refundedPoints,
       netDeductedPoints: billing.netDeductedPoints,
-      reason: billing.passed ? undefined : billing.reasons.join(', '),
+      reason,
     };
 
     const antiDouble = billing.antiDoubleBilling;
@@ -459,7 +477,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       : terminalStatus === 'FAILED'
       ? '未提供账单流水，无法核验失败退款净扣归零，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]'
       : '未提供账单流水，缺少真实账务证据获取能力 [SKIPPED_NO_LOGS]';
-    billingEvidence = { status: 'UNVERIFIED', source: billingSource, expectedPoints, reason: skipReason };
+    billingEvidence = { status: 'UNVERIFIED', source: billingSource, expectedPoints, expectedChargeSource, reason: skipReason };
     invariantsEvidence = {
       status: 'UNVERIFIED',
       details: {

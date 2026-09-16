@@ -26,6 +26,7 @@ export interface BillingAuditReport {
   passed: boolean;
   status: FlowStepStatus;
   expectedPoints: number;
+  expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
   preDeductedPoints: number;
   settledPoints: number;
   refundedPoints: number;
@@ -124,8 +125,10 @@ export class BillingOracle {
     balanceBefore?: number;
     balanceAfter?: number;
     allowAsyncPending?: boolean;
+    expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
   }): BillingAuditReport {
     const { taskId, expectedPoints, terminalStatus, scoreLogs } = params;
+    const expectedChargeSource = params.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
     const reasons: string[] = [];
 
     const taskLogs = scoreLogs.filter((log) => {
@@ -297,6 +300,7 @@ export class BillingOracle {
       passed,
       status,
       expectedPoints,
+      expectedChargeSource,
       preDeductedPoints: preDeduct,
       settledPoints: settled,
       refundedPoints: refunded,
