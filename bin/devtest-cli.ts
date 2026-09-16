@@ -265,8 +265,8 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           console.error(`${c.red}错误: 必须通过 --task <id> 指定任务编号${c.reset}`);
           return 1;
         }
-        const modelId = Number(options.model ?? options['model-id'] ?? options.modelId ?? 84);
-        const mediaType = ((options.media ?? options['media-type'] ?? options.mediaType ?? 'video') as string).toLowerCase() as 'video' | 'image';
+        const modelId = options.model || options['model-id'] || options.modelId ? Number(options.model ?? options['model-id'] ?? options.modelId) : undefined;
+        const mediaType = options.media || options['media-type'] || options.mediaType ? ((options.media ?? options['media-type'] ?? options.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined;
         const expectedPoints = typeof options['expected-points'] === 'number' ? options['expected-points'] as number : undefined;
         const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED') || 'SUCCESS';
         const resolution = options.resolution as string | undefined;
@@ -314,7 +314,12 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           }
           console.log(`${c.bold}最终裁决:${c.reset} ${verdictLabel}`);
 
-          console.log(`\n${c.bold}1. 产物物理结构验真 (Media Inspection):${c.reset}`);
+          console.log(`\n${c.bold}1. 任务状态与执行 (Task Execution):${c.reset} ${result.evidence.task.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.task.status === 'PROCESSING' ? `${c.yellow}● PROCESSING${c.reset}` : result.evidence.task.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.task.source}]`);
+          if (result.evidence.task.error) {
+            console.log(`   错误信息: ${result.evidence.task.error}`);
+          }
+
+          console.log(`\n${c.bold}2. 产物物理结构验真 (Media Inspection):${c.reset} ${result.evidence.media.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.media.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.media.source}]`);
           if (result.artifact) {
             if (result.probeDurationMs !== undefined) {
               console.log(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
@@ -330,12 +335,12 @@ export async function runDevTestCli(args: string[]): Promise<number> {
             console.log(`   ${c.yellow}未获取产物二进制 Buffer (未提供 assetBuffer 且未连接主站获取产物 URL)${c.reset}`);
           }
 
-          console.log(`\n${c.bold}2. 防资损账务对账 (Billing & Invariants):${c.reset}`);
+          console.log(`\n${c.bold}3. 防资损账务对账 (Billing & Invariants):${c.reset} ${result.evidence.billing.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.billing.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.billing.source}]`);
           if (result.billing) {
             console.log(`   对账结果: ${result.billing.passed ? `${c.green}✔ PASS${c.reset}` : `${c.red}✖ MISMATCH${c.reset}`}`);
             console.log(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
             if (result.invariants) {
-              console.log(`   核心不变量核验:`);
+              console.log(`   核心不变量核验 (Invariants: ${result.evidence.invariants.status}):`);
               console.log(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 存在多重扣费${c.reset}`}`);
               console.log(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 失败未完全退款${c.reset}`}`);
               console.log(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 重复退款${c.reset}`}`);

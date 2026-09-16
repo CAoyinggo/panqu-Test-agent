@@ -8,6 +8,7 @@ export type {
   PlanKernelOptions, PlanKernelResult,
   ExecuteKernelOptions, ExecuteKernelResult,
   VerifyKernelOptions, VerifyKernelResult,
+  TaskEvidence, MediaEvidence, BillingEvidence, InvariantsEvidence, VerificationEvidence,
 } from "./core-kernel.js";
 
 export type {

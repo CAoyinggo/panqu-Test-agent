@@ -13,6 +13,7 @@ import { runDevTestCli } from '../../../bin/devtest-cli.js';
 import { DEVTEST_VERSION } from '../../../src/devtest/version.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 import * as mediaFlow from '../../../src/devtest/media-flow.js';
+import { DevTestMcpService } from '../../../src/devtest/mcp-service.js';
 
 describe('DevTest 纯净内核层 (Core Kernel)', () => {
   describe('1. probe (环境探活)', () => {
@@ -485,5 +486,190 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
 
     expect(code).toBe(1);
     expect(errors.join(' ')).toContain('未知命令');
+  });
+});
+
+describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', () => {
+  it('1. 幂等复验：对同一任务多次执行 verify 纯只读无副作用且结构完全一致', async () => {
+    const mp4Buffer = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const verifyOpts: VerifyKernelOptions = {
+      taskId: 77701,
+      modelId: 84,
+      mediaType: 'video',
+      artifactBuffer: mp4Buffer,
+      expectedPoints: 56,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 77701, type: 2, score: -56, memo: '预扣' }],
+    };
+
+    const run1 = await verify(verifyOpts);
+    const run2 = await verify(verifyOpts);
+
+    expect(run1.ok).toBe(true);
+    expect(run2.ok).toBe(true);
+    expect(run1.passed).toBe(true);
+    expect(run2.passed).toBe(true);
+    expect(run1.status).toBe('SUCCESS');
+    expect(run2.status).toBe('SUCCESS');
+    expect(run1.evidence).toEqual(run2.evidence);
+    expect(run1.evidence.task.status).toBe('PASS');
+    expect(run1.evidence.media.status).toBe('PASS');
+    expect(run1.evidence.billing.status).toBe('PASS');
+    expect(run1.evidence.invariants.status).toBe('PASS');
+  });
+
+  it('2. 凭据缺失：媒体缺失但账单有效时，标记 UNVERIFIED 而非误报 FAILED', async () => {
+    const res = await verify({
+      taskId: 77702,
+      modelId: 84,
+      mediaType: 'video',
+      expectedPoints: 28,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 77702, type: 2, score: -28, memo: '正常扣费' }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('UNVERIFIED');
+    expect(res.evidence.billing.status).toBe('PASS');
+    expect(res.evidence.invariants.status).toBe('PASS');
+    expect(res.reasons.some((r) => r.includes('缺失真实媒体产物'))).toBe(true);
+  });
+
+  it('3. 物理伪成功拦截：HTTP 200/206 返回但二进制首部损坏，准确判定 media FAIL', async () => {
+    const corruptBuffer = Buffer.from('FAKE_HTTP_200_HEADER_DATA_NOT_MP4_OR_PNG');
+    const res = await verify({
+      taskId: 77703,
+      modelId: 84,
+      mediaType: 'video',
+      artifactBuffer: corruptBuffer,
+      expectedPoints: 28,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 77703, type: 2, score: -28 }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.evidence.media.status).toBe('FAIL');
+    expect(res.evidence.media.decodable).toBe(false);
+    expect(res.reasons.some((r) => r.includes('产物物理完整性校验失败'))).toBe(true);
+  });
+
+  it('4. 失败无流水拦截：任务终态失败但无流水证明退款，标记 FAILED 且账单 UNVERIFIED', async () => {
+    const res = await verify({
+      taskId: 77704,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'FAILED',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.evidence.task.status).toBe('FAIL');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.reasons.some((r) => r.includes('无法核验失败退款净扣归零'))).toBe(true);
+  });
+
+  it('5. 重复扣费拦截：存在多笔扣费违反防重复扣费不变量', async () => {
+    const mp4Buffer = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 77705,
+      modelId: 84,
+      mediaType: 'video',
+      artifactBuffer: mp4Buffer,
+      expectedPoints: 28,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [
+        { task_id: 77705, type: 2, score: -28, memo: '预扣 1' },
+        { task_id: 77705, type: 2, score: -28, memo: '并发重复预扣 2' },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.evidence.invariants.status).toBe('FAIL');
+    expect(res.evidence.invariants.antiDoubleBilling).toBe(false);
+    expect(res.reasons.some((r) => r.includes('防重复扣费'))).toBe(true);
+  });
+
+  it('6. 重复退款拦截：存在多次退款违反退款幂等核销不变量', async () => {
+    const mp4Buffer = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 77706,
+      modelId: 84,
+      mediaType: 'video',
+      artifactBuffer: mp4Buffer,
+      expectedPoints: 28,
+      terminalStatus: 'FAILED',
+      scoreLogs: [
+        { task_id: 77706, type: 2, score: -28, memo: '预扣' },
+        { task_id: 77706, type: 1, score: 28, memo: '退款 1' },
+        { task_id: 77706, type: 1, score: 28, memo: '重复退款 2' },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.evidence.invariants.status).toBe('FAIL');
+    expect(res.evidence.invariants.refundIdempotency).toBe(false);
+    expect(res.reasons.some((r) => r.includes('退款幂等核销'))).toBe(true);
+  });
+
+  it('7. 失败任务全额退款：账务与净扣归零 PASS，但任务本身状态为 FAIL', async () => {
+    const res = await verify({
+      taskId: 77707,
+      modelId: 84,
+      mediaType: 'video',
+      expectedPoints: 28,
+      terminalStatus: 'FAILED',
+      scoreLogs: [
+        { task_id: 77707, type: 2, score: -28, memo: '预扣' },
+        { task_id: 77707, type: 1, score: 28, memo: '退款' },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.evidence.task.status).toBe('FAIL');
+    expect(res.evidence.billing.status).toBe('PASS');
+    expect(res.evidence.invariants.status).toBe('PASS');
+    expect(res.evidence.invariants.netChargeZero).toBe(true);
+  });
+
+  it('8. 双模同源一致性：CLI 与 TRAE MCP 针对相同输入产出一致的裁决与 Evidence 结构', async () => {
+    const mcpService = new DevTestMcpService();
+    const mcpRes = await mcpService.call({
+      action: 'verify',
+      task_id: 77708,
+      model_id: 84,
+      media_type: 'video',
+      terminal_status: 'SUCCESS',
+    });
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+    const code = await runDevTestCli(['verify', '--task', '77708', '--model', '84', '--media', 'video', '--json']);
+    spy.mockRestore();
+
+    expect(code).toBe(1); // unverified returns 1
+    const cliRes = JSON.parse(logs.join(''));
+
+    expect(mcpRes.ok).toBe(cliRes.ok);
+    expect(mcpRes.data.passed).toBe(cliRes.passed);
+    expect(mcpRes.data.status).toBe(cliRes.status);
+    expect(mcpRes.data.evidence.task.status).toBe(cliRes.evidence.task.status);
+    expect(mcpRes.data.evidence.media.status).toBe(cliRes.evidence.media.status);
+    expect(mcpRes.data.evidence.billing.status).toBe(cliRes.evidence.billing.status);
+    expect(mcpRes.data.evidence.invariants.status).toBe(cliRes.evidence.invariants.status);
+    expect(mcpRes.summary).toContain('最终裁决 <UNVERIFIED>');
   });
 });

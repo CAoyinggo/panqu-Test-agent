@@ -108,13 +108,16 @@ export class DevTestMcpService {
           assetBuffer: args.asset_buffer || args.assetBuffer,
           artifactBuffer: args.artifact_buffer || args.artifactBuffer,
         });
-        const artifactStatus = res.artifact ? (res.artifact.decodable ? `PASS (${(res.artifact.format || 'media').toUpperCase()}完整)` : 'FAIL (损坏)') : 'UNVERIFIED (无产物)';
-        const billingStatus = res.billing ? (res.billing.passed ? 'PASS' : 'FAIL') : 'SKIPPED (无流水)';
+        const taskStatus = res.evidence.task.status;
+        const artifactStatus = res.evidence.media.status === 'PASS'
+          ? `PASS (${(res.evidence.media.format || 'media').toUpperCase()}完整)`
+          : res.evidence.media.status === 'FAIL' ? 'FAIL (损坏)' : 'UNVERIFIED (无产物)';
+        const billingStatus = res.evidence.billing.status;
         const netZero = res.invariants ? (res.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
         const antiDouble = res.invariants ? (res.invariants.antiDoubleBilling ? 'PASS' : 'FAIL (重扣告警)') : 'SKIPPED';
 
         const summary = `🎯 概况：模型 #${res.modelId} (${res.mediaType}) · [${res.mode.toUpperCase()}] · 任务 #${res.taskId}
-🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
+🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 任务状态 <${taskStatus}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
 💻 复现：npm run devtest -- verify --task ${res.taskId} --model ${res.modelId} --media ${res.mediaType}`;
         return { ok: res.ok, action: 'verify', summary, data: res };
       }

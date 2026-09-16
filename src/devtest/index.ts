@@ -15,6 +15,11 @@ export {
   type ExecuteKernelResult,
   type VerifyKernelOptions,
   type VerifyKernelResult,
+  type TaskEvidence,
+  type MediaEvidence,
+  type BillingEvidence,
+  type InvariantsEvidence,
+  type VerificationEvidence,
 } from './core-kernel.js';
 
 export {
