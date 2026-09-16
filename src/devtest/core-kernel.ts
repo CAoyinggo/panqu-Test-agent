@@ -216,6 +216,7 @@ export interface VerifyKernelOptions {
   baseUrl?: string; cookies?: string; videoUrl?: string; imageUrl?: string; pollTimeoutSec?: number;
   artifactOwnership?: 'VERIFIED' | 'UNVERIFIED' | 'UNBOUND';
   isSimulated?: boolean;
+  expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
 }
 export interface VerifyKernelResult {
   ok: boolean; passed: boolean; taskId: number; modelId: number; mediaType: 'video' | 'image';
@@ -237,9 +238,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
   const expectedPoints = options.expectedPoints ?? BillingOracle.calculateExpectedPoints({ mediaType, modelId, duration, resolution });
-  const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedPoints !== undefined
-    ? 'REAL_BILLING_FACT'
-    : 'DEVTEST_EXPECTATION';
+  const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
 
   let session: PanquSession | null = null;
   const autoSession = options.sessionFile || process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
@@ -405,7 +404,16 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   let invariants: { antiDoubleBilling: boolean; netChargeZero: boolean; refundIdempotency: boolean } | undefined;
 
   if (billing) {
-    const hasBillingViolations = Boolean(billing.duplicateCharged || billing.duplicateRefunded || billing.missingRefund || billing.underCharged || billing.overCharged);
+    const hasBillingViolations = Boolean(
+      billing.duplicateCharged ||
+      billing.duplicateRefunded ||
+      billing.missingRefund ||
+      billing.underCharged ||
+      billing.overCharged ||
+      billing.antiDoubleBilling === false ||
+      billing.netChargeZero === false ||
+      billing.refundIdempotency === false
+    );
     const billingStatus: EvidenceStatus = hasBillingViolations ? 'FAIL' : billing.passed ? 'PASS' : 'UNVERIFIED';
 
     const isSuccessEmpty = scoreLogsToReconcile && scoreLogsToReconcile.length === 0;
@@ -432,22 +440,22 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     const refundIdem = billing.refundIdempotency;
 
     const antiDoubleItem: InvariantDetail = antiDouble === true
-      ? { status: 'PASS', evidence: { preDeductCount: billing.preDeductedPoints ? 1 : 0 } }
+      ? { status: 'PASS', evidence: { preDeductCount: billing.preDeductCount } }
       : antiDouble === false
-      ? { status: 'FAIL', reason: '违背防重复扣费不变量: 存在多笔扣费或缺失预扣' }
-      : { status: 'UNVERIFIED', reason: '缺少账单流水，防重复扣费不变量未核验 [UNVERIFIED]' };
+      ? { status: 'FAIL', reason: '违背防重复扣费不变量: 存在多笔扣费或重复扣款' }
+      : { status: 'UNVERIFIED', reason: '缺少有效预扣流水，防重复扣费不变量未核验 [UNVERIFIED]' };
 
     const netZeroItem: InvariantDetail = netZero === true
       ? { status: 'PASS', evidence: { netDeductedPoints: billing.netDeductedPoints } }
       : netZero === false
-      ? { status: 'FAIL', reason: terminalStatus === 'FAILED' ? '违背失败净扣归零不变量: 失败任务净扣不为 0' : '计费不匹配预期扣费' }
-      : { status: 'UNVERIFIED', reason: '任务终态未知或缺少账单流水，失败净扣归零不变量未核验 [UNVERIFIED]' };
+      ? { status: 'FAIL', reason: terminalStatus === 'FAILED' ? '违背失败净扣归零不变量: 失败任务净扣不为 0 或少/超额退款' : '计费不匹配预期扣费' }
+      : { status: 'UNVERIFIED', reason: '任务终态未知或缺少有效账务记录，失败净扣归零不变量未核验 [UNVERIFIED]' };
 
     const refundIdemItem: InvariantDetail = refundIdem === true
-      ? { status: 'PASS', evidence: { refundCount: billing.refundedPoints ? 1 : 0 } }
+      ? { status: 'PASS', evidence: { refundCount: billing.refundCount } }
       : refundIdem === false
-      ? { status: 'FAIL', reason: '违背退款幂等核销不变量: 存在重复退款或退款异常' }
-      : { status: 'UNVERIFIED', reason: '缺少账单流水，退款幂等核销不变量未核验 [UNVERIFIED]' };
+      ? { status: 'FAIL', reason: '违背退款幂等核销不变量: 存在重复退款、异常退款或失败未退款' }
+      : { status: 'UNVERIFIED', reason: '缺少有效预扣或退款流水，退款幂等核销不变量未核验 [UNVERIFIED]' };
 
     const anyInvFailed = antiDoubleItem.status === 'FAIL' || netZeroItem.status === 'FAIL' || refundIdemItem.status === 'FAIL';
     const allInvPassed = antiDoubleItem.status === 'PASS' && netZeroItem.status === 'PASS' && refundIdemItem.status === 'PASS';
@@ -466,7 +474,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       reason: anyInvFailed ? [antiDoubleItem.reason, netZeroItem.reason, refundIdemItem.reason].filter(Boolean).join('; ') : undefined,
     };
 
-    invariants = (antiDouble !== undefined && netZero !== undefined && refundIdem !== undefined) ? {
+    invariants = billing ? {
       antiDoubleBilling: antiDouble === true,
       netChargeZero: netZero === true,
       refundIdempotency: refundIdem === true,

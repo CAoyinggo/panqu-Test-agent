@@ -28,8 +28,10 @@ export interface BillingAuditReport {
   expectedPoints: number;
   expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
   preDeductedPoints: number;
+  preDeductCount: number;
   settledPoints: number;
   refundedPoints: number;
+  refundCount: number;
   netDeductedPoints: number;
   underCharged: boolean;
   overCharged: boolean;
@@ -157,7 +159,13 @@ export class BillingOracle {
       const rawPoints = entryObj.points !== undefined ? entryObj.points : entry.score;
       const absScore = Math.abs(Number(rawPoints || 0));
 
-      if (typeNum === 1 || typeStr === 'REFUND' || (entry.memo && (entry.memo.includes('退') || entry.memo.includes('返还')))) {
+      const hasNegation = entry.memo && (entry.memo.includes('未扣') || entry.memo.includes('免扣') || entry.memo.includes('无需扣') || entry.memo.includes('未扣费'));
+      const isRefundMemo = entry.memo && (entry.memo.includes('退') || entry.memo.includes('返还'));
+      const isDeductMemo = !hasNegation && entry.memo && (entry.memo.includes('扣除') || entry.memo.includes('扣费') || entry.memo.includes('预扣'));
+      const isRefundType = typeNum === 1 || typeStr === 'REFUND';
+      const isDeductType = typeNum === 2 || typeStr === 'PRE_DEDUCT';
+
+      if (isRefundType || isRefundMemo) {
         refunded += absScore;
         refundCount++;
         structuredEntries.push({
@@ -167,7 +175,7 @@ export class BillingOracle {
           time: entry.createtime ? String(entry.createtime) : undefined,
           memo: entry.memo,
         });
-      } else if (typeNum === 2 || typeStr === 'PRE_DEDUCT' || (entry.memo && (entry.memo.includes('扣除') || entry.memo.includes('扣费') || entry.memo.includes('预扣')))) {
+      } else if (isDeductType || isDeductMemo || (entry.score !== undefined && entry.score < 0)) {
         preDeduct += absScore;
         preDeductCount++;
         structuredEntries.push({
@@ -177,7 +185,7 @@ export class BillingOracle {
           time: entry.createtime ? String(entry.createtime) : undefined,
           memo: entry.memo,
         });
-      } else {
+      } else if (typeStr === 'SETTLE' || (entry.memo && entry.memo.includes('结算'))) {
         settled += absScore;
         structuredEntries.push({
           id: String(entry.id || structuredEntries.length + 1),
@@ -186,6 +194,8 @@ export class BillingOracle {
           time: entry.createtime ? String(entry.createtime) : undefined,
           memo: entry.memo,
         });
+      } else {
+        reasons.push(`流水条目 (ID: ${entry.id ?? '未知'}) 业务动作类型 (${entry.type}) 无法由真实后端字段确认 [UNVERIFIED]`);
       }
     }
 
@@ -202,19 +212,26 @@ export class BillingOracle {
     let netChargeZero: boolean | undefined = undefined;
 
     const isSuccess = terminalStatus === 'SUCCESS' || (terminalStatus as string) === 'SUCCEEDED';
-    const isFailed = terminalStatus === 'FAILED';
+    const isFailed = terminalStatus === 'FAILED' || terminalStatus === 'TIMEOUT';
 
     if (taskLogs.length === 0) {
       reasons.push(`未找到匹配任务 ID ${taskId} 的有效流水记录 [UNVERIFIED]`);
     } else {
-      antiDoubleBilling = preDeductCount === 1;
+      // 1. antiDoubleBilling 审计
       if (preDeductCount > 1) {
         duplicateCharged = true;
         antiDoubleBilling = false;
         reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水`);
-      } else if (preDeductCount === 0) {
-        antiDoubleBilling = false;
-        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 任务缺失有效预扣流水记录`);
+      } else if (preDeductCount === 1) {
+        antiDoubleBilling = true;
+      } else {
+        // preDeductCount === 0: 区分业务未发生 / 证明无需预扣 / 数据缺失
+        if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0) {
+          antiDoubleBilling = true;
+        } else {
+          antiDoubleBilling = undefined;
+          reasons.push(`[BILLING_UNVERIFIED] 任务缺失有效预扣流水记录 (preDeductCount=0)，防重复扣费不变量未核验 [UNVERIFIED]`);
+        }
       }
 
       const clientTokens = taskLogs
@@ -225,20 +242,30 @@ export class BillingOracle {
         reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`);
       }
 
+      // 2. 根据终态审计 netChargeZero 与 refundIdempotency
       if (isSuccess) {
-        refundIdempotency = refundCount === 0;
         if (refundCount > 0) {
           refundIdempotency = false;
           reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 成功任务异常触发退款: 存在 ${refundCount} 次退款记录`);
+        } else if (preDeductCount >= 1) {
+          refundIdempotency = true;
+        } else if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0) {
+          refundIdempotency = true;
+        } else {
+          refundIdempotency = undefined;
         }
 
         if (preDeductCount === 0) {
-          netChargeZero = false;
-          if (params.allowAsyncPending) {
+          if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0) {
+            netChargeZero = true;
+          } else if (params.allowAsyncPending) {
             asyncSettlementPending = true;
+            netChargeZero = undefined;
             reasons.push(`成功任务预扣流水尚未落盘，标记异步入账处理中`);
           } else {
-            reasons.push(`成功任务缺失预扣流水记录`);
+            underCharged = true;
+            netChargeZero = false;
+            reasons.push(`成功任务缺失预扣流水记录，且应扣 ${expectedPoints} 积分`);
           }
         } else if (netDeducted < expectedPoints) {
           underCharged = true;
@@ -252,36 +279,69 @@ export class BillingOracle {
           netChargeZero = true;
         }
       } else if (isFailed) {
-        if (preDeductCount > 0) {
-          refundIdempotency = refundCount === 1;
-          if (refundCount > 1) {
-            duplicateRefunded = true;
+        if (refundCount > 1) {
+          duplicateRefunded = true;
+          refundIdempotency = false;
+          reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
+        } else if (preDeductCount === 1) {
+          if (refundCount === 1) {
+            refundIdempotency = true;
+          } else {
+            if (netDeducted > 0) {
+              missingRefund = true;
+              refundIdempotency = false;
+              reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务未执行退款 (存在净扣 ${netDeducted} 积分)`);
+            } else {
+              refundIdempotency = expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0 ? true : undefined;
+            }
+          }
+        } else if (preDeductCount === 0) {
+          if (refundCount > 0) {
             refundIdempotency = false;
-            reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
-          } else if (refundCount === 0) {
-            refundIdempotency = false;
-            reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务未执行退款`);
+            reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务缺失有效预扣却存在退款记录`);
+          } else {
+            if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0) {
+              refundIdempotency = true;
+            } else {
+              refundIdempotency = undefined;
+              reasons.push(`[BILLING_UNVERIFIED] 失败任务缺失有效预扣与退款流水，无法核验退款幂等 [UNVERIFIED]`);
+            }
           }
         } else {
-          refundIdempotency = refundCount === 0;
+          refundIdempotency = false;
+          reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 存在多次预扣，退款幂等核销失效`);
         }
 
-        netChargeZero = netDeducted === 0;
-        if (preDeductCount === 0 && expectedPoints > 0) {
-          if (params.allowAsyncPending) {
-            asyncSettlementPending = true;
-            reasons.push(`失败任务预扣与退款流水尚未落盘，标记异步处理中`);
+        if (preDeductCount === 1) {
+          if (netDeducted === 0) {
+            netChargeZero = true;
+          } else if (netDeducted > 0) {
+            missingRefund = true;
+            netChargeZero = false;
+            reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 失败仍净扣 ${netDeducted} 积分未退回`);
           } else {
-            reasons.push(`失败任务缺失专属预扣流水记录`);
+            netChargeZero = false;
+            reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
           }
-        } else if (netDeducted > 0) {
-          missingRefund = true;
-          reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 失败仍净扣 ${netDeducted} 积分未退回`);
-        } else if (netDeducted < 0) {
-          reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
+        } else if (preDeductCount === 0) {
+          if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0 && netDeducted === 0) {
+            netChargeZero = true;
+          } else {
+            netChargeZero = undefined;
+            if (params.allowAsyncPending) {
+              asyncSettlementPending = true;
+              reasons.push(`失败任务预扣与退款流水尚未落盘，标记异步处理中`);
+            } else {
+              reasons.push(`[BILLING_UNVERIFIED] 失败任务无真实计费流水，数学净扣 0 不能作为真实核销证据 [UNVERIFIED]`);
+            }
+          }
+        } else {
+          netChargeZero = false;
+          reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 存在重复预扣费，失败净扣无法正常归零`);
         }
       } else {
         netChargeZero = undefined;
+        refundIdempotency = undefined;
         reasons.push(`任务终态为 ${terminalStatus}，无法核验账务不变量 [UNVERIFIED]`);
       }
     }
@@ -293,8 +353,13 @@ export class BillingOracle {
       balanceNote = `钱包余额变化: ${params.balanceBefore} -> ${params.balanceAfter} (差额 ${balanceDelta} pts)`;
     }
 
-    const passed = reasons.length === 0;
-    const status: FlowStepStatus = passed ? 'PASS' : taskLogs.length === 0 && !hasMismatchedTaskLogs ? 'BLOCKED' : 'FAIL';
+    const hasViolations = Boolean(
+      duplicateCharged || duplicateRefunded || missingRefund || underCharged || overCharged
+      || antiDoubleBilling === false || netChargeZero === false || refundIdempotency === false
+    );
+    const allInvariantsPassed = antiDoubleBilling === true && netChargeZero === true && refundIdempotency === true;
+    const passed = reasons.length === 0 && allInvariantsPassed && !hasViolations;
+    const status: FlowStepStatus = hasViolations ? 'FAIL' : passed ? 'PASS' : 'UNVERIFIED';
 
     return {
       passed,
@@ -302,8 +367,10 @@ export class BillingOracle {
       expectedPoints,
       expectedChargeSource,
       preDeductedPoints: preDeduct,
+      preDeductCount,
       settledPoints: settled,
       refundedPoints: refunded,
+      refundCount,
       netDeductedPoints: netDeducted,
       underCharged,
       overCharged,

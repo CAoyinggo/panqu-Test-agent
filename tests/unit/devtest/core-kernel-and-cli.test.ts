@@ -950,6 +950,7 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
       cookies: 'PHPSESSID=mock_session_123',
       artifactBuffer: validMp4,
       expectedPoints: 28,
+      expectedChargeSource: 'REAL_BILLING_FACT',
     });
 
     expect(res.ok).toBe(true);

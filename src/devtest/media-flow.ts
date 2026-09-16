@@ -291,14 +291,19 @@ export async function queryTaskBillingLogs(
         }
 
         if (body && Array.isArray(body.rows)) {
-          const matchedLogs: ScoreLogEntry[] = body.rows.map((r: any) => ({
-            id: r.id,
-            task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
-            type: Number(r.type ?? 2),
-            score: Number(r.score ?? 0),
-            memo: r.remark || r.source_name || r.memo,
-            createtime: r.createtime,
-          }));
+          const matchedLogs: ScoreLogEntry[] = body.rows.map((r: any) => {
+            const hasTaskId = r.task_id !== undefined && r.task_id !== null && r.task_id !== '';
+            const memoStr = String(r.remark || r.source_name || r.memo || '');
+            const parsedTaskId = hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined);
+            return {
+              id: r.id,
+              task_id: parsedTaskId,
+              type: Number(r.type ?? 2),
+              score: Number(r.score ?? 0),
+              memo: r.remark || r.source_name || r.memo,
+              createtime: r.createtime,
+            };
+          });
           return {
             status: 'QUERY_SUCCESS',
             scoreLogs: matchedLogs,
@@ -381,14 +386,19 @@ export async function queryTaskBillingLogs(
       }
 
       if (body && body.code === 1 && body.data && Array.isArray(body.data.rows)) {
-        const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => ({
-          id: r.id,
-          task_id: r.task_id !== undefined ? Number(r.task_id) : taskId,
-          type: Number(r.record_type ?? r.type ?? 2),
-          score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
-          memo: r.type_text || r.model || r.project,
-          createtime: r.time || r.createtime,
-        }));
+        const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => {
+          const hasTaskId = r.task_id !== undefined && r.task_id !== null && r.task_id !== '';
+          const memoStr = String(r.type_text || r.model || r.project || '');
+          const parsedTaskId = hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined);
+          return {
+            id: r.id,
+            task_id: parsedTaskId,
+            type: Number(r.record_type ?? r.type ?? 2),
+            score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
+            memo: r.type_text || r.model || r.project,
+            createtime: r.time || r.createtime,
+          };
+        });
 
         return {
           status: 'QUERY_SUCCESS',

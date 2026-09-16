@@ -107,5 +107,82 @@ describe('Billing - 计费预估、流水对账与供应商成本核算', () => 
       expect(res.netChargeZero).toBe(false);
       expect(res.missingRefund).toBe(true);
     });
+
+    it('0 次预扣且期望扣费大于 0：不能仅凭 <=1 自动 PASS，判定 UNVERIFIED', () => {
+      const logs: ScoreLogEntry[] = [{ task_id: 1006, type: 3, score: 0, memo: '任务初始化未扣费' }];
+      const res = BillingOracle.reconcileTaskLedger({
+        taskId: 1006,
+        expectedPoints: 56,
+        terminalStatus: 'SUCCESS',
+        scoreLogs: logs,
+        expectedChargeSource: 'DEVTEST_EXPECTATION',
+      });
+      expect(res.passed).toBe(false);
+      expect(res.antiDoubleBilling).toBeUndefined();
+      expect(res.status).toBe('FAIL'); // 因 missing pre-deduct (underCharged) 导致 FAIL
+    });
+
+    it('0 次预扣且有确凿事实证明无需扣费 (REAL_BILLING_FACT + 0 pt)：判定 PASS', () => {
+      const logs: ScoreLogEntry[] = [{ task_id: 1007, type: 2, score: 0, memo: '免计费任务' }];
+      const res = BillingOracle.reconcileTaskLedger({
+        taskId: 1007,
+        expectedPoints: 0,
+        terminalStatus: 'SUCCESS',
+        scoreLogs: logs,
+        expectedChargeSource: 'REAL_BILLING_FACT',
+      });
+      expect(res.passed).toBe(true);
+      expect(res.antiDoubleBilling).toBe(true);
+      expect(res.netChargeZero).toBe(true);
+      expect(res.refundIdempotency).toBe(true);
+      expect(res.status).toBe('PASS');
+    });
+
+    it('失败任务无真实扣费记录：即便数学 sum=0 也绝不判定 PASS，而是 UNVERIFIED', () => {
+      const logs: ScoreLogEntry[] = [];
+      const res = BillingOracle.reconcileTaskLedger({
+        taskId: 1008,
+        expectedPoints: 56,
+        terminalStatus: 'FAILED',
+        scoreLogs: logs,
+      });
+      expect(res.passed).toBe(false);
+      expect(res.netChargeZero).toBeUndefined();
+      expect(res.antiDoubleBilling).toBeUndefined();
+      expect(res.refundIdempotency).toBeUndefined();
+      expect(res.status).toBe('UNVERIFIED');
+    });
+
+    it('失败任务超额退款 (netCharge < 0)：判定 FAIL', () => {
+      const logs: ScoreLogEntry[] = [
+        { task_id: 1009, type: 2, score: -28 },
+        { task_id: 1009, type: 1, score: 56 },
+      ];
+      const res = BillingOracle.reconcileTaskLedger({
+        taskId: 1009,
+        expectedPoints: 28,
+        terminalStatus: 'FAILED',
+        scoreLogs: logs,
+      });
+      expect(res.passed).toBe(false);
+      expect(res.netChargeZero).toBe(false);
+      expect(res.status).toBe('FAIL');
+    });
+
+    it('成功任务异常触发退款：判定 FAIL', () => {
+      const logs: ScoreLogEntry[] = [
+        { task_id: 1010, type: 2, score: -28 },
+        { task_id: 1010, type: 1, score: 28 },
+      ];
+      const res = BillingOracle.reconcileTaskLedger({
+        taskId: 1010,
+        expectedPoints: 28,
+        terminalStatus: 'SUCCESS',
+        scoreLogs: logs,
+      });
+      expect(res.passed).toBe(false);
+      expect(res.refundIdempotency).toBe(false);
+      expect(res.status).toBe('FAIL');
+    });
   });
 });
