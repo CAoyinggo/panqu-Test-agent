@@ -14,6 +14,7 @@ import { DEVTEST_VERSION } from '../../../src/devtest/version.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 import * as mediaFlow from '../../../src/devtest/media-flow.js';
 import { DevTestMcpService } from '../../../src/devtest/mcp-service.js';
+import { discoverModelContract } from '../../../src/devtest/env-probe.js';
 
 describe('DevTest 纯净内核层 (Core Kernel)', () => {
   describe('1. probe (环境探活)', () => {
@@ -1121,4 +1122,217 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     }
   });
 });
+
+describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency & Drift Elimination)', () => {
+  it('Case A: Model 84 缺省 resolution - plan / execute / verify 统一推导 480p 且积分规格一致 (56 pt)', async () => {
+    // 1. plan: 缺省 resolution 推导首项 480p, duration 推导首项 4s, 计费 14 pt/s * 4s = 56 pt
+    const planRes = await plan({ modelId: 84, mediaType: 'video' });
+    expect(planRes.expectedPoints).toBe(56);
+    expect(planRes.testerActionSummary?.nextStep).toContain('--resolution 480p');
+    expect(planRes.testerActionSummary?.nextStep).toContain('--duration 4');
+
+    // 2. execute: 缺省 resolution 仿真模式返回 56 pt
+    const execRes = await execute({ modelId: 84, mediaType: 'video', mode: 'mock' });
+    expect(execRes.points).toBe(56);
+
+    // 3. execute: 真实提交时携带推导的 480p，绝不再盲目硬编码 720p
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
+      env: 'test',
+      base_url: 'https://test.panqu.com',
+      cookie_string: 'PHPSESSID=mock',
+      csrf_token: 'token',
+      project_id: 10,
+    });
+    const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask').mockResolvedValueOnce({
+      ok: true,
+      taskId: 84001,
+      message: 'ok',
+      durationMs: 100,
+    });
+    await execute({
+      modelId: 84,
+      mediaType: 'video',
+      mode: 'real',
+      sessionFile: 'session.json',
+    });
+    expect(submitSpy).toHaveBeenCalled();
+    const callArgs = submitSpy.mock.calls[0][0];
+    expect(callArgs.resolution).toBe('480p');
+    expect(callArgs.duration).toBe(4);
+    sessionSpy.mockRestore();
+    submitSpy.mockRestore();
+
+    // 4. verify: 缺省 resolution 独立核验推导 480p/4s -> 56 pt
+    const verifyRes = await verify({
+      taskId: execRes.taskId,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -56, memo: '预扣' }],
+    });
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.status).toBe('PASS');
+  });
+
+  it('Case B: Model 15 (Seedance) 缺省 duration - plan / execute / verify 统一推导 3s (75 pt)', async () => {
+    // 1. plan: Seedance 契约 durations=[3, 4, 5]，首选值为 3s，计费 25 pt/s * 3s = 75 pt
+    const planRes = await plan({ modelId: 15, mediaType: 'video' });
+    expect(planRes.expectedPoints).toBe(75);
+    expect(planRes.testerActionSummary?.nextStep).toContain('--duration 3');
+    expect(planRes.testerActionSummary?.nextStep).toContain('--resolution 480p');
+
+    // 2. execute: 缺省 duration 统一推导为 3s (75 pt)
+    const execRes = await execute({ modelId: 15, mediaType: 'video', mode: 'mock' });
+    expect(execRes.points).toBe(75);
+
+    // 3. execute: 真实提交验证携带 duration: 3
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
+      env: 'test',
+      base_url: 'https://test.panqu.com',
+      cookie_string: 'PHPSESSID=mock',
+      csrf_token: 'token',
+      project_id: 10,
+    });
+    const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask').mockResolvedValueOnce({
+      ok: true,
+      taskId: 15001,
+      message: 'ok',
+      durationMs: 100,
+    });
+    await execute({
+      modelId: 15,
+      mediaType: 'video',
+      mode: 'real',
+      sessionFile: 'session.json',
+    });
+    expect(submitSpy).toHaveBeenCalled();
+    const callArgs = submitSpy.mock.calls[0][0];
+    expect(callArgs.duration).toBe(3);
+    expect(callArgs.resolution).toBe('480p');
+    sessionSpy.mockRestore();
+    submitSpy.mockRestore();
+
+    // 4. verify: 缺省 duration 独立推导为 3s，与预扣 75 pt 完全对齐
+    const verifyRes = await verify({
+      taskId: execRes.taskId,
+      modelId: 15,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -75, memo: '预扣' }],
+    });
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(75);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(75);
+    expect(verifyRes.evidence.billing.status).toBe('PASS');
+  });
+
+  it('Case C: 显式参数优先级最高 - resolution=720p, duration=5 不被默认逻辑覆盖 (70 pt)', async () => {
+    // 1. plan 显式传参
+    const planRes = await plan({ modelId: 84, mediaType: 'video', resolution: '720p', duration: 5 });
+    expect(planRes.expectedPoints).toBe(70);
+    expect(planRes.testerActionSummary?.nextStep).toContain('--resolution 720p');
+    expect(planRes.testerActionSummary?.nextStep).toContain('--duration 5');
+
+    // 2. execute 显式传参
+    const execRes = await execute({ modelId: 84, mediaType: 'video', resolution: '720p', duration: 5, mode: 'mock' });
+    expect(execRes.points).toBe(70);
+
+    // 3. verify 显式传参
+    const verifyRes = await verify({
+      taskId: 12345,
+      modelId: 84,
+      mediaType: 'video',
+      resolution: '720p',
+      duration: 5,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 12345, type: 2, score: -70, memo: '预扣' }],
+    });
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(70);
+    expect(verifyRes.evidence.billing.status).toBe('PASS');
+  });
+
+  it('Case D: 仅支持 480p 的非标契约模型 - execute 缺省时严格遵循契约首选值，不强制产生 720p', async () => {
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
+      env: 'test',
+      base_url: 'https://test.panqu.com',
+      cookie_string: 'PHPSESSID=mock',
+      csrf_token: 'token',
+      project_id: 10,
+    });
+    const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask').mockResolvedValueOnce({
+      ok: true,
+      taskId: 99701,
+      message: 'ok',
+      durationMs: 100,
+    });
+
+    const customContract = {
+      ...discoverModelContract(977, 'video', { price: 10 }),
+      supportedResolutions: { value: ['480p'], source: 'SOURCE_INPUT' as const, determined: true, allowPass: true },
+    };
+
+    await execute({
+      modelId: 977,
+      mediaType: 'video',
+      mode: 'real',
+      sessionFile: 'session.json',
+      price: 10,
+      contract: customContract,
+    });
+
+    expect(submitSpy).toHaveBeenCalled();
+    const callArgs = submitSpy.mock.calls[0][0];
+    expect(callArgs.resolution).toBe('480p');
+    expect(callArgs.resolution).not.toBe('720p');
+
+    sessionSpy.mockRestore();
+    submitSpy.mockRestore();
+  });
+
+  it('Case E: verify 独立性 - 无 execute / plan 内存上下文时完全独立推导并完成审计', async () => {
+    const verifyRes = await verify({
+      taskId: 88801,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 88801, type: 2, score: -56 }],
+    });
+
+    expect(verifyRes.contract).toBeDefined();
+    expect(verifyRes.contract?.modelId).toBe(84);
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.status).toBe('PASS');
+    // 缺少物理产物时遵循 Fail-Closed 原则，整体状态为 UNVERIFIED
+    expect(verifyRes.passed).toBe(false);
+    expect(verifyRes.status).toBe('UNVERIFIED');
+  });
+
+  it('Case F: expectedPoints 与 customPoints 隔离 - 视频模型不受污染，图片模型保留兼容', async () => {
+    // 1. 视频模型传入 expectedPoints：不污染 pointsPerSecond，不被当成 customPoints
+    const vVideo = await verify({
+      taskId: 88802,
+      modelId: 84,
+      mediaType: 'video',
+      expectedPoints: 56,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 88802, type: 2, score: -56 }],
+    });
+    expect(vVideo.contract?.pricing.pointsPerSecond?.value).toBe(14);
+    expect(vVideo.contract?.pricing.customPoints?.value).toBeUndefined();
+
+    // 2. 图片模型传入 expectedPoints：兼容作为 customPoints 提供刊例基准
+    const vImage = await verify({
+      taskId: 88803,
+      modelId: 988,
+      mediaType: 'image',
+      expectedPoints: 10,
+      terminalStatus: 'SUCCESS',
+      scoreLogs: [{ task_id: 88803, type: 2, score: -10 }],
+    });
+    expect(vImage.contract?.pricing.customPoints?.value).toBe(10);
+    expect(vImage.contract?.pricing.isPricingDetermined).toBe(true);
+  });
+});
+
 

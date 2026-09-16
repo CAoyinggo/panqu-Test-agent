@@ -760,7 +760,10 @@ export function generateDynamicTestPlan(
   if (blocked.length > 0) {
     nextStep = `先补充缺失事实 (${blocked.map(b => b.missingField || b.field).join(', ')})，然后再执行真实任务`;
   } else {
-    nextStep = `执行任务: devtest execute --model ${contract.modelId} --media ${contract.mediaType} --mode real${options.sessionFile ? ` --session-file ${options.sessionFile}` : ''}`;
+    const videoParams = contract.mediaType === 'video'
+      ? ` --resolution ${res}${dur !== undefined ? ` --duration ${dur}` : ''}`
+      : '';
+    nextStep = `执行任务: devtest execute --model ${contract.modelId} --media ${contract.mediaType}${videoParams} --mode real${options.sessionFile ? ` --session-file ${options.sessionFile}` : ''}`;
   }
 
   const testerActionSummary = {
@@ -1048,19 +1051,19 @@ export interface ExecuteKernelResult {
 export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKernelResult> {
   const { modelId, mediaType } = options;
   const mode = options.mode === 'real' ? 'real' : 'mock';
-  const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
-  const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
-
   const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
   const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
 
   const contract = options.contract ?? discoverModelContract(modelId, mediaType, {
-    resolution,
-    duration,
+    resolution: options.resolution,
+    duration: options.duration,
     customPoints,
     pointsPerSecond,
     price: options.price,
   });
+
+  const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
+  const resolution = options.resolution ?? contract.supportedResolutions.value[0] ?? (mediaType === 'video' ? '720p' : '1k');
 
   if (!contract.pricing.allowPass) {
     return {
@@ -1232,29 +1235,29 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   const { taskId } = options;
   const mediaType = options.mediaType || 'video';
   const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
-  const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
-  const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
-
   const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
   const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
+
+  const contract = options.contract || discoverModelContract(modelId, mediaType, {
+    duration: options.duration,
+    resolution: options.resolution,
+    customPoints: customPoints ?? (mediaType === 'image' ? options.expectedPoints : undefined),
+    pointsPerSecond,
+    price: options.price,
+  });
+
+  const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
+  const resolution = options.resolution ?? contract.supportedResolutions.value[0] ?? (mediaType === 'video' ? '720p' : '1k');
 
   const expectedPoints = options.expectedPoints ?? BillingOracle.calculateExpectedPoints({
     mediaType,
     modelId,
     duration,
     resolution,
-    customPoints,
-    pointsPerSecond,
+    customPoints: customPoints ?? contract.pricing.customPoints?.value,
+    pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
   });
   const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
-
-  const contract = options.contract || discoverModelContract(modelId, mediaType, {
-    duration,
-    resolution,
-    customPoints: customPoints ?? options.expectedPoints,
-    pointsPerSecond,
-    price: options.price,
-  });
 
   let session: PanquSession | null = null;
   const autoSession = options.sessionFile || process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
