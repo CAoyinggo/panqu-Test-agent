@@ -56,7 +56,7 @@ ${c.bold}命令参数与示例:${c.reset}
   devtest probe [--env test|preonline] [--session-file <path>] [--json]
 
   ${c.yellow}# 2. 分流推导与规划${c.reset}
-  devtest plan --model 84 --media video [--flow diversion|direct] [--resolution 720p] [--json]
+  devtest plan --model 84 --media video [--flow diversion|direct] [--change-type new_model|diversion_change] [--custom-points 5] [--is-global] [--json]
 
   ${c.yellow}# 3. 任务执行${c.reset}
   devtest execute --model 84 --media video [--mode mock|real] [--prompt "..."] [--json]
@@ -120,7 +120,7 @@ function parseCliArgs(argv: string[]): ParsedArgs {
 }
 
 export async function runDevTestCli(args: string[]): Promise<number> {
-  const { command, options } = parseCliArgs(args);
+  const { command, options, positionals } = parseCliArgs(args);
   const isJson = Boolean(options.json);
 
   if (options.version) {
@@ -182,20 +182,32 @@ export async function runDevTestCli(args: string[]): Promise<number> {
       }
 
       case 'plan': {
-        const modelId = Number(options.model ?? options['model-id'] ?? options.modelId ?? 84);
-        const mediaType = ((options.media ?? options['media-type'] ?? options.mediaType ?? 'video') as string).toLowerCase() as 'video' | 'image';
-        const flowType = (options.flow ?? options['flow-type'] ?? options.flowType ?? 'diversion') as 'direct' | 'diversion';
+        const rawRequirement = (options.requirement as string) || (options.req as string) || (positionals.length > 0 ? positionals.join(' ') : undefined);
+        const price = typeof options.price === 'number' ? options.price as number : undefined;
+        const modelId = options.model ?? options['model-id'] ?? options.modelId ? Number(options.model ?? options['model-id'] ?? options.modelId) : undefined;
+        const mediaType = options.media ?? options['media-type'] ?? options.mediaType ? (((options.media ?? options['media-type'] ?? options.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined;
+        const flowType = (options.flow ?? options['flow-type'] ?? options.flowType) as 'direct' | 'diversion' | undefined;
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
-        const requirement = (options.requirement as string) || (options.req as string);
+        const changeType = (options['change-type'] || options.changeType) as 'new_model' | 'diversion_change' | undefined;
+        const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
+        const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
+        const isGlobal = typeof options['is-global'] === 'boolean' ? options['is-global'] as boolean : typeof options.isGlobal === 'boolean' ? options.isGlobal as boolean : undefined;
+        const alias = (options.alias as string) || undefined;
 
         const planOptions: PlanKernelOptions = {
           modelId,
           mediaType,
           flowType,
-          requirement,
+          changeType,
+          requirement: rawRequirement,
           resolution,
           duration,
+          customPoints,
+          pointsPerSecond,
+          price,
+          isGlobal,
+          alias,
         };
 
         const result = await plan(planOptions);
@@ -204,15 +216,65 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}📋 DevTest 分流推导与测试规划${c.reset}`);
-          console.log(`${c.bold}模型规格:${c.reset} 模型 #${result.modelId} (${result.mediaType}) | 模式: ${result.flowType}`);
+          console.log(`${c.bold}📋 DevTest 分流推导与动态测试规划 [${result.scenarioName || result.scenario}]${c.reset}`);
+          console.log(`${c.bold}模型规格:${c.reset} 模型 #${result.modelId} (${result.mediaType}) | 别名: ${result.contract?.alias.value || '未知'} [${result.contract?.alias.source || 'default'}] | 模式: ${result.flowType}`);
           console.log(`${c.bold}分流决策:${c.reset} ${result.willDivert ? `${c.green}NEWAPI 切流 (线路 ${result.routeLine})${c.reset}` : `${c.yellow}DIRECT 直连 (线路 ${result.routeLine})${c.reset}`} [${result.decision}]`);
           console.log(`${c.bold}推导原因:${c.reset} ${result.reason}`);
-          console.log(`${c.bold}基准计费:${c.reset} ${c.yellow}${result.expectedPoints} 积分${c.reset} ${c.dim}(约 ¥${(result.expectedPoints * 0.1).toFixed(2)})${c.reset}`);
+          console.log(`${c.bold}刊例计费:${c.reset} ${c.yellow}${result.expectedPoints} 积分${c.reset} [${result.pricingStatus}] ${c.dim}(约 ¥${(result.expectedPoints * 0.1).toFixed(2)})${c.reset}`);
           if (result.expectedSnapshot) {
             console.log(`${c.bold}切流快照:${c.reset} 模型别名=${c.cyan}${result.expectedSnapshot.newapiModel}${c.reset} | 分组=${result.expectedSnapshot.newapiGroup || 'default'}`);
           }
           console.log(`${c.bold}候选渠道:${c.reset} ${result.candidateChannels.join(', ') || '无可用渠道'}`);
+
+          if (result.testPlan) {
+            console.log(`\n${c.bold}🤖 自动化覆盖用例 (${result.testPlan.tests.length} 项):${c.reset}`);
+            for (const t of result.testPlan.tests) {
+              const icon = t.status === 'READY' ? `${c.green}✔ READY${c.reset}` : t.status === 'BLOCKED' ? `${c.red}✖ BLOCKED${c.reset}` : `${c.yellow}○ SKIPPED${c.reset}`;
+              console.log(`  [${t.layer.padEnd(9)}] ${t.id}: ${icon} - ${t.purpose}`);
+              if (t.rationale) {
+                console.log(`               ${c.dim}目的: ${t.rationale.whyIncluded} (防范: ${t.rationale.riskAddressed})${c.reset}`);
+              }
+            }
+          }
+
+          if (result.testPlan?.skippedTests && result.testPlan.skippedTests.length > 0) {
+            console.log(`\n${c.bold}🛡️ 安全裁剪跳过用例 (${result.testPlan.skippedTests.length} 项):${c.reset}`);
+            for (const s of result.testPlan.skippedTests) {
+              console.log(`  ○ [${s.id}] ${s.name}: ${s.whySkipped} ${c.dim}(规则: ${s.rule})${c.reset}`);
+            }
+          }
+
+          if (result.blocked && result.blocked.length > 0) {
+            console.log(`\n${c.yellow}⚠️ 阻断待提供事实 (${result.blocked.length} 项):${c.reset}`);
+            for (const b of result.blocked) {
+              const fieldName = b.missingField || b.field;
+              const impact = b.impact || b.reason;
+              const action = b.suggestedAction || b.requiredAction;
+              console.log(`  - 缺失字段: ${c.bold}${fieldName}${c.reset} (影响: ${impact})`);
+              console.log(`    指引: ${action}`);
+            }
+          }
+
+          if (result.testerActionSummary?.manualRequiredSummary && result.testerActionSummary.manualRequiredSummary.length > 0) {
+            console.log(`\n${c.bold}📌 需人工确认/查库证据:${c.reset}`);
+            for (const item of result.testerActionSummary.manualRequiredSummary) {
+              console.log(`  👉 ${item}`);
+            }
+          }
+
+          if (result.testerActionSummary?.nextStep) {
+            console.log(`\n${c.bold}🚀 下一步行动:${c.reset}`);
+            console.log(`  ${c.cyan}${result.testerActionSummary.nextStep}${c.reset}`);
+          }
+
+          if (result.acceptanceForecast) {
+            const forecastColor = result.acceptanceForecast === 'BLOCKED' ? c.red : c.yellow;
+            console.log(`\n${c.bold}验收预判:${c.reset} ${forecastColor}[${result.acceptanceForecast}]${c.reset}`);
+          }
+          if (result.missingInputs && result.missingInputs.length > 0) {
+            console.log(`${c.bold}缺失必填项:${c.reset} ${c.yellow}${result.missingInputs.join(', ')}${c.reset}`);
+          }
+
           console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
         }
         return result.ok ? 0 : 1;
@@ -227,6 +289,9 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const prompt = options.prompt as string | undefined;
         const sessionFile = (options['session-file'] as string) || (options.session as string);
         const env = (options.env as 'test' | 'preonline') || 'test';
+        const price = typeof options.price === 'number' ? options.price as number : undefined;
+        const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
+        const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
 
         const execOptions: ExecuteKernelOptions = {
           modelId,
@@ -237,6 +302,9 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           prompt,
           sessionFile,
           env,
+          price,
+          customPoints,
+          pointsPerSecond,
         };
 
         const result = await execute(execOptions);
@@ -275,6 +343,11 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const env = (options.env as 'test' | 'preonline') || 'test';
         const videoUrl = options['video-url'] as string | undefined;
         const imageUrl = options['image-url'] as string | undefined;
+        const dbExtraConfirmed = Boolean(options['db-extra-confirmed'] || options.dbExtraConfirmed);
+        const gatewayChannelConfirmed = Boolean(options['gateway-channel-confirmed'] || options.gatewayChannelConfirmed);
+        const price = typeof options.price === 'number' ? options.price as number : undefined;
+        const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
+        const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
 
         const verifyOptions: VerifyKernelOptions = {
           taskId,
@@ -288,6 +361,11 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           env,
           videoUrl,
           imageUrl,
+          dbExtraConfirmed,
+          gatewayChannelConfirmed,
+          price,
+          customPoints,
+          pointsPerSecond,
         };
 
         const result = await verify(verifyOptions);
@@ -313,7 +391,8 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           console.log(`antiDoubleBilling <${antiDoubleText}>`);
           console.log(`netChargeZero <${netZeroText}>`);
           console.log(`refundIdempotency <${refundIdemText}>`);
-          console.log(`最终裁决 <${finalVerdictText}>`);
+          console.log(`生产验收裁决 <${result.acceptance}>`);
+          console.log(`最终技术判定 <${finalVerdictText}>`);
           console.log(`\n💻 复现：`);
           console.log(`npm run devtest -- verify --task ${result.taskId}`);
 
@@ -331,6 +410,22 @@ export async function runDevTestCli(args: string[]): Promise<number> {
             console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);
           }
 
+          let acceptanceLabel: string;
+          if (result.acceptance === 'ACCEPTED') {
+            acceptanceLabel = `${c.green}● ACCEPTED (生产级四态验收通过)${c.reset}`;
+          } else if (result.acceptance === 'REJECTED') {
+            acceptanceLabel = `${c.red}● REJECTED (验收驳回: 存在缺陷或非预期回归)${c.reset}`;
+          } else if (result.acceptance === 'BLOCKED') {
+            acceptanceLabel = `${c.yellow}● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)${c.reset}`;
+          } else {
+            acceptanceLabel = `${c.yellow}● UNVERIFIED (验收待确认: 测试通过但关键证据未闭环)${c.reset}`;
+          }
+          console.log(`${c.bold}生产验收裁决:${c.reset} ${acceptanceLabel}`);
+          console.log(`${c.bold}证据完整度:${c.reset} ${result.evidenceCompleteness.isComplete ? `${c.green}✔ COMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}` : `${c.yellow}○ INCOMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}`}`);
+          if (result.evidenceCompleteness.missingEvidence.length > 0) {
+            console.log(`  ${c.yellow}待补证据: ${result.evidenceCompleteness.missingEvidence.join(', ')}${c.reset}`);
+          }
+
           let verdictLabel: string;
           if (result.passed) {
             verdictLabel = `${c.green}● ALL PASS (验真与账务全部通过)${c.reset}`;
@@ -341,7 +436,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           } else {
             verdictLabel = `${c.red}● FAILED (存在违背或缺陷)${c.reset}`;
           }
-          console.log(`${c.bold}最终裁决:${c.reset} ${verdictLabel}`);
+          console.log(`${c.bold}技术裁决:${c.reset} ${verdictLabel}`);
 
           console.log(`\n${c.bold}1. 任务状态与执行 (Task Execution):${c.reset} ${result.evidence.task.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.task.status === 'PROCESSING' ? `${c.yellow}● PROCESSING${c.reset}` : result.evidence.task.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.task.source}]`);
           if (result.evidence.task.error) {
@@ -378,10 +473,67 @@ export async function runDevTestCli(args: string[]): Promise<number> {
             console.log(`   ${c.yellow}未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]${c.reset}`);
           }
 
+          if (result.expectedVsActual) {
+            console.log(`\n${c.bold}4. 预期与实际对比 (Expected vs Actual Matrix):${c.reset}`);
+            const diffItems = result.expectedVsActual.items || result.expectedVsActual.diffs || [];
+            for (const item of diffItems) {
+              const statusTag = item.status === 'PASS'
+                ? `${c.green}[PASS]${c.reset}`
+                : item.status === 'FAIL'
+                ? `${c.red}[FAIL]${c.reset}`
+                : item.status === 'BLOCKED'
+                ? `${c.yellow}[BLOCKED]${c.reset}`
+                : `${c.cyan}[MANUAL_REQUIRED]${c.reset}`;
+              const matchIcon = item.matched ? `${c.green}✔ MATCH${c.reset}` : `${c.red}✖ DIFF${c.reset}`;
+              console.log(`   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`);
+              if (item.diff && item.diff !== 'MATCH') {
+                console.log(`     ${c.dim}差异说明: ${item.diff}${c.reset}`);
+              }
+            }
+            if (result.expectedVsActual.regressionDiff) {
+              const reg = result.expectedVsActual.regressionDiff;
+              const regStatusStr = reg.regressionStatus === 'CLEAN'
+                ? `${c.green}✔ CLEAN (所有基线比对项通过且证据齐备)${c.reset}`
+                : reg.regressionStatus === 'REGRESSION'
+                ? `${c.red}✖ REGRESSION DETECTED (存在非预期变化阻断)${c.reset}`
+                : `${c.yellow}○ UNKNOWN (基线比对关键证据不全，无法判定CLEAN)${c.reset}`;
+              console.log(`   回归状态: ${regStatusStr}`);
+              if (reg.expectedChanges.length > 0) {
+                console.log(`   预期变更:`);
+                for (const ec of reg.expectedChanges) {
+                  console.log(`     - [${ec.field}] ${JSON.stringify(ec.before)} -> ${JSON.stringify(ec.after)} (${ec.reason})`);
+                }
+              }
+              if (reg.unexpectedChanges.length > 0) {
+                console.log(`   ${c.red}⚠️ 非预期变更 (回归缺陷阻断):${c.reset}`);
+                for (const uc of reg.unexpectedChanges) {
+                  console.log(`     - [${uc.field}] ${JSON.stringify(uc.before)} -> ${JSON.stringify(uc.after)} (${c.red}${uc.reason}${c.reset})`);
+                }
+              }
+            }
+            if (result.expectedVsActual.evidenceStatus?.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED') {
+              console.log(`\n${c.yellow}📌 关键证据提醒: [MANUAL_DB_EVIDENCE_REQUIRED]${c.reset}`);
+              console.log(`   ${result.expectedVsActual.manualVerificationGuide?.notice}`);
+              console.log(`   SQL 指引: ${c.cyan}${result.expectedVsActual.manualVerificationGuide?.extraQuerySql}${c.reset}`);
+            }
+          }
+
           if (result.reasons.length > 0) {
             console.log(`\n${c.bold}核验明细 / 告警:${c.reset}`);
             for (const r of result.reasons) console.log(`  ${result.passed ? c.green : c.yellow}👉 ${r}${c.reset}`);
           }
+
+          console.log(`\n${c.bold}🚀 下一步行动:${c.reset}`);
+          if (result.acceptance === 'ACCEPTED') {
+            console.log(`  ${c.green}✔ 验收全部通过！测试证据闭环，可合流上线 / 交付生产。${c.reset}`);
+          } else if (result.acceptance === 'BLOCKED') {
+            console.log(`  ${c.yellow}⚠️ 验收阻断：请先补充缺失的刊例定价或环境会话凭据。${c.reset}`);
+          } else if (result.acceptance === 'REJECTED') {
+            console.log(`  ${c.red}✖ 验收驳回：发现明确业务缺陷或非预期回归，请联系研发排查。${c.reset}`);
+          } else {
+            console.log(`  ${c.yellow}○ 待闭环确认：执行 SQL 查询任务 extra 确认分流落库后，追加 --db-extra-confirmed 重新验真。${c.reset}`);
+          }
+
           console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
         }
         return result.passed ? 0 : 1;

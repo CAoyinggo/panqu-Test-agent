@@ -34,6 +34,7 @@ export interface ImageRoutingInput {
 
 export interface MainSiteRouteRules {
   video?: Record<number, { resolutions: string[]; aspect_ratios: string[] }>;
+  image?: Record<number, { resolutions?: string[]; aspect_ratios?: string[]; max_ref_images?: number }>;
 }
 
 export interface GroupRouteRules {

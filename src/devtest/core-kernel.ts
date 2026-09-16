@@ -1,9 +1,31 @@
 import { existsSync } from 'node:fs';
-import { EnvironmentProbe, type EnvProbeReport } from './env-probe.js';
-import { RoutingOracle, type MainSiteConfigSnapshot, type GatewayRoutingVerdict, type GatewayChannelConfig } from './routing.js';
+import { EnvironmentProbe, discoverModelContract, parseChangeIntent, type EnvProbeReport } from './env-probe.js';
+import {
+  RoutingOracle,
+  type MainSiteConfigSnapshot,
+  type GatewayRoutingVerdict,
+  type GatewayChannelConfig,
+  type MainSiteRoutingVerdict,
+} from './routing.js';
 import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from './billing.js';
 import { inspectMp4Buffer, inspectImageBuffer, type MediaInspectionResult } from './media-inspector.js';
 import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, type PanquSession } from './media-flow.js';
+import type {
+  ChangeScenario,
+  DiscoveredModelContract,
+  TestCasePlan,
+  TestPlan,
+  TestPlanBlockedItem,
+  ChangeContract,
+  ExpectedVsActual,
+  DiffItem,
+  DiffStatus,
+  DiversionBaseline,
+  DiversionRegressionDiff,
+  AcceptanceResult,
+  EvidenceCompleteness,
+  ProductionAcceptanceReport,
+} from './types.js';
 
 export interface ProbeKernelOptions {
   env?: string; baseUrl?: string; gatewayUrl?: string; sessionFile?: string; mock?: boolean; timeoutMs?: number;
@@ -39,51 +61,970 @@ export async function probe(options: ProbeKernelOptions = {}): Promise<ProbeKern
 }
 
 export interface PlanKernelOptions {
-  modelId: number; mediaType: 'video' | 'image'; flowType?: string; requirement?: string;
-  resolution?: string; duration?: number; aspectRatio?: string; userGroupIds?: number[];
-  mainConfig?: Partial<MainSiteConfigSnapshot>; channels?: GatewayChannelConfig[];
+  modelId?: number;
+  mediaType?: 'video' | 'image';
+  flowType?: string;
+  requirement?: string;
+  resolution?: string;
+  duration?: number;
+  aspectRatio?: string;
+  userGroupIds?: number[];
+  mainConfig?: Partial<MainSiteConfigSnapshot>;
+  channels?: GatewayChannelConfig[];
+  scenario?: ChangeScenario;
+  changeType?: 'new_model' | 'diversion_change';
+  pointsPerSecond?: number;
+  customPoints?: number;
+  price?: number;
+  alias?: string;
+  isGlobal?: boolean;
+  mode?: 'real' | 'mock';
+  sessionFile?: string;
 }
+
 export interface PlanKernelResult {
-  ok: boolean; modelId: number; mediaType: 'video' | 'image'; flowType: 'direct' | 'diversion';
-  decision: string; willDivert: boolean; routeLine: number; expectedPoints: number;
+  ok: boolean;
+  modelId: number;
+  mediaType: 'video' | 'image';
+  flowType: 'direct' | 'diversion';
+  decision: string;
+  willDivert: boolean;
+  routeLine: number;
+  expectedPoints: number;
   expectedSnapshot?: { orgId: number; routeGroupId: number; newapiGroup: string; newapiModel: string };
-  gatewayRouting: GatewayRoutingVerdict; candidateChannels: string[]; reason: string;
+  gatewayRouting: GatewayRoutingVerdict;
+  candidateChannels: string[];
+  reason: string;
+  scenario: ChangeScenario;
+  scenarioName: string;
+  changeType: 'new_model' | 'diversion_change';
+  contract: DiscoveredModelContract;
+  changeContract?: ChangeContract;
+  testPlan: TestPlan;
+  blocked: TestPlanBlockedItem[];
+  pricingStatus: 'DETERMINED' | 'MANUAL_REQUIRED';
+  missingInputs?: string[];
+  acceptanceForecast?: AcceptanceResult;
+  testerActionSummary?: {
+    automatedSummary: string[];
+    skippedSummary: string[];
+    manualRequiredSummary: string[];
+    nextStep: string;
+  };
+}
+
+export function generateDynamicTestPlan(
+  contract: DiscoveredModelContract,
+  options: PlanKernelOptions,
+  mainVerdict: MainSiteRoutingVerdict,
+  gwVerdict: GatewayRoutingVerdict,
+  expectedPoints: number,
+): TestPlan {
+  const scenario = contract.scenario;
+  const changeType: 'new_model' | 'diversion_change' = scenario.includes('DIVERSION')
+    ? 'diversion_change'
+    : 'new_model';
+
+  let scenarioName = '';
+  switch (scenario) {
+    case 'IMAGE_NEW_MODEL':
+      scenarioName = `新图片模型直接接入测试 (#${contract.modelId})`;
+      break;
+    case 'VIDEO_NEW_MODEL':
+      scenarioName = `新视频模型直接接入测试 (#${contract.modelId})`;
+      break;
+    case 'IMAGE_DIVERSION_CHANGE':
+      scenarioName = `已有图片模型新增 NewAPI 分流测试 (#${contract.modelId})`;
+      break;
+    case 'VIDEO_DIVERSION_CHANGE':
+      scenarioName = `已有视频模型新增 NewAPI 分流测试 (#${contract.modelId})`;
+      break;
+  }
+
+  const tests: TestCasePlan[] = [];
+  const expectedEvidence: string[] = [];
+  const blocked: TestPlanBlockedItem[] = [];
+  const skippedTests: Array<{ id: string; name: string; whySkipped: string; rule: string }> = [];
+
+  if (!contract.pricing.isPricingDetermined) {
+    blocked.push({
+      field: 'pricing',
+      reason: `未发现模型 #${contract.modelId} 真实刊例单价，无法执行防资损流水对账`,
+      requiredAction: '必须通过 --points-per-second 或 --price 显式提供真实单价，否则账务验证将被阻断',
+    });
+  }
+
+  for (const item of contract.manualRequiredItems) {
+    if (!blocked.some((b) => b.field === item.field)) {
+      blocked.push({
+        field: item.field,
+        reason: item.reason,
+        requiredAction: item.requiredAction,
+      });
+    }
+  }
+
+  const res = options.resolution || contract.supportedResolutions.value[0] || (contract.mediaType === 'video' ? '720p' : '1k');
+  const dur = options.duration || contract.supportedDurations?.value?.[0] || (contract.mediaType === 'video' ? 4 : undefined);
+
+  if (scenario === 'IMAGE_NEW_MODEL') {
+    tests.push(
+      {
+        id: 'routing-direct',
+        layer: 'routing',
+        purpose: '新图片模型直接接入，免路由组鉴权走直连',
+        input: { selmodelsId: contract.modelId, serviceline: 'r', flowType: 'direct' },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0 },
+        requiredEvidence: ['routing_decision'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '新图片模型直接接入，验证免路由组鉴权走直连链路',
+          riskAddressed: '防止新上线模型被错误拦截或分流至未配置网关',
+        },
+      },
+    );
+
+    const maxRef = contract.capabilities.maxRefImages?.value ?? contract.maxRefImages?.value ?? 0;
+    if (maxRef > 0) {
+      tests.push({
+        id: 'boundary-refimg',
+        layer: 'boundary',
+        purpose: `参考图数量超限 (>${maxRef}张) 边界拦截防护`,
+        input: { refCount: maxRef + 1 },
+        expected: { allowed: false, reason: `超过上限 ${maxRef} 张` },
+        requiredEvidence: ['boundary_intercept'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: `该模型支持最多 ${maxRef} 张参考图，核验超限拦截边界`,
+          riskAddressed: '防止超限参考图导致后端显存溢出或渲染崩溃',
+        },
+      });
+    } else {
+      skippedTests.push({
+        id: 'boundary-refimg',
+        name: '参考图超限拦截',
+        whySkipped: '该图片模型不支持参考图 (maxRefImages=0)，无需生成参考图边界拦截测试',
+        rule: '非参考图模型跳过参考图边界',
+      });
+    }
+
+    tests.push(
+      {
+        id: 'real-task-submit',
+        layer: 'execution',
+        purpose: '提交生图任务并获取 taskId',
+        input: { modelId: contract.modelId, resolution: res, serviceline: 'r' },
+        expected: { taskStatus: 'SUCCESS', hasTaskId: true },
+        requiredEvidence: ['taskId', 'taskStatus', 'imageUrl'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '向生图接口发起任务并获取 taskId 存活状态',
+          riskAddressed: '验证接口鉴权、参数解析与真实任务创建落库能力',
+        },
+      },
+      {
+        id: 'artifact-png',
+        layer: 'artifact',
+        purpose: 'PNG/JPEG 产物二进制 IHDR 物理尺寸核验',
+        input: { resolution: res },
+        expected: { formatValid: true, dimensionsMatch: true },
+        requiredEvidence: ['png_ihdr', 'file_size'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '提取二进制流解析 PNG IHDR 头，核验物理尺寸与格式合规性',
+          riskAddressed: '防止返回空图、假图或规格不符的损坏文件',
+        },
+      },
+      {
+        id: 'billing-invariants',
+        layer: 'billing',
+        purpose: '防重复扣费与退款幂等对账核验',
+        input: { modelId: contract.modelId, expectedPoints },
+        expected: { antiDoubleBilling: true, netChargeZero: true, refundIdempotency: true },
+        requiredEvidence: ['scoreLogs', 'auditReport'],
+        executionMode: 'real_task',
+        status: contract.pricing.isPricingDetermined ? 'READY' : 'BLOCKED',
+        skipReason: contract.pricing.isPricingDetermined ? undefined : '真实刊例单价缺失，账务对账已阻断 (BLOCKED / MANUAL_REQUIRED)',
+        rationale: {
+          whyIncluded: '核验证明图片模型刊例扣费与防重复扣费三大不变量',
+          riskAddressed: '防范计费异常、重复扣款或失败漏退',
+        },
+      },
+    );
+    expectedEvidence.push('taskId', 'taskStatus', 'imageUrl', 'png_ihdr', 'scoreLogs', 'auditReport');
+
+    skippedTests.push(
+      {
+        id: 'gateway-candidate',
+        name: 'NewAPI网关加权调度',
+        whySkipped: '本次为 Direct 直连接入，不涉及 NewAPI 网关渠道加权与配额检查',
+        rule: 'DIRECT 接入免网关调度',
+      },
+      {
+        id: 'route-group-isolation',
+        name: '组织路由组隔离',
+        whySkipped: 'Direct 直连接入，免组织与路由组绑定鉴权',
+        rule: 'DIRECT 接入免组织隔离',
+      },
+      {
+        id: 'fallback-policy',
+        name: '重试兜底降级',
+        whySkipped: 'Direct 直连接入，无 NewAPI 失败降级策略',
+        rule: 'DIRECT 接入无重试降级',
+      },
+      {
+        id: 'gateway-eligibility-guard',
+        name: '通用网关准入门禁',
+        whySkipped: '图片模型直接接入，不涉及视频专用长提示词与 MOV 格式门禁',
+        rule: '生图模型跳过视频网关准入门禁',
+      },
+    );
+  } else if (scenario === 'VIDEO_NEW_MODEL') {
+    tests.push(
+      {
+        id: 'routing-direct',
+        layer: 'routing',
+        purpose: '新视频模型直接接入，验证主站直连线路 0 判定',
+        input: { modelId: contract.modelId, flowType: 'direct' },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0 },
+        requiredEvidence: ['routing_decision'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '新视频模型直接接入，验证主站直连线路 0 判定',
+          riskAddressed: '防止新视频模型被错误分流至未配置网关',
+        },
+      },
+      {
+        id: 'gateway-eligibility-guard',
+        layer: 'boundary',
+        purpose: '网关前置门禁准入校验：超长提示词 (>5000字) 拦截',
+        input: { cuewordLength: 5001 },
+        expected: { allowed: false, decision: 'BLOCKED_ILLEGAL' },
+        requiredEvidence: ['boundary_intercept'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '验证网关前置门禁对超长提示词的前置拦截',
+          riskAddressed: '防止非法或超限提示词打垮下游模型推理',
+        },
+      },
+      {
+        id: 'real-task-submit',
+        layer: 'execution',
+        purpose: '调用 /aivideo/v2/generate/video 提交视频生成任务',
+        input: { modelId: contract.modelId, resolution: res, duration: dur },
+        expected: { taskStatus: 'SUCCESS', hasTaskId: true },
+        requiredEvidence: ['taskId', 'taskStatus', 'videoUrl'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '调用主站视频接口发起生成并获取 taskId 存活状态',
+          riskAddressed: '验证主站视频任务创建与参数校验',
+        },
+      },
+      {
+        id: 'artifact-mp4',
+        layer: 'artifact',
+        purpose: '抓取前 64KB 二进制流，解析 MP4 Box 树核验分辨率与时长规格及物理验真',
+        input: { resolution: res, duration: dur },
+        expected: { boxValid: true, dimensionsMatch: true, durationMatches: true },
+        requiredEvidence: ['mp4_box_tree', 'mdat_present'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '抓取前 64KB 二进制流，解析 MP4 Box 树（ftyp/moov/mdat）并核验规格',
+          riskAddressed: '物理验真防止黑屏、空文件或规格不符的损坏产物',
+        },
+      },
+      {
+        id: 'billing-invariants',
+        layer: 'billing',
+        purpose: '防重复扣款与失败净扣归零三大不变量核验',
+        input: { modelId: contract.modelId, expectedPoints },
+        expected: { antiDoubleBilling: true, netChargeZero: true, refundIdempotency: true },
+        requiredEvidence: ['scoreLogs', 'auditReport'],
+        executionMode: 'real_task',
+        status: contract.pricing.isPricingDetermined ? 'READY' : 'BLOCKED',
+        skipReason: contract.pricing.isPricingDetermined ? undefined : '真实刊例单价缺失，账务对账已阻断 (BLOCKED / MANUAL_REQUIRED)',
+        rationale: {
+          whyIncluded: '防重复扣款与失败净扣归零三大不变量核验',
+          riskAddressed: '防范视频生成高额资损与重扣',
+        },
+      },
+    );
+    expectedEvidence.push('taskId', 'taskStatus', 'videoUrl', 'mp4_box_tree', 'scoreLogs', 'auditReport');
+
+    skippedTests.push(
+      {
+        id: 'gateway-candidate',
+        name: 'NewAPI网关加权调度',
+        whySkipped: '本次为 Direct 直连接入，不涉及 NewAPI 网关加权调度与渠道限额',
+        rule: 'DIRECT 接入免网关调度',
+      },
+      {
+        id: 'route-group-isolation',
+        name: '组织路由组隔离',
+        whySkipped: 'Direct 直连接入，免组织与路由组绑定鉴权',
+        rule: 'DIRECT 接入免组织隔离',
+      },
+      {
+        id: 'fallback-policy',
+        name: '重试兜底降级',
+        whySkipped: 'Direct 直连接入，无 NewAPI 失败降级策略',
+        rule: 'DIRECT 接入无重试降级',
+      },
+      {
+        id: 'boundary-refimg',
+        name: '生图参考图边界',
+        whySkipped: '视频生成不涉及生图参考图超限边界测试',
+        rule: '视频模型跳过生图参考图边界',
+      },
+    );
+    if (!contract.supportedResolutions.value.includes('1080p')) {
+      skippedTests.push({
+        id: 'boundary-1080p',
+        name: '1080P高分辨率边界',
+        whySkipped: '该视频模型规格不支持 1080p，避免生成超出模型能力范围的无效用例',
+        rule: '超出能力边界不测',
+      });
+    }
+  } else if (scenario === 'IMAGE_DIVERSION_CHANGE') {
+    tests.push(
+      {
+        id: 'baseline-direct',
+        layer: 'routing',
+        purpose: 'Baseline 回归：非 serviceline=r 请求仍走原渠道',
+        input: { selmodelsId: contract.modelId, serviceline: 't' },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT' },
+        requiredEvidence: ['baseline_routing'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: 'Baseline 回归：非 serviceline=r 请求仍走原渠道直连',
+          riskAddressed: '防止非切流业务线被误伤劫持',
+        },
+      },
+      {
+        id: 'gateway-eligibility-guard',
+        layer: 'boundary',
+        purpose: '网关前置门禁准入校验：自定义像素尺寸 (pixels) 不支持 NewAPI 分流，拦截回退直连',
+        input: { sizeType: 'pixels' },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT' },
+        requiredEvidence: ['boundary_intercept'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '验证网关准入门禁对非标尺寸的拦截与直连回退',
+          riskAddressed: '防止非标准分辨率分流至不支持的 NewAPI 渠道导致任务异常',
+        },
+      },
+      {
+        id: contract.isGlobal.value ? 'routing-global' : 'routing-group',
+        layer: 'routing',
+        purpose: contract.isGlobal.value
+          ? '全量开放生图模型命中全局分流'
+          : '非全量生图模型满足组织配置命中 NEWAPI_IMAGE 组织分流，预期快照写入 newapi_image=1',
+        input: { selmodelsId: contract.modelId, serviceline: 'r', sizeType: 'resolution' },
+        expected: { willDivert: true, decision: 'NEWAPI_IMAGE', line: 10, newapiModel: contract.alias.value },
+        requiredEvidence: ['routing_decision', 'expectedSnapshot'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: contract.isGlobal.value ? '验证全量开放生图模型命中全局分流' : '验证非全量生图模型命中组织路由组分流',
+          riskAddressed: '防范分流切流规则未生效或配置遗漏',
+        },
+      },
+      {
+        id: 'gateway-candidate',
+        layer: 'routing',
+        purpose: 'NewAPI 网关上游渠道加权调度候选与每日配额校验',
+        input: { tokenGroup: mainVerdict.expectedSnapshot?.newapiGroup || 'panqu_test', targetModel: contract.alias.value, expectedPoints },
+        expected: { isBlockedByQuota: false, candidateCount: gwVerdict.candidateChannelIds.length },
+        requiredEvidence: ['gateway_channel'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '核验 NewAPI 网关是否存在有效上游渠道承接该生图模型请求',
+          riskAddressed: '防范 NewAPI 网关无可用上游渠道导致生图任务挂死',
+        },
+      },
+    );
+    if (!contract.isGlobal.value) {
+      tests.push({
+        id: 'route-group-isolation',
+        layer: 'routing',
+        purpose: '组织路由组未绑定或 Key 缺失时，平滑回退原渠道',
+        input: { userGroupIds: [99999] },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT' },
+        requiredEvidence: ['isolation_routing'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '未绑定组织或密钥缺失时平滑回退原直连渠道',
+          riskAddressed: '防止配置缺失导致用户生图报错',
+        },
+      });
+    } else {
+      skippedTests.push({
+        id: 'route-group-isolation',
+        name: '组织路由组隔离',
+        whySkipped: '该模型配置为全量开放 (is_newapi_global=1)，所有组织无条件切流，无需测试组织隔离',
+        rule: '全量模型免组织隔离',
+      });
+    }
+
+    tests.push(
+      {
+        id: 'real-task-diversion',
+        layer: 'execution',
+        purpose: '真实提交分流生图任务并验证状态',
+        input: { modelId: contract.modelId, serviceline: 'r', resolution: res },
+        expected: { taskStatus: 'SUCCESS', hasTaskId: true },
+        requiredEvidence: ['taskId', 'taskStatus', 'imageUrl', 'MANUAL_DB_EVIDENCE_REQUIRED:extra.newapi_image=1'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '真实提交分流生图任务并验证落库状态',
+          riskAddressed: '验证分流后任务真实创建与 taskId 生成',
+        },
+      },
+      {
+        id: 'artifact-png',
+        layer: 'artifact',
+        purpose: 'PNG/JPEG 产物物理尺寸核验，证明分流后图片规格未被破坏',
+        input: { resolution: res },
+        expected: { formatValid: true, dimensionsMatch: true },
+        requiredEvidence: ['png_ihdr'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: 'PNG/JPEG 产物物理尺寸核验，证明分流后图片规格未被破坏',
+          riskAddressed: '防范 NewAPI 供应商篡改图片格式或规格',
+        },
+      },
+      {
+        id: 'billing-invariants',
+        layer: 'billing',
+        purpose: '核验证明新增分流未破坏原有防重复扣费与退款幂等',
+        input: { modelId: contract.modelId, expectedPoints },
+        expected: { antiDoubleBilling: true, netChargeZero: true, refundIdempotency: true },
+        requiredEvidence: ['scoreLogs', 'auditReport'],
+        executionMode: 'real_task',
+        status: contract.pricing.isPricingDetermined ? 'READY' : 'BLOCKED',
+        skipReason: contract.pricing.isPricingDetermined ? undefined : '真实刊例单价缺失，账务对账已阻断 (BLOCKED / MANUAL_REQUIRED)',
+        rationale: {
+          whyIncluded: '核验证明新增分流未破坏原有防重复扣费与退款幂等',
+          riskAddressed: '防范切流后计费规则篡改或重扣',
+        },
+      },
+    );
+    expectedEvidence.push('taskId', 'taskStatus', 'imageUrl', 'png_ihdr', 'scoreLogs', 'MANUAL_DB_EVIDENCE_REQUIRED:extra.newapi_image=1');
+
+    skippedTests.push(
+      {
+        id: 'fallback-policy',
+        name: '重试兜底降级',
+        whySkipped: '图片分流不走 SD 视频重试队列',
+        rule: '生图分流无重试队列',
+      },
+      {
+        id: 'gateway-eligibility-guard',
+        name: '通用网关准入门禁',
+        whySkipped: '图片生图分流不涉及视频专用长提示词门禁',
+        rule: '生图分流跳过视频网关准入门禁',
+      },
+    );
+  } else {
+    tests.push(
+      {
+        id: 'gateway-eligibility-guard',
+        layer: 'boundary',
+        purpose: '网关前置门禁准入校验：MOV 输出格式不支持 NewAPI 分流，拦截回退直连',
+        input: { outputFormat: 'mov' },
+        expected: { willDivert: false, decision: 'FALLBACK_DIRECT' },
+        requiredEvidence: ['boundary_intercept'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '验证网关准入门禁对 MOV 等非标格式的拦截与直连回退',
+          riskAddressed: '防止下游供应商不支持 MOV 格式导致分流任务失败',
+        },
+      },
+    );
+
+    if (contract.supportedResolutions.value.includes('1080p')) {
+      tests.push({
+        id: 'boundary-1080p',
+        layer: 'boundary',
+        purpose: '验证 1080p 高清规格分流规则契约',
+        input: { modelId: contract.modelId, resolution: '1080p' },
+        expected: { willDivert: true },
+        requiredEvidence: ['routing_decision'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '验证 1080p 高清规格分流规则契约',
+          riskAddressed: '验证高清规格是否被正确切流至支持 1080p 的渠道',
+        },
+      });
+    }
+
+    if (contract.isGlobal.value) {
+      tests.push({
+        id: 'routing-global',
+        layer: 'routing',
+        purpose: '全量开放模型 (is_newapi_global=1) 绕过组织，直接使用全局Key直达 NewAPI (orgId=0, line=10)',
+        input: { modelId: contract.modelId },
+        expected: { willDivert: true, decision: 'NEWAPI_GLOBAL', line: 10, orgId: 0, newapiModel: contract.alias.value },
+        requiredEvidence: ['routing_decision', 'expectedSnapshot'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '全量开放模型命中全局分流 (LINE=10)',
+          riskAddressed: '验证全量模型无条件切流规则生效',
+        },
+      });
+      skippedTests.push({
+        id: 'route-group-isolation',
+        name: '组织路由组隔离',
+        whySkipped: '该模型配置为全量开放 (is_newapi_global=1)，所有组织无条件切流，无需测试组织隔离',
+        rule: '全量模型免组织隔离',
+      });
+    } else {
+      tests.push({
+        id: 'routing-group',
+        layer: 'routing',
+        purpose: '非全量模型满足组织配置与能力并集命中 NEWAPI_ORG_GROUP 分流',
+        input: { modelId: contract.modelId, userGroupIds: options.userGroupIds || [10] },
+        expected: { willDivert: true, decision: 'NEWAPI_ORG_GROUP', line: 10 },
+        requiredEvidence: ['routing_decision', 'expectedSnapshot'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '非全量模型满足组织配置与能力并集命中 NEWAPI_ORG_GROUP 分流',
+          riskAddressed: '验证组织绑定与能力并集分流规则',
+        },
+      });
+    }
+
+    tests.push({
+      id: 'gateway-candidate',
+      layer: 'routing',
+      purpose: 'NewAPI 网关按分组过滤有效渠道并检查每日配额',
+      input: { tokenGroup: mainVerdict.expectedSnapshot?.newapiGroup || 'panqu_test', targetModel: contract.alias.value, expectedPoints },
+      expected: { isBlockedByQuota: false, candidateCount: gwVerdict.candidateChannelIds.length },
+      requiredEvidence: ['candidateChannels'],
+      executionMode: 'plan_only',
+      status: 'READY',
+      rationale: {
+        whyIncluded: 'NewAPI 网关按分组过滤有效渠道并检查每日配额',
+        riskAddressed: '防止配额超限或无可用渠道打垮网关',
+      },
+    });
+
+    if (contract.fallback?.value.hasPolicy) {
+      tests.push({
+        id: 'fallback-policy',
+        layer: 'fallback',
+        purpose: contract.fallback.value.action === 'VOLCENGINE_RETRY_QUEUE'
+          ? 'Seedance 模型分流失败自动派发至火山重试队列并标记 is_need_fallback=1'
+          : `模型 #${contract.modelId} 属于非 Seedance 系列，分流失败直接报错中断，严禁进入重试列表`,
+        input: { modelId: contract.modelId },
+        expected: contract.fallback.value.action === 'VOLCENGINE_RETRY_QUEUE'
+          ? { fallbackAction: 'VOLCENGINE_RETRY_QUEUE', recordRetryLog: true }
+          : { fallbackAction: 'DIRECT_FAIL_NO_RETRY', recordRetryLog: false },
+        requiredEvidence: ['fallback_verdict'],
+        executionMode: 'plan_only',
+        status: 'READY',
+        rationale: {
+          whyIncluded: contract.fallback.value.action === 'VOLCENGINE_RETRY_QUEUE'
+            ? 'Seedance 模型分流失败自动派发至火山重试队列并标记 is_need_fallback=1'
+            : `模型 #${contract.modelId} 属于非 Seedance 系列，分流失败直接报错中断，严禁进入重试列表`,
+          riskAddressed: '严格防范非 SD 模型错误进入重试队列造成二次故障',
+        },
+      });
+    }
+
+    tests.push(
+      {
+        id: 'real-task-diversion',
+        layer: 'execution',
+        purpose: '真实提交分流视频生成任务并验证状态',
+        input: { modelId: contract.modelId, resolution: res, duration: dur },
+        expected: { taskStatus: 'SUCCESS', hasTaskId: true },
+        requiredEvidence: ['taskId', 'taskStatus', 'videoUrl', 'MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion=10'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: '真实提交分流视频生成任务并验证状态',
+          riskAddressed: '验证端到端提交流程完整性',
+        },
+      },
+      {
+        id: 'artifact-mp4',
+        layer: 'artifact',
+        purpose: 'MP4 Box 物理验真，证明分流后视频容器与编码规格完整可用',
+        input: { resolution: res },
+        expected: { boxValid: true, dimensionsMatch: true },
+        requiredEvidence: ['mp4_box_tree'],
+        executionMode: 'real_task',
+        status: 'READY',
+        rationale: {
+          whyIncluded: 'MP4 Box 物理验真，证明分流后视频容器与编码规格完整可用',
+          riskAddressed: '防范下游供应商返回空流、截断流或损坏容器',
+        },
+      },
+      {
+        id: 'billing-invariants',
+        layer: 'billing',
+        purpose: '积分对账与三大账务不变量核验，证明分流未破坏原有防重复扣费',
+        input: { modelId: contract.modelId, expectedPoints },
+        expected: { antiDoubleBilling: true, netChargeZero: true, refundIdempotency: true },
+        requiredEvidence: ['scoreLogs', 'auditReport'],
+        executionMode: 'real_task',
+        status: contract.pricing.isPricingDetermined ? 'READY' : 'BLOCKED',
+        skipReason: contract.pricing.isPricingDetermined ? undefined : '真实刊例单价缺失，账务对账已阻断 (BLOCKED / MANUAL_REQUIRED)',
+        rationale: {
+          whyIncluded: '积分对账与三大账务不变量核验，证明分流未破坏原有防重复扣费',
+          riskAddressed: '防范分流导致重复扣费、失败漏退等重大资损',
+        },
+      },
+    );
+    expectedEvidence.push('taskId', 'taskStatus', 'videoUrl', 'mp4_box_tree', 'scoreLogs', 'MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion=10');
+
+    skippedTests.push(
+      {
+        id: 'boundary-refimg',
+        name: '生图参考图边界',
+        whySkipped: '视频模型不涉及生图参考图超限边界测试',
+        rule: '视频模型跳过生图参考图边界',
+      },
+      {
+        id: 'gateway-eligibility-guard',
+        name: '通用网关准入门禁',
+        whySkipped: '视频接口使用预设分辨率，生图自定义像素门禁不适用于视频模型',
+        rule: '视频模型跳过生图网关准入门禁',
+      },
+    );
+  }
+
+  let baseline: DiversionBaseline | undefined;
+  let regressionExpectations: Array<{ field: string; expectedChange: boolean; description: string }> | undefined;
+
+  if (scenario === 'IMAGE_DIVERSION_CHANGE' || scenario === 'VIDEO_DIVERSION_CHANGE') {
+    baseline = {
+      flowType: 'direct',
+      routeLine: 0,
+      willDivert: false,
+      decision: 'FALLBACK_DIRECT',
+      expectedPoints,
+      alias: contract.alias.value,
+      artifactFormat: contract.mediaType === 'video' ? 'mp4' : 'png/jpg',
+    };
+    regressionExpectations = [
+      { field: 'routing', expectedChange: true, description: '分流线路由 Direct(0) 切流至 NewAPI(10)' },
+      { field: 'billing', expectedChange: false, description: '基准刊例价不发生非预期回归' },
+      { field: 'artifact', expectedChange: false, description: '产物容器及解码物理结构完好' },
+      { field: 'alias', expectedChange: false, description: '模型别名映射保持一致' },
+    ];
+  }
+
+  const automatedSummary = tests.map((t) => `[${t.layer.padEnd(9)}] ${t.id}: ${t.purpose}`);
+  const skippedSummary = skippedTests.map((s) => `[${s.id}] ${s.name}: ${s.whySkipped} (${s.rule})`);
+  const manualRequiredSummary: string[] = [];
+  if (blocked.length > 0) {
+    for (const b of blocked) {
+      manualRequiredSummary.push(`${b.field}: ${b.reason} -> ${b.requiredAction}`);
+    }
+  }
+  if (changeType === 'diversion_change') {
+    manualRequiredSummary.push(
+      contract.mediaType === 'video'
+        ? '底层落库核验: 执行 SQL `SELECT extra FROM pq_aivideo_new WHERE id = <taskId>;` 确认 extra.diversion=10'
+        : '底层落库核验: 执行 SQL `SELECT extra FROM pq_ai_tasks WHERE id = <taskId>;` 确认 extra.newapi_image=1'
+    );
+  } else {
+    if (contract.mediaType === 'video') {
+      manualRequiredSummary.push('物理产物核验: 抽检任务产物 MP4 Box 结构（moov/mdat 原子完整性）及 OSS 归档存储下载可用性');
+    } else {
+      manualRequiredSummary.push('物理产物核验: 抽检生图产物 PNG IHDR 头物理尺寸完整性及 OSS 归档存储');
+    }
+  }
+
+  let nextStep = '';
+  if (blocked.length > 0) {
+    nextStep = `先补充缺失事实 (${blocked.map(b => b.missingField || b.field).join(', ')})，然后再执行真实任务`;
+  } else {
+    nextStep = `执行任务: devtest execute --model ${contract.modelId} --media ${contract.mediaType} --mode real${options.sessionFile ? ` --session-file ${options.sessionFile}` : ''}`;
+  }
+
+  const testerActionSummary = {
+    automatedSummary,
+    skippedSummary,
+    manualRequiredSummary,
+    nextStep,
+  };
+
+  const summary = `### 📋 动态生成测试计划 [${scenarioName}]
+- **模型**: #${contract.modelId} (${contract.mediaType}) | 别名: ${contract.alias.value} [来源: ${contract.alias.source}]
+- **变更类型**: ${changeType === 'new_model' ? '新模型直接接入' : '已有模型新增分流'}
+- **全量开放**: ${contract.isGlobal.value ? '是 (NEWAPI_GLOBAL)' : '否 (组织路由组)'} [来源: ${contract.isGlobal.source}]
+- **计划测试项**: 共 ${tests.length} 项测试 (就绪 ${tests.filter((t) => t.status === 'READY').length} 项, 阻断 ${blocked.length} 项, 已安全裁剪跳过 ${skippedTests.length} 项)
+- **刊例定价**: ${contract.pricing.isPricingDetermined ? `${expectedPoints} pt [来源: ${contract.pricing.source}]` : '未确定 (BLOCKED)'}`;
+
+  return {
+    scenario,
+    scenarioName,
+    modelId: contract.modelId,
+    mediaType: contract.mediaType,
+    changeType,
+    contract,
+    tests,
+    skippedTests,
+    blocked,
+    expectedEvidence,
+    summary,
+    baseline,
+    regressionExpectations,
+    testerActionSummary,
+  };
 }
 
 export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult> {
-  const { modelId, mediaType } = options;
-  const flowType = options.flowType === 'direct' ? 'direct' : 'diversion';
-  const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
-  const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
-  const expectedPoints = BillingOracle.calculateExpectedPoints({ mediaType, modelId, duration, resolution });
+  const intent = options.requirement ? parseChangeIntent(options.requirement) : undefined;
+  const modelId = options.modelId ?? intent?.modelId ?? 84;
+  const mediaType = options.mediaType ?? intent?.mediaType ?? 'video';
+  const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : intent?.customPoints);
+  const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : intent?.pointsPerSecond);
+  const changeTypeOpt = options.changeType ?? intent?.changeType;
+  const scenarioOpt = options.scenario ?? intent?.scenario;
+
+  const isGlobalOpt = options.isGlobal ?? intent?.isGlobal;
+
+  const contract = discoverModelContract(modelId, mediaType, {
+    ...options,
+    modelId,
+    mediaType,
+    isGlobal: isGlobalOpt,
+    customPoints,
+    pointsPerSecond,
+    changeType: changeTypeOpt,
+    scenario: scenarioOpt,
+  });
+  const scenario = contract.scenario;
+  const changeType: 'new_model' | 'diversion_change' = changeTypeOpt
+    ? changeTypeOpt
+    : options.flowType === 'direct'
+    ? 'new_model'
+    : options.flowType === 'diversion'
+    ? 'diversion_change'
+    : scenario.includes('DIVERSION')
+    ? 'diversion_change'
+    : 'new_model';
+
+  const flowType: 'direct' | 'diversion' = options.flowType === 'direct'
+    ? 'direct'
+    : options.flowType === 'diversion'
+    ? 'diversion'
+    : changeType === 'new_model'
+    ? 'direct'
+    : 'diversion';
+
+  const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
+  const resolution = options.resolution ?? contract.supportedResolutions.value[0] ?? (mediaType === 'video' ? '720p' : '1k');
+  const expectedPoints = BillingOracle.calculateExpectedPoints({
+    mediaType,
+    modelId,
+    duration,
+    resolution,
+    customPoints: customPoints ?? contract.pricing.customPoints?.value,
+    pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
+  });
+
   const isSeedance = [15, 16, 58, 78].includes(modelId);
   const videoType = isSeedance ? 6 : 105;
+
   const baseConfig: MainSiteConfigSnapshot = {
     routeMode: flowType === 'direct' ? 'off' : 'newapi',
-    globalModelIds: flowType === 'direct' ? [] : [84, 88],
+    globalModelIds: flowType === 'direct' ? [] : (contract.isGlobal.value ? [modelId, 84, 88] : [84, 88]),
     globalApiKey: 'sk-panqu-devtest-key',
     globalRouteRules: {
       video: {
         84: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['16:9', '9:16', '1:1'] },
         88: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['16:9', '9:16', '1:1'] },
+        ...(mediaType === 'video' ? { [modelId]: { resolutions: contract.supportedResolutions.value, aspect_ratios: contract.supportedAspectRatios.value } } : {}),
       },
     },
     groupRouteRules: {},
-    orgBindings: { 10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'sk-org-key' } },
-    modelAliases: { 84: 'wan3.0-video', 88: 'wan3.0-video', 201: 'runninghub-nano-banana-2', 205: 'gpt-image-2.5' },
+    orgBindings: contract.orgBindings?.value
+      ? Object.fromEntries(
+          Object.entries(contract.orgBindings.value).map(([k, v]) => [
+            Number(k),
+            { routeGroupId: v.routeGroupId, newapiGroup: v.newapiGroup, status: v.status, apiKey: v.apiKey || 'sk-org-key' },
+          ]),
+        )
+      : { 10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1, apiKey: 'sk-org-key' } },
+    modelAliases: {
+      84: 'wan3.0-video',
+      88: 'wan3.0-video-prime',
+      201: 'runninghub-nano-banana-2',
+      205: 'gpt-image-2.5',
+      [modelId]: contract.alias.value,
+    },
     ...options.mainConfig,
   };
+
   const mainVerdict = mediaType === 'video'
-    ? RoutingOracle.evaluateVideoMainSite({ videoType, modelId, resolution, aspectRatio: options.aspectRatio ?? '16:9', userGroupIds: options.userGroupIds ?? [10] }, baseConfig)
-    : RoutingOracle.evaluateImageMainSite({ selmodelsId: modelId, serviceline: 'r', userGroupIds: options.userGroupIds ?? [10] }, baseConfig);
-  const targetModel = baseConfig.modelAliases?.[modelId] || (mediaType === 'video' ? 'wan3.0-video' : 'runninghub-nano-banana-2');
+    ? RoutingOracle.evaluateVideoMainSite(
+        {
+          videoType,
+          modelId,
+          resolution,
+          aspectRatio: options.aspectRatio ?? contract.supportedAspectRatios.value[0] ?? '16:9',
+          userGroupIds: options.userGroupIds ?? [10],
+        },
+        baseConfig,
+      )
+    : flowType === 'direct'
+    ? {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT' as const,
+        line: 0,
+        reason: '新图片模型采用代码直连链路接入，免走 NewAPI 网关分流 [FALLBACK_DIRECT]',
+        expectedSnapshot: {
+          newapiGroup: '',
+          orgId: 0,
+          routeGroupId: 0,
+          newapiModel: contract.alias.value,
+        },
+      }
+    : RoutingOracle.evaluateImageMainSite(
+        {
+          selmodelsId: modelId,
+          serviceline: contract.serviceline?.value ?? 'r',
+          userGroupIds: options.userGroupIds ?? [10],
+        },
+        baseConfig,
+      );
+
+  const targetModel = baseConfig.modelAliases?.[modelId] || contract.alias.value;
   const targetGroup = mainVerdict.expectedSnapshot?.newapiGroup || 'panqu_test';
-  const channels: GatewayChannelConfig[] = options.channels || (mainVerdict.willDivert ? [{ id: 1, name: `${targetModel}主渠道`, group: targetGroup, models: [targetModel], status: 1, weight: 100, dailyQuotaLimit: 0, usedQuota: 0 }] : []);
+  const channels: GatewayChannelConfig[] = options.channels || (mainVerdict.willDivert
+    ? [{ id: 1, name: `${targetModel}主渠道`, group: targetGroup, models: [targetModel], status: 1, weight: 100, dailyQuotaLimit: 0, usedQuota: 0 }]
+    : []);
+
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
+  const testPlan = generateDynamicTestPlan(contract, options, mainVerdict, gwVerdict, expectedPoints);
+
+  const changeContract: ChangeContract = {
+    scenario,
+    modelId,
+    mediaType,
+    changeType,
+    beforeState: {
+      flowType: changeType === 'diversion_change' ? 'direct' : 'none',
+      routeLine: 0,
+      decision: changeType === 'diversion_change' ? 'FALLBACK_DIRECT' : undefined,
+      pricing: changeType === 'diversion_change'
+        ? `${expectedPoints} pt (baseline)`
+        : contract.pricing.isPricingDetermined ? `${expectedPoints} pt` : '未确定 (MANUAL_REQUIRED)',
+    },
+    afterState: {
+      flowType,
+      routeLine: mainVerdict.line,
+      decision: mainVerdict.decision,
+      pricing: contract.pricing.isPricingDetermined ? `${expectedPoints} pt` : '未确定 (MANUAL_REQUIRED)',
+    },
+    requiredFacts: [
+      'modelId', 'mediaType', 'pricing', 'supportedResolutions', 'supportedAspectRatios',
+      ...(changeType === 'diversion_change' ? ['isGlobal', 'routeGroup', 'candidateChannels'] : [])
+    ],
+    discoveredFacts: {
+      alias: { value: contract.alias.value, source: contract.alias.source, determined: contract.alias.determined },
+      isGlobal: { value: contract.isGlobal.value, source: contract.isGlobal.source, determined: contract.isGlobal.determined },
+      supportedResolutions: { value: contract.supportedResolutions.value, source: contract.supportedResolutions.source, determined: contract.supportedResolutions.determined },
+      supportedAspectRatios: { value: contract.supportedAspectRatios.value, source: contract.supportedAspectRatios.source, determined: contract.supportedAspectRatios.determined },
+      ...(contract.supportedDurations ? { supportedDurations: { value: contract.supportedDurations.value, source: contract.supportedDurations.source, determined: contract.supportedDurations.determined } } : {}),
+      routing: { value: contract.routing.value, source: contract.routing.source, determined: contract.routing.determined },
+      pricing: { value: contract.pricing.pointsPerSecond?.value ?? contract.pricing.customPoints?.value ?? expectedPoints, source: contract.pricing.source, determined: contract.pricing.isPricingDetermined },
+    },
+    missingFacts: contract.manualRequiredItems.map((m) => m.field),
+    capabilities: {
+      resolutions: contract.supportedResolutions.value,
+      aspectRatios: contract.supportedAspectRatios.value,
+      durations: contract.supportedDurations?.value,
+      maxRefImages: contract.maxRefImages?.value,
+      supportsReferenceVideo: contract.supportsReferenceVideo?.value,
+      supportsFirstLastFrame: contract.supportsFirstLastFrame?.value,
+    },
+    pricing: {
+      determined: contract.pricing.isPricingDetermined,
+      allowPass: contract.pricing.allowPass,
+      points: contract.pricing.customPoints?.value ?? (mediaType === 'image' ? expectedPoints : undefined),
+      pointsPerSecond: contract.pricing.pointsPerSecond?.value ?? (mediaType === 'video' ? (expectedPoints / (duration || 4)) : undefined),
+      source: contract.pricing.source,
+    },
+    routingExpectation: {
+      mode: mainVerdict.willDivert ? 'DIVERSION' : 'DIRECT',
+      willDivert: mainVerdict.willDivert,
+      routeLine: mainVerdict.line,
+      decision: mainVerdict.decision,
+      isGlobal: contract.isGlobal.value,
+      group: mainVerdict.expectedSnapshot?.newapiGroup,
+    },
+    fallbackPolicy: contract.fallback?.value.action,
+    testObjectives: testPlan.tests.map(t => `${t.id}: ${t.purpose}`),
+  };
+  testPlan.changeContract = changeContract;
+
+  const missingInputs: string[] = [];
+  if (!contract.pricing.isPricingDetermined || !contract.pricing.allowPass) {
+    missingInputs.push('pricing');
+  }
+  if (options.mode === 'real' && !options.sessionFile && !existsSync('session.json') && !existsSync('.panqu/session.json') && !process.env.PANQU_SESSION_COOKIES_FILE) {
+    missingInputs.push('session/auth');
+  }
+  if ((scenario === 'IMAGE_DIVERSION_CHANGE' || scenario === 'VIDEO_DIVERSION_CHANGE') && contract.alias.source === 'SOURCE_DEFAULT_FALLBACK') {
+    missingInputs.push('baseline/alias');
+  }
+  for (const b of testPlan.blocked) {
+    const f = b.missingField || b.field;
+    if (!missingInputs.includes(f)) {
+      missingInputs.push(f);
+    }
+  }
+
+  const acceptanceForecast: AcceptanceResult = missingInputs.length > 0 ? 'BLOCKED' : 'UNVERIFIED';
+
   return {
-    ok: true, modelId, mediaType, flowType, decision: mainVerdict.decision, willDivert: mainVerdict.willDivert,
-    routeLine: mainVerdict.line, expectedPoints, expectedSnapshot: mainVerdict.expectedSnapshot,
-    gatewayRouting: gwVerdict, candidateChannels: gwVerdict.allowedChannels, reason: mainVerdict.reason,
+    ok: true,
+    modelId,
+    mediaType,
+    flowType,
+    decision: mainVerdict.decision,
+    willDivert: mainVerdict.willDivert,
+    routeLine: mainVerdict.line,
+    expectedPoints,
+    expectedSnapshot: mainVerdict.expectedSnapshot,
+    gatewayRouting: gwVerdict,
+    candidateChannels: gwVerdict.allowedChannels,
+    reason: mainVerdict.reason,
+    scenario,
+    scenarioName: testPlan.scenarioName,
+    changeType,
+    contract,
+    changeContract,
+    testPlan,
+    blocked: testPlan.blocked,
+    pricingStatus: contract.pricing.isPricingDetermined ? 'DETERMINED' : 'MANUAL_REQUIRED',
+    missingInputs,
+    acceptanceForecast,
+    testerActionSummary: testPlan.testerActionSummary,
   };
 }
 
@@ -91,10 +1032,16 @@ export interface ExecuteKernelOptions {
   modelId: number; mediaType: 'video' | 'image'; resolution?: string; duration?: number;
   aspectRatio?: string; mode?: 'mock' | 'real'; prompt?: string; sessionFile?: string;
   env?: 'test' | 'preonline'; serviceline?: string;
+  contract?: DiscoveredModelContract;
+  flow?: string;
+  flowType?: 'direct' | 'diversion';
+  customPoints?: number;
+  pointsPerSecond?: number;
+  price?: number;
 }
 export interface ExecuteKernelResult {
   ok: boolean; taskId: number; simulationId?: string; isSimulated?: boolean; mode: 'mock' | 'real'; modelId: number; mediaType: 'video' | 'image';
-  status: 'SUBMITTED' | 'SUCCESS' | 'FAILED' | 'ERROR'; points: number; message: string;
+  status: 'SUBMITTED' | 'SUCCESS' | 'FAILED' | 'ERROR' | 'BLOCKED'; points: number; message: string;
   credentialsMasked?: string; rawResponse?: Record<string, unknown>;
 }
 
@@ -103,7 +1050,39 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
   const mode = options.mode === 'real' ? 'real' : 'mock';
   const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
-  const points = BillingOracle.calculateExpectedPoints({ mediaType, modelId, duration, resolution });
+
+  const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
+  const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
+
+  const contract = options.contract ?? discoverModelContract(modelId, mediaType, {
+    resolution,
+    duration,
+    customPoints,
+    pointsPerSecond,
+    price: options.price,
+  });
+
+  if (!contract.pricing.allowPass) {
+    return {
+      ok: false,
+      taskId: 0,
+      mode,
+      modelId,
+      mediaType,
+      status: 'BLOCKED',
+      points: 0,
+      message: `模型 #${modelId} 刊例定价未确定 (${contract.pricing.source})，拒绝伪造定价执行任务 [BLOCKED / MANUAL_REQUIRED]。请通过 --price 或 --points-per-second 显式提供真实单价。`,
+    };
+  }
+
+  const points = BillingOracle.calculateExpectedPoints({
+    mediaType,
+    modelId,
+    duration,
+    resolution,
+    customPoints: customPoints ?? contract.pricing.customPoints?.value,
+    pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
+  });
   if (mode === 'real') {
     if (!options.sessionFile) {
       return { ok: false, taskId: 0, mode: 'real', modelId, mediaType, status: 'ERROR', points, message: '真实执行必须提供有效的 sessionFile 会话凭据文件' };
@@ -217,11 +1196,27 @@ export interface VerifyKernelOptions {
   artifactOwnership?: 'VERIFIED' | 'UNVERIFIED' | 'UNBOUND';
   isSimulated?: boolean;
   expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
+  contract?: DiscoveredModelContract;
+  expectedResolution?: string;
+  expectedDuration?: number;
+  expectedWillDivert?: boolean;
+  baseline?: DiversionBaseline;
+  dbExtraConfirmed?: boolean;
+  dbExtra?: Record<string, unknown>;
+  gatewayChannelConfirmed?: boolean;
+  channels?: GatewayChannelConfig[];
+  unconfirmedStatic?: boolean;
+  customPoints?: number;
+  pointsPerSecond?: number;
+  price?: number;
 }
 export interface VerifyKernelResult {
   ok: boolean; passed: boolean; taskId: number; modelId: number; mediaType: 'video' | 'image';
   status: 'SUCCESS' | 'FAILED' | 'PROCESSING' | 'UNVERIFIED' | 'ERROR';
   verdict: 'PASS' | 'FAIL' | 'UNVERIFIED' | 'PROCESSING';
+  acceptance: AcceptanceResult;
+  evidenceCompleteness: EvidenceCompleteness;
+  acceptanceReport: ProductionAcceptanceReport;
   mode: 'real' | 'mock';
   executionMode: 'real' | 'offline' | 'fixture';
   progress?: number; probeDurationMs?: number; artifact?: MediaInspectionResult; billing?: BillingAuditReport;
@@ -229,6 +1224,8 @@ export interface VerifyKernelResult {
   invariants?: { antiDoubleBilling: boolean; netChargeZero: boolean; refundIdempotency: boolean };
   evidence: VerificationEvidence;
   reasons: string[];
+  expectedVsActual?: ExpectedVsActual;
+  contract?: DiscoveredModelContract;
 }
 
 export async function verify(options: VerifyKernelOptions): Promise<VerifyKernelResult> {
@@ -237,8 +1234,27 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
   const duration = options.duration ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? (mediaType === 'video' ? '720p' : '1k');
-  const expectedPoints = options.expectedPoints ?? BillingOracle.calculateExpectedPoints({ mediaType, modelId, duration, resolution });
+
+  const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
+  const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
+
+  const expectedPoints = options.expectedPoints ?? BillingOracle.calculateExpectedPoints({
+    mediaType,
+    modelId,
+    duration,
+    resolution,
+    customPoints,
+    pointsPerSecond,
+  });
   const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
+
+  const contract = options.contract || discoverModelContract(modelId, mediaType, {
+    duration,
+    resolution,
+    customPoints: customPoints ?? options.expectedPoints,
+    pointsPerSecond,
+    price: options.price,
+  });
 
   let session: PanquSession | null = null;
   const autoSession = options.sessionFile || process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
@@ -246,8 +1262,27 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     try { session = await loadPanquSession(options.sessionFile, options.env || 'test'); }
     catch (err) {
       const msg = `加载凭据失败: ${err instanceof Error ? err.message : String(err)}`;
+      const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
+      const completeness: EvidenceCompleteness = {
+        requiredEvidence,
+        availableEvidence: [],
+        missingEvidence: ['sessionCredentials', ...requiredEvidence],
+        isComplete: false,
+      };
+      const acceptanceReport: ProductionAcceptanceReport = {
+        scenario: contract.scenario,
+        acceptance: 'BLOCKED',
+        verified: [],
+        unverified: requiredEvidence,
+        manualEvidenceRequired: ['sessionCredentials'],
+        unexpectedChanges: [],
+        reasons: [msg],
+        summaryText: `[BLOCKED] ${msg}`,
+      };
       return {
-        ok: false, passed: false, taskId, modelId, mediaType, status: 'ERROR', verdict: 'FAIL', mode: 'real', executionMode: 'real', billingAudit: 'SKIPPED_NO_LOGS',
+        ok: false, passed: false, taskId, modelId, mediaType, status: 'ERROR', verdict: 'FAIL',
+        acceptance: 'BLOCKED',
+        mode: 'real', executionMode: 'real', billingAudit: 'SKIPPED_NO_LOGS',
         evidence: {
           task: { status: 'FAIL', source: 'session_error', error: msg },
           media: { status: 'UNVERIFIED', source: 'missing_session', ownership: 'UNVERIFIED', reason: msg },
@@ -255,6 +1290,9 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
           invariants: { status: 'UNVERIFIED', reason: msg },
         },
         reasons: [msg],
+        contract,
+        evidenceCompleteness: completeness,
+        acceptanceReport,
       };
     }
   } else if (autoSession) {
@@ -281,15 +1319,38 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   if (session) {
     const { finalSnapshot } = await pollTaskStatus(taskId, { baseUrl: session.base_url, cookies: session.cookie_string, mediaType, pollTimeoutSec: options.pollTimeoutSec ?? 10 });
     if (finalSnapshot.taskStatus === 1) {
+      const msg = `任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`;
+      const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
+      const completeness: EvidenceCompleteness = {
+        requiredEvidence,
+        availableEvidence: [],
+        missingEvidence: ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'diversionDbExtra'],
+        isComplete: false,
+      };
+      const acceptanceReport: ProductionAcceptanceReport = {
+        scenario: contract.scenario,
+        acceptance: 'BLOCKED',
+        verified: [],
+        unverified: requiredEvidence,
+        manualEvidenceRequired: ['taskCompletion'],
+        unexpectedChanges: [],
+        reasons: [msg],
+        summaryText: `[BLOCKED] ${msg}`,
+      };
       return {
-        ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING', progress: finalSnapshot.progress, mode: 'real', executionMode: 'real', billingAudit: 'SKIPPED_NO_LOGS',
+        ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING',
+        acceptance: 'BLOCKED',
+        progress: finalSnapshot.progress, mode: 'real', executionMode: 'real', billingAudit: 'SKIPPED_NO_LOGS',
         evidence: {
           task: { status: 'PROCESSING', source: 'live_polling', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: finalSnapshot.progress },
           media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
           billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
           invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
         },
-        reasons: [`任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`],
+        reasons: [msg],
+        contract,
+        evidenceCompleteness: completeness,
+        acceptanceReport,
       };
     }
     if (finalSnapshot.taskStatus === 3 || finalSnapshot.taskStatus === 4) {
@@ -497,6 +1558,163 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     };
   }
 
+  if (!contract.pricing.allowPass) {
+    billingEvidence = {
+      ...billingEvidence,
+      status: 'UNVERIFIED',
+      reason: `真实刊例定价未确定 (${contract.pricing.source})，不可用于生产 PASS 验收 [BLOCKED_FALLBACK_PRICING]`,
+    };
+  }
+
+  const isDbExtraVerified = Boolean(options.dbExtraConfirmed || options.dbExtra);
+  const isGatewayChannelRequired = mediaType === 'video' && contract.routing.value.willDivert;
+  const isGatewayChannelVerified = Boolean(options.gatewayChannelConfirmed || (options.channels && options.channels.length > 0));
+
+  let regressionDiff: DiversionRegressionDiff | undefined;
+  if (options.baseline) {
+    const baseline = options.baseline;
+    const expectedChanges: Array<{ field: string; before: unknown; after: unknown; reason: string }> = [];
+    const observedChanges: Array<{ field: string; before: unknown; after: unknown }> = [];
+    const unexpectedChanges: Array<{ field: string; before: unknown; after: unknown; reason: string }> = [];
+    const missingEvidence: string[] = [];
+
+    // 1. 路由变化比对
+    const currentRouting = contract.routing.value;
+    const willDivertChanged = baseline.willDivert !== currentRouting.willDivert;
+    const routeLineChanged = baseline.routeLine !== currentRouting.routeLine;
+    if (willDivertChanged || routeLineChanged) {
+      observedChanges.push({
+        field: 'routing',
+        before: `${baseline.decision} (line:${baseline.routeLine}, divert:${baseline.willDivert})`,
+        after: `${currentRouting.decision} (line:${currentRouting.routeLine}, divert:${currentRouting.willDivert})`,
+      });
+      if (currentRouting.willDivert) {
+        expectedChanges.push({
+          field: 'routing',
+          before: `${baseline.decision} (line:${baseline.routeLine})`,
+          after: `${currentRouting.decision} (line:${currentRouting.routeLine})`,
+          reason: '分流规则变更按预期切换至 NewAPI 路由',
+        });
+      } else {
+        unexpectedChanges.push({
+          field: 'routing',
+          before: `${baseline.decision} (line:${baseline.routeLine})`,
+          after: `${currentRouting.decision} (line:${currentRouting.routeLine})`,
+          reason: '分流变更未能成功使流量切换至 NewAPI，仍为 Direct',
+        });
+      }
+    } else if (!currentRouting.willDivert) {
+      unexpectedChanges.push({
+        field: 'routing',
+        before: `${baseline.decision} (line:${baseline.routeLine})`,
+        after: `${currentRouting.decision} (line:${currentRouting.routeLine})`,
+        reason: '分流变更未生效，路由未发生预期切换 (未分流至 NewAPI)',
+      });
+    }
+
+    // 2. 积分对账漂移比对
+    const actualPoints = billing ? billing.netDeductedPoints : expectedPoints;
+    if (actualPoints !== baseline.expectedPoints) {
+      unexpectedChanges.push({
+        field: 'billingPoints',
+        before: baseline.expectedPoints,
+        after: actualPoints,
+        reason: `分流变更导致扣费积分发生非预期漂移 (基线: ${baseline.expectedPoints} pt, 实际: ${actualPoints} pt)`,
+      });
+      observedChanges.push({
+        field: 'billingPoints',
+        before: baseline.expectedPoints,
+        after: actualPoints,
+      });
+    }
+
+    // 3. 产物完整性与格式比对
+    if (artifact) {
+      if (!artifact.decodable) {
+        unexpectedChanges.push({
+          field: 'artifactDecodability',
+          before: true,
+          after: false,
+          reason: '分流变更后产物损坏不可解码',
+        });
+        observedChanges.push({
+          field: 'artifactDecodability',
+          before: true,
+          after: false,
+        });
+      }
+      if (artifact.format && baseline.artifactFormat) {
+        const actualFmt = artifact.format.toLowerCase();
+        const baseFmt = baseline.artifactFormat.toLowerCase();
+        const matches = (baseFmt === 'png/jpg' && (actualFmt.includes('png') || actualFmt.includes('jpg') || actualFmt.includes('jpeg')))
+          || (baseFmt === 'mp4' && actualFmt.includes('mp4'))
+          || actualFmt.includes(baseFmt)
+          || baseFmt.includes(actualFmt);
+        if (!matches) {
+          unexpectedChanges.push({
+            field: 'artifactFormat',
+            before: baseline.artifactFormat,
+            after: artifact.format,
+            reason: `分流变更后产物格式与基线不一致 (基线: ${baseline.artifactFormat}, 实际: ${artifact.format})`,
+          });
+          observedChanges.push({
+            field: 'artifactFormat',
+            before: baseline.artifactFormat,
+            after: artifact.format,
+          });
+        }
+      }
+    }
+
+    // 4. 别名一致性比对
+    if (baseline.alias && contract.alias.value && baseline.alias !== contract.alias.value) {
+      unexpectedChanges.push({
+        field: 'alias',
+        before: baseline.alias,
+        after: contract.alias.value,
+        reason: `模型别名与基线不一致 (基线: ${baseline.alias}, 实际: ${contract.alias.value})，可能导致既有业务调用失效`,
+      });
+      observedChanges.push({
+        field: 'alias',
+        before: baseline.alias,
+        after: contract.alias.value,
+      });
+    }
+
+    // 5. 关键证据缺失记录
+    if (billingEvidence.status === 'UNVERIFIED') {
+      missingEvidence.push('billingEvidence: 缺失实际账单流水证据');
+    }
+    if (mediaEvidence.status === 'UNVERIFIED' && terminalStatus !== 'FAILED') {
+      missingEvidence.push('mediaEvidence: 缺失物理产物验证证据');
+    }
+    if (!isDbExtraVerified) {
+      missingEvidence.push('MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion (需DB只读核查 extra.diversion=10)');
+    }
+    if (isGatewayChannelRequired && !isGatewayChannelVerified) {
+      missingEvidence.push('MANUAL_GATEWAY_CHANNEL_REQUIRED:缺少 NewAPI 视频模型网关渠道证据');
+    }
+
+    const isRegression = unexpectedChanges.length > 0;
+    let regressionStatus: 'CLEAN' | 'REGRESSION' | 'UNKNOWN';
+    if (unexpectedChanges.length > 0) {
+      regressionStatus = 'REGRESSION';
+    } else if (missingEvidence.length > 0) {
+      regressionStatus = 'UNKNOWN';
+    } else {
+      regressionStatus = 'CLEAN';
+    }
+
+    regressionDiff = {
+      expectedChanges,
+      observedChanges,
+      unexpectedChanges,
+      missingEvidence,
+      isRegression,
+      regressionStatus,
+    };
+  }
+
   const reasons: string[] = [];
   if (taskEvidence.status === 'FAIL') reasons.push(`任务执行失败: ${taskEvidence.error || '任务状态异常'}`);
   if (taskEvidence.status === 'UNVERIFIED') reasons.push(taskEvidence.error || '任务状态未确认 [UNVERIFIED]');
@@ -505,9 +1723,31 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   if (billingEvidence.status === 'FAIL') reasons.push(`账单审计失败: ${billingEvidence.reason}`);
   if (billingEvidence.status === 'UNVERIFIED') reasons.push(billingEvidence.reason!);
   if (invariantsEvidence.status === 'FAIL') reasons.push(invariantsEvidence.reason!);
+  if (regressionDiff?.isRegression) {
+    for (const u of regressionDiff.unexpectedChanges) {
+      reasons.push(`[分流回归阻断] ${u.reason}`);
+    }
+  }
+  if (contract.conflicts.length > 0) {
+    for (const c of contract.conflicts) {
+      reasons.push(`[配置冲突] ${c.message}`);
+    }
+  }
 
-  const hasFailures = taskEvidence.status === 'FAIL' || mediaEvidence.status === 'FAIL' || billingEvidence.status === 'FAIL' || invariantsEvidence.status === 'FAIL';
-  const allPassed = taskEvidence.status === 'PASS' && mediaEvidence.status === 'PASS' && billingEvidence.status === 'PASS' && invariantsEvidence.status === 'PASS';
+  const hasFailures = taskEvidence.status === 'FAIL'
+    || mediaEvidence.status === 'FAIL'
+    || billingEvidence.status === 'FAIL'
+    || invariantsEvidence.status === 'FAIL'
+    || Boolean(regressionDiff?.isRegression)
+    || contract.conflicts.length > 0;
+
+  const allPassed = taskEvidence.status === 'PASS'
+    && mediaEvidence.status === 'PASS'
+    && billingEvidence.status === 'PASS'
+    && invariantsEvidence.status === 'PASS'
+    && !regressionDiff?.isRegression
+    && contract.pricing.allowPass
+    && contract.conflicts.length === 0;
 
   let verdictStatus: 'SUCCESS' | 'FAILED' | 'UNVERIFIED';
   let verdict: 'PASS' | 'FAIL' | 'UNVERIFIED';
@@ -523,10 +1763,323 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     verdict = 'UNVERIFIED';
   }
 
+  const diffItems: DiffItem[] = [
+    {
+      field: 'taskStatus',
+      layer: 'execution',
+      expected: options.terminalStatus ?? 'SUCCESS',
+      actual: terminalStatus,
+      matched: terminalStatus === (options.terminalStatus ?? 'SUCCESS'),
+      status: terminalStatus === (options.terminalStatus ?? 'SUCCESS') ? 'PASS' : (terminalStatus === 'UNKNOWN' ? 'BLOCKED' : 'FAIL'),
+      diff: terminalStatus === (options.terminalStatus ?? 'SUCCESS') ? 'MATCH' : `Expected ${options.terminalStatus ?? 'SUCCESS'}, got ${terminalStatus}`,
+      critical: true,
+      evidence: taskEvidence.source,
+    },
+    {
+      field: 'mediaFormat',
+      layer: 'artifact',
+      expected: mediaType === 'video' ? 'mp4' : 'png/jpg',
+      actual: artifact?.format || (terminalStatus === 'FAILED' ? 'NONE_TASK_FAILED' : 'MISSING_MEDIA'),
+      matched: terminalStatus === 'FAILED' ? true : Boolean(artifact?.decodable),
+      status: terminalStatus === 'FAILED' ? 'PASS' : (artifact?.decodable ? 'PASS' : (artifactBuffer ? 'FAIL' : 'BLOCKED')),
+      diff: terminalStatus === 'FAILED'
+        ? 'MATCH (失败任务无产物)'
+        : (artifact?.decodable ? 'MATCH' : (artifactBuffer ? `产物无法解码: ${artifact?.format || 'CORRUPTED'}` : '缺少媒体产物证据 [BLOCKED]')),
+      critical: true,
+      evidence: mediaArtifactSource,
+    },
+    {
+      field: 'billingPoints',
+      layer: 'billing',
+      expected: terminalStatus === 'FAILED' ? 0 : expectedPoints,
+      actual: billing ? billing.netDeductedPoints : 'NO_SCORE_LOGS',
+      matched: billing ? (billing.netDeductedPoints === (terminalStatus === 'FAILED' ? 0 : expectedPoints) && contract.pricing.allowPass) : false,
+      status: !contract.pricing.allowPass
+        ? 'BLOCKED'
+        : billing
+        ? (billing.netDeductedPoints === (terminalStatus === 'FAILED' ? 0 : expectedPoints) ? 'PASS' : 'FAIL')
+        : 'BLOCKED',
+      diff: !contract.pricing.allowPass
+        ? `刊例定价未确定 (${contract.pricing.source}) [BLOCKED]`
+        : billing
+        ? (billing.netDeductedPoints === (terminalStatus === 'FAILED' ? 0 : expectedPoints) ? 'MATCH' : `Expected ${terminalStatus === 'FAILED' ? 0 : expectedPoints} pts, got ${billing.netDeductedPoints} pts`)
+        : '未提供账单流水，缺少真实账务证据 [BLOCKED_NO_LOGS]',
+      critical: true,
+      evidence: billingSource,
+    },
+    {
+      field: 'diversionExtra',
+      layer: 'routing',
+      expected: contract.isGlobal.value
+        ? 'extra.diversion=10 (global)'
+        : 'extra.diversion=10 (org) / extra.newapi_image=1',
+      actual: isDbExtraVerified ? (options.dbExtra ? JSON.stringify(options.dbExtra) : 'CONFIRMED_VIA_READONLY_QUERY') : 'NOT_RETURNED_BY_HTTP_API (MANUAL_DB_EVIDENCE_REQUIRED)',
+      matched: isDbExtraVerified,
+      status: isDbExtraVerified ? 'PASS' : 'MANUAL_REQUIRED',
+      diff: isDbExtraVerified ? 'MATCH' : 'HTTP API 不返回 extra 字段，需以只读权限查询 DB 验证落库',
+      critical: false,
+      evidence: isDbExtraVerified ? 'DB_READONLY_QUERY' : 'MANUAL_DB_EVIDENCE_REQUIRED',
+    },
+  ];
+
+  if (isGatewayChannelRequired) {
+    diffItems.push({
+      field: 'gatewayChannel',
+      layer: 'routing',
+      expected: 'NewAPI upstream channel configured',
+      actual: isGatewayChannelVerified ? (options.channels ? `${options.channels.length} channel(s)` : 'CONFIRMED') : 'MISSING_GATEWAY_CHANNEL_EVIDENCE',
+      matched: isGatewayChannelVerified,
+      status: isGatewayChannelVerified ? 'PASS' : 'MANUAL_REQUIRED',
+      diff: isGatewayChannelVerified ? 'MATCH' : '缺少 NewAPI 网关上游通道确认证据 [MANUAL_GATEWAY_CHANNEL_REQUIRED]',
+      critical: true,
+      evidence: isGatewayChannelVerified ? 'GATEWAY_API' : 'MANUAL_REQUIRED',
+    });
+  }
+
+  if (options.unconfirmedStatic) {
+    diffItems.push({
+      field: 'staticContractConfirmation',
+      layer: 'contract',
+      expected: 'Static contract confirmed by real data/manual input',
+      actual: 'UNCONFIRMED_STATIC',
+      matched: false,
+      status: 'BLOCKED',
+      diff: '静态契约未经过线上事实或人工输入验真 [BLOCKED]',
+      critical: true,
+      evidence: 'SOURCE_STATIC_CONTRACT',
+    });
+  }
+
+  if (artifact?.dimensions) {
+    const expectedRes = options.expectedResolution || resolution || '720p';
+    diffItems.push({
+      field: 'dimensions',
+      layer: 'artifact',
+      expected: expectedRes,
+      actual: `${artifact.dimensions.width}x${artifact.dimensions.height}`,
+      matched: true,
+      status: 'PASS',
+      diff: 'MATCH',
+      critical: false,
+      evidence: `${mediaArtifactSource}:${artifact.format}`,
+    });
+  }
+
+  if (regressionDiff) {
+    diffItems.push({
+      field: 'diversionRegression',
+      layer: 'regression',
+      expected: 'No unexpected changes',
+      actual: regressionDiff.isRegression
+        ? `${regressionDiff.unexpectedChanges.length} unexpected change(s)`
+        : (regressionDiff.regressionStatus === 'UNKNOWN' ? 'Regression status unknown (missing evidence)' : 'Clean (no regression)'),
+      matched: !regressionDiff.isRegression && regressionDiff.regressionStatus === 'CLEAN',
+      status: regressionDiff.isRegression ? 'FAIL' : (regressionDiff.regressionStatus === 'UNKNOWN' ? 'BLOCKED' : 'PASS'),
+      diff: regressionDiff.isRegression
+        ? regressionDiff.unexpectedChanges.map((u) => u.reason).join('; ')
+        : (regressionDiff.regressionStatus === 'UNKNOWN' ? '缺少基线比对关键证据，无法确定无回归 [regressionStatus: UNKNOWN]' : 'MATCH'),
+      critical: true,
+      evidence: 'BaselineComparison',
+    });
+  }
+
+  if (contract.conflicts.length > 0) {
+    diffItems.push({
+      field: 'configurationConsistency',
+      layer: 'contract',
+      expected: 'No config conflicts',
+      actual: `${contract.conflicts.length} conflict(s): ${contract.conflicts.map((c) => c.message).join('; ')}`,
+      matched: false,
+      status: 'FAIL',
+      diff: contract.conflicts.map((c) => c.message).join('; '),
+      critical: true,
+      evidence: 'CONFIG_MISMATCH',
+    });
+  }
+
+  const allCriticalMatched = diffItems.filter((i) => i.critical).every((i) => i.matched);
+
+  // 证据完整度计算
+  const requiredEvidence: string[] = [
+    'taskTerminalStatus',
+    'mediaArtifactDecodable',
+    'billingLedgerReconciled',
+    'pricingDetermined',
+    'diversionDbExtra',
+  ];
+  if (isGatewayChannelRequired) {
+    requiredEvidence.push('gatewayChannelConfirmed');
+  }
+  if (options.baseline) {
+    requiredEvidence.push('baselineRegressionVerified');
+  }
+
+  const availableEvidence: string[] = [];
+  const missingEvidence: string[] = [];
+
+  if (taskEvidence.status === 'PASS' || (terminalStatus === 'FAILED' && options.terminalStatus === 'FAILED')) {
+    availableEvidence.push('taskTerminalStatus');
+  } else {
+    missingEvidence.push(taskEvidence.status === 'FAIL' ? 'taskTerminalStatus:FAILED' : 'taskTerminalStatus:UNVERIFIED');
+  }
+
+  if (mediaEvidence.status === 'PASS' || (terminalStatus === 'FAILED' && !artifactBuffer)) {
+    availableEvidence.push('mediaArtifactDecodable');
+  } else {
+    missingEvidence.push(mediaEvidence.status === 'FAIL' ? 'mediaArtifactDecodable:CORRUPTED' : 'mediaArtifactDecodable:UNVERIFIED');
+  }
+
+  if (billingEvidence.status === 'PASS') {
+    availableEvidence.push('billingLedgerReconciled');
+  } else {
+    missingEvidence.push(billingEvidence.status === 'FAIL' ? 'billingLedgerReconciled:AUDIT_FAILED' : 'billingLedgerReconciled:NO_LOGS');
+  }
+
+  if (contract.pricing.allowPass && contract.pricing.isPricingDetermined && contract.pricing.source !== 'SOURCE_DEFAULT_FALLBACK') {
+    availableEvidence.push('pricingDetermined');
+  } else {
+    missingEvidence.push(`pricingDetermined:${contract.pricing.source}`);
+  }
+
+  if (isDbExtraVerified) {
+    availableEvidence.push('diversionDbExtra');
+  } else {
+    missingEvidence.push('MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion');
+  }
+
+  if (isGatewayChannelRequired) {
+    if (isGatewayChannelVerified) {
+      availableEvidence.push('gatewayChannelConfirmed');
+    } else {
+      missingEvidence.push('MANUAL_GATEWAY_CHANNEL_REQUIRED:gatewayChannel');
+    }
+  }
+
+  if (options.baseline) {
+    if (regressionDiff && regressionDiff.regressionStatus === 'CLEAN') {
+      availableEvidence.push('baselineRegressionVerified');
+    } else if (regressionDiff && regressionDiff.regressionStatus === 'REGRESSION') {
+      missingEvidence.push('baselineRegressionVerified:REGRESSION_DETECTED');
+    } else {
+      missingEvidence.push('baselineRegressionVerified:UNKNOWN_DUE_TO_MISSING_EVIDENCE');
+    }
+  }
+
+  const isComplete = missingEvidence.length === 0;
+  const evidenceCompleteness: EvidenceCompleteness = {
+    requiredEvidence,
+    availableEvidence,
+    missingEvidence,
+    isComplete,
+  };
+
+  // 生产验收最终裁决判定
+  let acceptance: AcceptanceResult;
+  if (hasFailures || (regressionDiff && regressionDiff.isRegression) || contract.conflicts.length > 0) {
+    acceptance = 'REJECTED';
+  } else if (
+    !contract.pricing.allowPass ||
+    !contract.pricing.isPricingDetermined ||
+    contract.pricing.source === 'SOURCE_DEFAULT_FALLBACK' ||
+    (taskEvidence.status === 'FAIL' && taskEvidence.source === 'session_error') ||
+    options.unconfirmedStatic ||
+    terminalStatus === 'UNKNOWN'
+  ) {
+    acceptance = 'BLOCKED';
+  } else if (allPassed && isComplete && !regressionDiff?.isRegression && contract.pricing.allowPass && contract.conflicts.length === 0) {
+    acceptance = 'ACCEPTED';
+  } else {
+    acceptance = 'UNVERIFIED';
+  }
+
+  const verifiedList: string[] = availableEvidence.slice();
+  const unverifiedList: string[] = missingEvidence.filter((e) => !e.startsWith('MANUAL_'));
+  const manualList: string[] = missingEvidence.filter((e) => e.startsWith('MANUAL_'));
+
+  const unexpectedChanges = regressionDiff?.unexpectedChanges || [];
+
+  let regressionSummary: ProductionAcceptanceReport['regressionSummary'] | undefined;
+  if (regressionDiff) {
+    regressionSummary = {
+      isRegression: regressionDiff.isRegression,
+      regressionStatus: regressionDiff.regressionStatus || (regressionDiff.isRegression ? 'REGRESSION' : 'UNKNOWN'),
+      fields: Array.from(new Set([
+        ...regressionDiff.unexpectedChanges.map((u) => u.field),
+        ...regressionDiff.observedChanges.map((o) => o.field),
+      ])),
+      details: regressionDiff.unexpectedChanges.map((u) => u.reason),
+    };
+  }
+
+  const reportReasons: string[] = [...reasons];
+  if (acceptance === 'UNVERIFIED') {
+    if (!isDbExtraVerified) {
+      reportReasons.push('[证据不足] HTTP API 无法确认 extra 字段落库，需 DB 只读查询验证 extra.diversion=10 [MANUAL_DB_EVIDENCE_REQUIRED]');
+    }
+    if (isGatewayChannelRequired && !isGatewayChannelVerified) {
+      reportReasons.push('[证据不足] 缺少 NewAPI 视频模型网关渠道与上游通道确认 [MANUAL_GATEWAY_CHANNEL_REQUIRED]');
+    }
+    if (regressionDiff?.regressionStatus === 'UNKNOWN') {
+      reportReasons.push('[回归分析未定] 因基线验证证据不完整，分流回归状态为 UNKNOWN，无法确认 CLEAN');
+    }
+  }
+
+  const acceptanceReport: ProductionAcceptanceReport = {
+    scenario: contract.scenario,
+    acceptance,
+    verified: verifiedList,
+    unverified: unverifiedList,
+    manualEvidenceRequired: manualList,
+    unexpectedChanges,
+    regressionSummary,
+    reasons: reportReasons,
+    summaryText: `[${acceptance}] 场景: ${contract.scenario} | 终态: ${terminalStatus} | 证据完整度: ${availableEvidence.length}/${requiredEvidence.length}${isComplete ? ' (COMPLETE)' : ' (INCOMPLETE)'}`,
+  };
+
+  const expectedVsActual: ExpectedVsActual = {
+    taskId,
+    modelId,
+    mediaType,
+    matched: allCriticalMatched,
+    allMatched: allCriticalMatched,
+    diffs: diffItems,
+    items: diffItems,
+    missingEvidence: isDbExtraVerified ? (regressionDiff?.missingEvidence || []) : ['MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion', ...(regressionDiff?.missingEvidence || [])],
+    evidenceStatus: {
+      extraSnapshot: isDbExtraVerified ? 'VERIFIED' : 'MANUAL_DB_EVIDENCE_REQUIRED',
+      taskStatus: taskEvidence.status === 'PASS' ? 'VERIFIED' : 'UNVERIFIED',
+      mediaArtifact: mediaEvidence.status === 'PASS' ? 'VERIFIED' : 'UNVERIFIED',
+      billingLedger: billingEvidence.status === 'PASS' ? 'VERIFIED' : 'UNVERIFIED',
+    },
+    manualVerificationGuide: {
+      extraQuerySql: `SELECT id, extra, user_group_id, created_at FROM ai_tasks WHERE id = ${taskId} LIMIT 1;`,
+      notice: '主站 HTTP 查询接口（/apiGetStatus 或任务详情接口）不返回 extra 字段。如需核实真实分流落库 (extra.diversion=10)，请以只读权限查询 DB ai_tasks 表。',
+    },
+    regressionDiff,
+    evidenceCompleteness,
+  };
+
   return {
-    ok: true, passed: verdictStatus === 'SUCCESS', taskId, modelId, mediaType, status: verdictStatus, verdict, mode: session ? 'real' : 'mock', executionMode,
-    probeDurationMs, artifact, billing, billingAudit: (billing && scoreLogsToReconcile && scoreLogsToReconcile.length > 0) ? 'AUDITED' : 'SKIPPED_NO_LOGS', invariants,
+    ok: true,
+    passed: verdictStatus === 'SUCCESS',
+    taskId,
+    modelId,
+    mediaType,
+    status: verdictStatus,
+    verdict,
+    acceptance,
+    mode: session ? 'real' : 'mock',
+    executionMode,
+    probeDurationMs,
+    artifact,
+    billing,
+    billingAudit: (billing && scoreLogsToReconcile && scoreLogsToReconcile.length > 0) ? 'AUDITED' : 'SKIPPED_NO_LOGS',
+    invariants,
     evidence: { task: taskEvidence, media: mediaEvidence, billing: billingEvidence, invariants: invariantsEvidence },
-    reasons,
+    evidenceCompleteness,
+    reasons: reportReasons,
+    expectedVsActual,
+    acceptanceReport,
+    contract,
   };
 }

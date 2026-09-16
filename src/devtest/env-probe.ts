@@ -11,6 +11,23 @@
 
 import { readFile } from 'node:fs/promises';
 import { RoutingOracle, type GatewayChannelConfig, type MainSiteConfigSnapshot } from './routing.js';
+import type { ChangeScenario, DiscoveredModelContract, DiscoveredFact, FactSource } from './types.js';
+
+export function createDiscoveredFact<T>(
+  value: T,
+  source: FactSource,
+  options?: { details?: string; warning?: string },
+): DiscoveredFact<T> {
+  const isTrusted = source === 'SOURCE_API' || source === 'SOURCE_INPUT' || source === 'SOURCE_STATIC_CONTRACT';
+  return {
+    value,
+    source,
+    determined: isTrusted,
+    allowPass: isTrusted,
+    details: options?.details,
+    warning: options?.warning,
+  };
+}
 
 export interface EnvProbeOptions {
   env?: 'test' | 'preonline' | string;
@@ -22,6 +39,23 @@ export interface EnvProbeOptions {
   userGroupIds?: number[];
   mock?: boolean;
   timeoutMs?: number;
+  scenario?: ChangeScenario;
+  changeType?: 'new_model' | 'diversion_change';
+  flowType?: 'direct' | 'diversion' | string;
+  resolution?: string;
+  duration?: number;
+  aspectRatio?: string;
+  pointsPerSecond?: number;
+  customPoints?: number;
+  price?: number;
+  alias?: string;
+  isGlobal?: boolean;
+  supportedResolutions?: string[];
+  supportedAspectRatios?: string[];
+  maxRefImages?: number;
+  mainConfig?: Partial<MainSiteConfigSnapshot>;
+  channels?: GatewayChannelConfig[];
+  requirement?: string;
 }
 
 export interface EndpointProbeResult {
@@ -60,7 +94,578 @@ export interface EnvProbeReport {
   };
   endpoints: EndpointProbeResult[];
   modelReadiness?: ModelReadinessVerdict;
+  discoveredContract?: DiscoveredModelContract;
   recommendations: string[];
+}
+
+export interface StaticModelInfo {
+  alias: string;
+  isGlobal: boolean;
+  resolutions: string[];
+  aspectRatios: string[];
+  durations?: number[];
+  supportsReferenceVideo?: boolean;
+  supportsFirstLastFrame?: boolean;
+  serviceline?: string;
+  maxRefImages?: number;
+  pricingPerSecond?: number;
+  fixedPrice?: number;
+  hasFallback?: boolean;
+}
+
+export const STATIC_MODELS: Record<'video' | 'image', Record<number, StaticModelInfo>> = {
+  video: {
+    84: {
+      alias: 'wan3.0-video',
+      isGlobal: true,
+      resolutions: ['480p', '720p', '1080p'],
+      aspectRatios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+      durations: [4, 5],
+      supportsReferenceVideo: true,
+      supportsFirstLastFrame: true,
+      pricingPerSecond: 14,
+      hasFallback: false,
+    },
+    88: {
+      alias: 'wan3.0-video-prime',
+      isGlobal: true,
+      resolutions: ['480p', '720p', '1080p'],
+      aspectRatios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+      durations: [4, 5],
+      supportsReferenceVideo: true,
+      supportsFirstLastFrame: true,
+      pricingPerSecond: 22,
+      hasFallback: false,
+    },
+    15: {
+      alias: 'seedance-2.0',
+      isGlobal: false,
+      resolutions: ['480p', '720p', '1080p', '4k'],
+      aspectRatios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+      durations: [3, 4, 5],
+      supportsReferenceVideo: false,
+      supportsFirstLastFrame: true,
+      pricingPerSecond: 25,
+      hasFallback: true,
+    },
+    78: {
+      alias: 'seedance-2.5',
+      isGlobal: false,
+      resolutions: ['480p', '720p', '1080p', '4k'],
+      aspectRatios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+      durations: [3, 4, 5],
+      supportsReferenceVideo: false,
+      supportsFirstLastFrame: true,
+      pricingPerSecond: 28,
+      hasFallback: true,
+    },
+  },
+  image: {
+    205: {
+      alias: 'gpt-image-2.5',
+      isGlobal: false,
+      resolutions: ['1k', '2k', '4k'],
+      aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '5:4', '4:5'],
+      serviceline: 'r',
+      maxRefImages: 10,
+    },
+    12: {
+      alias: 'pan-banana-pro',
+      isGlobal: true,
+      resolutions: ['1k', '2k', '4k'],
+      aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '5:4', '4:5'],
+      serviceline: 'r',
+      maxRefImages: 10,
+    },
+    201: {
+      alias: 'runninghub-nano-banana-2',
+      isGlobal: false,
+      resolutions: ['1k', '2k', '4k'],
+      aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
+      serviceline: 'r',
+      maxRefImages: 10,
+      fixedPrice: 5,
+    },
+  },
+};
+
+export interface ParsedChangeIntent {
+  modelId?: number;
+  mediaType?: 'video' | 'image';
+  changeType?: 'new_model' | 'diversion_change';
+  scenario?: ChangeScenario;
+  price?: number;
+  customPoints?: number;
+  pointsPerSecond?: number;
+  isGlobal?: boolean;
+  alias?: string;
+  raw: string;
+}
+
+export function parseChangeIntent(input: string): ParsedChangeIntent {
+  const text = (input || '').trim();
+  let mediaType: 'video' | 'image' | undefined;
+  if (/视频|video/i.test(text)) {
+    mediaType = 'video';
+  } else if (/图片|生图|image/i.test(text)) {
+    mediaType = 'image';
+  }
+
+  let modelId: number | undefined;
+  const modelMatch =
+    text.match(/(?:模型|model|#)\s*(\d{2,5})/i) ||
+    text.match(/(\d{2,5})\s*(?:模型|model)/i) ||
+    text.match(/\b(\d{2,5})\b/);
+  if (modelMatch) {
+    modelId = Number(modelMatch[1]);
+  }
+
+  // If mediaType was not explicitly stated in text, infer from known static models
+  if (!mediaType && modelId !== undefined) {
+    if (STATIC_MODELS.video[modelId]) {
+      mediaType = 'video';
+    } else if (STATIC_MODELS.image[modelId]) {
+      mediaType = 'image';
+    }
+  }
+
+  let changeType: 'new_model' | 'diversion_change' | undefined;
+  if (/分流|切到|切流|newapi|diversion/i.test(text)) {
+    changeType = 'diversion_change';
+  } else if (/新增|接入|上线|新模型|direct|new/i.test(text)) {
+    changeType = 'new_model';
+  }
+
+  let isGlobal: boolean | undefined;
+  if (/--is-global|--global|全量/i.test(text)) {
+    isGlobal = true;
+  }
+
+  let price: number | undefined;
+  let customPoints: number | undefined;
+  let pointsPerSecond: number | undefined;
+
+  const ppsMatch =
+    text.match(/(?:--points-per-second|每秒|每秒积分|pt\/s)\s*[:=]?\s*(\d+(?:\.\d+)?)/i) ||
+    text.match(/(\d+(?:\.\d+)?)\s*(?:积分每秒|pt\/s|分每秒)/i);
+  if (ppsMatch) {
+    pointsPerSecond = Number(ppsMatch[1]);
+    price = pointsPerSecond;
+  }
+
+  const priceMatch =
+    text.match(/(?:--price|--custom-points|单价|积分|pt)\s*[:=]?\s*(\d+(?:\.\d+)?)/i) ||
+    text.match(/(?:单价|价格)\s*[:=]?\s*(\d+(?:\.\d+)?)/i) ||
+    text.match(/(\d+(?:\.\d+)?)\s*(?:积分|pt)\b/i);
+  if (priceMatch && !ppsMatch) {
+    const val = Number(priceMatch[1]);
+    price = val;
+    if (mediaType === 'video') {
+      pointsPerSecond = val;
+    } else {
+      customPoints = val;
+    }
+  } else if (ppsMatch && mediaType === 'video') {
+    pointsPerSecond = price;
+  }
+
+  if (price !== undefined && customPoints === undefined && mediaType === 'image') {
+    customPoints = price;
+  }
+
+  let scenario: ChangeScenario | undefined;
+  if (mediaType && (changeType || modelId !== undefined)) {
+    const isDiversion =
+      changeType === 'diversion_change' ||
+      (changeType === undefined &&
+        modelId !== undefined &&
+        (STATIC_MODELS.video[modelId] !== undefined || STATIC_MODELS.image[modelId] !== undefined));
+    if (mediaType === 'image') {
+      scenario = isDiversion ? 'IMAGE_DIVERSION_CHANGE' : 'IMAGE_NEW_MODEL';
+    } else {
+      scenario = isDiversion ? 'VIDEO_DIVERSION_CHANGE' : 'VIDEO_NEW_MODEL';
+    }
+  }
+
+  if (!changeType && scenario) {
+    changeType = scenario.endsWith('DIVERSION_CHANGE') ? 'diversion_change' : 'new_model';
+  }
+
+  return {
+    modelId,
+    mediaType,
+    changeType,
+    scenario,
+    price,
+    customPoints,
+    pointsPerSecond,
+    isGlobal,
+    raw: input,
+  };
+}
+
+export function identifyChangeScenario(
+  mediaType: 'video' | 'image',
+  modelId: number,
+  options: {
+    scenario?: ChangeScenario;
+    changeType?: 'new_model' | 'diversion_change';
+    flowType?: 'direct' | 'diversion' | string;
+    requirement?: string;
+  } = {},
+): ChangeScenario {
+  if (options.scenario) return options.scenario;
+  let isDiversion: boolean;
+  if (options.changeType === 'diversion_change' || options.flowType === 'diversion') {
+    isDiversion = true;
+  } else if (options.changeType === 'new_model' || options.flowType === 'direct') {
+    isDiversion = false;
+  } else if (options.requirement) {
+    const parsed = parseChangeIntent(options.requirement);
+    if (parsed.changeType === 'diversion_change') {
+      isDiversion = true;
+    } else if (parsed.changeType === 'new_model') {
+      isDiversion = false;
+    } else {
+      isDiversion = Boolean(STATIC_MODELS[mediaType]?.[modelId]);
+    }
+  } else {
+    isDiversion = Boolean(STATIC_MODELS[mediaType]?.[modelId]);
+  }
+
+  if (mediaType === 'image') {
+    return isDiversion ? 'IMAGE_DIVERSION_CHANGE' : 'IMAGE_NEW_MODEL';
+  }
+  return isDiversion ? 'VIDEO_DIVERSION_CHANGE' : 'VIDEO_NEW_MODEL';
+}
+
+export function discoverModelContract(
+  modelId: number,
+  mediaType: 'video' | 'image',
+  options: EnvProbeOptions = {},
+): DiscoveredModelContract {
+  const scenario = identifyChangeScenario(mediaType, modelId, options);
+  const staticInfo = STATIC_MODELS[mediaType]?.[modelId];
+  const conflicts: Array<{ field: string; message: string; apiValue?: unknown; staticValue?: unknown }> = [];
+  const manualRequiredItems: Array<{ field: string; reason: string; requiredAction: string }> = [];
+
+  // 1. Alias
+  let alias: DiscoveredFact<string>;
+  if (options.alias) {
+    if (staticInfo && staticInfo.alias !== options.alias) {
+      conflicts.push({
+        field: 'alias',
+        message: `显式输入 alias=${options.alias} 与静态已知别名 ${staticInfo.alias} 冲突 [CONFIG_MISMATCH]`,
+        apiValue: options.alias,
+        staticValue: staticInfo.alias,
+      });
+    }
+    alias = createDiscoveredFact(options.alias, 'SOURCE_INPUT');
+  } else if (options.mainConfig?.modelAliases?.[modelId]) {
+    const inputAlias = options.mainConfig.modelAliases[modelId];
+    if (staticInfo && staticInfo.alias !== inputAlias) {
+      conflicts.push({
+        field: 'alias',
+        message: `配置输入 alias=${inputAlias} 与静态已知别名 ${staticInfo.alias} 冲突 [CONFIG_MISMATCH]`,
+        apiValue: inputAlias,
+        staticValue: staticInfo.alias,
+      });
+    }
+    alias = createDiscoveredFact(inputAlias, 'SOURCE_INPUT');
+  } else if (staticInfo) {
+    alias = createDiscoveredFact(staticInfo.alias, 'SOURCE_STATIC_CONTRACT');
+  } else {
+    const fallbackAlias = mediaType === 'video' ? `new-video-model-${modelId}` : `new-image-model-${modelId}`;
+    alias = createDiscoveredFact(fallbackAlias, 'SOURCE_DEFAULT_FALLBACK', {
+      warning: `模型 #${modelId} 别名未在系统登记，需人工确认与 NewAPI 渠道别名保持一致`,
+    });
+    manualRequiredItems.push({
+      field: 'alias',
+      reason: `未知模型 #${modelId} 的 NewAPI 映射别名缺失`,
+      requiredAction: '请通过 --alias 或在配置中传入真实别名',
+    });
+  }
+
+  // 2. isGlobal
+  let isGlobal: DiscoveredFact<boolean>;
+  if (options.isGlobal !== undefined) {
+    if (staticInfo && staticInfo.isGlobal !== options.isGlobal) {
+      conflicts.push({
+        field: 'isGlobal',
+        message: `显式输入 isGlobal=${options.isGlobal} 与静态已知值 ${staticInfo.isGlobal} 冲突 [CONFIG_MISMATCH]`,
+        apiValue: options.isGlobal,
+        staticValue: staticInfo.isGlobal,
+      });
+    }
+    isGlobal = createDiscoveredFact(options.isGlobal, 'SOURCE_INPUT');
+  } else if (options.mainConfig?.globalModelIds) {
+    const fromConfig = options.mainConfig.globalModelIds.includes(modelId);
+    isGlobal = createDiscoveredFact(fromConfig, 'SOURCE_INPUT');
+  } else if (staticInfo) {
+    isGlobal = createDiscoveredFact(staticInfo.isGlobal, 'SOURCE_STATIC_CONTRACT');
+  } else {
+    isGlobal = createDiscoveredFact(false, 'SOURCE_DEFAULT_FALLBACK', {
+      details: '未知模型默认非全量开放，需验证组织路由组',
+    });
+  }
+
+  // 3. Supported resolutions
+  let supportedResolutions: DiscoveredFact<string[]>;
+  const inputResolutions = options.supportedResolutions
+    || (mediaType === 'video'
+        ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.resolutions
+        : options.mainConfig?.globalRouteRules?.image?.[modelId]?.resolutions);
+  if (inputResolutions && inputResolutions.length > 0) {
+    supportedResolutions = createDiscoveredFact(inputResolutions, 'SOURCE_INPUT');
+  } else if (staticInfo) {
+    supportedResolutions = createDiscoveredFact(staticInfo.resolutions, 'SOURCE_STATIC_CONTRACT');
+  } else if (options.resolution) {
+    supportedResolutions = createDiscoveredFact([options.resolution], 'SOURCE_INPUT');
+  } else {
+    const defaultRes = mediaType === 'video' ? ['720p'] : ['1k'];
+    supportedResolutions = createDiscoveredFact(defaultRes, 'MANUAL_REQUIRED', {
+      warning: '无法获取模型完整分辨率支持列表，临时基于默认规格测试，需人工确认能力矩阵',
+    });
+    manualRequiredItems.push({
+      field: 'supportedResolutions',
+      reason: `未知模型 #${modelId} 支持的分辨率列表缺失`,
+      requiredAction: '请通过 --resolution 显式指定或补充能力规则',
+    });
+  }
+
+  // 4. Supported aspect ratios
+  let supportedAspectRatios: DiscoveredFact<string[]>;
+  const inputAspectRatios = options.supportedAspectRatios
+    || (mediaType === 'video'
+        ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.aspect_ratios
+        : options.mainConfig?.globalRouteRules?.image?.[modelId]?.aspect_ratios);
+  if (inputAspectRatios && inputAspectRatios.length > 0) {
+    supportedAspectRatios = createDiscoveredFact(inputAspectRatios, 'SOURCE_INPUT');
+  } else if (staticInfo) {
+    supportedAspectRatios = createDiscoveredFact(staticInfo.aspectRatios, 'SOURCE_STATIC_CONTRACT');
+  } else if (options.aspectRatio) {
+    supportedAspectRatios = createDiscoveredFact([options.aspectRatio], 'SOURCE_INPUT');
+  } else {
+    const defaultAsp = mediaType === 'video' ? ['16:9'] : ['1:1'];
+    supportedAspectRatios = createDiscoveredFact(defaultAsp, 'SOURCE_DEFAULT_FALLBACK', {
+      details: '未知模型画幅使用默认比例',
+    });
+  }
+
+  // 5. Pricing
+  const intentPrice = options.requirement ? parseChangeIntent(options.requirement) : undefined;
+  const explicitCustomPoints = options.customPoints !== undefined
+    ? options.customPoints
+    : (mediaType === 'image' && options.price !== undefined ? options.price : intentPrice?.customPoints);
+  const explicitPointsPerSecond = options.pointsPerSecond !== undefined
+    ? options.pointsPerSecond
+    : (mediaType === 'video' && options.price !== undefined ? options.price : intentPrice?.pointsPerSecond);
+
+  let pricing: DiscoveredModelContract['pricing'];
+  if (explicitCustomPoints !== undefined) {
+    pricing = {
+      customPoints: createDiscoveredFact(explicitCustomPoints, 'SOURCE_INPUT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_INPUT',
+    };
+  } else if (explicitPointsPerSecond !== undefined) {
+    pricing = {
+      pointsPerSecond: createDiscoveredFact(explicitPointsPerSecond, 'SOURCE_INPUT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_INPUT',
+    };
+  } else if (staticInfo?.pricingPerSecond !== undefined) {
+    pricing = {
+      pointsPerSecond: createDiscoveredFact(staticInfo.pricingPerSecond, 'SOURCE_STATIC_CONTRACT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_STATIC_CONTRACT',
+    };
+  } else if (staticInfo?.fixedPrice !== undefined) {
+    pricing = {
+      customPoints: createDiscoveredFact(staticInfo.fixedPrice, 'SOURCE_STATIC_CONTRACT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_STATIC_CONTRACT',
+    };
+  } else if (modelId === 205) {
+    const res = (options.resolution || '1k').toLowerCase();
+    const pts = res.includes('2k') || res.includes('flare') || res.includes('hd') || res.includes('4k') ? 15 : 10;
+    pricing = {
+      customPoints: createDiscoveredFact(pts, 'SOURCE_STATIC_CONTRACT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_STATIC_CONTRACT',
+    };
+  } else if (modelId === 12) {
+    const res = (options.resolution || '1k').toLowerCase();
+    const pts = res.includes('4k') ? 15 : res.includes('2k') ? 10 : 5;
+    pricing = {
+      customPoints: createDiscoveredFact(pts, 'SOURCE_STATIC_CONTRACT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_STATIC_CONTRACT',
+    };
+  } else {
+    pricing = {
+      isPricingDetermined: false,
+      allowPass: false,
+      source: 'MANUAL_REQUIRED',
+    };
+    manualRequiredItems.push({
+      field: 'pricing',
+      reason: `未发现模型 #${modelId} 真实刊例单价，无法执行防资损流水对账`,
+      requiredAction: '必须通过 --points-per-second 或 --price 显式提供真实单价，否则账务验证将被阻断',
+    });
+  }
+
+  // 6. Org bindings
+  let orgBindings: DiscoveredFact<Record<number, { routeGroupId: number; newapiGroup: string; status: number }>> | undefined;
+  if (options.mainConfig?.orgBindings) {
+    const raw = options.mainConfig.orgBindings;
+    const mapped: Record<number, { routeGroupId: number; newapiGroup: string; status: number }> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      mapped[Number(k)] = { routeGroupId: v.routeGroupId, newapiGroup: v.newapiGroup, status: v.status };
+    }
+    orgBindings = createDiscoveredFact(mapped, 'SOURCE_INPUT');
+  } else if (options.userGroupIds && options.userGroupIds.length > 0) {
+    const mapped: Record<number, { routeGroupId: number; newapiGroup: string; status: number }> = {};
+    for (const gid of options.userGroupIds) {
+      mapped[gid] = { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1 };
+    }
+    orgBindings = createDiscoveredFact(mapped, 'SOURCE_INPUT');
+  } else {
+    orgBindings = createDiscoveredFact(
+      { 10: { routeGroupId: 1, newapiGroup: 'panqu_test', status: 1 } },
+      'SOURCE_STATIC_CONTRACT',
+      { details: '默认使用组织 10 (panqu_test 组)' },
+    );
+  }
+
+  // 7. Video specifics
+  let supportedDurations: DiscoveredFact<number[]> | undefined;
+  let supportsReferenceVideo: DiscoveredFact<boolean> | undefined;
+  let supportsFirstLastFrame: DiscoveredFact<boolean> | undefined;
+  if (mediaType === 'video') {
+    if (staticInfo?.durations) {
+      supportedDurations = createDiscoveredFact(staticInfo.durations, 'SOURCE_STATIC_CONTRACT');
+    } else if (options.duration) {
+      supportedDurations = createDiscoveredFact([options.duration], 'SOURCE_INPUT');
+    } else {
+      supportedDurations = createDiscoveredFact([4, 5], 'SOURCE_DEFAULT_FALLBACK');
+    }
+
+    supportsReferenceVideo = createDiscoveredFact(
+      staticInfo?.supportsReferenceVideo ?? false,
+      staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
+    );
+    supportsFirstLastFrame = createDiscoveredFact(
+      staticInfo?.supportsFirstLastFrame ?? true,
+      staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
+    );
+  }
+
+  // 8. Image specifics
+  let serviceline: DiscoveredFact<string> | undefined;
+  let maxRefImages: DiscoveredFact<number> | undefined;
+  if (mediaType === 'image') {
+    serviceline = createDiscoveredFact(
+      staticInfo?.serviceline ?? 'r',
+      staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
+    );
+    const inputMaxRef = options.maxRefImages !== undefined
+      ? options.maxRefImages
+      : options.mainConfig?.globalRouteRules?.image?.[modelId]?.max_ref_images;
+    if (inputMaxRef !== undefined) {
+      maxRefImages = createDiscoveredFact(inputMaxRef, 'SOURCE_INPUT');
+    } else {
+      maxRefImages = createDiscoveredFact(
+        staticInfo?.maxRefImages ?? (modelId === 201 || modelId === 205 || modelId === 12 ? 10 : 0),
+        staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
+      );
+    }
+  }
+
+  // 9. Capabilities bundle
+  const capabilities = {
+    resolutions: supportedResolutions,
+    aspectRatios: supportedAspectRatios,
+    durations: supportedDurations,
+    supportsReferenceVideo,
+    supportsFirstLastFrame,
+    maxRefImages,
+  };
+
+  // 10. Routing Fact
+  let routing: DiscoveredModelContract['routing'];
+  if (options.flowType === 'direct') {
+    routing = createDiscoveredFact(
+      { routeLine: 0, willDivert: false, decision: 'FALLBACK_DIRECT', isGlobal: false },
+      'SOURCE_INPUT',
+    );
+  } else if (isGlobal.value) {
+    routing = createDiscoveredFact(
+      { routeLine: 10, willDivert: true, decision: 'NEWAPI_GLOBAL', isGlobal: true },
+      isGlobal.source,
+    );
+  } else {
+    routing = createDiscoveredFact(
+      {
+        routeLine: 10,
+        willDivert: true,
+        decision: mediaType === 'video' ? 'NEWAPI_ORG_GROUP' : 'NEWAPI_IMAGE',
+        isGlobal: false,
+        group: 'panqu_test',
+      },
+      staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
+    );
+  }
+
+  // 11. Fallback Fact
+  let fallback: DiscoveredModelContract['fallback'];
+  if ([15, 78].includes(modelId)) {
+    fallback = createDiscoveredFact(
+      { hasPolicy: true, action: 'VOLCENGINE_RETRY_QUEUE' as const },
+      'SOURCE_STATIC_CONTRACT',
+      { details: 'Seedance 模型分流失败派发火山重试队列' },
+    );
+  } else if ([84, 88].includes(modelId)) {
+    fallback = createDiscoveredFact(
+      { hasPolicy: true, action: 'DIRECT_FAIL_NO_RETRY' as const },
+      'SOURCE_STATIC_CONTRACT',
+      { details: '非 Seedance 模型分流失败直接报错中断' },
+    );
+  } else {
+    fallback = createDiscoveredFact(
+      { hasPolicy: false, action: 'NONE' as const },
+      'SOURCE_DEFAULT_FALLBACK',
+      { details: '未知模型无特殊容灾策略' },
+    );
+  }
+
+  return {
+    modelId,
+    mediaType,
+    scenario,
+    alias,
+    isGlobal,
+    capabilities,
+    supportedResolutions,
+    supportedAspectRatios,
+    supportedDurations,
+    supportsReferenceVideo,
+    supportsFirstLastFrame,
+    serviceline,
+    maxRefImages,
+    routing,
+    pricing,
+    fallback,
+    orgBindings,
+    conflicts,
+    manualRequiredItems,
+  };
 }
 
 export class EnvironmentProbe {
@@ -249,6 +854,19 @@ export class EnvironmentProbe {
       }
     }
 
+    let discoveredContract: DiscoveredModelContract | undefined;
+    if (typeof options.modelId === 'number' || options.mediaType) {
+      const mediaType = options.mediaType || 'video';
+      const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
+      discoveredContract = discoverModelContract(modelId, mediaType, options);
+      for (const item of discoveredContract.manualRequiredItems) {
+        recommendations.push(`[待人工提供-${item.field}] ${item.reason} -> ${item.requiredAction}`);
+      }
+      for (const conflict of discoveredContract.conflicts) {
+        recommendations.push(`[配置冲突-${conflict.field}] ${conflict.message}`);
+      }
+    }
+
     if (!hasSession) {
       recommendations.push('[会话凭据] 未提供 Session Cookie，真实接口提交与轮询将受限。可通过 --session-file 传入已登录会话。');
     }
@@ -270,6 +888,7 @@ export class EnvironmentProbe {
       },
       endpoints,
       modelReadiness,
+      discoveredContract,
       recommendations,
     };
   }
@@ -366,6 +985,19 @@ export class EnvironmentProbe {
       }
     }
 
+    let discoveredContract: DiscoveredModelContract | undefined;
+    if (typeof options.modelId === 'number' || options.mediaType) {
+      const mediaType = options.mediaType || 'video';
+      const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
+      discoveredContract = discoverModelContract(modelId, mediaType, options);
+      for (const item of discoveredContract.manualRequiredItems) {
+        recommendations.push(`[待人工提供-${item.field}] ${item.reason} -> ${item.requiredAction}`);
+      }
+      for (const conflict of discoveredContract.conflicts) {
+        recommendations.push(`[配置冲突-${conflict.field}] ${conflict.message}`);
+      }
+    }
+
     const ok = unreachable.length === 0 && authStatus !== 'EXPIRED';
     const status = unreachable.length > 0 ? 'BLOCKED' : ok ? 'HEALTHY' : 'DEGRADED';
 
@@ -382,6 +1014,7 @@ export class EnvironmentProbe {
         hasSession,
       },
       endpoints,
+      discoveredContract,
       recommendations,
     };
   }
