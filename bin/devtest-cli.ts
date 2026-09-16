@@ -268,7 +268,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const modelId = options.model || options['model-id'] || options.modelId ? Number(options.model ?? options['model-id'] ?? options.modelId) : undefined;
         const mediaType = options.media || options['media-type'] || options.mediaType ? ((options.media ?? options['media-type'] ?? options.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined;
         const expectedPoints = typeof options['expected-points'] === 'number' ? options['expected-points'] as number : undefined;
-        const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED') || 'SUCCESS';
+        const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED' | 'TIMEOUT') || undefined;
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
         const sessionFile = (options['session-file'] as string) || (options.session as string) || (options.sessionFile as string);
@@ -296,7 +296,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账${c.reset} [任务 #${result.taskId}]`);
+          console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账${c.reset} [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
 
           if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
             console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);
@@ -324,7 +324,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
             if (result.probeDurationMs !== undefined) {
               console.log(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
             }
-            console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 完整${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'}`);
+            console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 规范合法 (MP4 container structure PASS)${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'}`);
             console.log(`   物理尺寸: ${result.artifact.dimensions ? `${result.artifact.dimensions.width}x${result.artifact.dimensions.height}` : 'N/A'}`);
             if (result.artifact.durationSeconds !== undefined) {
               console.log(`   视频时长: ${result.artifact.durationSeconds} 秒`);

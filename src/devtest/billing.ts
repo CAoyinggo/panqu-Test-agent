@@ -194,9 +194,9 @@ export class BillingOracle {
     let missingRefund = false;
     let asyncSettlementPending = false;
 
-    let antiDoubleBilling = preDeductCount <= 1;
-    let refundIdempotency = refundCount <= 1;
-    let netChargeZero = true;
+    let antiDoubleBilling: boolean = preDeductCount <= 1;
+    let refundIdempotency: boolean = refundCount <= 1;
+    let netChargeZero: boolean | undefined = undefined;
 
     if (preDeductCount > 1) {
       duplicateCharged = true;
@@ -218,7 +218,10 @@ export class BillingOracle {
       reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
     }
 
-    if (terminalStatus === 'SUCCESS') {
+    const isSuccess = terminalStatus === 'SUCCESS' || (terminalStatus as string) === 'SUCCEEDED';
+    const isFailed = terminalStatus === 'FAILED';
+
+    if (isSuccess) {
       netChargeZero = true;
       if (preDeductCount === 0) {
         if (params.allowAsyncPending) {
@@ -234,7 +237,7 @@ export class BillingOracle {
         overCharged = true;
         reasons.push(`多扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`);
       }
-    } else if (terminalStatus === 'FAILED') {
+    } else if (isFailed) {
       netChargeZero = netDeducted === 0;
       if (preDeductCount === 0 && expectedPoints > 0) {
         if (params.allowAsyncPending) {
@@ -249,6 +252,9 @@ export class BillingOracle {
       } else if (netDeducted < 0) {
         reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
       }
+    } else {
+      netChargeZero = undefined;
+      reasons.push(`任务终态为 ${terminalStatus}，无法核验失败净扣归零不变量 [UNVERIFIED]`);
     }
 
     let balanceDelta: number | undefined;

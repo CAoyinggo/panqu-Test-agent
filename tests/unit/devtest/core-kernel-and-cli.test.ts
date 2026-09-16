@@ -657,7 +657,7 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
       logs.push(args.join(' '));
     });
-    const code = await runDevTestCli(['verify', '--task', '77708', '--model', '84', '--media', 'video', '--json']);
+    const code = await runDevTestCli(['verify', '--task', '77708', '--model', '84', '--media', 'video', '--terminal-status', 'SUCCESS', '--json']);
     spy.mockRestore();
 
     expect(code).toBe(1); // unverified returns 1
@@ -671,5 +671,174 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     expect(mcpRes.data.evidence.billing.status).toBe(cliRes.evidence.billing.status);
     expect(mcpRes.data.evidence.invariants.status).toBe(cliRes.evidence.invariants.status);
     expect(mcpRes.summary).toContain('最终裁决 <UNVERIFIED>');
+  });
+
+  it('9. 任务查询不到 (taskStatus=0/不存在)：判定 UNVERIFIED，绝不谎报成功', async () => {
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 77709,
+        taskStatus: 0,
+        statusLabel: '待处理 (Pending)',
+        progress: 0,
+        pollCount: 1,
+        durationMs: 150,
+      },
+      totalPolls: 1,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 77709,
+      baseUrl: 'https://test-main.example.com',
+      cookies: 'PHPSESSID=mock_session_77709',
+    });
+
+    pollSpy.mockRestore();
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.task.status).toBe('UNVERIFIED');
+    expect(res.evidence.task.source).toBe('task_not_found');
+    expect(res.reasons.some((r) => r.includes('未能从主站获取到任务'))).toBe(true);
+  });
+
+  it('10. 归属缺失拦截：MP4 合法但无法证明属于 Task (外部 URL) 判定 UNVERIFIED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('external-unbound-video.mp4')) {
+        return {
+          ok: true,
+          status: 206,
+          statusText: 'Partial Content',
+          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+        } as unknown as Response;
+      }
+      return originalFetch(url, init);
+    });
+
+    const res = await verify({
+      taskId: 77710,
+      videoUrl: 'https://cdn.example.com/external-unbound-video.mp4',
+      terminalStatus: 'SUCCESS',
+      expectedPoints: 28,
+      scoreLogs: [{ task_id: 77710, type: 2, score: -28 }],
+    });
+
+    global.fetch = originalFetch;
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.media.status).toBe('UNVERIFIED');
+    expect(res.evidence.media.ownership).toBe('UNVERIFIED');
+    expect(res.evidence.media.reason).toContain('缺少与 Task #77710 的归属绑定证据');
+  });
+
+  it('11. 终态未知拦截：未传入 terminalStatus 且无 session，判定 UNKNOWN/UNVERIFIED，拒绝默认 SUCCESS', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 77711,
+      artifactBuffer: validMp4,
+      expectedPoints: 28,
+      scoreLogs: [{ task_id: 77711, type: 2, score: -28 }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.task.status).toBe('UNVERIFIED');
+    expect(res.evidence.task.terminalStatus).toBe('UNKNOWN');
+    expect(res.reasons.some((r) => r.includes('终态未知'))).toBe(true);
+  });
+
+  it('12. 账务流水缺失拦截：缺少 scoreLogs 判定 UNVERIFIED，不变量 details 均为 UNVERIFIED 绝无假 PASS', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 77712,
+      terminalStatus: 'SUCCESS',
+      artifactBuffer: validMp4,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('UNVERIFIED');
+    expect(res.verdict).toBe('UNVERIFIED');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.details?.antiDoubleBilling.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.details?.netChargeZero.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.details?.refundIdempotency.status).toBe('UNVERIFIED');
+    expect(res.billingAudit).toBe('SKIPPED_NO_LOGS');
+    expect(res.reasons.some((r) => r.includes('缺少真实账务证据获取能力'))).toBe(true);
+  });
+
+  it('13. 业务失败与验证失败严格区分：Task 失败但无流水时，业务 FAIL 且账单 UNVERIFIED，总判定 FAILED', async () => {
+    const res = await verify({
+      taskId: 77713,
+      terminalStatus: 'FAILED',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.passed).toBe(false);
+    expect(res.status).toBe('FAILED');
+    expect(res.verdict).toBe('FAIL');
+    expect(res.evidence.task.status).toBe('FAIL');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.evidence.invariants.status).toBe('UNVERIFIED');
+    expect(res.reasons.some((r) => r.includes('任务执行失败'))).toBe(true);
+    expect(res.reasons.some((r) => r.includes('无法核验失败退款净扣归零'))).toBe(true);
+  });
+
+  it('14. 隔离原则：OFFLINE / FIXTURE 不能伪装 REAL，离线仿真携带专属 simulationId', async () => {
+    const execRes = await execute({
+      modelId: 84,
+      mediaType: 'video',
+      mode: 'mock',
+    });
+
+    expect(execRes.mode).toBe('mock');
+    expect(execRes.isSimulated).toBe(true);
+    expect(execRes.simulationId).toMatch(/^sim-offline-/);
+    expect(execRes.message).toContain('[OFFLINE 离线仿真]');
+
+    const verifyOffline = await verify({
+      taskId: execRes.taskId,
+    });
+    expect(verifyOffline.executionMode).toBe('offline');
+    expect(verifyOffline.status).toBe('UNVERIFIED');
+
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const verifyFixture = await verify({
+      taskId: execRes.taskId,
+      artifactBuffer: validMp4,
+      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -28 }],
+      terminalStatus: 'SUCCESS',
+      expectedPoints: 28,
+    });
+    expect(verifyFixture.executionMode).toBe('fixture');
+    expect(verifyFixture.mode).toBe('mock');
+  });
+
+  it('15. 零副作用验证：verify 纯只读，执行期间绝对不触发 submitMediaTask 任务派发', async () => {
+    const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask');
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+
+    await verify({
+      taskId: 77715,
+      modelId: 84,
+      mediaType: 'video',
+      artifactBuffer: validMp4,
+      terminalStatus: 'SUCCESS',
+      expectedPoints: 28,
+      scoreLogs: [{ task_id: 77715, type: 2, score: -28 }],
+    });
+
+    expect(submitSpy).not.toHaveBeenCalled();
+    submitSpy.mockRestore();
   });
 });

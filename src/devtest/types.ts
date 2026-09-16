@@ -31,7 +31,7 @@ export type { EnvProbeOptions, EnvProbeReport, EndpointProbeResult } from "./env
 export type FlowMediaType = "VIDEO" | "IMAGE";
 export type FlowExecutionMode = "REAL" | "MOCK";
 export type FlowStepStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED";
-export type TaskTerminalStatus = "SUCCEEDED" | "FAILED" | "TIMEOUT" | "UNKNOWN";
+export type TaskTerminalStatus = "SUCCEEDED" | "SUCCESS" | "FAILED" | "TIMEOUT" | "UNKNOWN";
 
 export interface DiversionCheckResult {
   passed: boolean;

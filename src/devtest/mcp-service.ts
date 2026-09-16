@@ -46,71 +46,86 @@ export const DEVTEST_MCP_TOOL = {
   },
 };
 
+export interface McpCallResult<T = any> {
+  ok: boolean;
+  action?: string;
+  summary?: string;
+  data?: T;
+  error?: string;
+}
+
 export class DevTestMcpService {
   constructor(private readonly projectRoot = process.cwd()) {}
 
-  public async call(args: Record<string, any>): Promise<any> {
+  public async call<T = any>(args: Record<string, unknown>): Promise<McpCallResult<T>> {
     const action = String(args.action || 'probe').toLowerCase();
     switch (action) {
       case 'probe': {
         const res = await probe({
-          env: args.env,
-          baseUrl: args.base_url || args.baseUrl,
-          gatewayUrl: args.gateway_url || args.gatewayUrl,
-          sessionFile: args.session_file || args.sessionFile,
-          mock: args.mock ?? false,
-          timeoutMs: args.timeout_ms || args.timeoutMs,
+          env: typeof args.env === 'string' ? args.env : undefined,
+          baseUrl: typeof args.base_url === 'string' ? args.base_url : typeof args.baseUrl === 'string' ? args.baseUrl : undefined,
+          gatewayUrl: typeof args.gateway_url === 'string' ? args.gateway_url : typeof args.gatewayUrl === 'string' ? args.gatewayUrl : undefined,
+          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
+          mock: typeof args.mock === 'boolean' ? args.mock : false,
+          timeoutMs: typeof args.timeout_ms === 'number' ? args.timeout_ms : typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
         });
         const summary = `### 📋 Panqu 环境探活回执\n- **环境**: ${res.env} | **状态**: ${res.status}\n- **主站**: ${res.baseUrl}\n- **网关**: ${res.gatewayUrl}\n- **可用渠道数**: ${res.candidateChannelCount}\n- **鉴权凭据**: ${res.auth.status} (${res.auth.details})`;
-        return { ok: res.ok, action: 'probe', summary, data: res };
+        return { ok: res.ok, action: 'probe', summary, data: res as unknown as T };
       }
       case 'plan': {
         const res = await plan({
           modelId: Number(args.model_id ?? args.modelId ?? 84),
-          mediaType: (args.media_type || args.mediaType || 'video') as 'video' | 'image',
-          flowType: args.flow_type || args.flowType || 'diversion',
-          resolution: args.resolution,
-          duration: args.duration,
-          aspectRatio: args.aspect_ratio || args.aspectRatio,
+          mediaType: ((args.media_type || args.mediaType || 'video') as string).toLowerCase() as 'video' | 'image',
+          flowType: typeof args.flow_type === 'string' ? args.flow_type : typeof args.flowType === 'string' ? args.flowType : 'diversion',
+          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
+          duration: typeof args.duration === 'number' ? args.duration : undefined,
+          aspectRatio: typeof args.aspect_ratio === 'string' ? args.aspect_ratio : typeof args.aspectRatio === 'string' ? args.aspectRatio : undefined,
         });
         const divertStr = res.willDivert ? `NEWAPI 切流 (线路 ${res.routeLine})` : `DIRECT 直连 (线路 ${res.routeLine})`;
         const summary = `### 📋 Panqu 分流推导回执\n- **模型**: #${res.modelId} (${res.mediaType})\n- **分流裁决**: ${divertStr} [${res.decision}]\n- **基准扣费**: ${res.expectedPoints} pt\n- **候选渠道**: ${res.candidateChannels.join(', ') || '无可用渠道'}\n- **推导依据**: ${res.reason}`;
-        return { ok: res.ok, action: 'plan', summary, data: res };
+        return { ok: res.ok, action: 'plan', summary, data: res as unknown as T };
       }
       case 'execute': {
         const res = await execute({
           modelId: Number(args.model_id ?? args.modelId ?? 84),
-          mediaType: (args.media_type || args.mediaType || 'video') as 'video' | 'image',
+          mediaType: ((args.media_type || args.mediaType || 'video') as string).toLowerCase() as 'video' | 'image',
           mode: args.mode === 'real' ? 'real' : 'mock',
-          resolution: args.resolution,
-          duration: args.duration,
-          prompt: args.prompt,
-          sessionFile: args.session_file || args.sessionFile,
-          env: args.env,
+          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
+          duration: typeof args.duration === 'number' ? args.duration : undefined,
+          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
+          env: (args.env as 'test' | 'preonline') || undefined,
         });
         const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}`;
-        return { ok: res.ok, action: 'execute', summary, data: res };
+        return { ok: res.ok, action: 'execute', summary, data: res as unknown as T };
       }
       case 'verify': {
+        const terminalStatus = typeof args.terminal_status === 'string'
+          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
+          : typeof args.terminalStatus === 'string'
+          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
+          : undefined;
+
         const res = await verify({
           taskId: Number(args.task_id ?? args.taskId ?? 0),
-          modelId: Number(args.model_id ?? args.modelId ?? 84),
-          mediaType: (args.media_type || args.mediaType || 'video') as 'video' | 'image',
-          expectedPoints: args.expected_points ?? args.expectedPoints,
-          terminalStatus: args.terminal_status || args.terminalStatus || 'SUCCESS',
-          scoreLogs: args.score_logs || args.scoreLogs,
-          resolution: args.resolution,
-          duration: args.duration,
-          sessionFile: args.session_file || args.sessionFile,
-          env: args.env,
-          videoUrl: args.video_url || args.videoUrl,
-          imageUrl: args.image_url || args.imageUrl,
-          assetBuffer: args.asset_buffer || args.assetBuffer,
-          artifactBuffer: args.artifact_buffer || args.artifactBuffer,
+          modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
+          mediaType: (args.media_type || args.mediaType) ? ((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined,
+          expectedPoints: typeof args.expected_points === 'number' ? args.expected_points : typeof args.expectedPoints === 'number' ? args.expectedPoints : undefined,
+          terminalStatus,
+          scoreLogs: Array.isArray(args.score_logs) ? args.score_logs : Array.isArray(args.scoreLogs) ? args.scoreLogs : undefined,
+          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
+          duration: typeof args.duration === 'number' ? args.duration : undefined,
+          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
+          env: (args.env as 'test' | 'preonline') || undefined,
+          videoUrl: typeof args.video_url === 'string' ? args.video_url : typeof args.videoUrl === 'string' ? args.videoUrl : undefined,
+          imageUrl: typeof args.image_url === 'string' ? args.image_url : typeof args.imageUrl === 'string' ? args.imageUrl : undefined,
+          assetBuffer: Buffer.isBuffer(args.asset_buffer) ? args.asset_buffer : Buffer.isBuffer(args.assetBuffer) ? args.assetBuffer : undefined,
+          artifactBuffer: Buffer.isBuffer(args.artifact_buffer) ? args.artifact_buffer : Buffer.isBuffer(args.artifactBuffer) ? args.artifactBuffer : undefined,
         });
+
         const taskStatus = res.evidence.task.status;
         const artifactStatus = res.evidence.media.status === 'PASS'
-          ? `PASS (${(res.evidence.media.format || 'media').toUpperCase()}完整)`
+          ? `PASS (${(res.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
           : res.evidence.media.status === 'FAIL' ? 'FAIL (损坏)' : 'UNVERIFIED (无产物)';
         const billingStatus = res.evidence.billing.status;
         const netZero = res.invariants ? (res.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
@@ -119,7 +134,7 @@ export class DevTestMcpService {
         const summary = `🎯 概况：模型 #${res.modelId} (${res.mediaType}) · [${res.mode.toUpperCase()}] · 任务 #${res.taskId}
 🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 任务状态 <${taskStatus}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
 💻 复现：npm run devtest -- verify --task ${res.taskId} --model ${res.modelId} --media ${res.mediaType}`;
-        return { ok: res.ok, action: 'verify', summary, data: res };
+        return { ok: res.ok, action: 'verify', summary, data: res as unknown as T };
       }
       default:
         return { ok: false, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };
