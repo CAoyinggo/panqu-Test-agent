@@ -1,11 +1,5 @@
 /**
- * Panqu AI DevTest 公共 API
- *
- * 固化纯净双模内核（Core Kernel），直接由本入口统一导出：
- * 1. probe(options)   - 环境探活
- * 2. plan(options)    - 分流推导与测试规划
- * 3. execute(options) - 任务执行
- * 4. verify(options)  - 物理验真与防资损对账
+ * Panqu AI DevTest 纯净测试副驾导出入口
  */
 
 export {
@@ -86,12 +80,8 @@ export {
 } from './types.js';
 
 export {
-  deriveVerificationTargets,
-  evaluateRequirementCoverage,
-  type CoverageStatus,
-  type VerificationTarget,
-  type TargetCoverageVerdict,
-  type RequirementCoverageReport,
-} from './verification-target.js';
+  DevTestMcpService,
+  DEVTEST_MCP_TOOL,
+} from './mcp-service.js';
 
 export { DEVTEST_VERSION, PLATFORM_VERSION } from './version.js';

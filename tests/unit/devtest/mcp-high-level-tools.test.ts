@@ -62,7 +62,7 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
       });
       expect(res.ok).toBe(true);
       expect(res.action).toBe('verify');
-      expect(res.summary).toContain('物理验真与防资损对账回执');
+      expect(res.summary).toContain('🔍 验真');
       expect(res.data.passed).toBe(false);
       expect(res.data.status).toBe('UNVERIFIED');
       expect(res.data.billingAudit).toBe('SKIPPED_NO_LOGS');
