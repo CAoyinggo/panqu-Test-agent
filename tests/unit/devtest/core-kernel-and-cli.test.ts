@@ -687,6 +687,12 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
       totalPolls: 1,
       timeline: [],
     });
+    const billingSpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockResolvedValueOnce({
+      status: 'QUERY_ERROR',
+      scoreLogs: [],
+      source: 'network_error',
+      error: '任务不存在',
+    });
 
     const res = await verify({
       taskId: 77709,
@@ -695,6 +701,7 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     });
 
     pollSpy.mockRestore();
+    billingSpy.mockRestore();
 
     expect(res.ok).toBe(true);
     expect(res.passed).toBe(false);

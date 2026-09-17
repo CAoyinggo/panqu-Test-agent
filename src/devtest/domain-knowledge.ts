@@ -592,6 +592,8 @@ export interface Experience {
   related_pattern_id?: string;
   confidence: KnowledgeCredibility;
   status?: 'CONFIRMED' | 'PENDING' | 'REJECTED' | 'STALE' | 'ACCEPTED';
+  sourceCandidateId?: string;
+  promotedAt?: string;
   requiredPlanCheck?: {
     stage: 'PRECONDITION' | 'OPERATION' | 'API_VERIFY' | 'TASK_VERIFY' | 'ORACLE_VERIFY' | 'BUSINESS_RESULT';
     description: string;
@@ -659,48 +661,47 @@ export const PANQU_FAILURE_PATTERNS: Record<string, FailurePattern> = {
   },
 };
 
-export const PANQU_CONFIRMED_EXPERIENCES: Experience[] = [
-  {
-    id: 'EXP-001',
-    title: 'Wan3.0 视频生成模型 720p 计费阶梯经验',
-    context: '测试模型 ID 84 (wan3.0-video) 的计费逻辑',
-    symptom: '如果用户传 duration=5s，预期扣除 70 积分 (14 pt/s * 5s)',
-    root_cause: '官方刊例价规定 720p 单价为 14 pt/s',
-    verification: 'BillingOracle.calculateExpectedPoints({ modelId: 84, resolution: "720p", duration: 5 }) === 70',
-    related_api: '/aivideo/v2/generate/video',
-    related_task: 'VIDEO_TASK',
-    related_oracle: 'pq_score_log',
-    related_model_id: 84,
-    related_resolution: '720p',
-    confidence: 'CONFIRMED',
-    status: 'CONFIRMED',
-  },
-  {
-    id: 'EXP-002',
-    title: 'FastAdmin AdminScore 与个人账单端点回退机制',
-    context: '只读审计任务流水时，不同权限账号可用端点不同',
-    symptom: '以普通用户 session 请求 /auth/adminscore/index 会得到 401/403 (AUTH_FAILED)',
-    root_cause: 'AdminScore 需要后台管理权限，普通用户仅能访问 /aivideo/v2/billing/apiPersonalRecords',
-    verification: 'queryTaskBillingLogs 优先尝试 AdminScore，遇 AUTH_FAILED 自动安全回退至 apiPersonalRecords',
-    confidence: 'CONFIRMED',
-    status: 'CONFIRMED',
-  },
-];
+/**
+ * 针对历史已确认缺陷模式提供默认标准核验策略后备 (Fallback Helper)
+ * 仅用于确保存量/未显式声明 requiredPlanCheck 的条目具备标准核验动作，
+ * 核心规划器 core-kernel.ts 统一由 exp.requiredPlanCheck 驱动，不再硬编码特判。
+ */
+export function resolveDefaultPlanCheck(patternId?: string, topic?: string): Experience['requiredPlanCheck'] | undefined {
+  if (patternId === 'FP-004') {
+    return {
+      stage: 'ORACLE_VERIFY',
+      description: `针对 ${topic || 'Wan3.0 双重扣费高发隐患'} 重点防范重试与并发重复扣款 (FP-004)`,
+      targetObject: 'BillingLedger',
+      expectedOutcome: 'preDeductCount 严格 === 1',
+      verificationMethod: 'BillingOracle.reconcileTaskLedger antiDoubleBilling 校验',
+    };
+  }
+  if (patternId === 'FP-005') {
+    return {
+      stage: 'ORACLE_VERIFY',
+      description: `针对 ${topic || '任务失败未退款隐患'} 重点核查异常终态下的退款核销流水与净扣归零 (FP-005)`,
+      targetObject: 'BillingLedger',
+      expectedOutcome: '若任务非成功终态，必须存在对应退款流水且 netDeducted === 0',
+      verificationMethod: 'BillingOracle.reconcileTaskLedger netChargeZero 校验',
+    };
+  }
+  return undefined;
+}
 
 /**
  * 动态加载已确认历史经验 (Ingest 阶段)
- * 仅加载明确通过审核 (status: 'ACCEPTED' | 'CONFIRMED'，且 confidence: 'CONFIRMED') 的事实，
- * 严格过滤任何处于 PENDING 待审核状态的候选，杜绝知识污染。
+ * 仅从项目唯一长期知识主源 references/knowledge_candidates.json 读取 ACCEPTED/CONFIRMED 事实，
+ * 绝不在运行时直接读取 shared-memory/candidates/inbox.md，避免未审核或未经晋升的候选污染运行时。
  */
 export function loadConfirmedExperiences(options: {
   projectRoot?: string;
   sharedMemoryDir?: string;
   extraExperiences?: Experience[];
 } = {}): Experience[] {
-  const experiences: Experience[] = [...PANQU_CONFIRMED_EXPERIENCES];
-  const seenIds = new Set<string>(experiences.map((e) => e.id));
+  const experiences: Experience[] = [];
+  const seenIds = new Set<string>();
 
-  // 1. 读取本地技能库的知识文件 (仅取 ACCEPTED/CONFIRMED，跳过 PENDING)
+  // 1. 读取本地技能库的唯一长期知识主源 (仅取 ACCEPTED/CONFIRMED，跳过 PENDING)
   const root = options.projectRoot || process.cwd();
   const candidatesJsonPath = path.resolve(root, '.agents/skills/self-evolving-tester/references/knowledge_candidates.json');
   if (fs.existsSync(candidatesJsonPath)) {
@@ -712,16 +713,32 @@ export function loadConfirmedExperiences(options: {
           if ((item.status === 'ACCEPTED' || item.status === 'CONFIRMED') && item.confidence === 'CONFIRMED') {
             if (!seenIds.has(item.id)) {
               seenIds.add(item.id);
+              if (item.sourceCandidateId) {
+                seenIds.add(item.sourceCandidateId);
+              }
+              const patternMatch = (item.claim || '').match(/\[(FP-\d{3})\]/);
+              const modelMatch = (item.claim || '').match(/模型\s*#(\d+)/);
+              const patternId = item.related_pattern_id || item.relatedPatternId || (patternMatch ? patternMatch[1] : (item.id.startsWith('KC-') ? undefined : item.id));
+              const title = item.title || item.claim || item.id;
+
               experiences.push({
                 id: item.id,
-                title: item.claim || item.title || item.id,
-                context: item.notes || item.claim || '',
-                symptom: item.claim || '',
-                root_cause: (item.evidence && item.evidence[0]?.reason) || '已确认经验证据',
-                verification: (item.evidence && item.evidence[0]?.location) || '验证规则',
-                related_pattern_id: item.id.startsWith('KC-') ? undefined : item.id,
+                title,
+                context: item.context || item.notes || item.claim || '',
+                symptom: item.symptom || item.claim || '',
+                root_cause: item.root_cause || (item.evidence && item.evidence[0]?.reason) || '已确认经验证据',
+                verification: item.verification || (item.evidence && item.evidence[0]?.location) || '验证规则',
+                related_api: item.related_api || item.relatedApi,
+                related_task: item.related_task || item.relatedTask,
+                related_oracle: item.related_oracle || item.relatedOracle,
+                related_resolution: item.related_resolution || item.relatedResolution,
+                related_pattern_id: patternId,
+                related_model_id: item.related_model_id !== undefined ? Number(item.related_model_id) : (item.relatedModelId !== undefined ? Number(item.relatedModelId) : (modelMatch ? Number(modelMatch[1]) : undefined)),
                 confidence: 'CONFIRMED',
                 status: 'ACCEPTED',
+                sourceCandidateId: item.sourceCandidateId,
+                promotedAt: item.promotedAt,
+                requiredPlanCheck: item.requiredPlanCheck,
               });
             }
           }
@@ -732,42 +749,7 @@ export function loadConfirmedExperiences(options: {
     }
   }
 
-  // 2. 读取 shared-memory 中已批准 (APPROVED) 的候选条目: 匹配 - [x] **[CAND-
-  const smDir = options.sharedMemoryDir || '/Users/mac/agents/shared-memory';
-  const inboxPath = path.resolve(smDir, 'candidates', 'inbox.md');
-  if (fs.existsSync(inboxPath)) {
-    try {
-      const content = fs.readFileSync(inboxPath, 'utf8');
-      const approvedRegex = /-\s*\[[xX]\]\s*\*\*\[(CAND-[^\]]+)\]\*\*\s*来源:[^\n]*\n\s*-\s*\*\*主题\*\*:\s*([^\n]+)\n\s*-\s*\*\*提议内容\*\*:\s*([^\n]+)/g;
-      let match;
-      while ((match = approvedRegex.exec(content)) !== null) {
-        const candId = match[1];
-        const topic = match[2].trim();
-        const body = match[3].trim();
-        if (!seenIds.has(candId)) {
-          seenIds.add(candId);
-          const patternMatch = topic.match(/\[(FP-\d{3})\]/);
-          const modelMatch = topic.match(/模型\s*#(\d+)/);
-          experiences.push({
-            id: candId,
-            title: topic,
-            context: body,
-            symptom: body,
-            root_cause: '来自 shared-memory 经审核批准事实',
-            verification: 'shared-memory 规则核验',
-            related_pattern_id: patternMatch ? patternMatch[1] : undefined,
-            related_model_id: modelMatch ? Number(modelMatch[1]) : undefined,
-            confidence: 'CONFIRMED',
-            status: 'CONFIRMED',
-          });
-        }
-      }
-    } catch {
-      // 容错忽略
-    }
-  }
-
-  // 3. 合并外部显式传入的动态经验集合
+  // 2. 合并外部显式传入的动态经验集合 (供测试或上层显式入参)
   if (options.extraExperiences && Array.isArray(options.extraExperiences)) {
     for (const exp of options.extraExperiences) {
       if (!seenIds.has(exp.id)) {
@@ -807,12 +789,10 @@ export function matchRelevantExperiences(
       if (exp.related_model_id !== context.modelId) {
         return false;
       }
-    }
-
-    // 检查标题与上下文中的特定模型限定，防止跨模型污染
-    if (context.modelId !== undefined) {
+    } else if (context.modelId !== undefined) {
+      // 仅在未显式指定 related_model_id 时从标题与上下文推导特定模型限定
       const text = `${exp.title} ${exp.context}`;
-      const modelRegex = /模型\s*(?:ID\s*)?#?(\d+)|(?:Wan3\.0.*\((\d+)\))|(?:Seedance.*\((\d+)\))/i;
+      const modelRegex = /模型\s*(?:ID\s*)?#?(\d+)(?![pkK])|(?:Wan3\.0.*\((\d+)\))|(?:Seedance.*\((\d+)\))/i;
       const m = text.match(modelRegex);
       if (m) {
         const boundModel = Number(m[1] || m[2] || m[3]);
@@ -1084,24 +1064,6 @@ export function generateDomainExecutionPlan(input: {
         credibility: 'CONFIRMED',
         verificationMethod: exp.requiredPlanCheck.verificationMethod,
       });
-    } else if (exp.related_pattern_id === 'FP-005') {
-      steps.push({
-        stage: 'ORACLE_VERIFY',
-        description: `[历史经验核验] 针对 ${exp.title} 重点核查异常终态下的退款核销流水与净扣归零 (FP-005)`,
-        targetObject: 'BillingLedger',
-        expectedOutcome: '若任务非成功终态，必须存在对应退款流水且 netDeducted === 0',
-        credibility: 'CONFIRMED',
-        verificationMethod: exp.verification || 'BillingOracle.reconcileTaskLedger netChargeZero 校验',
-      });
-    } else if (exp.related_pattern_id === 'FP-004') {
-      steps.push({
-        stage: 'ORACLE_VERIFY',
-        description: `[历史经验核验] 针对 ${exp.title} 重点防范重试与并发重复扣款 (FP-004)`,
-        targetObject: 'BillingLedger',
-        expectedOutcome: 'preDeductCount 严格 === 1',
-        credibility: 'CONFIRMED',
-        verificationMethod: exp.verification || 'BillingOracle.reconcileTaskLedger antiDoubleBilling 校验',
-      });
     }
 
     caveats.push(`[历史经验告警]: ${exp.title} - ${exp.symptom}`);
@@ -1193,6 +1155,208 @@ export function recordCandidateToSharedMemory(
   } catch (err) {
     return { recorded: false, reason: `WRITE_ERROR: ${(err as Error).message}` };
   }
+}
+
+export interface PromoteOptions {
+  projectRoot?: string;
+  sharedMemoryDir?: string;
+  inboxPath?: string;
+  candidatesJsonPath?: string;
+  dryRun?: boolean;
+}
+
+export interface PromotionReportItem {
+  candidateId: string;
+  status: 'PROMOTED' | 'ALREADY_PROMOTED' | 'DUPLICATE_CONTENT_SKIPPED' | 'INVALID_CANDIDATE_SKIPPED';
+  knowledgeId?: string;
+  reason: string;
+}
+
+export interface PromotionReport {
+  totalScanned: number;
+  confirmedCount: number;
+  promotedCount: number;
+  alreadyPromotedCount: number;
+  skippedCount: number;
+  items: PromotionReportItem[];
+}
+
+/**
+ * 最小候选晋升机制 (Promotion Pipeline: Confirmed Experience -> Persistent Knowledge)
+ * 仅由离线流程、CLI 或 MCP 显式调用。严格只读 inbox.md，仅对经人工审核 (- [x]) 的条目
+ * 执行幂等校验与去重后写入 knowledge_candidates.json。
+ */
+export function promoteConfirmedExperiences(options: PromoteOptions = {}): PromotionReport {
+  const root = options.projectRoot || process.cwd();
+  const smDir = options.sharedMemoryDir || '/Users/mac/agents/shared-memory';
+  const inboxPath = options.inboxPath || path.resolve(smDir, 'candidates', 'inbox.md');
+  const candidatesJsonPath =
+    options.candidatesJsonPath ||
+    path.resolve(root, '.agents/skills/self-evolving-tester/references/knowledge_candidates.json');
+
+  const report: PromotionReport = {
+    totalScanned: 0,
+    confirmedCount: 0,
+    promotedCount: 0,
+    alreadyPromotedCount: 0,
+    skippedCount: 0,
+    items: [],
+  };
+
+  if (!fs.existsSync(inboxPath)) {
+    return report;
+  }
+
+  // 1. 读取并解析 inbox.md
+  const inboxContent = fs.readFileSync(inboxPath, 'utf8');
+  const candBlockRegex = /-\s*\[([ xX])\]\s*\*\*\[(CAND-[^\]]+)\]\*\*\s*来源:\s*`?([^`\n]+)`?[^\n]*\n([\s\S]*?)(?=(?:-\s*\[[ xX]\]|$))/g;
+
+  // 2. 读取现有 knowledge_candidates.json
+  let knowledgeList: any[] = [];
+  if (fs.existsSync(candidatesJsonPath)) {
+    try {
+      const raw = fs.readFileSync(candidatesJsonPath, 'utf8');
+      knowledgeList = JSON.parse(raw);
+      if (!Array.isArray(knowledgeList)) {
+        knowledgeList = [];
+      }
+    } catch {
+      knowledgeList = [];
+    }
+  }
+
+  let match;
+  let hasNewPromotion = false;
+
+  while ((match = candBlockRegex.exec(inboxContent)) !== null) {
+    report.totalScanned++;
+    const isChecked = match[1].toLowerCase() === 'x';
+    const candId = match[2].trim();
+    const agent = match[3].trim();
+    const body = match[4].trim();
+
+    // 规则 1: 仅 - [x] 允许进入 promotion，- [ ] 严格拒绝
+    if (!isChecked) {
+      report.skippedCount++;
+      report.items.push({
+        candidateId: candId,
+        status: 'INVALID_CANDIDATE_SKIPPED',
+        reason: 'CANDIDATE_NOT_CONFIRMED (未勾选 - [x])',
+      });
+      continue;
+    }
+
+    report.confirmedCount++;
+
+    // 规则 2: 解析主题、内容、目标归宿
+    const topicMatch = body.match(/-\s*\*\*主题\*\*:\s*([^\n]+)/);
+    const contentMatch = body.match(/-\s*\*\*提议内容\*\*:\s*([^\n]+)/);
+
+    const topic = topicMatch ? topicMatch[1].trim() : `Candidate ${candId}`;
+    const content = contentMatch ? contentMatch[1].trim() : body;
+
+    const patternMatch = topic.match(/\[(FP-\d{3})\]/) || content.match(/\[(FP-\d{3})\]/);
+    const modelMatch = topic.match(/模型\s*#(\d+)/) || content.match(/模型\s*#(\d+)/);
+    const patternId = patternMatch ? patternMatch[1] : undefined;
+    const modelId = modelMatch ? Number(modelMatch[1]) : undefined;
+
+    // 规则 3: 幂等性检查 (同一 Candidate 不得重复晋升)
+    const alreadyPromoted = knowledgeList.some((k) => k.sourceCandidateId === candId);
+    if (alreadyPromoted) {
+      report.alreadyPromotedCount++;
+      report.items.push({
+        candidateId: candId,
+        status: 'ALREADY_PROMOTED',
+        reason: 'CANDIDATE_ALREADY_PROMOTED (sourceCandidateId 已存在)',
+      });
+      continue;
+    }
+
+    // 规则 4: 内容去重 (相同 patternId + modelId 或完全相同的 claim 拒绝重复插入)
+    const isDuplicateContent = knowledgeList.some((k) => {
+      if (k.claim === topic) return true;
+      if (
+        patternId &&
+        modelId !== undefined &&
+        (k.related_pattern_id === patternId || k.relatedPatternId === patternId) &&
+        (k.related_model_id === modelId || k.relatedModelId === modelId)
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (isDuplicateContent) {
+      report.skippedCount++;
+      report.items.push({
+        candidateId: candId,
+        status: 'DUPLICATE_CONTENT_SKIPPED',
+        reason: 'DUPLICATE_PATTERN_AND_MODEL_EXIST (已存在相同模式与模型的知识)',
+      });
+      continue;
+    }
+
+    // 规则 5: 构建符合 schema 的结构化条目
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const nextSeq = String(knowledgeList.length + 1).padStart(2, '0');
+    const newId = `KC-${todayStr}-${nextSeq}`;
+
+    let domain: 'Task' | 'Billing' | 'Media' | 'Routing' = 'Task';
+    if (patternId === 'FP-004' || patternId === 'FP-005') domain = 'Billing';
+    else if (patternId === 'FP-002') domain = 'Media';
+    else if (patternId === 'FP-001' || patternId === 'FP-003') domain = 'Task';
+
+    const newKnowledgeEntry: Record<string, any> = {
+      id: newId,
+      claim: topic,
+      evidence: [
+        {
+          source: 'shared-memory/candidates/inbox.md',
+          location: candId,
+          reason: content,
+        },
+      ],
+      confidence: 'CONFIRMED',
+      domain,
+      status: 'ACCEPTED',
+      derived_from: [
+        `shared-memory/candidates/inbox.md: ${candId}`,
+        `agent: ${agent}`,
+      ],
+      notes: content,
+      sourceCandidateId: candId,
+      promotedAt: now.toISOString(),
+      related_pattern_id: patternId,
+      related_model_id: modelId,
+    };
+
+    const defaultCheck = resolveDefaultPlanCheck(patternId, topic);
+    if (defaultCheck) {
+      newKnowledgeEntry.requiredPlanCheck = defaultCheck;
+    }
+
+    knowledgeList.push(newKnowledgeEntry);
+    hasNewPromotion = true;
+    report.promotedCount++;
+    report.items.push({
+      candidateId: candId,
+      status: 'PROMOTED',
+      knowledgeId: newId,
+      reason: 'CANDIDATE_SUCCESSFULLY_PROMOTED',
+    });
+  }
+
+  // 3. 写入知识库 (如非 dryRun 且有新增)
+  if (hasNewPromotion && !options.dryRun) {
+    const parentDir = path.dirname(candidatesJsonPath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+    fs.writeFileSync(candidatesJsonPath, JSON.stringify(knowledgeList, null, 2) + '\n', 'utf8');
+  }
+
+  return report;
 }
 
 // ============================================================================

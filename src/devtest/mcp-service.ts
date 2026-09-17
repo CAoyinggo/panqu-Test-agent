@@ -13,7 +13,7 @@ import {
   type VerifyKernelOptions,
 } from './core-kernel.js';
 import type { DiversionBaseline } from './types.js';
-import { recordCandidateToSharedMemory } from './domain-knowledge.js';
+import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
 
 export const DEVTEST_MCP_TOOL = {
   name: 'devtest',
@@ -218,5 +218,24 @@ export class DevTestMcpService {
       default:
         return { ok: false, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };
     }
+  }
+
+  /**
+   * 经验晋升管道 (Promotion Pipeline: Confirmed Experience -> Persistent Knowledge)
+   * 独立 helper 方法，不属于 probe/plan/execute/verify 4 项核心测试 Action。
+   */
+  public async promoteConfirmedExperiences(options?: {
+    sharedMemoryDir?: string;
+    dryRun?: boolean;
+    inboxPath?: string;
+    candidatesJsonPath?: string;
+  }): Promise<PromotionReport> {
+    return promoteConfirmedExperiences({
+      projectRoot: this.projectRoot,
+      sharedMemoryDir: options?.sharedMemoryDir,
+      dryRun: options?.dryRun,
+      inboxPath: options?.inboxPath,
+      candidatesJsonPath: options?.candidatesJsonPath,
+    });
   }
 }

@@ -223,5 +223,47 @@
       "vitest pass"
     ],
     "notes": "针对网络传输截断多媒体流的健壮性保障"
+  },
+  {
+    "id": "EXP-001",
+    "claim": "Wan3.0 视频生成模型 720p 计费阶梯经验: duration=5s 预期扣除 70 积分 (14 pt/s * 5s)",
+    "evidence": [
+      {
+        "source": "src/devtest/billing.ts",
+        "location": "BillingOracle.calculateExpectedPoints",
+        "reason": "官方刊例价规定 720p 单价为 14 pt/s"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "Official billing pricing table for model #84",
+      "BillingOracle specification"
+    ],
+    "notes": "测试模型 ID 84 (wan3.0-video) 的计费逻辑",
+    "related_api": "/aivideo/v2/generate/video",
+    "related_task": "VIDEO_TASK",
+    "related_oracle": "pq_score_log",
+    "related_model_id": 84,
+    "related_resolution": "720p"
+  },
+  {
+    "id": "EXP-002",
+    "claim": "FastAdmin AdminScore 与个人账单端点回退机制: 遇 AUTH_FAILED 自动安全回退至 apiPersonalRecords",
+    "evidence": [
+      {
+        "source": "src/devtest/core-kernel.ts",
+        "location": "queryTaskBillingLogs",
+        "reason": "AdminScore 需要后台管理权限，普通用户仅能访问 /aivideo/v2/billing/apiPersonalRecords"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "FastAdmin API permissions and endpoint fallback mechanism"
+    ],
+    "notes": "只读审计任务流水时，不同权限账号可用端点不同"
   }
 ]

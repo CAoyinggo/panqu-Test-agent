@@ -967,14 +967,13 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
   // 若根据真实上下文匹配到了历史已确认业务经验，动态增强测试计划
   if (domainPlan.relevantExperiences && domainPlan.relevantExperiences.length > 0) {
     for (const exp of domainPlan.relevantExperiences) {
-      const hasPlanCheck = Boolean(exp.requiredPlanCheck || exp.related_pattern_id === 'FP-004' || exp.related_pattern_id === 'FP-005');
-      if (!hasPlanCheck) continue;
+      if (!exp.requiredPlanCheck) continue;
 
       const expTestId = `history-${exp.id.toLowerCase()}`;
       if (!testPlan.tests.some((t) => t.id === expTestId)) {
         testPlan.tests.push({
           id: expTestId,
-          layer: exp.requiredPlanCheck?.stage === 'TASK_VERIFY' ? 'execution' : 'billing',
+          layer: exp.requiredPlanCheck.stage === 'TASK_VERIFY' ? 'execution' : 'billing',
           purpose: `[历史经验核验] ${exp.title}: ${exp.symptom}`,
           input: {
             modelId,
@@ -983,8 +982,8 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
             patternId: exp.related_pattern_id,
           },
           expected: {
-            verificationRule: exp.verification || exp.requiredPlanCheck?.verificationMethod || 'PASS',
-            expectedOutcome: exp.requiredPlanCheck?.expectedOutcome || '核验通过',
+            verificationRule: exp.requiredPlanCheck.verificationMethod || exp.verification || 'PASS',
+            expectedOutcome: exp.requiredPlanCheck.expectedOutcome || '核验通过',
           },
           requiredEvidence: ['billing_reconciliation', 'business_invariants'],
           executionMode: 'real_task',

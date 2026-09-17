@@ -10,6 +10,7 @@ import {
   matchRelevantExperiences,
   recordCandidateToSharedMemory,
   formatMemoryCandidate,
+  promoteConfirmedExperiences,
   type Experience,
 } from '../../../src/devtest/index.js';
 import { RoutingOracle, type GatewayChannelConfig } from '../../../src/devtest/routing.js';
@@ -399,11 +400,24 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
         const approvedContent = inboxContent1.replace(/- \[ \] \*\*\[(CAND-[^\]]+)\]\*\*/, '- [x] **[$1]**');
         fs.writeFileSync(inboxFile, approvedContent, 'utf8');
 
-        // 4. 验证 loadConfirmedExperiences 能够正确吸纳经批准的 shared-memory 经验
-        const approvedExperiences = loadConfirmedExperiences({ sharedMemoryDir: tmpDir });
+        // 3.1 验证 Candidate Buffer 隔离性: 未执行 Promotion 前，即使勾选了 [x]，loadConfirmedExperiences 也绝不读取它
+        const unpromotedExperiences = loadConfirmedExperiences({ projectRoot: tmpDir });
+        const unpromotedExp = unpromotedExperiences.find((e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84);
+        expect(unpromotedExp).toBeUndefined();
+
+        // 3.2 运行 Promotion 管道: 将 - [x] 候选经验正式晋升至持久知识库 knowledge_candidates.json
+        const candidatesJsonPath = path.join(tmpDir, '.agents/skills/self-evolving-tester/references/knowledge_candidates.json');
+        promoteConfirmedExperiences({
+          projectRoot: tmpDir,
+          inboxPath: inboxFile,
+          candidatesJsonPath,
+        });
+
+        // 4. 验证 Promotion 后 loadConfirmedExperiences 能够正确吸纳持久化经验
+        const approvedExperiences = loadConfirmedExperiences({ projectRoot: tmpDir });
         const matchedExp = approvedExperiences.find((e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84);
         expect(matchedExp).toBeDefined();
-        expect(matchedExp?.status).toBe('CONFIRMED');
+        expect(matchedExp?.status).toBe('ACCEPTED');
 
         // 5. 第二次调用 plan(): 传入包含此批准经验的上下文，测试计划自动完成进化增强
         const planAfterApproval = await plan({
