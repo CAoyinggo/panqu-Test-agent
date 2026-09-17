@@ -1,42 +1,37 @@
+# Dependencies
 node_modules/
-dist/
-eval-reports/
-*.log
-.DS_Store
-output/
-output-ci/
 
-# Environment variables (secrets)
+# Production & Build Artifacts
+dist/
+test-flow-*.tgz
+
+# Environment & Credentials (Secrets)
 .env
 .env.*
-!config/env/.env.example
-!config/env/.env.staging.example
-!config/env/.env.production.example
+session.json
+session-*.json
 
-# Security scan reports (CI artifacts, not version controlled)
+# Logs & Temporary Files
+*.log
+.DS_Store
+*.swp
+*.swo
+
+# Test & Coverage Outputs
+coverage/
+output/
+output-ci/
+reports/
+eval-reports/
 security-reports/
+
+# Cache & Local State
+.cache/
 .trivycache/
 .docker-cache/
-
-# Test coverage reports
-/coverage/
-
-# Mutation testing artifacts (Stryker)
 .stryker-tmp/
-reports/mutation/
-
-# Developer Acceptance 本地配置与运行产物（可能包含环境元数据或脱敏证据）
+/.devtest.json
 /acceptance.config.json
-/reports/
 /devtest-results/
 /package-artifacts/
-/.devtest.json
 /.trae/skills/
-
-# Playwright E2E artifacts (Phase 41)
-test-results/
-playwright-report/
-blob-report/
-
-# AI Quality CLI 持久化状态（Phase 46）
-data/ai-quality-state.json

@@ -1,0 +1,49 @@
+name: DevTest CI Quality Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-verify:
+    name: Build, Unit Tests & Dual-Mode Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build TypeScript Kernel
+        run: npm run build
+
+      - name: Run Full Unit Test Suite (21 Suites, 275 Tests)
+        run: npm test
+
+      - name: CLI Smoke Test (probe & plan)
+        run: |
+          node dist/bin/devtest-cli.js --version
+          node dist/bin/devtest-cli.js plan --model 84 --media video --json
+
+      - name: MCP stdio Protocol Handshake
+        run: |
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-tester","version":"1.0"}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' \
+            | node dist/bin/devtest-mcp.js --project-root .
+
+      - name: Package Verification
+        run: npm pack
