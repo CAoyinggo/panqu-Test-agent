@@ -12,7 +12,7 @@ import {
   type ExecuteKernelOptions,
   type VerifyKernelOptions,
 } from './core-kernel.js';
-import type { DiversionBaseline } from './types.js';
+import type { DiversionBaseline, MemoryCandidatePayload, RecordCandidateResult } from './types.js';
 import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
 
 export const DEVTEST_MCP_TOOL = {
@@ -58,6 +58,84 @@ export const DEVTEST_MCP_TOOL = {
       unconfirmed_static: { type: 'boolean', description: '是否包含未确认的静态规则' },
     },
     required: ['action'],
+  },
+};
+
+export const DEVTEST_RECORD_CANDIDATE_TOOL = {
+  name: 'devtest_record_candidate',
+  description: '受控的知识候选记录辅助入口。用于将分析代码库（如 GitHub Repository）或测试执行中提炼出的可复用认知存入 shared-memory 待审缓冲池 (inbox.md)。严禁绕过人工审核与 Promotion 直接写入长期知识库。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      topic: {
+        type: 'string',
+        description: '知识候选主题或模式名称（例如: [FP-005] 业务风险模式: 任务失败未退款资损缺陷 (模型 #88)）',
+      },
+      content: {
+        type: 'string',
+        description: '知识候选提议内容与真实代码证据（必须包含事实、来源文件、复用价值与核验规则）',
+      },
+      agent: {
+        type: 'string',
+        enum: ['trae', 'antigravity', 'codex'],
+        description: '提议 Agent 标识（默认 trae）',
+      },
+      dest: {
+        type: 'string',
+        description: '建议归宿（默认 L2-state/active-projects.md）',
+      },
+      pattern_id: {
+        type: 'string',
+        description: '关联的失效模式 ID (例如 FP-001 ~ FP-005)',
+      },
+      patternId: {
+        type: 'string',
+        description: '关联的失效模式 ID (camelCase)',
+      },
+      model_id: {
+        type: 'number',
+        description: '关联的模型 ID (例如 84, 88)',
+      },
+      modelId: {
+        type: 'number',
+        description: '关联的模型 ID (camelCase)',
+      },
+      task_id: {
+        type: 'number',
+        description: '关联的任务 ID',
+      },
+      taskId: {
+        type: 'number',
+        description: '关联的任务 ID (camelCase)',
+      },
+      confidence: {
+        type: 'string',
+        enum: ['CONFIRMED', 'OBSERVED', 'INFERRED'],
+        description: '知识可信度（默认 CONFIRMED）',
+      },
+      reasons: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '结构化事实证据与原因说明',
+      },
+      source: {
+        type: 'string',
+        description: '知识来源标识（例如 github）',
+      },
+      repository: {
+        type: 'string',
+        description: '来源代码仓库（例如 CAoyinggo/panqu-Test-agent）',
+      },
+      shared_memory_dir: {
+        type: 'string',
+        description: 'shared-memory 根目录路径（可选，用于测试隔离）',
+      },
+      sharedMemoryDir: {
+        type: 'string',
+        description: 'shared-memory 根目录路径（camelCase）',
+      },
+    },
+    required: ['topic', 'content'],
   },
 };
 
@@ -237,5 +315,105 @@ export class DevTestMcpService {
       inboxPath: options?.inboxPath,
       candidatesJsonPath: options?.candidatesJsonPath,
     });
+  }
+
+  /**
+   * 受控知识候选记录入口 (Record Knowledge Candidate)
+   * 仅用于将外部 (如 GitHub MCP 分析、代码审查) 发现的候选事实写入 shared-memory 待审缓冲池。
+   * 绝对不属于 probe/plan/execute/verify 4 项核心测试 Action，绝不直接修改 knowledge_candidates.json。
+   */
+  public async recordCandidate(args: Record<string, unknown>): Promise<RecordCandidateResult> {
+    const topic = typeof args.topic === 'string' ? args.topic.trim() : '';
+    const content = typeof args.content === 'string' ? args.content.trim() : '';
+
+    if (!topic || !content) {
+      return {
+        ok: false,
+        status: 'INVALID_ARGUMENTS',
+        summary: '录入失败：缺少必填字段 topic 或 content',
+        error: 'Both "topic" and "content" must be non-empty strings.',
+      };
+    }
+
+    const agent = (args.agent === 'antigravity' || args.agent === 'codex' ? args.agent : 'trae') as 'trae' | 'antigravity' | 'codex';
+    const dest = typeof args.dest === 'string' && args.dest.trim() ? args.dest.trim() : 'L2-state/active-projects.md';
+    const patternId = typeof args.pattern_id === 'string' ? args.pattern_id : typeof args.patternId === 'string' ? args.patternId : undefined;
+    const modelId = args.model_id !== undefined ? Number(args.model_id) : (args.modelId !== undefined ? Number(args.modelId) : undefined);
+    const taskId = args.task_id !== undefined ? Number(args.task_id) : (args.taskId !== undefined ? Number(args.taskId) : undefined);
+    const confidence = (args.confidence === 'OBSERVED' || args.confidence === 'INFERRED' ? args.confidence : 'CONFIRMED') as 'CONFIRMED' | 'OBSERVED' | 'INFERRED';
+    const reasons = Array.isArray(args.reasons) ? args.reasons.map(String) : [];
+    const source = typeof args.source === 'string' ? args.source : 'github';
+    const repository = typeof args.repository === 'string' ? args.repository : undefined;
+
+    const payload: MemoryCandidatePayload = {
+      agent,
+      topic,
+      content,
+      dest,
+      patternId,
+      modelId,
+      taskId,
+      confidence,
+      reasons,
+      source,
+      repository,
+    };
+
+    const sharedMemoryDir = typeof args.shared_memory_dir === 'string'
+      ? args.shared_memory_dir
+      : typeof args.sharedMemoryDir === 'string'
+      ? args.sharedMemoryDir
+      : '/Users/mac/agents/shared-memory';
+
+    const res = recordCandidateToSharedMemory(payload, sharedMemoryDir);
+
+    if (res.recorded) {
+      return {
+        ok: true,
+        candidateId: res.candidateId,
+        status: 'RECORDED_PENDING_CONFIRMATION',
+        summary: `### 📥 Knowledge Candidate 已记录\n- **候选 ID**: ${res.candidateId}\n- **来源**: \`${agent}\`${repository ? ` (${repository})` : ''}\n- **主题**: ${topic}\n- **状态**: 待人工确认 (需人工将 inbox.md 中的 [ ] 审核为 [x])\n- **下一步**: 人工审核后触发 Promotion 晋升为长期知识`,
+        data: {
+          candidateId: res.candidateId,
+          recorded: true,
+          inboxPath: `${sharedMemoryDir}/candidates/inbox.md`,
+          status: 'PENDING_CONFIRMATION',
+          nextStep: 'Review entry in shared-memory/candidates/inbox.md, mark [x], then run promoteConfirmedExperiences()',
+          source,
+          repository,
+        },
+      };
+    }
+
+    if (res.reason === 'DUPLICATE_CANDIDATE_SKIPPED') {
+      return {
+        ok: true,
+        status: 'DUPLICATE_CANDIDATE_SKIPPED',
+        summary: `### ℹ️ Knowledge Candidate 已存在 (跳过重复追加)\n- **主题**: ${topic}\n- **原因**: 命中已有候选去重规则，无需重复写入`,
+        data: {
+          recorded: false,
+          inboxPath: `${sharedMemoryDir}/candidates/inbox.md`,
+          status: 'SKIPPED',
+          nextStep: 'No action needed: duplicate candidate already exists',
+          source,
+          repository,
+        },
+      };
+    }
+
+    return {
+      ok: false,
+      status: 'WRITE_ERROR',
+      summary: `录入失败: ${res.reason}`,
+      error: res.reason,
+      data: {
+        recorded: false,
+        inboxPath: `${sharedMemoryDir}/candidates/inbox.md`,
+        status: 'FAILED',
+        nextStep: 'Check shared-memory directory path and permissions',
+        source,
+        repository,
+      },
+    };
   }
 }

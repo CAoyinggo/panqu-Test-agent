@@ -83,11 +83,13 @@ export {
   type BillingReconciliation,
   type FlowRunEvidence,
   type MemoryCandidatePayload,
+  type RecordCandidateResult,
 } from './types.js';
 
 export {
   DevTestMcpService,
   DEVTEST_MCP_TOOL,
+  DEVTEST_RECORD_CANDIDATE_TOOL,
 } from './mcp-service.js';
 
 export {

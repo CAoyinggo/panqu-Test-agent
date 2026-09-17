@@ -1143,8 +1143,9 @@ export function recordCandidateToSharedMemory(
     const candId = `CAND-${dateStr}-${timeStr}`;
     const formattedDate = now.toISOString().slice(0, 10);
 
+    const sourceSuffix = candidate.repository ? ` (repo: ${candidate.repository})` : '';
     const entry = `
-- [ ] **[${candId}]** 来源: \`${candidate.agent}\` | 提交日期: ${formattedDate}
+- [ ] **[${candId}]** 来源: \`${candidate.agent}\`${sourceSuffix} | 提交日期: ${formattedDate}
   - **主题**: ${candidate.topic}
   - **提议内容**: ${candidate.content}
   - **建议归宿**: ${candidate.dest || 'L2-state/active-projects.md'}

@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { DevTestMcpService, DEVTEST_MCP_TOOL } from '../src/devtest/mcp-service.js';
+import { DevTestMcpService, DEVTEST_MCP_TOOL, DEVTEST_RECORD_CANDIDATE_TOOL } from '../src/devtest/mcp-service.js';
 import { PLATFORM_VERSION } from '../src/devtest/version.js';
 
 /** stdio transport only. Reuses the current TEST_CASE_V2 kernel; never shells out with model input. */
@@ -22,10 +22,15 @@ export async function serveDevTestMcp(projectRoot = process.cwd()): Promise<void
     if (request.method === 'initialize') {
       response({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'devtest', version: PLATFORM_VERSION } });
     } else if (request.method === 'ping') response({});
-    else if (request.method === 'tools/list') response({ tools: [DEVTEST_MCP_TOOL] });
+    else if (request.method === 'tools/list') response({ tools: [DEVTEST_MCP_TOOL, DEVTEST_RECORD_CANDIDATE_TOOL] });
     else if (request.method === 'tools/call') {
       const toolName = request.params?.name;
       const args = (request.params?.arguments as Record<string, unknown>) || {};
+      if (toolName === 'devtest_record_candidate' || toolName === 'record_knowledge_candidate' || toolName === 'record_candidate') {
+        const result = await service.recordCandidate(args);
+        response({ content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: result.ok === false });
+        return;
+      }
       let action = args.action;
       if (toolName === 'devtest') {
         // use args.action as-is

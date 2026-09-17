@@ -265,5 +265,35 @@
       "FastAdmin API permissions and endpoint fallback mechanism"
     ],
     "notes": "只读审计任务流水时，不同权限账号可用端点不同"
+  },
+  {
+    "id": "KC-20260917-13",
+    "claim": "[FP-005] 业务风险模式: 任务失败未退款资损缺陷 (模型 #88)",
+    "evidence": [
+      {
+        "source": "shared-memory/candidates/inbox.md",
+        "location": "CAND-20260917-1203",
+        "reason": "[来源: CAoyinggo/panqu-Test-agent:src/devtest/billing.ts & docs/ARCHITECTURE_FREEZE.md] 模型 #88 (480p 11pt/s) 在任务失败终态必须全额退款且净扣归零 (netChargeZero === true)，违背将触发 FP-005 资损缺陷；针对该模型必须执行 BillingOracle.reconcileTaskLedger netChargeZero 校验"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "shared-memory/candidates/inbox.md: CAND-20260917-1203",
+      "agent: trae"
+    ],
+    "notes": "[来源: CAoyinggo/panqu-Test-agent:src/devtest/billing.ts & docs/ARCHITECTURE_FREEZE.md] 模型 #88 (480p 11pt/s) 在任务失败终态必须全额退款且净扣归零 (netChargeZero === true)，违背将触发 FP-005 资损缺陷；针对该模型必须执行 BillingOracle.reconcileTaskLedger netChargeZero 校验",
+    "sourceCandidateId": "CAND-20260917-1203",
+    "promotedAt": "2026-09-17T04:03:12.098Z",
+    "related_pattern_id": "FP-005",
+    "related_model_id": 88,
+    "requiredPlanCheck": {
+      "stage": "ORACLE_VERIFY",
+      "description": "针对 [FP-005] 业务风险模式: 任务失败未退款资损缺陷 (模型 #88) 重点核查异常终态下的退款核销流水与净扣归零 (FP-005)",
+      "targetObject": "BillingLedger",
+      "expectedOutcome": "若任务非成功终态，必须存在对应退款流水且 netDeducted === 0",
+      "verificationMethod": "BillingOracle.reconcileTaskLedger netChargeZero 校验"
+    }
   }
 ]

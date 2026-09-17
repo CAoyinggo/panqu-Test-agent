@@ -1,14 +1,14 @@
 # Panqu AI DevTest
 
-面向 Panqu AI 图片与视频链路的轻量纯净测试副驾。源码版本为 **v5.2.0**，统一由一套纯 TypeScript 内核驱动，以完全同源逻辑提供本地终端 CLI 与 IDE 辅助 TRAE MCP 双入口。
+面向 Panqu AI 图片与视频链路的轻量纯净测试副驾。源码版本为 **v5.3.0**，统一由一套纯 TypeScript 内核驱动，以完全同源逻辑提供本地终端 CLI 与 IDE 辅助 TRAE MCP 双入口。
 
 | 核心属性 | 当前规范 |
 | --- | --- |
-| **版本 / 包名** | `test-flow@5.2.0` |
+| **版本 / 包名** | `test-flow@5.3.0` |
 | **运行时要求** | Node.js `>=20` · TypeScript `>=5.9` · ESM 纯模块 |
 | **双模同源入口** | 本地终端 `devtest` CLI · IDE 辅助 `devtest-mcp` (stdio MCP) |
 | **四大核心动作** | `probe()` 环境探活 · `plan()` 分流推导 · `execute()` 任务派发 · `verify()` 验真对账 |
-| **测试验证矩阵** | 12 个测试套件 · **191 项单元测试全部通过 (100% PASS)** |
+| **测试验证矩阵** | 13 个测试套件 · **201 项单元测试全部通过 (100% PASS)** |
 | **架构规范** | 严格遵守 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md) 永久冻结原则，零中心上帝类，零虚假报告大盘 |
 | **发布形式** | GitHub 提交固定快照；不代表已发布 npm 或生产全量验收 |
 
@@ -19,16 +19,17 @@
 系统严格遵循永久架构冻结契约，核心拓扑直通调度内核：
 
 ```text
-       ┌──────────────┐         ┌──────────────┐
-       │ devtest CLI  │         │  TRAE MCP    │
-       └──────┬───────┘         └──────┬───────┘
-              │                        │
-              └───────────┬────────────┘
-                          ▼
-                 ┌─────────────────┐
-                 │   core-kernel   │
-                 └────────┬────────┘
-                          │
+       ┌──────────────┐         ┌──────────────────────────────┐
+       │ devtest CLI  │         │          TRAE MCP            │
+       └──────┬───────┘         ├──────────────┬───────────────┤
+              │                 │ devtest (4A) │ record_cand   │
+              │                 └──────┬───────┴───────┬───────┘
+              └───────────┬────────────┘               │
+                          ▼                            ▼
+                 ┌─────────────────┐          ┌────────────────┐
+                 │   core-kernel   │          │ shared-memory  │
+                 └────────┬────────┘          │ inbox.md [ ]   │
+                          │                   └────────────────┘
        ┌──────────┬───────┴───────┬──────────┐
        ▼          ▼               ▼          ▼
     probe()    plan()         execute()   verify()
@@ -43,6 +44,7 @@
 2. **事实第一，绝不谎报**：无真实凭据输出 `UNVERIFIED` / `BLOCKED`，未提供流水输出 `SKIPPED_NO_LOGS`，绝对禁止默认伪造 `PASS`。
 3. **彻底杜绝幽灵大盘**：铲除所有“固定七章报告”、“大盘报表”等冗余平台代码，全域统一采用极简 3 段式实战输出（概况 / 验真 / 复现）。
 4. **严格读写隔离**：`probe`、`plan`、`verify` 保证 100% 只读与幂等，严禁产生外网写请求或状态副作用；仅 `execute` 在显式 `mode=real` 且提供合法授权会话时发起真实任务提交。
+5. **受控经验收敛**：外部代理审查出的业务经验通过独立工具受控录入待审收件箱（严格标记为未审 `[ ]`），绝不侵蚀核心测试动作内核。
 
 ---
 
@@ -69,7 +71,7 @@ cd panqu-Test-agent
 npm ci
 npm run build
 
-# 3. 运行全量测试验证
+# 3. 运行全量测试验证（201 项全绿通过）
 npm test
 
 # 4. 查看 CLI 帮助
@@ -82,7 +84,7 @@ node dist/bin/devtest-cli.js --help
 npm pack
 
 # 业务项目引入
-npm install --save-dev ./test-flow-5.2.0.tgz
+npm install --save-dev ./test-flow-5.3.0.tgz
 npx --no-install devtest --help
 ```
 
@@ -133,7 +135,7 @@ npx --no-install devtest verify \
   --expected-points 56 \
   --session-file /path/to/session.json
 
-# 直接传入产物 URL 进行深度二进制物理验真
+# 直接传入产物 URL 进行深度二进制物理验真（支持尾部 moov 范围切片）
 npx --no-install devtest verify \
   --task 12345 \
   --model 84 \
@@ -200,27 +202,22 @@ node /absolute/path/to/dist/bin/devtest-mcp.js --project-root /absolute/path/to/
       "env": {
         "NODE_OPTIONS": "",
         "NODE_USE_ENV_PROXY": "1",
-        "PANQU_MCP_INTEGRATION_VERSION": "5.2.0"
+        "PANQU_MCP_INTEGRATION_VERSION": "5.3.0"
       }
     }
   }
 }
 ```
 
-### MCP 唯一核心工具：`devtest`
-Trae MCP 单工具整合了全量参数契约，支持参数包含：
-- `action`: `'probe' | 'plan' | 'execute' | 'verify'` (必需)
-- `env`: `'test' | 'preonline'`
-- `model_id`: 数字模型 ID (如 84, 15, 25, 960)
-- `media_type`: `'video' | 'image'`
-- `mode`: `'mock' | 'real'`
-- `resolution` / `duration` / `prompt`: 生成规格参数
-- `video_url` / `image_url`: 待验真产物直接直链
-- `task_id` / `terminal_status` / `score_logs` / `expected_points`: 验真核对输入
-- `timeout_ms` / `db_extra_confirmed` / `gateway_channel_confirmed`: 深度审计证据
+### MCP 暴露工具列表
+
+| 工具名称 | 工具职责 | 参数与特性 |
+|---|---|---|
+| **`devtest`** | **唯一核心测试副驾入口**（直接驱动 `core-kernel.ts`） | 4 项 Action：`probe`, `plan`, `execute`, `verify`<br>支持 `video_url`, `timeout_ms`, `db_extra_confirmed` 等全量契约参数 |
+| **`devtest_record_candidate`** | **受控知识候选录入入口**（专用于外部代理/GitHub 审查） | 录入业务发现到 `shared-memory/candidates/inbox.md`<br>状态严格为待审 `[ ]`，需人工审核后晋升，绝不入侵核心测试逻辑 |
 
 ### 极简 3 行实战流响应规范
-MCP 执行后直接输出结构化、可直接复现的 3 行精炼回执：
+MCP 核心工具 `devtest` 执行后直接输出结构化、可直接复现的 3 行精炼回执：
 ```text
 🎯 概况：动作 <verify> · 目标 <video:84> · 模式 <real> · 任务 #12345
 🔍 验真：最终裁决 <ALL PASS> · 生产验收 <ACCEPTED> · 任务状态 <SUCCESS> · 产物结构 <PASS (MP4)> · 账单对账 <PASS> · 失败净扣归零 <PASS> · 防重复扣费 <PASS>
@@ -251,7 +248,7 @@ MCP 执行后直接输出结构化、可直接复现的 3 行精炼回执：
 ## 7. 自演化经验与知识闭环
 
 系统内建解耦的领域知识与经验沉淀机制（`domain-knowledge.ts`）：
-- **历史失效模式库**：结构化沉淀高频问题（如 FP-001 扣费单价污染、FP-004 尾部 moov 误报、FP-005 Direct/NewAPI 路由冲突）。
+- **历史失效模式库**：结构化沉淀高频问题（如 FP-001 扣费单价污染、FP-004 尾部 moov 误报、FP-005 任务失败未退款资损缺陷）。
 - **动态测试增强**：在 `plan()` 阶段自适应召回相关经验，动态注入专项检验用例与预期判定逻辑。
 - **经验晋升机制**：支持将经过实战验证的候选模式晋升为已确认经验规则，实现测试知识持续演化。
 
@@ -263,7 +260,7 @@ MCP 执行后直接输出结构化、可直接复现的 3 行精炼回执：
 # 1. 编译构建
 npm run build
 
-# 2. 运行全量单元测试（12 套件，191 项单测，必须 100% 通过）
+# 2. 运行全量单元测试（13 套件，201 项单测，必须 100% 通过）
 npm test
 
 # 3. CLI 快速自测
@@ -281,7 +278,7 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 ```text
 src/devtest/
 ├── core-kernel.ts         # 四大核心动作统一调度器（probe, plan, execute, verify）
-├── mcp-service.ts         # MCP stdio 服务封装、全参数 Schema 与 3 行流格式化
+├── mcp-service.ts         # MCP stdio 服务封装、全参数 Schema 与候选录入入口
 ├── env-probe.ts           # 环境与会话探活、动态模型契约发现
 ├── routing.ts             # Direct 与 NewAPI 分流决策与渠道映射
 ├── domain-knowledge.ts    # 动态经验库、失效模式召回与自演化知识闭环
@@ -289,7 +286,7 @@ src/devtest/
 ├── media-inspector.ts     # MP4（头部/尾部 moov）与图片物理二进制结构解码器
 ├── billing.ts             # 账单流水对账与三大金融安全不变量审计
 ├── types.ts               # 统一契约、事实模型与事实源类型定义
-├── version.ts             # 统一平台版本常量导出（v5.2.0）
+├── version.ts             # 统一平台版本常量导出（v5.3.0）
 └── index.ts               # 模块公共入口导出
 
 bin/
@@ -300,11 +297,12 @@ tests/unit/devtest/
 ├── core-kernel-and-cli.test.ts  # 核心内核与 CLI 统一契约回归
 ├── dynamic-plan.test.ts         # 动态规划与用例生成测试
 ├── mcp-high-level-tools.test.ts # MCP Schema 与服务调用测试
+├── mcp-candidate-record.test.ts # 受控候选知识录入测试
 ├── media-inspector.test.ts      # 媒体物理结构（含尾部 moov）解码测试
 ├── domain-knowledge.test.ts     # 领域知识召回测试
 ├── knowledge-decoupling.test.ts # 知识解耦架构测试
 ├── knowledge-promotion.test.ts  # 候选经验晋升测试
-└── ...                          # 其余专项测试（共 12 套件，191 项测试通过）
+└── ...                          # 其余专项测试（共 13 套件，201 项测试通过）
 
 docs/
 └── ARCHITECTURE_FREEZE.md       # 架构永久冻结规范

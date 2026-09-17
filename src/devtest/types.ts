@@ -53,6 +53,25 @@ export interface MemoryCandidatePayload {
   taskId?: number;
   confidence: 'CONFIRMED' | 'OBSERVED' | 'INFERRED';
   reasons: string[];
+  source?: string;
+  repository?: string;
+}
+
+export interface RecordCandidateResult {
+  ok: boolean;
+  candidateId?: string;
+  status: 'RECORDED_PENDING_CONFIRMATION' | 'DUPLICATE_CANDIDATE_SKIPPED' | 'INVALID_ARGUMENTS' | 'WRITE_ERROR';
+  summary: string;
+  data?: {
+    candidateId?: string;
+    recorded: boolean;
+    inboxPath?: string;
+    status: 'PENDING_CONFIRMATION' | 'SKIPPED' | 'FAILED';
+    nextStep: string;
+    source?: string;
+    repository?: string;
+  };
+  error?: string;
 }
 
 export interface DiversionCheckResult {
