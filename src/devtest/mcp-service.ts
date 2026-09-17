@@ -13,6 +13,7 @@ import {
   type VerifyKernelOptions,
 } from './core-kernel.js';
 import type { DiversionBaseline } from './types.js';
+import { recordCandidateToSharedMemory } from './domain-knowledge.js';
 
 export const DEVTEST_MCP_TOOL = {
   name: 'devtest',
@@ -82,8 +83,16 @@ export class DevTestMcpService {
           sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
           mock: typeof args.mock === 'boolean' ? args.mock : false,
           timeoutMs: typeof args.timeout_ms === 'number' ? args.timeout_ms : typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+          requirement: typeof args.requirement === 'string' ? args.requirement : undefined,
+          modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
+          mediaType: args.media_type || args.mediaType ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined,
+          extraExperiences: (args.extra_experiences || args.extraExperiences) as any,
+          projectRoot: typeof args.project_root === 'string' ? args.project_root : typeof args.projectRoot === 'string' ? args.projectRoot : this.projectRoot,
         });
-        const summary = `### 📋 Panqu 环境探活回执\n- **环境**: ${res.env} | **状态**: ${res.status}\n- **主站**: ${res.baseUrl}\n- **网关**: ${res.gatewayUrl}\n- **可用渠道数**: ${res.candidateChannelCount}\n- **鉴权凭据**: ${res.auth.status} (${res.auth.details})`;
+        const domainStr = res.domainAnalysis?.identifiedObjects
+          ? `\n- **领域对象**: ${res.domainAnalysis.identifiedObjects.map((o) => o.name).join(', ')}`
+          : '';
+        const summary = `### 📋 Panqu 环境探活回执\n- **环境**: ${res.env} | **状态**: ${res.status}\n- **主站**: ${res.baseUrl}\n- **网关**: ${res.gatewayUrl}\n- **可用渠道数**: ${res.candidateChannelCount}\n- **鉴权凭据**: ${res.auth.status} (${res.auth.details})${domainStr}`;
         return { ok: res.ok, action: 'probe', summary, data: res as unknown as T };
       }
       case 'plan': {
@@ -101,6 +110,8 @@ export class DevTestMcpService {
           price: typeof args.price === 'number' ? args.price : undefined,
           isGlobal: typeof args.is_global === 'boolean' ? args.is_global : typeof args.isGlobal === 'boolean' ? args.isGlobal : undefined,
           alias: typeof args.alias === 'string' ? args.alias : undefined,
+          extraExperiences: (args.extra_experiences || args.extraExperiences) as any,
+          projectRoot: typeof args.project_root === 'string' ? args.project_root : typeof args.projectRoot === 'string' ? args.projectRoot : this.projectRoot,
         });
         const divertStr = res.willDivert ? `NEWAPI 切流 (线路 ${res.routeLine})` : `DIRECT 直连 (线路 ${res.routeLine})`;
         const forecastStr = res.acceptanceForecast ? `\n- **验收预判**: [${res.acceptanceForecast}]` : '';
@@ -108,12 +119,15 @@ export class DevTestMcpService {
         const blockedStr = res.blocked && res.blocked.length > 0 ? `\n⚠️ 阻断待补事实 (${res.blocked.length}项): ${res.blocked.map((b) => b.missingField || b.field).join(', ')}` : '';
         const skippedStr = res.testPlan?.skippedTests && res.testPlan.skippedTests.length > 0 ? `\n🛡️ 安全裁剪跳过: 共 ${res.testPlan.skippedTests.length} 项无关测试已排除` : '';
         const nextStepStr = res.testerActionSummary?.nextStep ? `\n🚀 下一步行动: ${res.testerActionSummary.nextStep}` : '';
+        const domainPlanStr = res.domainPlan
+          ? `\n- **业务闭环计划**: 共 ${res.domainPlan.steps.length} 步 (${res.domainPlan.steps.map((s) => s.stage).join(' → ')})`
+          : '';
 
         const summary = `### 📋 Panqu 分流推导回执与动态测试计划 [${res.scenarioName || res.scenario}]
 - **模型**: #${res.modelId} (${res.mediaType}) | 别名: ${res.contract?.alias.value || '未知'} [${res.contract?.alias.source || 'default'}]
 - **分流裁决**: ${divertStr} [${res.decision}]
 - **定价状态**: ${res.pricingStatus} (${res.expectedPoints} pt)
-- **测试计划**: 共 ${res.testPlan?.tests.length || 0} 项测试 (就绪 ${res.testPlan?.tests.filter((t) => t.status === 'READY').length || 0} 项)${skippedStr}${forecastStr}${missingInputsStr}${blockedStr}${nextStepStr}
+- **测试计划**: 共 ${res.testPlan?.tests.length || 0} 项测试 (就绪 ${res.testPlan?.tests.filter((t) => t.status === 'READY').length || 0} 项)${skippedStr}${forecastStr}${missingInputsStr}${blockedStr}${domainPlanStr}${nextStepStr}
 - **候选渠道**: ${res.candidateChannels.join(', ') || '无可用渠道'}
 - **推导依据**: ${res.reason}`;
         return { ok: res.ok, action: 'plan', summary, data: res as unknown as T };
@@ -164,6 +178,10 @@ export class DevTestMcpService {
           gatewayChannelConfirmed: Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed),
           baseline: args.baseline as DiversionBaseline | undefined,
           unconfirmedStatic: Boolean(args.unconfirmed_static ?? args.unconfirmedStatic),
+          apiResult: (args.api_result || args.apiResult) as any,
+          projectId: typeof args.project_id === 'number' ? args.project_id : undefined,
+          folderId: typeof args.folder_id === 'number' ? args.folder_id : undefined,
+          isFolderInProject: typeof args.is_folder_in_project === 'boolean' ? args.is_folder_in_project : undefined,
         });
 
         const taskStatus = res.evidence.task.status;
@@ -173,6 +191,7 @@ export class DevTestMcpService {
         const billingStatus = res.evidence.billing.status;
         const netZero = res.invariants ? (res.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
         const antiDouble = res.invariants ? (res.invariants.antiDoubleBilling ? 'PASS' : 'FAIL (重扣告警)') : 'SKIPPED';
+        const businessSuccessStr = res.businessValidation?.businessSuccess ? 'PASS' : (res.businessValidation?.status || 'UNVERIFIED');
         const extraNotice = res.expectedVsActual?.evidenceStatus.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED'
           ? '\n📌 关键分流落库证据: [MANUAL_DB_EVIDENCE_REQUIRED] (HTTP接口不返回extra，需只读查询DB ai_tasks)'
           : '';
@@ -180,8 +199,19 @@ export class DevTestMcpService {
           ? ` · 证据完整度 <${res.evidenceCompleteness.availableEvidence.length}/${res.evidenceCompleteness.requiredEvidence.length}${res.evidenceCompleteness.isComplete ? ' COMPLETE' : ' INCOMPLETE'}>`
           : '';
 
+        let candidateNote = '';
+        if (res.memoryCandidate) {
+          const sharedMemoryDir = typeof args.shared_memory_dir === 'string' ? args.shared_memory_dir : typeof args.sharedMemoryDir === 'string' ? args.sharedMemoryDir : undefined;
+          const recordRes = recordCandidateToSharedMemory(res.memoryCandidate, sharedMemoryDir);
+          if (recordRes.recorded) {
+            candidateNote = `\n💡 知识自学习: 自动沉淀失败模式提案 [${recordRes.candidateId}] 至 shared-memory 待审缓冲池`;
+          } else if (recordRes.reason === 'DUPLICATE_CANDIDATE_SKIPPED') {
+            candidateNote = `\n💡 知识自学习: 命中已有沉淀模式，跳过重复写入`;
+          }
+        }
+
         const summary = `🎯 概况：模型 #${res.modelId} (${res.mediaType}) · [${res.mode.toUpperCase()}] · 任务 #${res.taskId}
-🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 生产验收 <${res.acceptance}>${completenessStr} · 任务状态 <${taskStatus}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${extraNotice}${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
+🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 生产验收 <${res.acceptance}>${completenessStr} · 业务成功 <${businessSuccessStr}> · 任务状态 <${taskStatus}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${extraNotice}${candidateNote}${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
 💻 复现：npm run devtest -- verify --task ${res.taskId} --model ${res.modelId} --media ${res.mediaType}`;
         return { ok: res.ok, action: 'verify', summary, data: res as unknown as T };
       }

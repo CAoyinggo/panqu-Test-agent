@@ -1,0 +1,227 @@
+[
+  {
+    "id": "KC-20260916-01",
+    "claim": "API 返回 code=1 仅代表异步任务排队接收成功，绝对不等于业务最终执行成功 (Technical Acceptance ≠ Business Success)。",
+    "evidence": [
+      {
+        "source": "src/devtest/domain-knowledge.ts",
+        "location": "PANQU_FAILURE_PATTERNS.PATTERN_API_SUCCESS_TASK_FAILED",
+        "reason": "代码明确定义 FP-001 并要求必须轮询跟踪至终态 (task_status=2)"
+      },
+      {
+        "source": "docs/ARCHITECTURE_FREEZE.md",
+        "location": "Section 3 & Section 5",
+        "reason": "Fail-closed 规则禁止 HTTP 200 直接断言 PASS"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Task",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "domain-knowledge.test.ts: [真实问题 1] API 返回成功 (code=1)，但 Task 实际失败 (status=3) → 判定业务 FAIL 并匹配 FP-001",
+      "vitest pass"
+    ],
+    "notes": "后续所有针对异步任务的测试必须对齐终态状态机"
+  },
+  {
+    "id": "KC-20260916-02",
+    "claim": "媒体文件不能仅看 HTTP 200 或 12 字节魔数头判定有效，必须遍历 MP4 Box 树核验 ftyp, moov, trak 及 mdat 数据实体。",
+    "evidence": [
+      {
+        "source": "src/devtest/media-inspector.ts",
+        "location": "inspectMp4Buffer",
+        "reason": "parseTopLevelMp4Boxes 必须完整解析出 moov 与 mdat"
+      },
+      {
+        "source": "docs/ARCHITECTURE_FREEZE.md",
+        "location": "Section 8: Media Evidence 永久规则",
+        "reason": "MP4 至少检查 ftyp, moov, mdat，禁止将容器结构检查夸大为完整解码"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Media",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "media-inspector.test.ts: 截断的 MP4（仅 12 字节 ftyp 魔数头，缺失 moov 与 mdat）：精确识别为 FILE_INVALID",
+      "vitest pass"
+    ],
+    "notes": "Mock MP4 数据时必须使用 createSyntheticValidMp4 生成完整 Box 结构"
+  },
+  {
+    "id": "KC-20260916-03",
+    "claim": "外部提供的媒体产物若缺少从真实 TaskSnapshot 解析绑定的凭证，所有权必须判定为 UNVERIFIED，不可假 PASS。",
+    "evidence": [
+      {
+        "source": "docs/ARCHITECTURE_FREEZE.md",
+        "location": "Section 7: Artifact Ownership 永久规则",
+        "reason": "没有 Task -> Artifact 真实绑定证据时，ownership = UNVERIFIED"
+      },
+      {
+        "source": "src/devtest/core-kernel.ts",
+        "location": "line 1517-1525",
+        "reason": "artifactOwnership === 'UNVERIFIED' 时强制设置 mediaEvidence.status = 'UNVERIFIED'"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Media",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "ARCHITECTURE_FREEZE.md specification",
+      "core-kernel verification logic"
+    ],
+    "notes": "必须设计专门的增量测试断言该分支行为"
+  },
+  {
+    "id": "KC-20260916-04",
+    "claim": "计费流水必须同时满足 antiDoubleBilling、netChargeZero、refundIdempotency 三大不变量，0次预扣不能凭 count<=1 自动 PASS。",
+    "evidence": [
+      {
+        "source": "docs/ARCHITECTURE_FREEZE.md",
+        "location": "Section 9: Billing 永久规则",
+        "reason": "必须区分 0次/1次/2+次，0次只有确凿免扣证据才允许 PASS"
+      },
+      {
+        "source": "src/devtest/billing.ts",
+        "location": "BillingOracle.reconcileTaskLedger",
+        "reason": "实现三大不变量审计，严格区分 DEVTEST_EXPECTATION 与 REAL_BILLING_FACT"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "billing.test.ts: 0 次预扣且期望扣费大于 0：不能仅凭 <=1 自动 PASS，判定 UNVERIFIED",
+      "vitest pass"
+    ],
+    "notes": "对账测试需覆盖重复扣费 (FP-004) 与失败漏退款 (FP-005)"
+  },
+  {
+    "id": "KC-20260917-05",
+    "claim": "当媒体产物物理结构合法，但 artifactOwnership 为 UNVERIFIED 时，verify() 必须 Fail-closed 判定为 UNVERIFIED，杜绝假 PASS。",
+    "evidence": [
+      {
+        "source": "src/devtest/core-kernel.ts",
+        "location": "line 1517-1525, line 1889-1897",
+        "reason": "mediaEvidence.status 变为 UNVERIFIED，阻止 allPassed 达成并输出 UNVERIFIED 裁决"
+      },
+      {
+        "source": "docs/ARCHITECTURE_FREEZE.md",
+        "location": "Section 7: Artifact Ownership 永久规则",
+        "reason": "明确规范即使媒体本身合法，无 Task 绑定证据仍不可 PASS"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Media",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 1: 外部提供物理有效 MP4，但缺少 TaskSnapshot 归属绑定时，verify 必须 Fail-closed 判定为 UNVERIFIED，绝不假 PASS",
+      "vitest pass"
+    ],
+    "notes": "验证 verify() 对外部输入 URL 的归属防御"
+  },
+  {
+    "id": "KC-20260917-06",
+    "claim": "任务即使成功生成且产物有效，若流水中出现多笔预扣 (preDeductCount > 1)，verify() 必须触发 FP-004 重复扣费资损告警并强制裁定 FAIL。",
+    "evidence": [
+      {
+        "source": "src/devtest/billing.ts",
+        "location": "BillingOracle.reconcileTaskLedger: line 221-226",
+        "reason": "preDeductCount > 1 时 antiDoubleBilling 置为 false，duplicateCharged 置为 true"
+      },
+      {
+        "source": "src/devtest/domain-knowledge.ts",
+        "location": "evaluateBusinessVerification: line 969-972",
+        "reason": "匹配 PANQU_FAILURE_PATTERNS.PATTERN_DOUBLE_BILLING (FP-004)"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 2: 任务成功且产物有效，但存在重复预扣流水时，verify 必须拦截并触发 FP-004 资损告警 (verdict: FAIL)",
+      "vitest pass"
+    ],
+    "notes": "必须防止多扣积分未被拦截导致的线上资损"
+  },
+  {
+    "id": "KC-20260917-07",
+    "claim": "失败任务若存在预扣但缺少退款流水 (netChargeZero === false)，verify() 必须触发 FP-005 失败漏退款资损告警并裁定 FAIL。",
+    "evidence": [
+      {
+        "source": "src/devtest/billing.ts",
+        "location": "BillingOracle.reconcileTaskLedger: line 318-322",
+        "reason": "失败任务 netDeducted > 0 时 netChargeZero 置为 false，missingRefund 置为 true"
+      },
+      {
+        "source": "src/devtest/domain-knowledge.ts",
+        "location": "evaluateBusinessVerification: line 973-976",
+        "reason": "匹配 PANQU_FAILURE_PATTERNS.PATTERN_FAILED_NO_REFUND (FP-005)"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Billing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 3: 任务在异步阶段执行失败且有扣费，但缺少退款流水时，verify 必须拦截并触发 FP-005 告警 (verdict: FAIL)",
+      "vitest pass"
+    ],
+    "notes": "确保用户失败任务不白扣点数"
+  },
+  {
+    "id": "KC-20260917-08",
+    "claim": "初始提交 API 返回失败 (code=0 / ok=false) 时，端到端异步一致性要求无论后续任务状态如何，verify() 必须将 apiVerified 置为 false 并裁定为 FAIL。",
+    "evidence": [
+      {
+        "source": "src/devtest/domain-knowledge.ts",
+        "location": "evaluateBusinessVerification: line 926, line 984-986",
+        "reason": "apiOk 为 false 直接纳入 hasAnyFail 触发 FAIL 裁定"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Task",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 4: 初始提交 API 返回失败 (code=0) 时，无论后续状态如何，verify 必须识别初始 API 违背并判定为 FAIL",
+      "vitest pass"
+    ],
+    "notes": "验证提交失败场景不会被后续状态误导"
+  },
+  {
+    "id": "KC-20260917-09",
+    "claim": "网关层当候选渠道全部超出每日限额 (usedQuota + taskPoints > dailyQuotaLimit) 时，RoutingOracle.evaluateGatewayRouting 必须置位 isBlockedByQuota 为 true 且候选渠道为空。",
+    "evidence": [
+      {
+        "source": "src/devtest/routing.ts",
+        "location": "RoutingOracle.evaluateGatewayRouting: line 326-347",
+        "reason": "超额渠道进入 quotaBlockedCount，candidates 为空且 quotaBlockedCount > 0 时 isBlockedByQuota 为 true"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Routing",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 5: 所有启用且同组的候选渠道超出每日限额时，evaluateGatewayRouting 必须置位 isBlockedByQuota 且候选渠道为空",
+      "vitest pass"
+    ],
+    "notes": "网关配额告警与熔断防穿透测试基准"
+  },
+  {
+    "id": "KC-20260917-10",
+    "claim": "MP4 遇 64 位 Extended Box (size=1) 且头部少于 16 字节截断时，inspectMp4Buffer 安全中断并不抛异常，精确归类为 FILE_INVALID。",
+    "evidence": [
+      {
+        "source": "src/devtest/media-inspector.ts",
+        "location": "parseTopLevelMp4Boxes: line 50-55",
+        "reason": "offset + 16 > maxLen 时安全 break，避免缓冲区越界"
+      }
+    ],
+    "confidence": "CONFIRMED",
+    "domain": "Media",
+    "status": "ACCEPTED",
+    "derived_from": [
+      "self-evolving-tester.test.ts: Card 6: MP4 遇到 size=1 (Extended Box) 且头部少于 16 字节时，inspectMp4Buffer 必须安全处理并判定为 FILE_INVALID",
+      "vitest pass"
+    ],
+    "notes": "针对网络传输截断多媒体流的健壮性保障"
+  }
+]

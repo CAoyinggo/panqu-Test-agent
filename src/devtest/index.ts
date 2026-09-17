@@ -82,11 +82,48 @@ export {
   type ArtifactCheckResult,
   type BillingReconciliation,
   type FlowRunEvidence,
+  type MemoryCandidatePayload,
 } from './types.js';
 
 export {
   DevTestMcpService,
   DEVTEST_MCP_TOOL,
 } from './mcp-service.js';
+
+export {
+  PANQU_BUSINESS_ENTITIES,
+  PANQU_API_KNOWLEDGE,
+  PANQU_ORACLE_KNOWLEDGE,
+  PANQU_TASK_KNOWLEDGE,
+  PANQU_FAILURE_PATTERNS,
+  PANQU_CONFIRMED_EXPERIENCES,
+  resolveDomainContext,
+  generateDomainExecutionPlan,
+  evaluateBusinessVerification,
+  loadConfirmedExperiences,
+  matchRelevantExperiences,
+  formatMemoryCandidate,
+  recordCandidateToSharedMemory,
+  createConfirmedFact,
+  createObservedFact,
+  createInferredFact,
+  createUnknownFact,
+  type KnowledgeCredibility,
+  type CredibleFact,
+  type BusinessEntity,
+  type ApiKnowledge,
+  type ApiParameterKnowledge,
+  type OracleKnowledge,
+  type OracleFieldKnowledge,
+  type TaskKnowledge,
+  type TaskLifecycleStep,
+  type Experience,
+  type FailurePattern,
+  type DomainProbeAnalysis,
+  type DomainExecutionStep,
+  type DomainExecutionPlan,
+  type BusinessVerificationInput,
+  type BusinessVerificationResult,
+} from './domain-knowledge.js';
 
 export { DEVTEST_VERSION, PLATFORM_VERSION } from './version.js';

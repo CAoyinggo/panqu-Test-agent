@@ -25,20 +25,44 @@ import type {
   AcceptanceResult,
   EvidenceCompleteness,
   ProductionAcceptanceReport,
+  MemoryCandidatePayload,
 } from './types.js';
+import {
+  resolveDomainContext,
+  generateDomainExecutionPlan,
+  evaluateBusinessVerification,
+  formatMemoryCandidate,
+  type DomainProbeAnalysis,
+  type DomainExecutionPlan,
+  type BusinessVerificationResult,
+  type Experience,
+} from './domain-knowledge.js';
 
 export interface ProbeKernelOptions {
   env?: string; baseUrl?: string; gatewayUrl?: string; sessionFile?: string; mock?: boolean; timeoutMs?: number;
+  requirement?: string;
+  modelId?: number;
+  mediaType?: 'video' | 'image';
+  extraExperiences?: Experience[];
+  projectRoot?: string;
 }
 export interface ProbeKernelResult {
   ok: boolean; status: 'HEALTHY' | 'DEGRADED' | 'BLOCKED'; env: string; baseUrl: string; gatewayUrl: string;
   probedAt: string; auth: { status: 'VALID' | 'EXPIRED' | 'MISSING'; details: string; hasSession: boolean };
   endpoints: Array<{ name: string; url: string; reachable: boolean; statusCode?: number; latencyMs?: number; message: string }>;
   candidateChannelCount: number; recommendations: string[];
+  domainAnalysis?: DomainProbeAnalysis;
 }
 
 export async function probe(options: ProbeKernelOptions = {}): Promise<ProbeKernelResult> {
   const env = options.env || 'test';
+  const domainAnalysis = resolveDomainContext({
+    requirement: options.requirement,
+    modelId: options.modelId,
+    mediaType: options.mediaType,
+    extraExperiences: options.extraExperiences,
+    projectRoot: options.projectRoot,
+  });
   try {
     const r: EnvProbeReport = await EnvironmentProbe.probe({
       env: env as 'test' | 'preonline', baseUrl: options.baseUrl, gatewayUrl: options.gatewayUrl,
@@ -48,6 +72,7 @@ export async function probe(options: ProbeKernelOptions = {}): Promise<ProbeKern
       ok: r.ok, status: r.status, env: r.env, baseUrl: r.baseUrl, gatewayUrl: r.gatewayUrl,
       probedAt: r.probedAt, auth: r.auth, endpoints: r.endpoints,
       candidateChannelCount: r.modelReadiness?.candidateChannelCount ?? 2, recommendations: r.recommendations,
+      domainAnalysis,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -56,6 +81,7 @@ export async function probe(options: ProbeKernelOptions = {}): Promise<ProbeKern
       gatewayUrl: options.gatewayUrl || 'https://unknown', probedAt: new Date().toISOString(),
       auth: { status: 'MISSING', details: msg, hasSession: false }, endpoints: [], candidateChannelCount: 0,
       recommendations: [`探活异常: ${msg}`],
+      domainAnalysis,
     };
   }
 }
@@ -80,6 +106,8 @@ export interface PlanKernelOptions {
   isGlobal?: boolean;
   mode?: 'real' | 'mock';
   sessionFile?: string;
+  extraExperiences?: Experience[];
+  projectRoot?: string;
 }
 
 export interface PlanKernelResult {
@@ -111,6 +139,7 @@ export interface PlanKernelResult {
     manualRequiredSummary: string[];
     nextStep: string;
   };
+  domainPlan?: DomainExecutionPlan;
 }
 
 export function generateDynamicTestPlan(
@@ -924,6 +953,51 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
   const testPlan = generateDynamicTestPlan(contract, options, mainVerdict, gwVerdict, expectedPoints);
 
+  const domainPlan = generateDomainExecutionPlan({
+    modelId,
+    mediaType,
+    flowType,
+    resolution: options.resolution || contract.supportedResolutions.value[0] || (contract.mediaType === 'video' ? '720p' : '1k'),
+    requirement: options.requirement,
+    expectedPoints,
+    extraExperiences: options.extraExperiences,
+    projectRoot: options.projectRoot,
+  });
+
+  // 若根据真实上下文匹配到了历史已确认业务经验，动态增强测试计划
+  if (domainPlan.relevantExperiences && domainPlan.relevantExperiences.length > 0) {
+    for (const exp of domainPlan.relevantExperiences) {
+      const hasPlanCheck = Boolean(exp.requiredPlanCheck || exp.related_pattern_id === 'FP-004' || exp.related_pattern_id === 'FP-005');
+      if (!hasPlanCheck) continue;
+
+      const expTestId = `history-${exp.id.toLowerCase()}`;
+      if (!testPlan.tests.some((t) => t.id === expTestId)) {
+        testPlan.tests.push({
+          id: expTestId,
+          layer: exp.requiredPlanCheck?.stage === 'TASK_VERIFY' ? 'execution' : 'billing',
+          purpose: `[历史经验核验] ${exp.title}: ${exp.symptom}`,
+          input: {
+            modelId,
+            mediaType,
+            relatedExperienceId: exp.id,
+            patternId: exp.related_pattern_id,
+          },
+          expected: {
+            verificationRule: exp.verification || exp.requiredPlanCheck?.verificationMethod || 'PASS',
+            expectedOutcome: exp.requiredPlanCheck?.expectedOutcome || '核验通过',
+          },
+          requiredEvidence: ['billing_reconciliation', 'business_invariants'],
+          executionMode: 'real_task',
+          status: 'READY',
+          rationale: {
+            whyIncluded: `历史上在 ${exp.context} 曾出现业务风险 (${exp.id})`,
+            riskAddressed: exp.root_cause || exp.symptom,
+          },
+        });
+      }
+    }
+  }
+
   const changeContract: ChangeContract = {
     scenario,
     modelId,
@@ -1028,6 +1102,7 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     missingInputs,
     acceptanceForecast,
     testerActionSummary: testPlan.testerActionSummary,
+    domainPlan,
   };
 }
 
@@ -1223,6 +1298,7 @@ export interface VerificationEvidence {
   media: MediaEvidence;
   billing: BillingEvidence;
   invariants: InvariantsEvidence;
+  business?: BusinessVerificationResult;
 }
 
 export interface VerifyKernelOptions {
@@ -1246,6 +1322,10 @@ export interface VerifyKernelOptions {
   customPoints?: number;
   pointsPerSecond?: number;
   price?: number;
+  apiResult?: { ok: boolean; code?: number; message?: string };
+  projectId?: number;
+  folderId?: number;
+  isFolderInProject?: boolean;
 }
 export interface VerifyKernelResult {
   ok: boolean; passed: boolean; taskId: number; modelId: number; mediaType: 'video' | 'image';
@@ -1263,6 +1343,8 @@ export interface VerifyKernelResult {
   reasons: string[];
   expectedVsActual?: ExpectedVsActual;
   contract?: DiscoveredModelContract;
+  businessValidation?: BusinessVerificationResult;
+  memoryCandidate?: MemoryCandidatePayload;
 }
 
 export async function verify(options: VerifyKernelOptions): Promise<VerifyKernelResult> {
@@ -1316,6 +1398,21 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         reasons: [msg],
         summaryText: `[BLOCKED] ${msg}`,
       };
+      const businessValidation: BusinessVerificationResult = {
+        status: 'FAIL',
+        technicalSuccess: false,
+        businessSuccess: false,
+        verdictDetail: {
+          apiVerified: false,
+          taskStateVerified: false,
+          artifactBound: false,
+          oracleConsistent: false,
+          relationsValid: false,
+        },
+        matchedFailurePatterns: [],
+        reasons: [msg],
+        credibility: 'CONFIRMED',
+      };
       return {
         ok: false, passed: false, taskId, modelId, mediaType, status: 'ERROR', verdict: 'FAIL',
         acceptance: 'BLOCKED',
@@ -1325,11 +1422,13 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
           media: { status: 'UNVERIFIED', source: 'missing_session', ownership: 'UNVERIFIED', reason: msg },
           billing: { status: 'UNVERIFIED', source: 'missing_session', expectedPoints, expectedChargeSource, reason: msg },
           invariants: { status: 'UNVERIFIED', reason: msg },
+          business: businessValidation,
         },
         reasons: [msg],
         contract,
         evidenceCompleteness: completeness,
         acceptanceReport,
+        businessValidation,
       };
     }
   } else if (autoSession) {
@@ -1374,6 +1473,21 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         reasons: [msg],
         summaryText: `[BLOCKED] ${msg}`,
       };
+      const businessValidation: BusinessVerificationResult = {
+        status: 'UNVERIFIED',
+        technicalSuccess: true,
+        businessSuccess: false,
+        verdictDetail: {
+          apiVerified: true,
+          taskStateVerified: false,
+          artifactBound: false,
+          oracleConsistent: false,
+          relationsValid: true,
+        },
+        matchedFailurePatterns: [],
+        reasons: [msg],
+        credibility: 'CONFIRMED',
+      };
       return {
         ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING',
         acceptance: 'BLOCKED',
@@ -1383,11 +1497,13 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
           media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
           billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
           invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
+          business: businessValidation,
         },
         reasons: [msg],
         contract,
         evidenceCompleteness: completeness,
         acceptanceReport,
+        businessValidation,
       };
     }
     if (finalSnapshot.taskStatus === 3 || finalSnapshot.taskStatus === 4) {
@@ -1752,6 +1868,39 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     };
   }
 
+  const businessValidation = evaluateBusinessVerification({
+    taskId,
+    modelId,
+    mediaType,
+    apiResult: options.apiResult,
+    taskTerminalStatus: terminalStatus,
+    mediaEvidence: {
+      status: mediaEvidence.status,
+      format: mediaEvidence.format,
+      decodable: mediaEvidence.decodable,
+      ownership: mediaEvidence.ownership,
+      reason: mediaEvidence.reason,
+    },
+    billingEvidence: {
+      status: billingEvidence.status,
+      netDeductedPoints: billingEvidence.netDeductedPoints,
+      expectedPoints: billingEvidence.expectedPoints,
+      reason: billingEvidence.reason,
+    },
+    invariantsEvidence: {
+      status: invariantsEvidence.status,
+      antiDoubleBilling: invariantsEvidence.antiDoubleBilling,
+      netChargeZero: invariantsEvidence.netChargeZero,
+      refundIdempotency: invariantsEvidence.refundIdempotency,
+      reason: invariantsEvidence.reason,
+    },
+    paramRelations: (options.projectId !== undefined || options.folderId !== undefined || options.isFolderInProject !== undefined) ? {
+      projectId: options.projectId,
+      folderId: options.folderId,
+      isFolderInProject: options.isFolderInProject,
+    } : undefined,
+  });
+
   const reasons: string[] = [];
   if (taskEvidence.status === 'FAIL') reasons.push(`任务执行失败: ${taskEvidence.error || '任务状态异常'}`);
   if (taskEvidence.status === 'UNVERIFIED') reasons.push(taskEvidence.error || '任务状态未确认 [UNVERIFIED]');
@@ -1770,13 +1919,19 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       reasons.push(`[配置冲突] ${c.message}`);
     }
   }
+  if (businessValidation.status === 'FAIL') {
+    for (const r of businessValidation.reasons) {
+      if (!reasons.includes(r)) reasons.push(r);
+    }
+  }
 
   const hasFailures = taskEvidence.status === 'FAIL'
     || mediaEvidence.status === 'FAIL'
     || billingEvidence.status === 'FAIL'
     || invariantsEvidence.status === 'FAIL'
     || Boolean(regressionDiff?.isRegression)
-    || contract.conflicts.length > 0;
+    || contract.conflicts.length > 0
+    || businessValidation.status === 'FAIL';
 
   const allPassed = taskEvidence.status === 'PASS'
     && mediaEvidence.status === 'PASS'
@@ -1784,7 +1939,8 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     && invariantsEvidence.status === 'PASS'
     && !regressionDiff?.isRegression
     && contract.pricing.allowPass
-    && contract.conflicts.length === 0;
+    && contract.conflicts.length === 0
+    && businessValidation.status === 'PASS';
 
   let verdictStatus: 'SUCCESS' | 'FAILED' | 'UNVERIFIED';
   let verdict: 'PASS' | 'FAIL' | 'UNVERIFIED';
@@ -1856,6 +2012,17 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       diff: isDbExtraVerified ? 'MATCH' : 'HTTP API 不返回 extra 字段，需以只读权限查询 DB 验证落库',
       critical: false,
       evidence: isDbExtraVerified ? 'DB_READONLY_QUERY' : 'MANUAL_DB_EVIDENCE_REQUIRED',
+    },
+    {
+      field: 'businessValidation',
+      layer: 'domain',
+      expected: 'BUSINESS_SUCCESS',
+      actual: businessValidation.businessSuccess ? 'BUSINESS_SUCCESS' : (businessValidation.status === 'FAIL' ? 'BUSINESS_FAIL' : 'BUSINESS_UNVERIFIED'),
+      matched: businessValidation.businessSuccess,
+      status: businessValidation.businessSuccess ? 'PASS' : (businessValidation.status === 'FAIL' ? 'FAIL' : 'BLOCKED'),
+      diff: businessValidation.businessSuccess ? 'MATCH' : (businessValidation.reasons.join('; ') || '业务级验证未全部满足'),
+      critical: true,
+      evidence: 'evaluateBusinessVerification',
     },
   ];
 
@@ -2096,6 +2263,17 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     evidenceCompleteness,
   };
 
+  const memoryCandidate = (verdictStatus === 'FAILED' || businessValidation.matchedFailurePatterns.length > 0)
+    ? formatMemoryCandidate({
+        taskId,
+        modelId,
+        mediaType,
+        matchedFailurePatterns: businessValidation.matchedFailurePatterns,
+        reasons: reportReasons,
+        terminalStatus,
+      })
+    : undefined;
+
   return {
     ok: true,
     passed: verdictStatus === 'SUCCESS',
@@ -2112,11 +2290,13 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     billing,
     billingAudit: (billing && scoreLogsToReconcile && scoreLogsToReconcile.length > 0) ? 'AUDITED' : 'SKIPPED_NO_LOGS',
     invariants,
-    evidence: { task: taskEvidence, media: mediaEvidence, billing: billingEvidence, invariants: invariantsEvidence },
+    evidence: { task: taskEvidence, media: mediaEvidence, billing: billingEvidence, invariants: invariantsEvidence, business: businessValidation },
     evidenceCompleteness,
     reasons: reportReasons,
     expectedVsActual,
     acceptanceReport,
     contract,
+    businessValidation,
+    memoryCandidate,
   };
 }

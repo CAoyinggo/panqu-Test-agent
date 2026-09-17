@@ -12,6 +12,16 @@ export type {
 } from "./core-kernel.js";
 
 export type {
+  KnowledgeCredibility, CredibleFact, BusinessEntity,
+  ApiKnowledge, ApiParameterKnowledge,
+  OracleKnowledge, OracleFieldKnowledge,
+  TaskKnowledge, TaskLifecycleStep,
+  Experience, FailurePattern,
+  DomainProbeAnalysis, DomainExecutionStep, DomainExecutionPlan,
+  BusinessVerificationInput, BusinessVerificationResult,
+} from "./domain-knowledge.js";
+
+export type {
   PanquSession, SubmitMediaTaskOptions, SubmitMediaTaskResult,
   TaskStatusSnapshot, PollTaskStatusOptions,
 } from "./media-flow.js";
@@ -32,6 +42,18 @@ export type FlowMediaType = "VIDEO" | "IMAGE";
 export type FlowExecutionMode = "REAL" | "MOCK";
 export type FlowStepStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED";
 export type TaskTerminalStatus = "SUCCEEDED" | "SUCCESS" | "FAILED" | "TIMEOUT" | "UNKNOWN";
+
+export interface MemoryCandidatePayload {
+  agent: 'trae' | 'antigravity' | 'codex';
+  topic: string;
+  content: string;
+  dest?: string;
+  patternId?: string;
+  modelId?: number;
+  taskId?: number;
+  confidence: 'CONFIRMED' | 'OBSERVED' | 'INFERRED';
+  reasons: string[];
+}
 
 export interface DiversionCheckResult {
   passed: boolean;
