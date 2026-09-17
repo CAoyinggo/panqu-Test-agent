@@ -354,3 +354,37 @@ export interface ExpectedVsActual {
   regressionDiff?: DiversionRegressionDiff;
   evidenceCompleteness?: EvidenceCompleteness;
 }
+
+export const DEFAULT_GITHUB_KNOWLEDGE_CONFIG = {
+  repository: 'CAoyinggo/panqu-Test-agent',
+  path: '.agents/skills/self-evolving-tester/references/knowledge_candidates.json',
+} as const;
+
+export interface KnowledgeSyncPayload {
+  repository: string;
+  path: string;
+  knowledge: import('./domain-knowledge.js').Experience[];
+}
+
+export interface BuildSyncPayloadOptions {
+  knowledge: import('./domain-knowledge.js').Experience[];
+  repository?: string;
+  path?: string;
+}
+
+export interface BuildSyncPayloadResult {
+  ok: boolean;
+  syncRequired: boolean;
+  payload?: KnowledgeSyncPayload;
+  rejectedItems?: Array<{ id: string; reason: string }>;
+  error?: string;
+}
+
+export interface MergeKnowledgeResult {
+  ok: boolean;
+  mergedContent?: string;
+  mergedCount: number;
+  skippedCount: number;
+  conflictItems?: Array<{ id: string; reason: string; existingClaim?: string; incomingClaim?: string }>;
+  error?: string;
+}

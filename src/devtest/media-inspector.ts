@@ -209,7 +209,7 @@ export function inspectMp4Buffer(buffer: Buffer, tailBuffer?: Buffer): MediaInsp
   let moovBuffer = buffer;
 
   if (!moovBox) {
-    const effectiveTail = tailBuffer || (buffer as any)?.tailBuffer || (buffer.length > 65536 ? buffer.subarray(Math.max(0, buffer.length - 65536)) : null);
+    const effectiveTail = tailBuffer || (buffer.length > 65536 ? buffer.subarray(Math.max(0, buffer.length - 65536)) : null);
     if (effectiveTail) {
       const tailMoov = findMoovBoxInTail(effectiveTail);
       if (tailMoov) {

@@ -912,9 +912,9 @@ export class EnvironmentProbe {
       headers: Record<string, string> = {},
     ): Promise<EndpointProbeResult> => {
       const startTime = Date.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
         const res = await fetch(url, {
           method,
           headers: {
@@ -923,7 +923,6 @@ export class EnvironmentProbe {
           },
           signal: controller.signal,
         });
-        clearTimeout(timer);
         const latency = Date.now() - startTime;
         return {
           name,
@@ -944,6 +943,8 @@ export class EnvironmentProbe {
           latencyMs: latency,
           message: `连接失败: ${(err as Error).message}`,
         };
+      } finally {
+        clearTimeout(timer);
       }
     };
 

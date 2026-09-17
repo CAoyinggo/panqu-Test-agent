@@ -84,6 +84,11 @@ export {
   type FlowRunEvidence,
   type MemoryCandidatePayload,
   type RecordCandidateResult,
+  DEFAULT_GITHUB_KNOWLEDGE_CONFIG,
+  type KnowledgeSyncPayload,
+  type BuildSyncPayloadOptions,
+  type BuildSyncPayloadResult,
+  type MergeKnowledgeResult,
 } from './types.js';
 
 export {
@@ -107,6 +112,8 @@ export {
   formatMemoryCandidate,
   recordCandidateToSharedMemory,
   promoteConfirmedExperiences,
+  buildKnowledgeSyncPayload,
+  mergeKnowledgeIntoRemoteJson,
   type PromoteOptions,
   type PromotionReport,
   type PromotionReportItem,
@@ -133,3 +140,20 @@ export {
 } from './domain-knowledge.js';
 
 export { DEVTEST_VERSION, PLATFORM_VERSION } from './version.js';
+
+export {
+  PanquExplorationRunner,
+  runMutationCandidate,
+  type MutationRunOptions,
+  type MutationRunResult,
+  type MutationRunStatus,
+  type NegativeRejectionEvidence,
+} from './exploration/runner.js';
+
+export {
+  PanquLearningStore,
+  extractLearningExperiences,
+  buildActionHistoryCounts,
+  feedResultIntoLearning,
+  type ExtractLearningOptions,
+} from './exploration/learning.js';

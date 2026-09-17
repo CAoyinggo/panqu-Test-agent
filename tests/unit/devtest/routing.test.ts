@@ -122,6 +122,43 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
         newapiModel: 'seedance-2.0',
       });
     });
+
+    it('分组渠道规格不匹配回退：当前路由分组无承接该分辨率/画幅渠道时回退直连 (line=0)', () => {
+      // panqu_test 分组只配置了 15 号模型的 480p 与 720p，请求 1080p 应回退直连
+      const verdict = RoutingOracle.evaluateVideoMainSite(
+        {
+          videoType: 6,
+          modelId: 15,
+          taskType: 28,
+          resolution: '1080p',
+          aspectRatio: '16:9',
+          userGroupIds: [10],
+        },
+        baseConfig,
+      );
+      expect(verdict.willDivert).toBe(false);
+      expect(verdict.decision).toBe('FALLBACK_DIRECT');
+      expect(verdict.line).toBe(0);
+      expect(verdict.reason).toContain('无承接分辨率 1080p 的渠道，回退直连');
+    });
+
+    it('多租户组织隔离：用户所属角色组未绑定任何 NewAPI 企业路由组时不分流', () => {
+      const verdict = RoutingOracle.evaluateVideoMainSite(
+        {
+          videoType: 6,
+          modelId: 15,
+          taskType: 28,
+          resolution: '720p',
+          aspectRatio: '16:9',
+          userGroupIds: [99999], // 未绑定组织
+        },
+        baseConfig,
+      );
+      expect(verdict.willDivert).toBe(false);
+      expect(verdict.decision).toBe('FALLBACK_DIRECT');
+      expect(verdict.line).toBe(0);
+      expect(verdict.reason).toContain('未绑定任何有效的 NewAPI 路由组');
+    });
   });
 
   describe('2. 图片分流决策推导', () => {
@@ -144,6 +181,27 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
       expect(verdict.line).toBe(10);
       expect(verdict.expectedSnapshot?.newapiModel).toBe('pan-banana-pro');
     });
+
+    it('网关准入门禁校验：自定义像素尺寸 (pixels) 或参考图超限 (>10张) 拦截回退直连', () => {
+      // 1. 自定义像素尺寸 (pixels) 拦截回退直连
+      const pixelVerdict = RoutingOracle.evaluateImageMainSite(
+        { selmodelsId: 12, serviceline: 'r', sizeType: 'pixels', userGroupIds: [10] },
+        baseConfig,
+      );
+      expect(pixelVerdict.willDivert).toBe(false);
+      expect(pixelVerdict.decision).toBe('FALLBACK_DIRECT');
+      expect(pixelVerdict.reason).toContain('自定义像素尺寸 (pixels) 不支持');
+
+      // 2. 参考图数量超限 (>10张) 拦截回退直连
+      const overflowImages = Array.from({ length: 11 }, (_, i) => `http://img_${i}.png`);
+      const refVerdict = RoutingOracle.evaluateImageMainSite(
+        { selmodelsId: 12, serviceline: 'r', imageList: overflowImages, userGroupIds: [10] },
+        baseConfig,
+      );
+      expect(refVerdict.willDivert).toBe(false);
+      expect(refVerdict.decision).toBe('FALLBACK_DIRECT');
+      expect(refVerdict.reason).toContain('参考图数量 (11) 超过上限 10 张');
+    });
   });
 
   describe('3. 网关层渠道筛选与加权推导', () => {
@@ -159,6 +217,20 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
       expect(result.candidateChannelIds).toEqual([36, 37]);
       expect(result.probabilities[36]).toBeCloseTo(0.8);
       expect(result.probabilities[37]).toBeCloseTo(0.2);
+    });
+
+    it('配额耗尽与模型不匹配熔断：渠道额度超限或模型未覆盖时触发拒绝并标记 isBlockedByQuota', () => {
+      const quotaLimitedChannels: GatewayChannelConfig[] = [
+        { id: 41, name: '限额渠道', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 100, usedQuota: 95 },
+        { id: 42, name: '异构模型渠道', group: 'panqu_test', models: ['seedance-2.0'], status: 1, weight: 10, dailyQuotaLimit: 1000, usedQuota: 0 },
+      ];
+
+      // 请求 10 积分，渠道 41 额度不足 (95+10 > 100)，渠道 42 模型不匹配
+      const result = RoutingOracle.evaluateGatewayRouting('panqu_test', 'wan3.0-video', 10, quotaLimitedChannels);
+      expect(result.candidateChannelIds).toEqual([]);
+      expect(result.isBlockedByQuota).toBe(true);
+      expect(result.rejectedReasons[41]).toContain('超出每日限额');
+      expect(result.rejectedReasons[42]).toContain('渠道不承接模型 wan3.0-video');
     });
 
     it('降级决策：Seedance 派发火山兜底，Wan3 直接失败', () => {

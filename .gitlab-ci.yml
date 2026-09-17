@@ -67,9 +67,7 @@ test:
     policy: pull
   script:
     - npm run build
-    - node dist/bin/run-test.js --task src/cases --ci --upload-reports
-    # 生成 Allure HTML 报告（不阻塞流水线）
-    - bash scripts/ci/generate-allure-html.sh || echo "⚠ Allure HTML 生成跳过"
+    - npm test
   artifacts:
     paths: [output/]
     reports:

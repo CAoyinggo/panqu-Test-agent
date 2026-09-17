@@ -1189,7 +1189,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
   };
 }
 
-async function fetchFirst64K(url: string, timeoutMs = 8000): Promise<{ buffer: Buffer; durationMs: number } | null> {
+async function fetchFirst64K(url: string, timeoutMs = 8000): Promise<{ buffer: Buffer; tailBuffer?: Buffer; durationMs: number } | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const start = Date.now();
@@ -1198,14 +1198,14 @@ async function fetchFirst64K(url: string, timeoutMs = 8000): Promise<{ buffer: B
     if (!res.ok && res.status !== 206) return null;
     const arrayBuf = await res.arrayBuffer();
     let buf = Buffer.from(arrayBuf);
+    let tail: Buffer | undefined;
     if (res.status === 200) {
       if (buf.length > 65536) {
         const head = buf.subarray(0, 65536);
-        const tail = buf.subarray(Math.max(0, buf.length - 65536));
-        (head as any).tailBuffer = tail;
+        tail = buf.subarray(Math.max(0, buf.length - 65536));
         buf = head;
       }
-      return { buffer: buf, durationMs: Date.now() - start };
+      return { buffer: buf, tailBuffer: tail, durationMs: Date.now() - start };
     }
     const headBuf = buf.subarray(0, 65536);
     const quickInspection = inspectMp4Buffer(headBuf);
@@ -1224,14 +1224,13 @@ async function fetchFirst64K(url: string, timeoutMs = 8000): Promise<{ buffer: B
           signal: ctrl.signal,
         });
         if (tailRes.ok || tailRes.status === 206) {
-          const tailBuf = Buffer.from(await tailRes.arrayBuffer());
-          (headBuf as any).tailBuffer = tailBuf;
+          tail = Buffer.from(await tailRes.arrayBuffer());
         }
       } catch {
         // 保留 headBuf 继续走既有 fail-closed 校验
       }
     }
-    return { buffer: headBuf, durationMs: Date.now() - start };
+    return { buffer: headBuf, tailBuffer: tail, durationMs: Date.now() - start };
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
@@ -1302,7 +1301,7 @@ export interface VerificationEvidence {
 
 export interface VerifyKernelOptions {
   taskId: number; modelId?: number; mediaType?: 'video' | 'image'; scoreLogs?: ScoreLogEntry[];
-  expectedPoints?: number; assetBuffer?: Buffer; artifactBuffer?: Buffer; terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
+  expectedPoints?: number; assetBuffer?: Buffer; artifactBuffer?: Buffer; tailBuffer?: Buffer; terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
   resolution?: string; duration?: number; sessionFile?: string; env?: 'test' | 'preonline';
   baseUrl?: string; cookies?: string; videoUrl?: string; imageUrl?: string; pollTimeoutSec?: number;
   artifactOwnership?: 'VERIFIED' | 'UNVERIFIED' | 'UNBOUND';
@@ -1445,6 +1444,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     : 'offline';
 
   let artifactBuffer = options.assetBuffer ?? options.artifactBuffer;
+  let artifactTailBuffer = options.tailBuffer;
   let probeDurationMs: number | undefined;
   let terminalStatus: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
   let taskEvidence: TaskEvidence;
@@ -1517,7 +1517,11 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         artifactOwnership = 'VERIFIED';
         if (!artifactBuffer) {
           const probeRes = await fetchFirst64K(mediaUrl);
-          if (probeRes) { artifactBuffer = probeRes.buffer; probeDurationMs = probeRes.durationMs; }
+          if (probeRes) {
+            artifactBuffer = probeRes.buffer;
+            artifactTailBuffer = probeRes.tailBuffer;
+            probeDurationMs = probeRes.durationMs;
+          }
         }
       }
     } else {
@@ -1527,7 +1531,11 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         mediaArtifactSource = 'EXTERNAL_URL';
         artifactOwnership = options.artifactOwnership === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED';
         const probeRes = await fetchFirst64K(options.videoUrl || options.imageUrl!);
-        if (probeRes) { artifactBuffer = probeRes.buffer; probeDurationMs = probeRes.durationMs; }
+        if (probeRes) {
+          artifactBuffer = probeRes.buffer;
+          artifactTailBuffer = probeRes.tailBuffer;
+          probeDurationMs = probeRes.durationMs;
+        }
       }
     }
   } else {
@@ -1548,14 +1556,18 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       }
       if (!artifactBuffer) {
         const probeRes = await fetchFirst64K(options.videoUrl || options.imageUrl!);
-        if (probeRes) { artifactBuffer = probeRes.buffer; probeDurationMs = probeRes.durationMs; }
+        if (probeRes) {
+          artifactBuffer = probeRes.buffer;
+          artifactTailBuffer = probeRes.tailBuffer;
+          probeDurationMs = probeRes.durationMs;
+        }
       }
     } else if (artifactBuffer) {
       mediaArtifactSource = options.artifactOwnership === 'UNVERIFIED' || options.artifactOwnership === 'UNBOUND' ? 'EXTERNAL_BUFFER' : 'FIXTURE_BUFFER';
     }
   }
 
-  const artifact = artifactBuffer ? (mediaType === 'video' ? inspectMp4Buffer(artifactBuffer) : inspectImageBuffer(artifactBuffer)) : undefined;
+  const artifact = artifactBuffer ? (mediaType === 'video' ? inspectMp4Buffer(artifactBuffer, artifactTailBuffer) : inspectImageBuffer(artifactBuffer)) : undefined;
   let mediaEvidence: MediaEvidence;
   if (terminalStatus === 'FAILED' && !artifactBuffer) {
     mediaEvidence = { status: 'UNVERIFIED', source: 'task_failed', ownership: 'UNVERIFIED', reason: '任务执行失败，无媒体产物' };

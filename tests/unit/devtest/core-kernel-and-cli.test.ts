@@ -1348,9 +1348,8 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     const moov = base.subarray(24, 24 + moovLen);
     const mdat = base.subarray(24 + moovLen);
 
-    // 构造 head + tail 并附加 tailBuffer
+    // 构造 head + tail 并显式传入 tailBuffer
     const head = Buffer.concat([ftyp, mdat]);
-    (head as any).tailBuffer = moov;
 
     const vRes = await verify({
       taskId: 88804,
@@ -1358,6 +1357,7 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       mediaType: 'video',
       terminalStatus: 'SUCCESS',
       assetBuffer: head,
+      tailBuffer: moov,
       scoreLogs: [{ task_id: 88804, type: 2, score: -56 }],
     });
 

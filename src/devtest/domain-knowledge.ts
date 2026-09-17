@@ -14,7 +14,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { MemoryCandidatePayload } from './types.js';
+import {
+  type MemoryCandidatePayload,
+  DEFAULT_GITHUB_KNOWLEDGE_CONFIG,
+  type KnowledgeSyncPayload,
+  type BuildSyncPayloadOptions,
+  type BuildSyncPayloadResult,
+  type MergeKnowledgeResult,
+} from './types.js';
 
 // ============================================================================
 // 1. 知识可信度边界定义 (Knowledge Credibility Boundary)
@@ -1170,6 +1177,7 @@ export interface PromotionReportItem {
   candidateId: string;
   status: 'PROMOTED' | 'ALREADY_PROMOTED' | 'DUPLICATE_CONTENT_SKIPPED' | 'INVALID_CANDIDATE_SKIPPED';
   knowledgeId?: string;
+  knowledge?: Experience;
   reason: string;
 }
 
@@ -1180,6 +1188,221 @@ export interface PromotionReport {
   alreadyPromotedCount: number;
   skippedCount: number;
   items: PromotionReportItem[];
+  syncRequired?: boolean;
+  syncPayload?: KnowledgeSyncPayload;
+}
+
+/**
+ * 构造确定性 Knowledge Sync Payload (仅接受已通过 Promotion 的合法知识)
+ * 纯函数，不进行任何网络请求，不修改 GitHub，不直接调用 GitHub API。
+ */
+export function buildKnowledgeSyncPayload(options: BuildSyncPayloadOptions): BuildSyncPayloadResult {
+  const repository = options.repository || DEFAULT_GITHUB_KNOWLEDGE_CONFIG.repository;
+  const path = options.path || DEFAULT_GITHUB_KNOWLEDGE_CONFIG.path;
+  const knowledgeList = Array.isArray(options.knowledge) ? options.knowledge : [];
+
+  const validKnowledge: Experience[] = [];
+  const rejectedItems: Array<{ id: string; reason: string }> = [];
+
+  for (const item of knowledgeList) {
+    if (!item || typeof item !== 'object') {
+      rejectedItems.push({ id: 'UNKNOWN', reason: 'ITEM_NOT_AN_OBJECT' });
+      continue;
+    }
+
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    if (!id) {
+      rejectedItems.push({ id: 'EMPTY_ID', reason: 'KNOWLEDGE_ID_MISSING' });
+      continue;
+    }
+
+    // 门禁 1: 必须为已晋升或已确认状态 (ACCEPTED 或 CONFIRMED)
+    if (item.status !== 'ACCEPTED' && item.status !== 'CONFIRMED') {
+      rejectedItems.push({ id, reason: `INVALID_STATUS_${item.status || 'UNSPECIFIED'}` });
+      continue;
+    }
+
+    // 门禁 2: 可信度必须为 CONFIRMED
+    if (item.confidence !== 'CONFIRMED') {
+      rejectedItems.push({ id, reason: `CONFIDENCE_NOT_CONFIRMED_${item.confidence || 'UNSPECIFIED'}` });
+      continue;
+    }
+
+    // 门禁 3: 必须包含溯源 sourceCandidateId (证明经过了 Candidate 缓冲池审批)
+    if (!item.sourceCandidateId || typeof item.sourceCandidateId !== 'string') {
+      rejectedItems.push({ id, reason: 'MISSING_SOURCE_CANDIDATE_ID' });
+      continue;
+    }
+
+    // 门禁 4: 必须包含 promotedAt 晋升时间戳
+    if (!item.promotedAt || typeof item.promotedAt !== 'string') {
+      rejectedItems.push({ id, reason: 'MISSING_PROMOTED_AT_TIMESTAMP' });
+      continue;
+    }
+
+    // 门禁 5: 必须具有有效的 title 或 symptom
+    if (!item.title && !item.symptom) {
+      rejectedItems.push({ id, reason: 'MISSING_TITLE_OR_CLAIM' });
+      continue;
+    }
+
+    // 注意：不要求 requiredPlanCheck 必须存在 (架构、API、Oracle 等事实皆为有效知识)
+    validKnowledge.push(item);
+  }
+
+  if (validKnowledge.length === 0) {
+    return {
+      ok: true,
+      syncRequired: false,
+      rejectedItems: rejectedItems.length > 0 ? rejectedItems : undefined,
+    };
+  }
+
+  return {
+    ok: true,
+    syncRequired: true,
+    payload: {
+      repository,
+      path,
+      knowledge: validKnowledge,
+    },
+    rejectedItems: rejectedItems.length > 0 ? rejectedItems : undefined,
+  };
+}
+
+/**
+ * 将经过校验的 Knowledge 合并至远端 JSON 数组 (含严格以 knowledge.id 为主键的幂等与冲突检测)
+ * 纯函数，杜绝让 Trae / LLM 自由编辑 JSON 文本造成语法损坏。
+ */
+export function mergeKnowledgeIntoRemoteJson(
+  remoteJsonContent: string,
+  incomingKnowledge: Experience[]
+): MergeKnowledgeResult {
+  if (!incomingKnowledge || incomingKnowledge.length === 0) {
+    return {
+      ok: true,
+      mergedContent: remoteJsonContent,
+      mergedCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  let remoteArray: any[] = [];
+  try {
+    const trimmed = remoteJsonContent ? remoteJsonContent.trim() : '';
+    if (!trimmed) {
+      remoteArray = [];
+    } else {
+      const parsed = JSON.parse(trimmed);
+      if (!Array.isArray(parsed)) {
+        return {
+          ok: false,
+          error: 'REMOTE_CONTENT_NOT_JSON_ARRAY',
+          mergedCount: 0,
+          skippedCount: 0,
+        };
+      }
+      remoteArray = parsed;
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: `REMOTE_JSON_PARSE_ERROR: ${(err as Error).message}`,
+      mergedCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  let mergedCount = 0;
+  let skippedCount = 0;
+  const conflictItems: Array<{ id: string; reason: string; existingClaim?: string; incomingClaim?: string }> = [];
+
+  for (const inc of incomingKnowledge) {
+    const existingIndex = remoteArray.findIndex((item) => item && item.id === inc.id);
+
+    if (existingIndex >= 0) {
+      const existing = remoteArray[existingIndex];
+      // 检查内容是否一致 (比对 claim / title 与 sourceCandidateId)
+      const existingClaim = (existing.claim || existing.title || '').trim();
+      const incomingClaim = (inc.title || inc.symptom || '').trim();
+      const existingSource = existing.sourceCandidateId;
+      const incomingSource = inc.sourceCandidateId;
+
+      const isSameContent =
+        existingClaim === incomingClaim &&
+        (!existingSource || !incomingSource || existingSource === incomingSource);
+
+      if (isSameContent) {
+        // 幂等：内容一致，安全跳过重复追加
+        skippedCount++;
+        continue;
+      } else {
+        // 冲突：相同 ID 但内容不一致，绝不静默覆盖
+        conflictItems.push({
+          id: inc.id,
+          reason: 'ID_EXISTS_WITH_DIFFERENT_CONTENT',
+          existingClaim,
+          incomingClaim,
+        });
+        continue;
+      }
+    }
+
+    // 远端不存在相同 ID，格式化为符合 references/knowledge_candidates.json 的标准条目并追加
+    let domain: 'Task' | 'Billing' | 'Media' | 'Routing' = 'Task';
+    const patternId = inc.related_pattern_id;
+    if (patternId === 'FP-004' || patternId === 'FP-005') domain = 'Billing';
+    else if (patternId === 'FP-002') domain = 'Media';
+    else if (patternId === 'FP-001' || patternId === 'FP-003') domain = 'Task';
+
+    const newRemoteEntry: Record<string, any> = {
+      id: inc.id,
+      claim: inc.title || inc.symptom,
+      evidence: [
+        {
+          source: 'shared-memory/candidates/inbox.md',
+          location: inc.sourceCandidateId,
+          reason: inc.root_cause || inc.context,
+        },
+      ],
+      confidence: inc.confidence,
+      domain,
+      status: inc.status || 'ACCEPTED',
+      derived_from: [
+        `shared-memory/candidates/inbox.md: ${inc.sourceCandidateId}`,
+        `agent: trae`,
+      ],
+      notes: inc.context,
+      sourceCandidateId: inc.sourceCandidateId,
+      promotedAt: inc.promotedAt,
+      related_pattern_id: inc.related_pattern_id,
+      related_model_id: inc.related_model_id,
+    };
+
+    if (inc.requiredPlanCheck) {
+      newRemoteEntry.requiredPlanCheck = inc.requiredPlanCheck;
+    }
+
+    remoteArray.push(newRemoteEntry);
+    mergedCount++;
+  }
+
+  if (conflictItems.length > 0) {
+    return {
+      ok: false,
+      error: 'SYNC_CONFLICT',
+      conflictItems,
+      mergedCount,
+      skippedCount,
+    };
+  }
+
+  return {
+    ok: true,
+    mergedContent: JSON.stringify(remoteArray, null, 2) + '\n',
+    mergedCount,
+    skippedCount,
+  };
 }
 
 /**
@@ -1228,6 +1451,7 @@ export function promoteConfirmedExperiences(options: PromoteOptions = {}): Promo
 
   let match;
   let hasNewPromotion = false;
+  const promotedExperiencesList: Experience[] = [];
 
   while ((match = candBlockRegex.exec(inboxContent)) !== null) {
     report.totalScanned++;
@@ -1340,10 +1564,29 @@ export function promoteConfirmedExperiences(options: PromoteOptions = {}): Promo
     knowledgeList.push(newKnowledgeEntry);
     hasNewPromotion = true;
     report.promotedCount++;
+
+    const promotedExp: Experience = {
+      id: newId,
+      title: topic,
+      context: content,
+      symptom: topic,
+      root_cause: content,
+      verification: defaultCheck?.verificationMethod || '已确认业务规则',
+      related_pattern_id: patternId,
+      related_model_id: modelId,
+      confidence: 'CONFIRMED',
+      status: 'ACCEPTED',
+      sourceCandidateId: candId,
+      promotedAt: newKnowledgeEntry.promotedAt,
+      requiredPlanCheck: defaultCheck,
+    };
+    promotedExperiencesList.push(promotedExp);
+
     report.items.push({
       candidateId: candId,
       status: 'PROMOTED',
       knowledgeId: newId,
+      knowledge: promotedExp,
       reason: 'CANDIDATE_SUCCESSFULLY_PROMOTED',
     });
   }
@@ -1355,6 +1598,19 @@ export function promoteConfirmedExperiences(options: PromoteOptions = {}): Promo
       fs.mkdirSync(parentDir, { recursive: true });
     }
     fs.writeFileSync(candidatesJsonPath, JSON.stringify(knowledgeList, null, 2) + '\n', 'utf8');
+  }
+
+  // 4. 若有新晋升，构造确定性 Sync Payload 挂载在 report 上
+  if (promotedExperiencesList.length > 0) {
+    const syncRes = buildKnowledgeSyncPayload({
+      knowledge: promotedExperiencesList,
+      repository: DEFAULT_GITHUB_KNOWLEDGE_CONFIG.repository,
+      path: DEFAULT_GITHUB_KNOWLEDGE_CONFIG.path,
+    });
+    report.syncRequired = syncRes.syncRequired;
+    report.syncPayload = syncRes.payload;
+  } else {
+    report.syncRequired = false;
   }
 
   return report;
