@@ -1370,4 +1370,439 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
   });
 });
 
+describe('E2E 闭环收口与防假 PASS 状态机测试 (v5.4.0 Hardening)', () => {
+  it('闭环状态机 1: 轮询由排队转为终态成功 (1 -> 2)，同时满足产物验真与账务不变量，产出唯一的技术 PASS 与 ACCEPTED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 91001,
+        taskStatus: 2,
+        statusLabel: '成功 (Success)',
+        videoUrl: 'https://cdn.example.com/videos/output_91001.mp4',
+        progress: 100,
+        pollCount: 3,
+        durationMs: 1500,
+      },
+      totalPolls: 3,
+      timeline: [
+        { timeMs: 500, status: 1, progress: 20 },
+        { timeMs: 1000, status: 1, progress: 70 },
+        { timeMs: 1500, status: 2, progress: 100 },
+      ],
+    });
 
+    const res = await verify({
+      taskId: 91001,
+      modelId: 84,
+      mediaType: 'video',
+      baseUrl: 'https://test-main.example.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      assetBuffer: validMp4,
+      dbExtraConfirmed: true,
+      gatewayChannelConfirmed: true,
+      scoreLogs: [
+        { task_id: 91001, type: 2, score: -56, memo: 'Wan 3.0 4s 扣除' },
+      ],
+    });
+
+    pollSpy.mockRestore();
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe('SUCCESS');
+    expect(res.verdict).toBe('PASS');
+    expect(res.acceptance).toBe('ACCEPTED');
+    expect(res.passed).toBe(true);
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('PASS');
+    expect(res.evidence.billing.status).toBe('PASS');
+    expect(res.evidence.invariants.status).toBe('PASS');
+  });
+
+  it('闭环状态机 2: 任务终态失败 (status 3/4)，跳过媒体物理验真，但执行账务核验 (netChargeZero + refundIdempotency)，严格判定 FAIL 与 REJECTED (exitCode != 0)', async () => {
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 91002,
+        taskStatus: 3,
+        statusLabel: '失败 (Failed)',
+        error: 'TXY 渠道超时 (gateway timeout)',
+        progress: 0,
+        pollCount: 2,
+        durationMs: 800,
+      },
+      totalPolls: 2,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 91002,
+      modelId: 84,
+      mediaType: 'video',
+      baseUrl: 'https://test-main.example.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      scoreLogs: [
+        { task_id: 91002, type: 2, score: -56, memo: '扣费' },
+        { task_id: 91002, type: 1, score: 56, memo: '失败退款' },
+      ],
+    });
+
+    pollSpy.mockRestore();
+
+    expect(res.status).toBe('FAILED');
+    expect(res.verdict).toBe('FAIL');
+    expect(res.acceptance).toBe('REJECTED');
+    expect(res.passed).toBe(false);
+    expect(res.evidence.task.status).toBe('FAIL');
+    expect(res.evidence.task.error).toContain('TXY 渠道超时');
+    // 任务失败时跳过媒体解码验真
+    expect(res.evidence.media.status).not.toBe('PASS');
+    // 严格核验失败账务净扣归零与退款幂等
+    expect(res.invariants?.netChargeZero).toBe(true);
+    expect(res.invariants?.refundIdempotency).toBe(true);
+  });
+
+  it('闭环状态机 3: 轮询超时维持 status 1 (排队/处理中)，严格 Fail-Closed 为 PROCESSING / BLOCKED / passed=false，严禁提前判定 PASS', async () => {
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 91003,
+        taskStatus: 1,
+        statusLabel: '排队中 (Queued)',
+        progress: 40,
+        pollCount: 10,
+        durationMs: 180000,
+      },
+      totalPolls: 10,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 91003,
+      modelId: 84,
+      mediaType: 'video',
+      baseUrl: 'https://test-main.example.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      pollTimeoutSec: 180,
+    });
+
+    pollSpy.mockRestore();
+
+    expect(res.status).toBe('PROCESSING');
+    expect(res.verdict).toBe('PROCESSING');
+    expect(res.acceptance).toBe('BLOCKED');
+    expect(res.passed).toBe(false);
+    expect(res.reasons.some((r) => r.includes('未到达终态'))).toBe(true);
+  });
+
+  it('闭环状态机 4: 仅有 extra.diversion=10 标识但未到达终态 SUCCESS 时，绝对不能产生 PASS', async () => {
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 91004,
+        taskStatus: 1,
+        statusLabel: '处理中',
+        progress: 50,
+        pollCount: 2,
+        durationMs: 500,
+      },
+      totalPolls: 2,
+      timeline: [],
+    });
+
+    const res = await verify({
+      taskId: 91004,
+      modelId: 84,
+      mediaType: 'video',
+      baseUrl: 'https://test-main.example.com',
+      cookies: 'PHPSESSID=mock_session_123',
+      dbExtraConfirmed: true,
+      gatewayChannelConfirmed: true,
+    });
+
+    pollSpy.mockRestore();
+
+    expect(res.passed).toBe(false);
+    expect(res.verdict).toBe('PROCESSING');
+    expect(res.acceptance).toBe('BLOCKED');
+  });
+
+  it('闭环门禁 5: Task 终态为 SUCCESS 但产物物理损坏 (corrupted MP4)，严格判定 FAIL 与 REJECTED', async () => {
+    const corruptBuffer = Buffer.from('NOT_A_VALID_MP4_HEADER_GARBAGE_BYTES_1234567890');
+    const res = await verify({
+      taskId: 91005,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      assetBuffer: corruptBuffer,
+      dbExtraConfirmed: true,
+      scoreLogs: [{ task_id: 91005, type: 2, score: -56 }],
+    });
+
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('FAIL');
+    expect(res.passed).toBe(false);
+    expect(res.verdict).toBe('FAIL');
+    expect(res.acceptance).toBe('REJECTED');
+  });
+
+  it('闭环门禁 6: Task 终态为 SUCCESS 且产物合法，但账务存在重复扣费，严格判定 FAIL 与 REJECTED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 91006,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      assetBuffer: validMp4,
+      dbExtraConfirmed: true,
+      scoreLogs: [
+        { task_id: 91006, type: 2, score: -56, memo: '扣费1' },
+        { task_id: 91006, type: 2, score: -56, memo: '重复扣费2' },
+      ],
+    });
+
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('PASS');
+    expect(res.evidence.billing.status).toBe('FAIL');
+    expect(res.invariants?.antiDoubleBilling).toBe(false);
+    expect(res.passed).toBe(false);
+    expect(res.verdict).toBe('FAIL');
+    expect(res.acceptance).toBe('REJECTED');
+  });
+
+  it('闭环门禁 7: Task 终态为 SUCCESS 且产物合法，但缺失账务流水 (SKIPPED_NO_LOGS)，判定 UNVERIFIED 与 UNVERIFIED', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const res = await verify({
+      taskId: 91007,
+      modelId: 84,
+      mediaType: 'video',
+      terminalStatus: 'SUCCESS',
+      assetBuffer: validMp4,
+      dbExtraConfirmed: true,
+    });
+
+    expect(res.evidence.task.status).toBe('PASS');
+    expect(res.evidence.media.status).toBe('PASS');
+    expect(res.evidence.billing.status).toBe('UNVERIFIED');
+    expect(res.billingAudit).toBe('SKIPPED_NO_LOGS');
+    expect(res.passed).toBe(false);
+    expect(res.acceptance).toBe('UNVERIFIED');
+  });
+
+  it('CLI 管道 --wait: execute 结合 --wait 并在任务未终态通过时返回退出码 1', async () => {
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValue({
+      env: 'test',
+      base_url: 'https://test-main.example.com',
+      cookie_string: 'PHPSESSID=mock_123',
+    });
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
+      finalSnapshot: {
+        taskId: 91008,
+        taskStatus: 1,
+        statusLabel: '排队中',
+        progress: 10,
+        pollCount: 1,
+        durationMs: 100,
+      },
+      totalPolls: 1,
+      timeline: [],
+    });
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+
+    const exitCode1 = await runDevTestCli([
+      'execute',
+      '--model', '84',
+      '--media', 'video',
+      '--mode', 'mock',
+      '--session-file', '/dummy/session.json',
+      '--wait',
+      '--json',
+    ]);
+    pollSpy.mockRestore();
+    sessionSpy.mockRestore();
+    spy.mockRestore();
+
+    expect(exitCode1).toBe(1);
+    const json = JSON.parse(logs.join(''));
+    expect(json.passed).toBe(false);
+    expect(json.status).toBe('PROCESSING');
+  });
+
+  it('CLI 管道 --wait: execute 结合 --wait 并在全部通过时返回退出码 0', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('cdn.example.com')) {
+        return {
+          ok: true,
+          status: 206,
+          statusText: 'Partial Content',
+          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+        } as unknown as Response;
+      }
+      return originalFetch(url, init);
+    });
+
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValue({
+      env: 'test',
+      base_url: 'https://test-main.example.com',
+      cookie_string: 'PHPSESSID=mock_123',
+    });
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockImplementation(async (taskId) => ({
+      finalSnapshot: {
+        taskId: Number(taskId),
+        taskStatus: 2,
+        statusLabel: '成功',
+        progress: 100,
+        videoUrl: `https://cdn.example.com/test_${taskId}.mp4`,
+        pollCount: 2,
+        durationMs: 200,
+      },
+      totalPolls: 2,
+      timeline: [],
+    }));
+    const querySpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockImplementation(async (taskId) => ({
+      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -56 }],
+      status: 'QUERY_SUCCESS',
+      source: 'api_query',
+      total: 1,
+    }));
+
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+
+    const exitCode0 = await runDevTestCli([
+      'execute',
+      '--model', '84',
+      '--media', 'video',
+      '--mode', 'mock',
+      '--session-file', '/dummy/session.json',
+      '--wait',
+      '--db-extra-confirmed',
+      '--gateway-channel-confirmed',
+      '--json',
+    ]);
+
+    pollSpy.mockRestore();
+    querySpy.mockRestore();
+    sessionSpy.mockRestore();
+    spy.mockRestore();
+    global.fetch = originalFetch;
+
+    expect(exitCode0).toBe(0);
+    const json = JSON.parse(logs.join(''));
+    expect(json.passed).toBe(true);
+    expect(json.verdict).toBe('PASS');
+    expect(json.acceptance).toBe('ACCEPTED');
+  });
+});
+
+
+// ─── MCP execute + wait:true E2E 闭环回归测试 ─────────────────────────────────
+describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
+  it('MCP wait:true — 任务成功时 ok=true，summary 包含 E2E 闭环关键词', async () => {
+    const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('cdn.example.com')) {
+        return {
+          ok: true,
+          status: 206,
+          statusText: 'Partial Content',
+          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+        } as unknown as Response;
+      }
+      return originalFetch(url, init);
+    });
+
+    const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValue({
+      env: 'test',
+      base_url: 'https://test-main.example.com',
+      cookie_string: 'PHPSESSID=mock_mcp_123',
+    });
+    const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockImplementation(async (taskId) => ({
+      finalSnapshot: {
+        taskId: Number(taskId),
+        taskStatus: 2,
+        statusLabel: '成功',
+        progress: 100,
+        videoUrl: `https://cdn.example.com/mcp_test_${taskId}.mp4`,
+        pollCount: 3,
+        durationMs: 300,
+      },
+      totalPolls: 3,
+      timeline: [],
+    }));
+    const querySpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockImplementation(async (taskId) => ({
+      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -56 }],
+      status: 'QUERY_SUCCESS',
+      source: 'api_query',
+      total: 1,
+    }));
+
+    const mcpService = new DevTestMcpService();
+    const result = await mcpService.call({
+      action: 'execute',
+      model_id: 84,
+      media_type: 'video',
+      mode: 'mock',
+      session_file: '/dummy/session.json',
+      wait: true,
+      db_extra_confirmed: true,
+      gateway_channel_confirmed: true,
+    });
+
+    pollSpy.mockRestore();
+    querySpy.mockRestore();
+    sessionSpy.mockRestore();
+    global.fetch = originalFetch;
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('execute');
+    expect(result.summary).toContain('E2E');
+    expect(result.summary).toContain('ALL PASS');
+    const data = result.data as Record<string, unknown>;
+    expect(data.passed).toBe(true);
+    expect(data.verdict).toBe('PASS');
+    expect(data.acceptance).toBe('ACCEPTED');
+  });
+
+  it('MCP wait:true — 提交失败时 ok=false，summary 包含 FAILED，不进入 verify', async () => {
+    // 用无效的 mode/session 让 execute 返回失败（mock 模式下强制 ok=false 场景：
+    // 我们直接 spy execute 本身）
+    const execSpy = vi.spyOn(
+      await import('../../../src/devtest/core-kernel.js'),
+      'execute',
+    ).mockResolvedValue({
+      ok: false,
+      taskId: 0,
+      status: 'FAILED',
+      mode: 'mock',
+      message: 'mock forced failure for MCP test',
+      points: 0,
+      isSimulated: true,
+      modelId: 84,
+      mediaType: 'video',
+    });
+    const verifySpy = vi.spyOn(
+      await import('../../../src/devtest/core-kernel.js'),
+      'verify',
+    );
+
+    const mcpService = new DevTestMcpService();
+    const result = await mcpService.call({
+      action: 'execute',
+      model_id: 84,
+      media_type: 'video',
+      mode: 'mock',
+      session_file: '/dummy/session.json',
+      wait: true,
+    });
+
+    execSpy.mockRestore();
+    verifySpy.mockRestore();
+
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain('FAILED');
+    // verify 不应被调用（提交失败不进入 verify）
+    expect(verifySpy).not.toHaveBeenCalled();
+  });
+});

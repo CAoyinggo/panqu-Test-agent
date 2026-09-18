@@ -22,6 +22,7 @@ import {
   type PlanKernelOptions,
   type ExecuteKernelOptions,
   type VerifyKernelOptions,
+  type VerifyKernelResult,
 } from '../src/devtest/core-kernel.js';
 import { DEVTEST_VERSION } from '../src/devtest/version.js';
 
@@ -59,7 +60,7 @@ ${c.bold}命令参数与示例:${c.reset}
   devtest plan --model 84 --media video [--flow diversion|direct] [--change-type new_model|diversion_change] [--custom-points 5] [--is-global] [--json]
 
   ${c.yellow}# 3. 任务执行${c.reset}
-  devtest execute --model 84 --media video [--mode mock|real] [--prompt "..."] [--json]
+  devtest execute --model 84 --media video [--mode mock|real] [--prompt "..."] [--wait] [--poll-timeout <sec>] [--json]
 
   ${c.yellow}# 4. 产物验真与对账${c.reset}
   devtest verify --task 12345 --model 84 --media video [--expected-points 28] [--json]
@@ -117,6 +118,185 @@ function parseCliArgs(argv: string[]): ParsedArgs {
   }
 
   return { command, options, positionals };
+}
+
+function printVerifyResult(result: VerifyKernelResult): void {
+  const taskStatusText = result.evidence.task.status;
+  const ownershipText = result.evidence.media.ownership;
+  const mediaStatusText = result.evidence.media.status;
+  const billingStatusText = result.evidence.billing.status;
+  const antiDoubleText = result.evidence.invariants.details?.antiDoubleBilling.status ?? (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
+  const netZeroText = result.evidence.invariants.details?.netChargeZero.status ?? (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
+  const refundIdemText = result.evidence.invariants.details?.refundIdempotency.status ?? (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
+  const finalVerdictText = result.verdict;
+
+  console.log(`\n🎯 概况：Task #${result.taskId} · [${result.executionMode.toUpperCase()}] · ${result.status}`);
+  console.log(`\n🔍 验真：`);
+  console.log(`Task <${taskStatusText}>`);
+  console.log(`Artifact ownership <${ownershipText}>`);
+  console.log(`Media <${mediaStatusText}>`);
+  console.log(`Billing <${billingStatusText}>`);
+  console.log(`antiDoubleBilling <${antiDoubleText}>`);
+  console.log(`netChargeZero <${netZeroText}>`);
+  console.log(`refundIdempotency <${refundIdemText}>`);
+  console.log(`生产验收裁决 <${result.acceptance}>`);
+  console.log(`最终技术判定 <${finalVerdictText}>`);
+  console.log(`\n💻 复现：`);
+  console.log(`npm run devtest -- verify --task ${result.taskId}`);
+
+  if (!result.passed && result.reasons.length > 0) {
+    console.log(`\n⚠️ 缺陷：`);
+    for (const r of result.reasons) {
+      console.log(`- ${r}`);
+    }
+  }
+
+  console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
+  console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账明细${c.reset} [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
+
+  if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
+    console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);
+  }
+
+  let acceptanceLabel: string;
+  if (result.acceptance === 'ACCEPTED') {
+    acceptanceLabel = `${c.green}● ACCEPTED (生产级四态验收通过)${c.reset}`;
+  } else if (result.acceptance === 'REJECTED') {
+    acceptanceLabel = `${c.red}● REJECTED (验收驳回: 存在缺陷或非预期回归)${c.reset}`;
+  } else if (result.acceptance === 'BLOCKED') {
+    if (result.status === 'PROCESSING') {
+      acceptanceLabel = `${c.yellow}● BLOCKED / IN_FLIGHT (轮询窗口耗尽: 任务仍在排队处理中)${c.reset}`;
+    } else {
+      acceptanceLabel = `${c.yellow}● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)${c.reset}`;
+    }
+  } else {
+    acceptanceLabel = `${c.yellow}● UNVERIFIED (验收待确认: 测试通过但关键证据未闭环)${c.reset}`;
+  }
+  console.log(`${c.bold}生产验收裁决:${c.reset} ${acceptanceLabel}`);
+  console.log(`${c.bold}证据完整度:${c.reset} ${result.evidenceCompleteness.isComplete ? `${c.green}✔ COMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}` : `${c.yellow}○ INCOMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}`}`);
+  if (result.evidenceCompleteness.missingEvidence.length > 0) {
+    console.log(`  ${c.yellow}待补证据: ${result.evidenceCompleteness.missingEvidence.join(', ')}${c.reset}`);
+  }
+
+  let verdictLabel: string;
+  if (result.passed) {
+    verdictLabel = `${c.green}● ALL PASS (验真与账务全部通过)${c.reset}`;
+  } else if (result.status === 'PROCESSING') {
+    verdictLabel = `${c.yellow}● PROCESSING (排队处理中: ${result.progress ?? 0}%)${c.reset}`;
+  } else if (result.status === 'UNVERIFIED') {
+    verdictLabel = `${c.yellow}● UNVERIFIED (凭据缺失，未通过线上验收)${c.reset}`;
+  } else {
+    verdictLabel = `${c.red}● FAILED (存在违背或缺陷)${c.reset}`;
+  }
+  console.log(`${c.bold}技术裁决:${c.reset} ${verdictLabel}`);
+
+  console.log(`\n${c.bold}1. 任务状态与执行 (Task Execution):${c.reset} ${result.evidence.task.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.task.status === 'PROCESSING' ? `${c.yellow}● PROCESSING${c.reset}` : result.evidence.task.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.task.source}]`);
+  if (result.evidence.task.error) {
+    console.log(`   错误信息: ${result.evidence.task.error}`);
+  }
+
+  console.log(`\n${c.bold}2. 产物物理结构验真 (Media Inspection):${c.reset} ${result.evidence.media.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.media.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.media.source}]`);
+  if (result.artifact) {
+    if (result.probeDurationMs !== undefined) {
+      console.log(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
+    }
+    console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 规范合法 (${(result.artifact.format || 'mp4').toUpperCase()} container structure PASS)${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'} | 结构有效: ${result.artifact.decodable ? `${c.green}✔ YES${c.reset}` : `${c.red}✖ NO${c.reset}`} | 归属确认: ${result.evidence.media.ownership === 'VERIFIED' ? `${c.green}✔ 绑定成功${c.reset}` : `${c.yellow}○ 未绑定${c.reset}`}`);
+    if (result.artifact.dimensions) {
+      console.log(`   分辨率: ${result.artifact.dimensions.width}x${result.artifact.dimensions.height}`);
+    }
+    if (result.artifact.durationSeconds !== undefined) {
+      console.log(`   时长: ${result.artifact.durationSeconds} 秒`);
+    }
+    if (result.artifact.hasMdat !== undefined) {
+      console.log(`   数据块校验: ${result.artifact.hasMdat !== false ? `${c.green}✔ 音视频裸流有效${c.reset}` : `${c.red}✖ 缺少 mdat 数据块${c.reset}`}`);
+    }
+    if (result.artifact.reasons.length > 0) {
+      for (const r of result.artifact.reasons) console.log(`   ${c.yellow}⚠ ${r}${c.reset}`);
+    }
+  } else {
+    console.log(`   ${c.yellow}${result.evidence.media.reason || '未获取产物二进制 Buffer (未提供 assetBuffer 且未连接主站获取产物 URL)'}${c.reset}`);
+  }
+
+  console.log(`\n${c.bold}3. 防资损账务对账 (Billing & Invariants):${c.reset} ${result.evidence.billing.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.billing.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.billing.source}]`);
+  if (result.billing) {
+    console.log(`   对账结果: ${result.billing.passed ? `${c.green}✔ PASS${c.reset}` : `${c.red}✖ MISMATCH${c.reset}`}`);
+    console.log(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
+    if (result.invariants) {
+      console.log(`   核心不变量核验 (Invariants: ${result.evidence.invariants.status}):`);
+      console.log(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 存在多重扣费${c.reset}`}`);
+      console.log(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 失败未完全退款${c.reset}`}`);
+      console.log(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 重复退款${c.reset}`}`);
+    }
+  } else {
+    console.log(`   ${c.yellow}未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]${c.reset}`);
+  }
+
+  if (result.expectedVsActual) {
+    console.log(`\n${c.bold}4. 预期与实际对比 (Expected vs Actual Matrix):${c.reset}`);
+    const diffItems = result.expectedVsActual.items || result.expectedVsActual.diffs || [];
+    for (const item of diffItems) {
+      const statusTag = item.status === 'PASS'
+        ? `${c.green}[PASS]${c.reset}`
+        : item.status === 'FAIL'
+        ? `${c.red}[FAIL]${c.reset}`
+        : item.status === 'BLOCKED'
+        ? `${c.yellow}[BLOCKED]${c.reset}`
+        : `${c.cyan}[MANUAL_REQUIRED]${c.reset}`;
+      const matchIcon = item.matched ? `${c.green}✔ MATCH${c.reset}` : `${c.red}✖ DIFF${c.reset}`;
+      console.log(`   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`);
+      if (item.diff && item.diff !== 'MATCH') {
+        console.log(`     ${c.dim}差异说明: ${item.diff}${c.reset}`);
+      }
+    }
+    if (result.expectedVsActual.regressionDiff) {
+      const reg = result.expectedVsActual.regressionDiff;
+      const regStatusStr = reg.regressionStatus === 'CLEAN'
+        ? `${c.green}✔ CLEAN (所有基线比对项通过且证据齐备)${c.reset}`
+        : reg.regressionStatus === 'REGRESSION'
+        ? `${c.red}✖ REGRESSION DETECTED (存在非预期变化阻断)${c.reset}`
+        : `${c.yellow}○ UNKNOWN (基线比对关键证据不全，无法判定CLEAN)${c.reset}`;
+      console.log(`   回归状态: ${regStatusStr}`);
+      if (reg.expectedChanges.length > 0) {
+        console.log(`   预期变更:`);
+        for (const ec of reg.expectedChanges) {
+          console.log(`     - [${ec.field}] ${JSON.stringify(ec.before)} -> ${JSON.stringify(ec.after)} (${ec.reason})`);
+        }
+      }
+      if (reg.unexpectedChanges.length > 0) {
+        console.log(`   ${c.red}⚠️ 非预期变更 (回归缺陷阻断):${c.reset}`);
+        for (const uc of reg.unexpectedChanges) {
+          console.log(`     - [${uc.field}] ${JSON.stringify(uc.before)} -> ${JSON.stringify(uc.after)} (${c.red}${uc.reason}${c.reset})`);
+        }
+      }
+    }
+    if (result.expectedVsActual.evidenceStatus?.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED') {
+      console.log(`\n${c.yellow}📌 关键证据提醒: [MANUAL_DB_EVIDENCE_REQUIRED]${c.reset}`);
+      console.log(`   ${result.expectedVsActual.manualVerificationGuide?.notice}`);
+      console.log(`   SQL 指引: ${c.cyan}${result.expectedVsActual.manualVerificationGuide?.extraQuerySql}${c.reset}`);
+    }
+  }
+
+  if (result.reasons.length > 0) {
+    console.log(`\n${c.bold}核验明细 / 告警:${c.reset}`);
+    for (const r of result.reasons) console.log(`  ${result.passed ? c.green : c.yellow}👉 ${r}${c.reset}`);
+  }
+
+  console.log(`\n${c.bold}🚀 下一步行动:${c.reset}`);
+  if (result.acceptance === 'ACCEPTED') {
+    console.log(`  ${c.green}✔ 验收全部通过！测试证据闭环，可合流上线 / 交付生产。${c.reset}`);
+  } else if (result.acceptance === 'BLOCKED') {
+    if (result.status === 'PROCESSING') {
+      console.log(`  ${c.yellow}⏳ 任务仍处于 PROCESSING/QUEUED 状态，本次 polling window 已耗尽。这并非业务失败，请继续执行 npm run devtest -- verify --task ${result.taskId} 追踪终态闭环。${c.reset}`);
+    } else {
+      console.log(`  ${c.yellow}⚠️ 验收阻断：请先补充缺失的刊例定价或环境会话凭据。${c.reset}`);
+    }
+  } else if (result.acceptance === 'REJECTED') {
+    console.log(`  ${c.red}✖ 验收驳回：发现明确业务缺陷或非预期回归，请联系研发排查。${c.reset}`);
+  } else {
+    console.log(`  ${c.yellow}○ 待闭环确认：执行 SQL 查询任务 extra 确认分流落库后，追加 --db-extra-confirmed 重新验真。${c.reset}`);
+  }
+
+  console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
 }
 
 export async function runDevTestCli(args: string[]): Promise<number> {
@@ -292,6 +472,14 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const price = typeof options.price === 'number' ? options.price as number : undefined;
         const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
         const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
+        const wait = Boolean(options.wait);
+        const dbExtraConfirmed = Boolean(options['db-extra-confirmed'] || options.dbExtraConfirmed);
+        const gatewayChannelConfirmed = Boolean(options['gateway-channel-confirmed'] || options.gatewayChannelConfirmed);
+        const pollTimeoutSec = typeof options['poll-timeout'] === 'number'
+          ? options['poll-timeout'] as number
+          : typeof options['poll-timeout-sec'] === 'number'
+          ? options['poll-timeout-sec'] as number
+          : undefined;
 
         const execOptions: ExecuteKernelOptions = {
           modelId,
@@ -309,22 +497,67 @@ export async function runDevTestCli(args: string[]): Promise<number> {
 
         const result = await execute(execOptions);
 
-        if (isJson) {
-          console.log(JSON.stringify(result, null, 2));
-        } else {
-          console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}🚀 DevTest 任务执行结果${c.reset} [${result.mode === 'real' ? `${c.red}REAL 真实执行${c.reset}` : `${c.green}MOCK 受控仿真${c.reset}`}]`);
-          console.log(`${c.bold}任务编号:${c.reset} #${c.bold}${result.taskId}${c.reset}`);
-          console.log(`${c.bold}模型规格:${c.reset} 模型 #${result.modelId} (${result.mediaType})`);
-          console.log(`${c.bold}执行状态:${c.reset} ${result.status === 'SUBMITTED' || result.status === 'SUCCESS' ? `${c.green}● ${result.status}${c.reset}` : `${c.red}● ${result.status}${c.reset}`}`);
-          console.log(`${c.bold}预扣积分:${c.reset} ${c.yellow}${result.points} pt${c.reset}`);
-          console.log(`${c.bold}回执信息:${c.reset} ${result.message}`);
-          if (result.credentialsMasked) {
-            console.log(`${c.bold}安全凭据:${c.reset} ${c.dim}${result.credentialsMasked}${c.reset}`);
+        if (!wait) {
+          if (isJson) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
+            console.log(`${c.bold}🚀 DevTest 任务执行结果${c.reset} [${result.mode === 'real' ? `${c.red}REAL 真实执行${c.reset}` : `${c.green}MOCK 受控仿真${c.reset}`}]`);
+            console.log(`${c.bold}任务编号:${c.reset} #${c.bold}${result.taskId}${c.reset}`);
+            console.log(`${c.bold}模型规格:${c.reset} 模型 #${result.modelId} (${result.mediaType})`);
+            console.log(`${c.bold}执行状态:${c.reset} ${result.status === 'SUBMITTED' || result.status === 'SUCCESS' ? `${c.green}● ${result.status}${c.reset}` : `${c.red}● ${result.status}${c.reset}`}`);
+            console.log(`${c.bold}预扣积分:${c.reset} ${c.yellow}${result.points} pt${c.reset}`);
+            console.log(`${c.bold}回执信息:${c.reset} ${result.message}`);
+            if (result.credentialsMasked) {
+              console.log(`${c.bold}安全凭据:${c.reset} ${c.dim}${result.credentialsMasked}${c.reset}`);
+            }
+            console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
           }
-          console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
+          return result.ok ? 0 : 1;
         }
-        return result.ok ? 0 : 1;
+
+        // --wait enabled: automatically pipe taskId into verify
+        if (!result.ok || !result.taskId || result.taskId <= 0) {
+          if (isJson) {
+            console.log(JSON.stringify({ ok: false, error: result.message || 'Task submission failed', executeResult: result }, null, 2));
+          } else {
+            console.error(`${c.red}任务提交失败，无法进入轮询验真:${c.reset} ${result.message}`);
+          }
+          return 1;
+        }
+
+        if (!isJson) {
+          console.log(`\n${c.cyan}⏳ 任务 #${result.taskId} 提交成功 (${result.points} pt)，开始等待终态轮询与闭环验真 (--wait)...${c.reset}`);
+        }
+
+        const verifyRes = await verify({
+          taskId: result.taskId,
+          modelId,
+          mediaType,
+          resolution,
+          duration,
+          sessionFile,
+          env,
+          price,
+          customPoints,
+          pointsPerSecond,
+          pollTimeoutSec,
+          isSimulated: result.isSimulated,
+          dbExtraConfirmed,
+          gatewayChannelConfirmed,
+          onProgress: isJson ? undefined : (snapshot) => {
+            process.stdout.write(`\r⏳ 轮询中... 任务 #${snapshot.taskId} 状态: ${snapshot.taskStatus} (进度: ${snapshot.progress ?? 0}%)   `);
+          },
+        });
+
+        if (!isJson) {
+          process.stdout.write('\r' + ' '.repeat(60) + '\r');
+          printVerifyResult(verifyRes);
+        } else {
+          console.log(JSON.stringify(verifyRes, null, 2));
+        }
+
+        return verifyRes.passed ? 0 : 1;
       }
 
       case 'verify': {
@@ -348,6 +581,11 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const price = typeof options.price === 'number' ? options.price as number : undefined;
         const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
         const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
+        const pollTimeoutSec = typeof options['poll-timeout'] === 'number'
+          ? options['poll-timeout'] as number
+          : typeof options['poll-timeout-sec'] === 'number'
+          ? options['poll-timeout-sec'] as number
+          : undefined;
 
         const verifyOptions: VerifyKernelOptions = {
           taskId,
@@ -366,176 +604,21 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           price,
           customPoints,
           pointsPerSecond,
+          pollTimeoutSec,
+          onProgress: isJson ? undefined : (snapshot) => {
+            process.stdout.write(`\r⏳ 轮询中... 任务 #${snapshot.taskId} 状态: ${snapshot.taskStatus} (进度: ${snapshot.progress ?? 0}%)   `);
+          },
         };
 
         const result = await verify(verifyOptions);
 
-        if (isJson) {
-          console.log(JSON.stringify(result, null, 2));
+        if (!isJson) {
+          process.stdout.write('\r' + ' '.repeat(60) + '\r');
+          printVerifyResult(result);
         } else {
-          const taskStatusText = result.evidence.task.status;
-          const ownershipText = result.evidence.media.ownership;
-          const mediaStatusText = result.evidence.media.status;
-          const billingStatusText = result.evidence.billing.status;
-          const antiDoubleText = result.evidence.invariants.details?.antiDoubleBilling.status ?? (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
-          const netZeroText = result.evidence.invariants.details?.netChargeZero.status ?? (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
-          const refundIdemText = result.evidence.invariants.details?.refundIdempotency.status ?? (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
-          const finalVerdictText = result.verdict;
-
-          console.log(`\n🎯 概况：Task #${result.taskId} · [${result.executionMode.toUpperCase()}] · ${result.status}`);
-          console.log(`\n🔍 验真：`);
-          console.log(`Task <${taskStatusText}>`);
-          console.log(`Artifact ownership <${ownershipText}>`);
-          console.log(`Media <${mediaStatusText}>`);
-          console.log(`Billing <${billingStatusText}>`);
-          console.log(`antiDoubleBilling <${antiDoubleText}>`);
-          console.log(`netChargeZero <${netZeroText}>`);
-          console.log(`refundIdempotency <${refundIdemText}>`);
-          console.log(`生产验收裁决 <${result.acceptance}>`);
-          console.log(`最终技术判定 <${finalVerdictText}>`);
-          console.log(`\n💻 复现：`);
-          console.log(`npm run devtest -- verify --task ${result.taskId}`);
-
-          if (!result.passed && result.reasons.length > 0) {
-            console.log(`\n⚠️ 缺陷：`);
-            for (const r of result.reasons) {
-              console.log(`- ${r}`);
-            }
-          }
-
-          console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}🔬 DevTest 物理验真与防资损对账明细${c.reset} [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
-
-          if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
-            console.log(`\n${c.yellow}⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。${c.reset}`);
-          }
-
-          let acceptanceLabel: string;
-          if (result.acceptance === 'ACCEPTED') {
-            acceptanceLabel = `${c.green}● ACCEPTED (生产级四态验收通过)${c.reset}`;
-          } else if (result.acceptance === 'REJECTED') {
-            acceptanceLabel = `${c.red}● REJECTED (验收驳回: 存在缺陷或非预期回归)${c.reset}`;
-          } else if (result.acceptance === 'BLOCKED') {
-            acceptanceLabel = `${c.yellow}● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)${c.reset}`;
-          } else {
-            acceptanceLabel = `${c.yellow}● UNVERIFIED (验收待确认: 测试通过但关键证据未闭环)${c.reset}`;
-          }
-          console.log(`${c.bold}生产验收裁决:${c.reset} ${acceptanceLabel}`);
-          console.log(`${c.bold}证据完整度:${c.reset} ${result.evidenceCompleteness.isComplete ? `${c.green}✔ COMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}` : `${c.yellow}○ INCOMPLETE (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})${c.reset}`}`);
-          if (result.evidenceCompleteness.missingEvidence.length > 0) {
-            console.log(`  ${c.yellow}待补证据: ${result.evidenceCompleteness.missingEvidence.join(', ')}${c.reset}`);
-          }
-
-          let verdictLabel: string;
-          if (result.passed) {
-            verdictLabel = `${c.green}● ALL PASS (验真与账务全部通过)${c.reset}`;
-          } else if (result.status === 'PROCESSING') {
-            verdictLabel = `${c.yellow}● PROCESSING (排队处理中: ${result.progress ?? 0}%)${c.reset}`;
-          } else if (result.status === 'UNVERIFIED') {
-            verdictLabel = `${c.yellow}● UNVERIFIED (凭据缺失，未通过线上验收)${c.reset}`;
-          } else {
-            verdictLabel = `${c.red}● FAILED (存在违背或缺陷)${c.reset}`;
-          }
-          console.log(`${c.bold}技术裁决:${c.reset} ${verdictLabel}`);
-
-          console.log(`\n${c.bold}1. 任务状态与执行 (Task Execution):${c.reset} ${result.evidence.task.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.task.status === 'PROCESSING' ? `${c.yellow}● PROCESSING${c.reset}` : result.evidence.task.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.task.source}]`);
-          if (result.evidence.task.error) {
-            console.log(`   错误信息: ${result.evidence.task.error}`);
-          }
-
-          console.log(`\n${c.bold}2. 产物物理结构验真 (Media Inspection):${c.reset} ${result.evidence.media.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.media.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.media.source}]`);
-          if (result.artifact) {
-            if (result.probeDurationMs !== undefined) {
-              console.log(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
-            }
-            console.log(`   容器标识: ${result.artifact.containerIdentified ? `${c.green}✔ 规范合法 (MP4 container structure PASS)${c.reset}` : `${c.red}✖ 缺失${c.reset}`} | 格式: ${result.artifact.format || 'unknown'}`);
-            console.log(`   物理尺寸: ${result.artifact.dimensions ? `${result.artifact.dimensions.width}x${result.artifact.dimensions.height}` : 'N/A'}`);
-            if (result.artifact.durationSeconds !== undefined) {
-              console.log(`   视频时长: ${result.artifact.durationSeconds} 秒`);
-            }
-            console.log(`   数据块校验: ${result.artifact.hasMdat !== false ? `${c.green}✔ 音视频裸流有效${c.reset}` : `${c.red}✖ 缺少 mdat 数据块${c.reset}`}`);
-            console.log(`   可解码状态: ${result.artifact.decodable ? `${c.green}✔ 完全符合规范${c.reset}` : `${c.red}✖ 结构异常${c.reset}`}`);
-          } else {
-            console.log(`   ${c.yellow}未获取产物二进制 Buffer (未提供 assetBuffer 且未连接主站获取产物 URL)${c.reset}`);
-          }
-
-          console.log(`\n${c.bold}3. 防资损账务对账 (Billing & Invariants):${c.reset} ${result.evidence.billing.status === 'PASS' ? `${c.green}✔ PASS${c.reset}` : result.evidence.billing.status === 'UNVERIFIED' ? `${c.yellow}● UNVERIFIED${c.reset}` : `${c.red}✖ FAIL${c.reset}`} [${result.evidence.billing.source}]`);
-          if (result.billing) {
-            console.log(`   对账结果: ${result.billing.passed ? `${c.green}✔ PASS${c.reset}` : `${c.red}✖ MISMATCH${c.reset}`}`);
-            console.log(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
-            if (result.invariants) {
-              console.log(`   核心不变量核验 (Invariants: ${result.evidence.invariants.status}):`);
-              console.log(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 存在多重扣费${c.reset}`}`);
-              console.log(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 失败未完全退款${c.reset}`}`);
-              console.log(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? `${c.green}✔ 符合${c.reset}` : `${c.red}✖ 重复退款${c.reset}`}`);
-            }
-          } else {
-            console.log(`   ${c.yellow}未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]${c.reset}`);
-          }
-
-          if (result.expectedVsActual) {
-            console.log(`\n${c.bold}4. 预期与实际对比 (Expected vs Actual Matrix):${c.reset}`);
-            const diffItems = result.expectedVsActual.items || result.expectedVsActual.diffs || [];
-            for (const item of diffItems) {
-              const statusTag = item.status === 'PASS'
-                ? `${c.green}[PASS]${c.reset}`
-                : item.status === 'FAIL'
-                ? `${c.red}[FAIL]${c.reset}`
-                : item.status === 'BLOCKED'
-                ? `${c.yellow}[BLOCKED]${c.reset}`
-                : `${c.cyan}[MANUAL_REQUIRED]${c.reset}`;
-              const matchIcon = item.matched ? `${c.green}✔ MATCH${c.reset}` : `${c.red}✖ DIFF${c.reset}`;
-              console.log(`   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`);
-              if (item.diff && item.diff !== 'MATCH') {
-                console.log(`     ${c.dim}差异说明: ${item.diff}${c.reset}`);
-              }
-            }
-            if (result.expectedVsActual.regressionDiff) {
-              const reg = result.expectedVsActual.regressionDiff;
-              const regStatusStr = reg.regressionStatus === 'CLEAN'
-                ? `${c.green}✔ CLEAN (所有基线比对项通过且证据齐备)${c.reset}`
-                : reg.regressionStatus === 'REGRESSION'
-                ? `${c.red}✖ REGRESSION DETECTED (存在非预期变化阻断)${c.reset}`
-                : `${c.yellow}○ UNKNOWN (基线比对关键证据不全，无法判定CLEAN)${c.reset}`;
-              console.log(`   回归状态: ${regStatusStr}`);
-              if (reg.expectedChanges.length > 0) {
-                console.log(`   预期变更:`);
-                for (const ec of reg.expectedChanges) {
-                  console.log(`     - [${ec.field}] ${JSON.stringify(ec.before)} -> ${JSON.stringify(ec.after)} (${ec.reason})`);
-                }
-              }
-              if (reg.unexpectedChanges.length > 0) {
-                console.log(`   ${c.red}⚠️ 非预期变更 (回归缺陷阻断):${c.reset}`);
-                for (const uc of reg.unexpectedChanges) {
-                  console.log(`     - [${uc.field}] ${JSON.stringify(uc.before)} -> ${JSON.stringify(uc.after)} (${c.red}${uc.reason}${c.reset})`);
-                }
-              }
-            }
-            if (result.expectedVsActual.evidenceStatus?.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED') {
-              console.log(`\n${c.yellow}📌 关键证据提醒: [MANUAL_DB_EVIDENCE_REQUIRED]${c.reset}`);
-              console.log(`   ${result.expectedVsActual.manualVerificationGuide?.notice}`);
-              console.log(`   SQL 指引: ${c.cyan}${result.expectedVsActual.manualVerificationGuide?.extraQuerySql}${c.reset}`);
-            }
-          }
-
-          if (result.reasons.length > 0) {
-            console.log(`\n${c.bold}核验明细 / 告警:${c.reset}`);
-            for (const r of result.reasons) console.log(`  ${result.passed ? c.green : c.yellow}👉 ${r}${c.reset}`);
-          }
-
-          console.log(`\n${c.bold}🚀 下一步行动:${c.reset}`);
-          if (result.acceptance === 'ACCEPTED') {
-            console.log(`  ${c.green}✔ 验收全部通过！测试证据闭环，可合流上线 / 交付生产。${c.reset}`);
-          } else if (result.acceptance === 'BLOCKED') {
-            console.log(`  ${c.yellow}⚠️ 验收阻断：请先补充缺失的刊例定价或环境会话凭据。${c.reset}`);
-          } else if (result.acceptance === 'REJECTED') {
-            console.log(`  ${c.red}✖ 验收驳回：发现明确业务缺陷或非预期回归，请联系研发排查。${c.reset}`);
-          } else {
-            console.log(`  ${c.yellow}○ 待闭环确认：执行 SQL 查询任务 extra 确认分流落库后，追加 --db-extra-confirmed 重新验真。${c.reset}`);
-          }
-
-          console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
+          console.log(JSON.stringify(result, null, 2));
         }
+
         return result.passed ? 0 : 1;
       }
 

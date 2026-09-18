@@ -6,27 +6,27 @@
 
 ## 一、主站硬性资格拦截规则（isRequestEligible）
 
-| 规则项 | 约束条件 | 合法输入示例 | 违规输入与预期行为 |
+| 规则项 | 约束条件 | 产品测试关注 (哪里有问题/预期行为) | 研发排查与修改位置 (改哪里) |
 | :--- | :--- | :--- | :--- |
-| **提示词长度** | 严格限制字数 `<= 5000` | `cueword` 长度 100~4999 字 | 超出 5000 字直接拦截，报错提示词最多 5000 个字，不进入分流 |
-| **输出视频格式** | 禁止 `mov` 格式走分流 | `output_format='mp4'` | `output_format='mov'` 时前置回退直连链路（返回 line 0） |
-| **真人人像** | 包含真人人像时不走 NewAPI | `hasRealHuman=false` | 命中人像检测规则时前置回退直连（返回 line 0） |
-| **Seedance 参考视频** | Seedance 模型带参考视频不走 NewAPI | `ref_videos=[]`（纯文生/图生视频） | `ref_videos=['...']` 时前置回退直连（返回 line 0） |
-| **Seedance 任务类型** | 仅全能参考任务支持分流 | `task_type=28`（全能参考） | 首尾帧或其他旧模式不走 NewAPI |
-| **Seedance 排除模型** | 排除特定直连模型 | 仅允许 sd2.0, sd2.5 | 模型 ID 16 (Seedance 2.0 Fast)、58 (Seedance 2.0 Mini) 强制回退直连 |
-| **Wan 3.0 参考视频** | NewAPI 已支持 Wan 3.0 参考视频 | `ref_videos=['...']` 允许 | Wan 3.0 支持携带参考视频分流 |
+| **提示词长度** | 严格限制字数 `<= 5000` | 超出 5000 字必须前置拦截，报错“提示词最多 5000 个字”，严禁发起付费生成 | `application/admin/controller/aivideo/PlotService.php` (前置参数校验函数) |
+| **输出视频格式** | 禁止 `mov` 格式走分流 | `output_format='mov'` 时必须平滑降级回退直连原链路（返回 line 0），不能报错 | `application/admin/controller/aivideo/PlotService.php` (`isRequestEligible`) |
+| **真人人像** | 包含真人人像时不走 NewAPI | `hasRealHuman=true` 命中人像检测规则时前置回退直连，防范敏感合规风险 | `application/admin/controller/aivideo/PlotService.php` (`checkHumanFace`) |
+| **Seedance 参考视频** | Seedance 带参考视频不走 NewAPI | `ref_videos` 非空时强制回退直连链路（line 0），不能强制切入 NewAPI 导致报错 | `application/admin/controller/aivideo/PlotService.php` (`isRequestEligible`) |
+| **Seedance 任务类型** | 仅全能参考任务支持分流 | `task_type=28`（全能参考）方可切流；首尾帧或其他旧模式必须走直连 | `application/admin/controller/aivideo/PlotService.php` (任务分发分支) |
+| **Seedance 排除模型** | 排除特定直连模型 | 模型 ID 16 (Seedance 2.0 Fast)、58 (Seedance 2.0 Mini) 必须强制回退直连 | `application/admin/controller/aivideo/PlotService.php` (白名单数组) |
+| **Wan 3.0 参考视频** | NewAPI 已支持 Wan 3.0 参考视频 | Wan 3.0 携带参考视频必须允许走 NewAPI 分流，不得误拦截 | `application/admin/controller/aivideo/PlotService.php` |
 
 ---
 
-## 二、新渠道与新模型参数约束表
+## 二、新渠道与新模型参数与毛利约束表
 
-| 渠道 / 模型 | 分类 | 支持分辨率 | 支持画幅比例 | 模型能力配置 |
-| :--- | :--- | :--- | :--- | :--- |
-| **阿里 Wan 3.0** (`#36`) | 视频 | 480P, 720P, 1080P | 自适应 (auto), 9:16, 16:9, 4:3, 3:4, 1:1（共 6 种） | 全能参考（支持参考视频）、首尾帧 |
-| **阿里 Wan 3.0 Prime** (`#36`) | 视频 | 480P, 720P, 1080P | 自适应 (auto), 9:16, 16:9, 4:3, 3:4, 1:1（共 6 种） | 全能参考（支持参考视频）、首尾帧 |
-| **RunningHub 视频** (`#39`) | 视频 | 480P, 720P, **768P (新增)**, 1080P | 所有宽高比 | sd2.0/2.5 支持全能参考（**无**参考视频）、支持首尾帧；sd2.0 fast 仅 720P |
-| **RunningHub 图片** (`#40`) | 图片 | 1K, 2K, 4K | 1:1, 4:3, 3:4, 16:9, 9:16, 3:2, 2:3, 5:4, 4:5（共 9 种） | Nano Banana 2, Nano Banana Pro, GPT Image 2 |
-| **TalkingData (TD)** (`#41`) | 视频 | 480P, 720P, 1080P, 4K | 所有宽高比 | 支持全能参考（无参考视频）；sd2.0, sd2.5 |
+| 渠道 / 模型 | 业务分类 | 支持分辨率 | 支持画幅比例 | 产品测试质检重点 (资损/功能) | 研发刊例配置与代码位置 (改哪里) |
+| :--- | :---: | :---: | :---: | :--- | :--- |
+| **阿里 Wan 3.0** (`#36/#84`) | 视频分流 | 480P, 720P, 1080P | 自适应, 9:16, 16:9, 4:3, 3:4, 1:1 | 重点核查 1080p 成本 (¥2.88)，刊例需 >=42pt 防倒挂 | `PlotService.php` + 数据库表 `pq_model_point` |
+| **阿里 Wan 3.0 Prime** (`#88`) | 视频分流 | 480P, 720P, 1080P | 自适应, 9:16, 16:9, 4:3, 3:4, 1:1 | 验证全能参考（支持参考视频）、首尾帧及毛利率 >=30% | `PlotService.php` + 数据库表 `pq_model_point` |
+| **RunningHub 视频** (`#39`) | 视频直连 | 480P, 720P, **768P (新增)**, 1080P | 所有宽高比 | 校验新增 768P 分辨率映射；sd2.0 fast 仅限 720P | `application/admin/controller/aivideo/Videonew.php` |
+| **RunningHub 图片** (`#40/#901`) | 图片直连 | 1K, 2K, 4K | 9 种宽高比例 | 拦截未配刊例白嫖漏洞 (1k: 20pt, 2k: 40pt) | `Image25Service.php` + 数据库表 `pq_model_point` |
+| **TalkingData (TD)** (`#41`) | 视频分流 | 480P, 720P, 1080P, 4K | 所有宽高比 | 验证全能参考（无参考视频）；sd2.0, sd2.5 降级安全性 | `PlotService.php` + 路由配置表 `pq_aivideo_diversion_config` |
 
 ---
 

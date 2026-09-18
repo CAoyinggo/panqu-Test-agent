@@ -114,9 +114,9 @@ $$\text{SOURCE\_INPUT} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT
 
 ```sql
 -- 验证 aivideo 任务真实写入 NewAPI 分流标记
-SELECT id, status, task_type, extra, user_group_id, created_at 
-FROM pq_aivideo_new 
-WHERE id = <taskId> 
+SELECT id, status, task_type, extra, user_group_id, created_at
+FROM pq_aivideo_new
+WHERE id = <taskId>
 LIMIT 1;
 -- 期望验证项：JSON 字段 extra 中包含 "diversion": 10
 ```
@@ -125,9 +125,9 @@ LIMIT 1;
 
 ```sql
 -- 验证生图任务真实写入 NewAPI 分流标记
-SELECT id, task_status, extra, user_group_id, created_at 
-FROM pq_ai_tasks 
-WHERE id = <taskId> 
+SELECT id, task_status, extra, user_group_id, created_at
+FROM pq_ai_tasks
+WHERE id = <taskId>
 LIMIT 1;
 -- 期望验证项：JSON 字段 extra 中包含 "newapi_image": 1
 ```
@@ -136,9 +136,9 @@ LIMIT 1;
 
 ```sql
 -- 验证该任务账务流水记录（预扣与结算，或失败退款）
-SELECT id, user_id, task_id, score, memo, type, created_at 
-FROM pq_user_score_logs 
-WHERE task_id = <taskId> 
+SELECT id, user_id, task_id, score, memo, type, created_at
+FROM pq_user_score_logs
+WHERE task_id = <taskId>
 ORDER BY id ASC;
 -- 期望验证项：
 -- 1. 成功任务：预扣/结算积分与刊例定价一致，无重复扣费；
@@ -149,9 +149,9 @@ ORDER BY id ASC;
 
 ```sql
 -- 核验网关层是否真实接收到来自主站的请求并路由至预期渠道
-SELECT id, model_name, token_name, channel_id, quota, prompt_tokens, completion_tokens, created_at 
-FROM newapi_logs 
-WHERE token_name = 'panqu_test' AND model_name = '<modelAlias>' 
+SELECT id, model_name, token_name, channel_id, quota, prompt_tokens, completion_tokens, created_at
+FROM newapi_logs
+WHERE token_name = 'panqu_test' AND model_name = '<modelAlias>'
 ORDER BY id DESC LIMIT 5;
 ```
 

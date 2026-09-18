@@ -1,196 +1,155 @@
 ---
 name: panqu-newapi-model-onboarding
-description: 处理通过 NewAPI 网关接入新模型与新渠道（如 Wan 3.0 / Prime、RunningHub、TalkingData）、两级分流决策、全量开放开关 (is_newapi_global)、渠道参数配置（分辨率/画幅/首尾帧）、组织管理密钥绑定、SD 重试兜底及账单大盘数据同步的开发自测、契约审查与测试流程规范。当涉及分流逻辑变更、新供应商接入或 NewAPI 联调时使用。
+description: 处理 Panqu 新图片与新视频模型直接接入 (IMAGE_NEW_MODEL / VIDEO_NEW_MODEL) 的研发自测、契约审查、规格覆盖与生产验收智能体决策树。
 ---
 
-# Panqu NewAPI 新模型接入与分流自测专属 Skill
+# Panqu 新模型接入自测智能体决策树 (panqu-newapi-model-onboarding)
 
-本 Skill 专门规范 Panqu（盼趣AI）系统通过统一 API 网关（NewAPI，`aiapis.panqu.com`）**接入新模型、配置新渠道、执行两级分流决策以及开发自测**的标准规范。
-
-本规范严格对齐产品需求文档《[0903 - 主站与Newapi对接v1.2版本](https://panqu-ai.feishu.cn/docx/W3cZd813YoNMnCxiT1zckWzenwe)》及主站核心实现（`aibaseos` 后端）。
+本 Skill 是面向 Coding Agent 与测试工程师的**新模型接入决策指南**，专门规范新图片模型（如 #950 Direct）与新视频模型（如 #960 Direct）上线时的契约建立、规格矩阵覆盖与生产验收。
 
 ---
 
-## 一、两级分流决策核心体系
+## 一、新模型接入决策树
 
-主站模型调用统一遵循**“主站业务资格前置判定 → NewAPI 权重与限额调度 → 上游供应商执行”**的两级决策体系：
-
-```
-用户发起模型生成请求
-       │
-       ▼
-【第 1 级：主站前置资格判断】（aibaseos 负责）
-   1. 分流模式检查：newapi_route_mode
-       ├── off: 全部关闭，不分流，走历史直连
-       ├── legacy: 故障快速回切，走旧版概率分流
-       └── newapi: 进入 NewAPI 分流资格判断（默认）
-   2. 硬性限制检查（isRequestEligible）：
-       ├── 提示词长度 <= 5000 字（超长直接拦截报错）
-       ├── 输出格式非 MOV（MOV 格式不支持分流）
-       ├── 无真人人像（包含真人人像回退直连）
-       └── Seedance 仅全能参考任务 (task_type=28) 且无参考视频支持分流；Wan 3.0 全能参考与首尾帧全量支持
-   3. 全量模型判断（isGlobalModel）：
-       ├── 是（pq_model_config.is_newapi_global == 1）：
-       │     【全量直达】：开完之后该模型的所有任务均无条件走 NewAPI 分流，
-       │     绕过组织路由组与角色绑定，直接使用全局 API Key（newapi_global_api_key），
-       │     任务快照记 newapi_org_id=0, newapi_route_group_id=0, newapi_group=''，直达 NewAPI 全局渠道
-       └── 否（非全量模型，is_newapi_global == 0）：
-             ├── 全局能力并集校验（isModelRoutable）：检查 newapi_route_rules 是否支持该模型/分辨率/画幅
-             ├── 组织路由组解析（resolveByGroupIds）：由用户角色组通过 pq_newapi_route_group_org 解析对应路由组
-             ├── 路由组可用性检查（isRouteGroupUsable）：路由组启用 (status=1) 且 NewAPI 密钥非空
-             └── 分组能力精确校验（isModelRoutableForGroup）：检查路由组对应 newapi_group 内是否有渠道承接
-                   │
-                   ▼
-【第 2 级：NewAPI 网关分发】（aiapis.panqu.com 负责）
-   1. 根据传入的分组 (newapi_group，如 panqu_test / default) 过滤有效渠道
-   2. 校验渠道每日积分限额（daily_quota_limit）与当前任务预估积分（points）
-   3. 按渠道预设权重（weight）加权轮询分发至具体供应商
-       │
-       ▼
-【后续链路：重试兜底与计费核算】
-   1. 失败处理：SD 系列任务分流失败进入重试列表并标记 is_need_fallback 兜底；其他模型（Wan 3.0 等）直接报错退出
-   2. 计费核销：10 积分 = 1 元，按秒计费，账单大盘动态映射供应商
+```text
+接收研发自然语言或 CLI 输入 (例: "接入 960 视频模型 --price 7")
+                      │
+                      ▼
+[判断 1] 媒体类型与变更类型
+  ├── 包含图片模型且为新接入 ──► 场景: IMAGE_NEW_MODEL (#950 等)
+  └── 包含视频模型且为新接入 ──► 场景: VIDEO_NEW_MODEL (#960 等)
+                      │
+                      ▼
+[判断 2] 事实探知与单价核实 (Fail-Closed)
+  ├── 显式传入单价 (--price / --points-per-second) ──► 采纳为真实定价，isPricingDetermined=true
+  └── 未提供定价 (缺少刊例价) ──► 拒绝使用兜底价，阻断通过 (BLOCKED / MANUAL_REQUIRED)
+                      │
+                      ▼
+[判断 3] 链路属性与规则剪枝 (DIRECT 模式)
+  ├── 新模型代码直连接入 (flowType='direct') ──► 安全裁剪 NewAPI 网关调度与组织隔离用例
+  └── 必须覆盖: 规格支持契约、任务创建提交、产物物理结构核验、单价计费核销
+                      │
+                      ▼
+[判断 4] 4 步标准闭环执行
+  probe (环境探活) ──► plan (契约与计划) ──► execute (执行) ──► verify (四态验收)
 ```
 
 ---
 
-## 二、七大功能域自测与验收标准
+## 二、事实探知优先级与 ChangeContract 规范
 
-根据需求文档 17 项功能点，自测时必须逐项核对以下验收标准：
+智能体在 `plan` 阶段必须遵循严格的事实探知优先级：
 
-### 1. 模型处理逻辑更新（两级分流判断）
-- **核心逻辑**：
-  - **全量模型特权**：当 `is_newapi_global = 1` 时，所有用户直接走分流，无需用户属于特定分流组（`newapi_org_id = 0`）；
-  - **分组分流判断**：当 `is_newapi_global = 0` 时，仅当用户属于绑定了有效 NewAPI 路由组的组织时才走分流，否则回退直连；
-  - **硬性边界**：提示词 > 5000 字直接拦截报错；MOV 格式回退；包含真人人像回退；Seedance 带参考视频回退。
+$$\text{SOURCE\_INPUT} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT\_FALLBACK}$$
 
-### 2. 模型管理界面与批量操作
-- **入口与展示**：
-  - 菜单位置：【运营管理-分流】上方新增菜单【模型管理】；
-  - 列表字段：模型 ID、模型类型（视频/图片/音频）、模型名称、关联渠道、创建时间、是否全量开放（开关）；
-- **交互与功能**：
-  - 支持按模型类型（视频/图片/音频）下拉筛选；
-  - 支持按模型 ID、名称或请求别名搜索；
-  - 支持全选模型批量开关「是否全量开放」，切换后即时生效且数据持久化。
-
-### 3. 渠道管理与参数配置
-- **菜单变更**：原【NewAPI渠道管理】更名为【渠道管理】；
-- **去掉新增**：去除“新增渠道”按钮，只允许编辑既有渠道参数；
-- **列表与字段**：
-  - 新增展示【环境】（正式/测试）、【分类】（视频/图片）、【模型能力】（全能参考/首尾帧）；
-  - 首列线路名由纯数字改为渠道拼音首字母大写（如万相显示 WX、TalkingData 显示 TD、火山显示 HS、RunningHub 显示 RH）；
-- **编辑参数配置**：
-  - 环境下拉可切换（正式/测试）；
-  - 分类下拉可切换（视频/图片）；
-  - **视频模型参数**：
-    - 模型能力多选：首尾帧、全能参考；
-    - **全能参考视频联动逻辑**：勾选“全能参考”后，若勾选“支持参考视频”，则该模型支持所有类型全能参考（图、文、音频、视频）；若不勾选“支持参考视频”，则仅支持图/文/音频生成视频；
-    - 分辨率支持多选与全选：包含 480P、720P、**768P (新增)**、1080P、2K、4K；
-    - 宽高比支持多选与全选：包含自适应 (auto)、16:9、9:16、4:3、3:4、1:1、21:9；
-  - **图片模型参数**：
-    - 分辨率支持：1k、2k、4k；
-    - 宽高比支持 9 种预设：1:1、4:3、3:4、16:9、9:16、3:2、2:3、5:4、4:5。
-
-### 4. 新接入渠道规格核验
-- **阿里 Wan 3.0 / Wan 3.0 Prime**：
-  - 接口协议：Model Studio 中转接入；
-  - 画幅支持：自适应、9:16、16:9、4:3、3:4、1:1（共 6 种）；
-  - 能力支持：全能参考（支持参考视频）、首尾帧。
-- **RunningHub 视频模型**：
-  - 支持 sd2.0 (720p/1080p)、sd2.5 (480p/720p/1080p)、sd2.0 fast (720p)；
-  - 能力支持：全能参考（**无**参考视频）、首尾帧；
-  - 画幅支持：所有宽高比。
-- **RunningHub 图片模型**：
-  - 支持 Nano Banana 2、Nano Banana Pro、GPT Image 2/pro；
-  - 分辨率：1k/2k/4k；宽高比：9 种标准比例。
-- **TalkingData (TD)**：
-  - 支持 sd2.0 与 sd2.5；
-  - 能力支持：全能参考（无参考视频）；分辨率支持 480p/720p/1080p/4k。
-
-### 5. 组织管理与企业绑定
-- **启用默认分组**：
-  - 默认分组包含主站所有普通用户，系统自动关联 NewAPI 的 API 分组密钥；
-- **搜索企业精准匹配**：
-  - 在新增/编辑企业关联企业时，必须使用精准匹配算法；
-  - 用户输入 `1` 时，ID 为 `1` 的企业必须排在列表第一位；
-- **移动分组二次确认**：
-  - 当选中的企业已有归属组织时，弹出二次确认弹窗；
-  - 支持手动勾选需要移交的企业，并支持“全选”；
-  - 勾选的企业移动至新分组，未勾选的企业继续保留在原组织。
-
-### 6. 分流重试与兜底降级
-- **重试范围白名单机制**：
-  - 仅 **SD 系列**（Seedance 系列）任务分流失败时，标记 `is_need_fallback = 1`，进入分流重试列表并展示兜底结果；
-  - **非 SD 模型**（如 Wan 3.0、Wan 3.0 Prime 等）分流失败直接报错中断，**绝对不得进入分流重试列表**。
-
-### 7. 账单数据大盘与计费对账
-- **动态线路型供应商同步**：
-  - 新增渠道时，账单大盘同步增加对应的供应商维度数据（编码规则：动态基数 + line）；
-  - 接入新模型时，在账单大盘对应模型、任务下方同步新增统计数据；
-- **计费与限额**：
-  - 固定汇率：`10 积分 = 1 元人民币`；
-  - 按秒计费公式：`生成时长 × 输出单价 + 参考视频时长 × 参考单价`；
-  - 每日限额：发起请求时写入任务积分 `points`，供 NewAPI 校验渠道每日额度上限（`daily_quota_limit`）。
+- **新模型定价铁律**：未知新模型绝对禁止使用 `5 pt` 或 `28 pt` 的默认 fallback 作为真实依据给出通过判决。
+- **ChangeContract 必备字段**：
+  1. `scenario`: `IMAGE_NEW_MODEL` 或 `VIDEO_NEW_MODEL`
+  2. `modelId` & `mediaType`
+  3. `beforeState`: `flowType='none'`, `pricing='未确定'`
+  4. `afterState`: `flowType='direct'`, `routeLine=0`, `decision='FALLBACK_DIRECT'` (免分流直连模式)
+  5. `requiredFacts`: `['modelId', 'mediaType', 'alias', 'pricing', 'supportedResolutions']`
+  6. `routingExpectation`: `mode: 'DIRECT'`, `willDivert: false`, `routeLine: 0`
+  7. `pricing`: `points` (图片按张) 或 `pointsPerSecond` (视频按秒)，来源必须为 `SOURCE_INPUT` 或静态已知
 
 ---
 
-## 三、需求划掉项保护（严格准则）
+## 三、最小充分测试用例集与安全裁剪矩阵
 
-以下 3 项经飞书文档富文本删除线（`strikethrough: true`）属性确认，属于本期已划掉范围，**严格不作为系统缺陷、漏测项或阻塞项**：
-1. ~~**接入渠道：菲玲（P2）**~~：已划掉，系统未接入，状态一致；
-2. ~~**接入主站剩余视频及图片模型（P2）**~~：已划掉（大盘存量历史模型，非本期新接入）；
-3. ~~**主站代码同步到海外站（P1）**~~：已划掉。
+测试智能体必须生成**解释性测试计划**：对纳入的用例说明必要性 (`rationale.whyIncluded` / `riskAddressed`)，对跳过的用例说明依据 (`skippedTests.whySkipped` / `rule`)。
 
----
+### 3.1 核心测试用例（必测）
 
-## 四、安全测试与执行铁律
+| 用例 ID | 所属分层 | 纳入理由 (whyIncluded) | 防范风险 (riskAddressed) |
+|---|---|---|---|
+| `routing-direct` | routing | 验证新模型直连线路 0 判定 | 防止新上线模型被错误拦截或分流至未配置网关 |
+| `gateway-eligibility-guard` | boundary | 网关前置准入门禁拦截（超长文本/非法格式） | 防止非法参数穿透打垮下游推理服务 |
+| `real-task-submit` | execution | 向主站真实发起任务提交请求并获取有效 taskId | 验证鉴权、参数白名单与主库任务记录落库能力 |
+| `artifact-mp4` / `artifact-png` | artifact | 解析 MP4 Box 树 (moov/mdat/stco) 或 PNG IHDR 物理尺寸 | 防止供应商返回空文件、损坏流或假规格 |
+| `billing-invariants` | billing | 核验计费单价精准扣费与三大账务不变量 | 防止单价配置错误产生资损或失败未退款 |
 
-1. **NewAPI 零写原则**：严禁向 NewAPI 网关（`aiapis.panqu.com`）发起任何写操作（禁止创建/修改渠道与令牌），仅只读访问 `/keys` 等页面。
-2. **测试数据标识**：所有端到端测试任务名称必须带 `devtest_` 前缀（如 `devtest_0910_wan3_e2e`）。
-3. **CMS 操作必回滚**：在 CMS 上的任何测试操作（如开关单模型 `is_newapi_global`）必须先记录基线，操作完成后必须立即调用原接口回滚并复核（零残留）。
-4. **凭证脱敏与安全**：禁止输出或记录任何明文 Cookie、Bearer Token 或 API Key（一律脱敏为 `sk******`）。
-5. **自动化测试命令**：
-   - **全量契约自动化验证（28 项）**：
-     ```bash
-     devtest flow api-diversion --project-root /path/to/panqu-ai
-     # 或在 panqu-ai 根目录执行快捷脚本：
-     ./test-diversion.sh
-     ```
-   - **定向新模型接入就绪度诊断（精准核查单个模型）**：
-     ```bash
-     devtest flow api-diversion --project-root /path/to/panqu-ai --model-id <ID> [--model-type <video|image>]
-     # 或在 panqu-ai 根目录执行快捷脚本：
-     ./test-diversion.sh --model-id 84
-     ```
-   - **真实视频任务提交与分流验真（端到端真实业务测试）**：
-     ```bash
-     devtest flow real-video-submit --model-id <ID> [--duration 5] [--poll-timeout 30]
-     # 或在 panqu-ai 根目录一键发起真实测试：
-     ./test-diversion.sh --real --model-id 84
-     ./test-diversion.sh --real-submit --model-id 84   # 契约 + 真实提交双重验证
-     ```
+### 3.2 安全裁剪用例（剪枝规则）
+
+| 跳过用例 ID | 裁剪原因 (whySkipped) | 裁剪规则 (rule) |
+|---|---|---|
+| `gateway-candidate` | 本次为 Direct 直连接入，不涉及 NewAPI 网关渠道加权与限额检查 | `DIRECT 接入免网关调度` |
+| `route-group-isolation` | Direct 直连接入，免组织与路由组绑定鉴权 | `DIRECT 接入免组织隔离` |
+| `fallback-policy` | Direct 直连接入，无 NewAPI 失败重试降级策略 | `DIRECT 接入无重试降级` |
+| `boundary-refimg` | 该生图模型不支持参考图 (`maxRefImages=0`)，无需参考图超限测试 | `非参考图模型跳过参考图边界` |
 
 ---
 
-## 五、专项参考文件索引
+## 四、执行与验证管道规范 (Execute & Verify Fail-Closed)
 
-- [references/code-map.md](references/code-map.md)：包含 Controller、Service、Model、View、数据库表与 SQL 契约。
-- [references/input-constraints.md](references/input-constraints.md)：逐项提取 17 项需求参数格式、大小、数量、边界与违规处理。
-- [references/onboarding-sop.md](references/onboarding-sop.md)：新模型接入与自测的标准操作程序指南。
-- [references/test-scenarios.md](references/test-scenarios.md)：完整用例场景矩阵（C01-C28 及正向/反向/边界全覆盖）。
-- [references/troubleshooting.md](references/troubleshooting.md)：分流未生效或调用失败的快速排查决策树。
+### 4.1 阻断规则 (Fail-Closed)
+- 若 `contract.pricing.allowPass == false`（未提供单价）：
+  - `execute()` 立即阻断并返回 `status: 'BLOCKED'`，拒绝以虚假单价派发任务；
+  - `verify()` 立即阻断并返回 `acceptance: 'BLOCKED'`，绝不给出误导性通过。
+- 当研发或测试通过 `--price` 或 `--points-per-second` 补充事实后，阻断解除。
+
+### 4.2 验证与动态计费计算
+- **视频模型**：按秒动态计算预期扣费：
+  $$\text{expectedPoints} = \text{pointsPerSecond} \times \text{duration}$$
+- **图片模型**：按张动态计算预期扣费：
+  $$\text{expectedPoints} = \text{price}$$
 
 ---
 
-## 六、日常高频交互引导与指令库（提升使用率）
+## 五、生产级四态验收判决系统
 
-在 Trae IDE 或智能体交互界面中，开发者可直接使用以下高频口令，无需繁琐说明上下文：
+1. **`ACCEPTED`**：
+   - 任务终态为 `SUCCESS`；
+   - 产物解码正常，物理结构解析通过；
+   - 账务流水预扣与结算吻合预期，净扣与动态刊例价完全一致；
+   - 不变量 `antiDoubleBilling=true`, `netChargeZero=true`, `refundIdempotency=true`；
+   - 抽检产物 OSS 存储与物理完整性。
+2. **`REJECTED`**：
+   - 任务创建失败或终态为 `FAILED` 且退款失败；
+   - 产物损坏、分辨率不匹配或文件大小异常（<100 字节）；
+   - 扣费金额与刊例定价不符。
+3. **`BLOCKED`**：
+   - 缺少单价或 session 凭证；
+   - 规格参数冲突。
+4. **`UNVERIFIED`**：
+   - 仅在脱机离线模式演算，无真实 session 与产物流水；
+   - 未查验 OSS 物理产物。
 
-1. **“接入新模型 [模型ID]”**：
-   - 智能体自动读取 `onboarding-sop.md`，核查 `Ai.php` 客户端别名、`pq_model_config.is_newapi_global` 全量状态、渠道能力配置与计费单价，并输出定向就绪度报告（0~100%）。
-2. **“测试分流” / “跑一下分流测试”**：
-   - 智能体直接调用 `runPanquDiversionFlow` 执行 28 项契约自测，10 秒内输出《开发自测测试报告.md》，直接作为提测附件。
-3. **“真实提交视频测试 [模型ID]”**：
-   - 智能体读取安全登录态，真实调用 `/aivideo/videonew/add` 提交任务，提取 Task ID，核验 `extra.diversion=10` 快照与预扣积分，轮询生成状态并生成《真实视频提交流程测试报告.md》。
-4. **“诊断未分流任务 [任务ID]”**：
-   - 智能体读取 `troubleshooting.md` 五层决策树，分析源表 `extra`，定位是别名为空、未开全量、角色组未绑定、能力不匹配还是配额超限。
+---
+
+## 六、人工确认证据清单与检验方法
+
+新模型直接接入模式下，测试人员需人工确认以下两项核心物理证据：
+
+### 6.1 视频模型物理产物与 OSS 存储抽检
+1. **MP4 容器完整性**：
+   - 抽检任务产物 URL，确认包含有效的 `moov`（媒体元数据）与 `mdat`（媒体数据）原子盒；
+   - 确认 Web 端或主流播放器能够秒开流式播放（`moov` 位于文件头部或支持 Range 请求）。
+2. **OSS 归档可用性**：
+   - 核验主站返回的视频 CDN/OSS 地址可正常下载且文件大小与预期画质匹配（通常 720p 5s 视频在 1MB~5MB 之间）。
+
+### 6.2 图片模型物理产物抽检
+1. **PNG IHDR 结构**：
+   - 解析 PNG 二进制前 33 字节，核对 IHDR 记录的宽和高与请求规格（如 1k/2k）精准一致。
+2. **账务对账 SQL**：
+   ```sql
+   SELECT id, task_id, score, memo, type, created_at
+   FROM pq_user_score_logs
+   WHERE task_id = <taskId>
+   ORDER BY id ASC;
+   ```
+
+---
+
+## 七、标准 CLI 与 MCP 调用范式
+
+```bash
+# 1. 规划阶段：输入自然语言，自动识别新模型场景并生成解释性测试计划
+devtest plan "接入 960 视频模型 --points-per-second 7"
+devtest plan "上线 950 新图片模型 --price 5"
+
+# 2. 执行阶段：带入单价参数受控执行
+devtest execute --model 960 --media video --points-per-second 7 --duration 5 --session-file session.json
+
+# 3. 验收阶段：全量证据核对与产物物理结构验真
+devtest verify --task <taskId> --model 960 --media video --points-per-second 7 --duration 5 --session-file session.json
+```

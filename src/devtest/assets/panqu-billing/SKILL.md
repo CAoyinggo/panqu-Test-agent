@@ -80,12 +80,15 @@ description: 处理 Panqu/盼趣的计费、积分预估、消费明细、账单
 ### 5.2 方式二：命令行自测（极速免配置，开箱即用）
 
 ```bash
-# 1. 快速核验失败退款分支与 NET_CHARGE_ZERO 不变量（模拟受控闭环）
-node dist/src/devtest/run-playwright-cli.js --mock --expect-failure
+# 1. 核验失败退款分支与 NET_CHARGE_ZERO 不变量（含 E2E 闭环 polling）
+npm run devtest -- execute --model 84 --media video --expect-failure --wait
 
-# 2. 快速核验新模型直接接入（DIRECT 模式，含全规格矩阵与账单）
-node dist/src/devtest/run-playwright-cli.js --flow direct --model 84 --media video --plan-only
+# 2. 核验新模型直接接入（DIRECT 模式，仅出计划不执行）
+npm run devtest -- plan --flow direct --model 84 --media video
 
-# 3. 快速核验已有模型分流（DIVERSION 模式，含两级决策与降级回退）
-node dist/src/devtest/run-playwright-cli.js --flow diversion --model 84 --media video --plan-only
+# 3. 核验已有模型分流（DIVERSION 模式，含两级决策与降级回退，仅出计划）
+npm run devtest -- plan --flow diversion --model 84 --media video
+
+# 4. 完整 E2E 闭环：提交 → 自动 polling → Artifact + Billing 验证
+npm run devtest -- execute --model 84 --media video --wait
 ```

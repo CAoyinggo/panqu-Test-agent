@@ -132,9 +132,9 @@ $$\text{SOURCE\_INPUT} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT
    - 解析 PNG 二进制前 33 字节，核对 IHDR 记录的宽和高与请求规格（如 1k/2k）精准一致。
 2. **账务对账 SQL**：
    ```sql
-   SELECT id, task_id, score, memo, type, created_at 
-   FROM pq_user_score_logs 
-   WHERE task_id = <taskId> 
+   SELECT id, task_id, score, memo, type, created_at
+   FROM pq_user_score_logs
+   WHERE task_id = <taskId>
    ORDER BY id ASC;
    ```
 

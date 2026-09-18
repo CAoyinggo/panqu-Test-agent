@@ -9,7 +9,7 @@ import {
 } from './routing.js';
 import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from './billing.js';
 import { inspectMp4Buffer, inspectImageBuffer, type MediaInspectionResult } from './media-inspector.js';
-import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, type PanquSession } from './media-flow.js';
+import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, type PanquSession, type TaskStatusSnapshot } from './media-flow.js';
 import type {
   ChangeScenario,
   DiscoveredModelContract,
@@ -1161,11 +1161,23 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
   });
   if (mode === 'real') {
-    if (!options.sessionFile) {
-      return { ok: false, taskId: 0, mode: 'real', modelId, mediaType, status: 'ERROR', points, message: '真实执行必须提供有效的 sessionFile 会话凭据文件' };
+    const sessionFilePath = options.sessionFile
+      || process.env.PANQU_SESSION_COOKIES_FILE
+      || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
+    if (!sessionFilePath) {
+      return {
+        ok: false,
+        taskId: 0,
+        mode: 'real',
+        modelId,
+        mediaType,
+        status: 'ERROR',
+        points,
+        message: '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
+      };
     }
     try {
-      const session = await loadPanquSession(options.sessionFile, options.env || 'test');
+      const session = await loadPanquSession(sessionFilePath, options.env || 'test');
       const res = await submitMediaTask({
         baseUrl: session.base_url, cookies: session.cookie_string, csrfToken: session.csrf_token,
         projectId: session.project_id, mediaType, modelId, prompt: options.prompt, resolution,
@@ -1304,6 +1316,8 @@ export interface VerifyKernelOptions {
   expectedPoints?: number; assetBuffer?: Buffer; artifactBuffer?: Buffer; tailBuffer?: Buffer; terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
   resolution?: string; duration?: number; sessionFile?: string; env?: 'test' | 'preonline';
   baseUrl?: string; cookies?: string; videoUrl?: string; imageUrl?: string; pollTimeoutSec?: number;
+  pollIntervalMs?: number;
+  onProgress?: (snapshot: TaskStatusSnapshot) => void;
   artifactOwnership?: 'VERIFIED' | 'UNVERIFIED' | 'UNBOUND';
   isSimulated?: boolean;
   expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
@@ -1452,9 +1466,18 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   let artifactOwnership: 'VERIFIED' | 'UNVERIFIED' = options.artifactOwnership === 'UNVERIFIED' || options.artifactOwnership === 'UNBOUND' ? 'UNVERIFIED' : 'VERIFIED';
 
   if (session) {
-    const { finalSnapshot } = await pollTaskStatus(taskId, { baseUrl: session.base_url, cookies: session.cookie_string, mediaType, pollTimeoutSec: options.pollTimeoutSec ?? 10 });
+    const defaultTimeoutSec = mediaType === 'image' ? 60 : 180;
+    const pollTimeoutSec = options.pollTimeoutSec ?? defaultTimeoutSec;
+    const { finalSnapshot } = await pollTaskStatus(taskId, {
+      baseUrl: session.base_url,
+      cookies: session.cookie_string,
+      mediaType,
+      pollTimeoutSec,
+      pollIntervalMs: options.pollIntervalMs,
+      onProgress: options.onProgress,
+    });
     if (finalSnapshot.taskStatus === 1) {
-      const msg = `任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress}%)，未到达终态`;
+      const msg = `任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress ?? 0}%)，未到达终态。本次轮询窗口已耗尽，处于异步非终态（非业务失败）。请继续使用 devtest verify --task ${taskId} 追踪终态闭环。`;
       const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
       const completeness: EvidenceCompleteness = {
         requiredEvidence,
@@ -1470,7 +1493,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
         manualEvidenceRequired: ['taskCompletion'],
         unexpectedChanges: [],
         reasons: [msg],
-        summaryText: `[BLOCKED] ${msg}`,
+        summaryText: `[BLOCKED / IN_FLIGHT] ${msg}`,
       };
       const businessValidation: BusinessVerificationResult = {
         status: 'UNVERIFIED',

@@ -14,8 +14,14 @@ description: Panqu 研发自测副驾。4 项工具（probe/plan/execute/verify�
 |---|---|---|
 | `probe` | 测试前确认环境通畅 | `env`, `session_file` |
 | `plan` | 确认分流决策与刊例基准 | `model_id`, `media_type`, `flow_type` |
-| `execute` | 提交测试任务 | `model_id`, `media_type`, `mode` (mock|real) |
+| `execute` | 提交测试任务 | `model_id`, `media_type`, `mode`, `wait: true (推荐自动闭环)` |
 | `verify` | 验真产物结构 + 对账积分 | `task_id`, `model_id`, `media_type`, `session_file` |
+
+## Agent 自主闭环契约
+1. 用户单次输入测试目标，智能体自主完成全流程，中间状态 (SUBMITTED/PROCESSING/QUEUED) 严禁暂停交出控制权。
+2. 调用 `execute` 建议传 `wait: true`（或 CLI `--wait`）一键闭环；若未传 wait，拿到 taskId 后必须立即自主调用 `verify`。
+3. 遇到 `PROCESSING`（轮询超时）代表异步任务仍在处理，严禁判定通过，严禁询问用户，可继续自主调用 `verify` 续期。
+4. 门禁硬约束：只有 [Task终态成功] + [产物结构有效] + [账务不变量通过] 均满足才允许输出 PASS。
 
 ## 汇报格式（严格执行，禁止扩张）
 

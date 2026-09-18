@@ -56,6 +56,8 @@ export const DEVTEST_MCP_TOOL = {
       db_extra_confirmed: { type: 'boolean', description: '是否已核实底层数据库 ai_tasks extra 分流字段' },
       gateway_channel_confirmed: { type: 'boolean', description: '是否已核实验证网关渠道分流' },
       unconfirmed_static: { type: 'boolean', description: '是否包含未确认的静态规则' },
+      wait: { type: 'boolean', description: '是否在 execute 提交成功后自动等待轮询并串联进入 verify 终态闭环验真 (Agent 自主执行建议设置为 true，默认 false)' },
+      poll_timeout_sec: { type: 'number', description: '轮询超时秒数 (默认: 视频 180s, 图片 60s)' },
     },
     required: ['action'],
   },
@@ -211,27 +213,120 @@ export class DevTestMcpService {
         return { ok: res.ok, action: 'plan', summary, data: res as unknown as T };
       }
       case 'execute': {
+        const modelId = Number(args.model_id ?? args.modelId ?? 84);
+        const mediaType = ((args.media_type || args.mediaType || 'video') as string).toLowerCase() as 'video' | 'image';
+        const mode = args.mode === 'real' ? 'real' : 'mock';
+        const resolution = typeof args.resolution === 'string' ? args.resolution : undefined;
+        const duration = typeof args.duration === 'number' ? args.duration : undefined;
+        const prompt = typeof args.prompt === 'string' ? args.prompt : undefined;
+        const sessionFile = typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined;
+        const env = (args.env as 'test' | 'preonline') || undefined;
+        const price = typeof args.price === 'number' ? args.price : undefined;
+        const customPoints = typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined;
+        const pointsPerSecond = typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined;
+        const wait = Boolean(args.wait);
+        const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
+          ? args.poll_timeout_sec
+          : typeof args.pollTimeoutSec === 'number'
+          ? args.pollTimeoutSec
+          : undefined;
+        const dbExtraConfirmed = Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed);
+        const gatewayChannelConfirmed = Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed);
+
         const res = await execute({
-          modelId: Number(args.model_id ?? args.modelId ?? 84),
-          mediaType: ((args.media_type || args.mediaType || 'video') as string).toLowerCase() as 'video' | 'image',
-          mode: args.mode === 'real' ? 'real' : 'mock',
-          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
-          duration: typeof args.duration === 'number' ? args.duration : undefined,
-          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
-          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
-          env: (args.env as 'test' | 'preonline') || undefined,
-          price: typeof args.price === 'number' ? args.price : undefined,
-          customPoints: typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined,
-          pointsPerSecond: typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined,
+          modelId,
+          mediaType,
+          mode,
+          resolution,
+          duration,
+          prompt,
+          sessionFile,
+          env,
+          price,
+          customPoints,
+          pointsPerSecond,
         });
-        const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}`;
-        return { ok: res.ok, action: 'execute', summary, data: res as unknown as T };
+
+        if (!wait) {
+          const nextInstruction = res.ok && res.taskId > 0
+            ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
+            : '';
+          const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}${nextInstruction}`;
+          return { ok: res.ok, action: 'execute', summary, data: res as unknown as T };
+        }
+
+        // wait enabled: execute -> verify continuous closed-loop pipeline
+        if (!res.ok || !res.taskId || res.taskId <= 0) {
+          const summary = `### 📋 Panqu 任务执行回执 [FAILED]\n- **执行状态**: FAILED\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
+          return { ok: false, action: 'execute', summary, data: res as unknown as T, error: res.message };
+        }
+
+        const verifyRes = await verify({
+          taskId: res.taskId,
+          modelId,
+          mediaType,
+          resolution,
+          duration,
+          sessionFile,
+          env,
+          price,
+          customPoints,
+          pointsPerSecond,
+          pollTimeoutSec,
+          isSimulated: res.isSimulated,
+          dbExtraConfirmed,
+          gatewayChannelConfirmed,
+        });
+
+        const taskStatus = verifyRes.evidence.task.status;
+        const artifactStatus = verifyRes.evidence.media.status === 'PASS'
+          ? `PASS (${(verifyRes.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
+          : verifyRes.evidence.media.status === 'FAIL' ? 'FAIL (损坏)' : 'UNVERIFIED (无产物)';
+        const billingStatus = verifyRes.evidence.billing.status;
+        const netZero = verifyRes.invariants ? (verifyRes.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
+        const antiDouble = verifyRes.invariants ? (verifyRes.invariants.antiDoubleBilling ? 'PASS' : 'FAIL (重扣告警)') : 'SKIPPED';
+        const businessSuccessStr = verifyRes.businessValidation?.businessSuccess ? 'PASS' : (verifyRes.businessValidation?.status || 'UNVERIFIED');
+        const completenessStr = verifyRes.evidenceCompleteness
+          ? ` · 证据完整度 <${verifyRes.evidenceCompleteness.availableEvidence.length}/${verifyRes.evidenceCompleteness.requiredEvidence.length}${verifyRes.evidenceCompleteness.isComplete ? ' COMPLETE' : ' INCOMPLETE'}>`
+          : '';
+
+        let verdictDesc: string;
+        if (verifyRes.passed) {
+          verdictDesc = 'ALL PASS (任务成功 + 物理产物结构有效 + 账务不变量全部通过)';
+        } else if (verifyRes.status === 'PROCESSING') {
+          verdictDesc = `PROCESSING (排队处理中: ${verifyRes.progress ?? 0}%, 轮询窗口已耗尽，非业务终态)`;
+        } else if (verifyRes.status === 'UNVERIFIED') {
+          verdictDesc = 'UNVERIFIED (证据未闭环，未通过线上验收)';
+        } else {
+          verdictDesc = 'FAILED (任务失败或存在违背缺陷)';
+        }
+
+        const summary = `### 🚀 Panqu E2E 任务执行与验真闭环 [${res.mode.toUpperCase()}]
+- **任务概况**: 模型 #${verifyRes.modelId} (${verifyRes.mediaType}) · 任务 #${verifyRes.taskId}
+- **技术裁决**: <${verdictDesc}>
+- **生产验收**: <${verifyRes.acceptance}>${completenessStr}
+- **证据明细**:
+  - 任务执行 (Task): <${taskStatus}>
+  - 产物结构 (Media): <${artifactStatus}>
+  - 积分账务 (Billing): <${billingStatus}>
+  - 失败净扣归零: <${netZero}>
+  - 防重复扣费: <${antiDouble}>
+  - 业务验证: <${businessSuccessStr}>
+${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('; ')}` : ''}
+- **本地复现**: npm run devtest -- verify --task ${verifyRes.taskId} --model ${verifyRes.modelId} --media ${verifyRes.mediaType}`;
+
+        return { ok: verifyRes.passed, action: 'execute', summary, data: verifyRes as unknown as T };
       }
       case 'verify': {
         const terminalStatus = typeof args.terminal_status === 'string'
           ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
           : typeof args.terminalStatus === 'string'
           ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
+          : undefined;
+        const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
+          ? args.poll_timeout_sec
+          : typeof args.pollTimeoutSec === 'number'
+          ? args.pollTimeoutSec
           : undefined;
 
         const res = await verify({
@@ -254,6 +349,7 @@ export class DevTestMcpService {
           artifactBuffer: Buffer.isBuffer(args.artifact_buffer) ? args.artifact_buffer : Buffer.isBuffer(args.artifactBuffer) ? args.artifactBuffer : undefined,
           dbExtraConfirmed: Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed),
           gatewayChannelConfirmed: Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed),
+          pollTimeoutSec,
           baseline: args.baseline as DiversionBaseline | undefined,
           unconfirmedStatic: Boolean(args.unconfirmed_static ?? args.unconfirmedStatic),
           apiResult: (args.api_result || args.apiResult) as any,
