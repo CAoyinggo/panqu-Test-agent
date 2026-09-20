@@ -57,13 +57,13 @@ ${c.bold}命令参数与示例:${c.reset}
   devtest probe [--env test|preonline] [--session-file <path>] [--json]
 
   ${c.yellow}# 2. 分流推导与规划${c.reset}
-  devtest plan --model 84 --media video [--flow diversion|direct] [--change-type new_model|diversion_change] [--custom-points 5] [--is-global] [--json]
+  devtest plan --model 84 --media video [--flow diversion|direct] [--change-type new_model|diversion_change] [--custom-points 5] [--alias <name>] [--is-global] [--json]
 
   ${c.yellow}# 3. 任务执行${c.reset}
-  devtest execute --model 84 --media video [--mode mock|real] [--prompt "..."] [--wait] [--poll-timeout <sec>] [--json]
+  devtest execute --model 84 --media video [--mode mock|real] [--alias <name>] [--prompt "..."] [--wait] [--poll-timeout <sec>] [--json]
 
   ${c.yellow}# 4. 产物验真与对账${c.reset}
-  devtest verify --task 12345 --model 84 --media video [--expected-points 28] [--json]
+  devtest verify --task 12345 --model 84 --media video [--alias <name>] [--expected-points 28] [--json]
 
 ${c.bold}通用参数:${c.reset}
   --json          以 JSON 格式输出纯结构化数据（便于脚本和智能体解析）
@@ -472,6 +472,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const price = typeof options.price === 'number' ? options.price as number : undefined;
         const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
         const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
+        const alias = (options.alias as string) || undefined;
         const wait = Boolean(options.wait);
         const dbExtraConfirmed = Boolean(options['db-extra-confirmed'] || options.dbExtraConfirmed);
         const gatewayChannelConfirmed = Boolean(options['gateway-channel-confirmed'] || options.gatewayChannelConfirmed);
@@ -493,6 +494,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           price,
           customPoints,
           pointsPerSecond,
+          alias,
         };
 
         const result = await execute(execOptions);
@@ -541,6 +543,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           price,
           customPoints,
           pointsPerSecond,
+          alias,
           pollTimeoutSec,
           isSimulated: result.isSimulated,
           dbExtraConfirmed,
@@ -581,6 +584,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const price = typeof options.price === 'number' ? options.price as number : undefined;
         const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
         const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;
+        const alias = (options.alias as string) || undefined;
         const pollTimeoutSec = typeof options['poll-timeout'] === 'number'
           ? options['poll-timeout'] as number
           : typeof options['poll-timeout-sec'] === 'number'
@@ -604,6 +608,7 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           price,
           customPoints,
           pointsPerSecond,
+          alias,
           pollTimeoutSec,
           onProgress: isJson ? undefined : (snapshot) => {
             process.stdout.write(`\r⏳ 轮询中... 任务 #${snapshot.taskId} 状态: ${snapshot.taskStatus} (进度: ${snapshot.progress ?? 0}%)   `);

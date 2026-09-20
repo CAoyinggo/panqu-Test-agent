@@ -623,6 +623,103 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
     expect(text).toContain('UNVERIFIED');
   });
 
+  it('TD #54 CLI execute：传入 --alias td 与 --custom-points 60，成功仿真派发且 points=60', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+
+    const code = await runDevTestCli([
+      'execute',
+      '--model', '54',
+      '--media', 'video',
+      '--mode', 'mock',
+      '--alias', 'td',
+      '--custom-points', '60',
+      '--json',
+    ]);
+    spy.mockRestore();
+
+    expect(code).toBe(0);
+    const json = JSON.parse(logs.join(''));
+    expect(json.status).toBe('SUBMITTED');
+    expect(json.points).toBe(60);
+    expect(json.taskId).toBeGreaterThan(0);
+    expect(json.isSimulated).toBe(true);
+  });
+
+  it('TD #54 CLI execute 缺少 alias：返回非 0 且 status=BLOCKED、包含 BLOCKED_MISSING_INPUT', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+
+    const code = await runDevTestCli([
+      'execute',
+      '--model', '54',
+      '--media', 'video',
+      '--mode', 'mock',
+      '--custom-points', '60',
+      '--json',
+    ]);
+    spy.mockRestore();
+
+    expect(code).not.toBe(0);
+    const json = JSON.parse(logs.join(''));
+    expect(json.status).toBe('BLOCKED');
+    expect(json.message).toContain('BLOCKED_MISSING_INPUT');
+    expect(json.taskId).toBe(0);
+  });
+
+  it('TD #54 CLI verify：传入 --alias td 与 --custom-points 60，正确解析 contract.alias.value=td 且 expectedPoints=60', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+
+    const code = await runDevTestCli([
+      'verify',
+      '--task', '54001',
+      '--model', '54',
+      '--media', 'video',
+      '--alias', 'td',
+      '--custom-points', '60',
+      '--json',
+    ]);
+    spy.mockRestore();
+
+    // 凭据缺失返回 1 (UNVERIFIED)
+    expect(code).toBe(1);
+    const json = JSON.parse(logs.join(''));
+    expect(json.contract?.alias?.value).toBe('td');
+    expect(json.evidence?.billing?.expectedPoints).toBe(60);
+  });
+
+  it('TD #54 CLI execute --wait：alias=td 正确透传至后续 verify 且 billing 期望积分为 60', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+      logs.push(args.join(' '));
+    });
+
+    const code = await runDevTestCli([
+      'execute',
+      '--model', '54',
+      '--media', 'video',
+      '--mode', 'mock',
+      '--alias', 'td',
+      '--custom-points', '60',
+      '--wait',
+      '--json',
+    ]);
+    spy.mockRestore();
+
+    // 脱机 mock 下 verify 凭据缺失返回 1 (UNVERIFIED)，不降低证据要求
+    expect(code).toBe(1);
+    const json = JSON.parse(logs.join(''));
+    expect(json.contract?.alias?.value).toBe('td');
+    expect(json.evidence?.billing?.expectedPoints).toBe(60);
+  });
+
   it('未知命令 fail-closed 返回 1', async () => {
     const errors: string[] = [];
     const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
