@@ -53,7 +53,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         projectId: 10,
       });
 
-      expect(recordedUrl).toBe('https://test.panqu.com/aivideo/v2/generate/video');
+      expect(recordedUrl).toBe('https://test.panqu.com/aivideo/videonew/add');
       expect(recordedMethod).toBe('POST');
       expect(recordedHeaders.Cookie).toBe('PHPSESSID=session_video_123');
       expect(recordedHeaders['Content-Type']).toContain('application/x-www-form-urlencoded');
@@ -208,6 +208,41 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       expect(finalSnapshot.taskStatus).toBe(2);
       expect(finalSnapshot.statusLabel).toBe('成功 (Success)');
       expect(finalSnapshot.videoUrl).toBe('https://cdn.panqu.com/video_77701.mp4');
+      expect(finalSnapshot.progress).toBe(100);
+    });
+
+    it('SUCCESS (嵌套 status 对象结构)：正确解析主站 apiGetStatus 的嵌套 data[0].status 结构', async () => {
+      global.fetch = vi.fn().mockImplementation(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 1,
+          msg: '获取成功',
+          data: [{
+            id: 239414,
+            status: {
+              id: 239414,
+              task_status: 2,
+              progress: 100,
+              video_url: 'https://v.panqu.com.cn/video/20260918/17873_239414_1789717440.mp4',
+              last_frame_url: 'https://img.panqu.com.cn/lastframe/20260918/17873_239414_1789717440.png',
+            },
+          }],
+        }),
+      } as unknown as Response));
+
+      const { finalSnapshot, totalPolls } = await pollTaskStatus(239414, {
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=poll_nested_test',
+        mediaType: 'video',
+        pollTimeoutSec: 1,
+        pollIntervalMs: 10,
+      });
+
+      expect(totalPolls).toBe(1);
+      expect(finalSnapshot.taskStatus).toBe(2);
+      expect(finalSnapshot.statusLabel).toBe('成功 (Success)');
+      expect(finalSnapshot.videoUrl).toBe('https://v.panqu.com.cn/video/20260918/17873_239414_1789717440.mp4');
       expect(finalSnapshot.progress).toBe(100);
     });
 

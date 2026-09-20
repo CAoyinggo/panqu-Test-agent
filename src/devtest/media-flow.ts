@@ -104,10 +104,11 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
 
   let submitUrl = '';
   if (mediaType === 'video') {
-    submitUrl = new URL('/aivideo/v2/generate/video', baseUrl).toString();
+    submitUrl = new URL('/aivideo/videonew/add', baseUrl).toString();
     bodyParams.set('row[type]', '6');
     bodyParams.set('row[selmodelsId]', String(modelId));
     bodyParams.set('row[extra][selmodels]', `${modelId}-Wan3.0`);
+    bodyParams.set('row[extra][task_type]', '28');
     bodyParams.set('row[extra][cueword]', safePrompt);
     bodyParams.set('row[extra][duration]', String(options.duration ?? 4));
     bodyParams.set('row[extra][video_resolution]', options.resolution || '720p');
@@ -182,15 +183,16 @@ export async function pollTaskStatus(
         const body = (await res.json()) as any;
         const taskObj = Array.isArray(body?.data) ? body.data.find((item: any) => Number(item.id) === taskId) : (body?.data?.[taskId] ?? body?.data);
         if (taskObj) {
-          const taskStatus = Number(taskObj.task_status ?? taskObj.status ?? 0);
+          const statusObj = (typeof taskObj.status === 'object' && taskObj.status !== null) ? taskObj.status : taskObj;
+          const taskStatus = Number(statusObj.task_status ?? (typeof taskObj.status === 'number' ? taskObj.status : 0));
           latestSnapshot = {
             taskId,
             taskStatus,
             statusLabel: statusMap[taskStatus] ?? `未知状态 (${taskStatus})`,
-            progress: Number(taskObj.progress ?? (taskStatus === 2 ? 100 : 0)),
-            videoUrl: taskObj.video_url,
-            imageUrl: taskObj.pic_url || taskObj.image_url,
-            error: taskObj.err || taskObj.error,
+            progress: Number(statusObj.progress ?? taskObj.progress ?? (taskStatus === 2 ? 100 : 0)),
+            videoUrl: statusObj.video_url || taskObj.video_url,
+            imageUrl: statusObj.pic_url || statusObj.image_url || taskObj.pic_url || taskObj.image_url,
+            error: statusObj.err || statusObj.error || taskObj.err || taskObj.error,
             pollCount,
             durationMs: Date.now() - startTime,
           };
@@ -291,10 +293,48 @@ export async function queryTaskBillingLogs(
         }
 
         if (body && Array.isArray(body.rows)) {
-          const matchedLogs: ScoreLogEntry[] = body.rows.map((r: any) => {
+          let rows = body.rows;
+          if (rows.length === 0) {
+            // 在视频生成业务中，FastAdmin AdminScore 将视频 ID (前台 taskId) 记录在 source_id 字段
+            try {
+              const filterSource = JSON.stringify({ source_id: taskId });
+              const opSource = JSON.stringify({ source_id: '=' });
+              const sourceUrl = new URL(
+                `/auth/adminscore/index?filter=${encodeURIComponent(filterSource)}&op=${encodeURIComponent(opSource)}`,
+                baseUrl
+              ).toString();
+              const sourceRes = await fetchWithRetry(
+                sourceUrl,
+                {
+                  method: 'GET',
+                  headers: {
+                    Cookie: cookies,
+                    'X-Requested-With': 'XMLHttpRequest',
+                    Accept: 'application/json, text/javascript, */*; q=0.01',
+                    'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+                  },
+                  signal: ctrl.signal,
+                },
+                2
+              );
+              if (sourceRes.ok) {
+                const sourceBody = (await sourceRes.json()) as any;
+                if (sourceBody && Array.isArray(sourceBody.rows) && sourceBody.rows.length > 0) {
+                  rows = sourceBody.rows;
+                }
+              }
+            } catch {
+              /* 忽略 source_id 回退错误 */
+            }
+          }
+
+          const matchedLogs: ScoreLogEntry[] = rows.map((r: any) => {
             const hasTaskId = r.task_id !== undefined && r.task_id !== null && r.task_id !== '';
+            const isSourceIdMatch = r.source_id !== undefined && r.source_id !== null && Number(r.source_id) === taskId;
             const memoStr = String(r.remark || r.source_name || r.memo || '');
-            const parsedTaskId = hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined);
+            const parsedTaskId = isSourceIdMatch
+              ? taskId
+              : (hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined));
             return {
               id: r.id,
               task_id: parsedTaskId,
@@ -307,7 +347,7 @@ export async function queryTaskBillingLogs(
           return {
             status: 'QUERY_SUCCESS',
             scoreLogs: matchedLogs,
-            total: body.total ?? matchedLogs.length,
+            total: rows.length,
             source: 'auth_adminscore',
           };
         }
