@@ -1313,7 +1313,7 @@ export interface VerificationEvidence {
 
 export interface VerifyKernelOptions {
   taskId: number; modelId?: number; mediaType?: 'video' | 'image'; scoreLogs?: ScoreLogEntry[];
-  expectedPoints?: number; assetBuffer?: Buffer; artifactBuffer?: Buffer; tailBuffer?: Buffer; terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
+  expectedPoints?: number; assetBuffer?: Buffer; artifactBuffer?: Buffer; tailBuffer?: Buffer; terminalStatus?: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN' | 'PROCESSING';
   resolution?: string; duration?: number; sessionFile?: string; env?: 'test' | 'preonline';
   baseUrl?: string; cookies?: string; videoUrl?: string; imageUrl?: string; pollTimeoutSec?: number;
   pollIntervalMs?: number;
@@ -1563,6 +1563,58 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     }
   } else {
     if (options.terminalStatus) {
+      if (options.terminalStatus === 'PROCESSING') {
+        const msg = `任务 #${taskId} 仍在排队/生成中，未到达终态。处于异步非终态（非业务失败）。请继续使用 devtest verify --task ${taskId} 追踪终态闭环。`;
+        const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
+        const completeness: EvidenceCompleteness = {
+          requiredEvidence,
+          availableEvidence: [],
+          missingEvidence: ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'diversionDbExtra'],
+          isComplete: false,
+        };
+        const acceptanceReport: ProductionAcceptanceReport = {
+          scenario: contract.scenario,
+          acceptance: 'BLOCKED',
+          verified: [],
+          unverified: requiredEvidence,
+          manualEvidenceRequired: ['taskCompletion'],
+          unexpectedChanges: [],
+          reasons: [msg],
+          summaryText: `[BLOCKED / IN_FLIGHT] ${msg}`,
+        };
+        const businessValidation: BusinessVerificationResult = {
+          status: 'UNVERIFIED',
+          technicalSuccess: true,
+          businessSuccess: false,
+          verdictDetail: {
+            apiVerified: true,
+            taskStateVerified: false,
+            artifactBound: false,
+            oracleConsistent: false,
+            relationsValid: true,
+          },
+          matchedFailurePatterns: [],
+          reasons: [msg],
+          credibility: 'CONFIRMED',
+        };
+        return {
+          ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING',
+          acceptance: 'BLOCKED',
+          progress: 50, mode: 'mock', executionMode: 'offline', billingAudit: 'SKIPPED_NO_LOGS',
+          evidence: {
+            task: { status: 'PROCESSING', source: 'provided', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: 50 },
+            media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
+            billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
+            invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
+            business: businessValidation,
+          },
+          reasons: [msg],
+          contract,
+          evidenceCompleteness: completeness,
+          acceptanceReport,
+          businessValidation,
+        };
+      }
       terminalStatus = options.terminalStatus;
       taskEvidence = { status: terminalStatus === 'FAILED' ? 'FAIL' : terminalStatus === 'SUCCESS' ? 'PASS' : 'UNVERIFIED', source: 'provided', terminalStatus };
     } else {

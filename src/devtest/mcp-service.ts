@@ -11,7 +11,10 @@ import {
   type PlanKernelOptions,
   type ExecuteKernelOptions,
   type VerifyKernelOptions,
+  type VerifyKernelResult,
 } from './core-kernel.js';
+import { parseChangeIntent } from './env-probe.js';
+import { existsSync } from 'node:fs';
 import type { DiversionBaseline, MemoryCandidatePayload, RecordCandidateResult } from './types.js';
 import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
 
@@ -40,7 +43,7 @@ export const DEVTEST_MCP_TOOL = {
       duration: { type: 'number', description: '生成时长秒数' },
       prompt: { type: 'string', description: '测试提示词' },
       task_id: { type: 'number', description: '任务 ID' },
-      terminal_status: { type: 'string', enum: ['SUCCESS', 'FAILED', 'TIMEOUT'], description: '任务终态' },
+      terminal_status: { type: 'string', enum: ['SUCCESS', 'FAILED', 'TIMEOUT', 'PROCESSING'], description: '任务终态' },
       score_logs: { type: 'array', description: '积分流水明细' },
       expected_points: { type: 'number', description: '预期扣除积分' },
       change_type: { type: 'string', enum: ['new_model', 'diversion_change'], description: '变更类型 (默认自适应识别)' },
@@ -60,6 +63,25 @@ export const DEVTEST_MCP_TOOL = {
       poll_timeout_sec: { type: 'number', description: '轮询超时秒数 (默认: 视频 180s, 图片 60s)' },
     },
     required: ['action'],
+    allOf: [
+      {
+        if: { properties: { action: { const: 'execute' } } },
+        then: { required: ['model_id', 'media_type', 'mode'] },
+      },
+      {
+        if: { properties: { action: { const: 'verify' } } },
+        then: { required: ['task_id'] },
+      },
+      {
+        if: { properties: { action: { const: 'plan' } } },
+        then: {
+          anyOf: [
+            { required: ['model_id', 'media_type'] },
+            { required: ['requirement'] },
+          ],
+        },
+      },
+    ],
   },
 };
 
@@ -143,17 +165,32 @@ export const DEVTEST_RECORD_CANDIDATE_TOOL = {
 
 export interface McpCallResult<T = any> {
   ok: boolean;
+  isError?: boolean;
+  passed?: boolean;
+  status?: 'SUCCESS' | 'FAILED' | 'PROCESSING' | 'UNVERIFIED' | 'BLOCKED' | 'BLOCKED_MISSING_INPUT' | 'ERROR' | string;
+  verdict?: 'PASS' | 'FAIL' | 'PROCESSING' | 'UNVERIFIED' | string;
+  acceptance?: 'ACCEPTED' | 'REJECTED' | 'BLOCKED' | 'UNVERIFIED' | string;
   action?: string;
   summary?: string;
+  report?: string;
   data?: T;
   error?: string;
+  missingInputs?: string[];
 }
 
 export class DevTestMcpService {
   constructor(private readonly projectRoot = process.cwd()) {}
 
   public async call<T = any>(args: Record<string, unknown>): Promise<McpCallResult<T>> {
-    const action = String(args.action || 'probe').toLowerCase();
+    if (!args || typeof args !== 'object' || !args.action || typeof args.action !== 'string' || !args.action.trim()) {
+      return {
+        ok: false,
+        isError: true,
+        summary: '### ⚠️ 工具调用错误：缺少必填参数 action\n- **说明**: devtest 工具必须指定 action 参数 ("probe" | "plan" | "execute" | "verify")。禁止缺少 action 时静默执行。',
+        error: 'Missing required argument "action". Allowed values: "probe", "plan", "execute", "verify".',
+      };
+    }
+    const action = args.action.trim().toLowerCase();
     switch (action) {
       case 'probe': {
         const res = await probe({
@@ -173,15 +210,63 @@ export class DevTestMcpService {
           ? `\n- **领域对象**: ${res.domainAnalysis.identifiedObjects.map((o) => o.name).join(', ')}`
           : '';
         const summary = `### 📋 Panqu 环境探活回执\n- **环境**: ${res.env} | **状态**: ${res.status}\n- **主站**: ${res.baseUrl}\n- **网关**: ${res.gatewayUrl}\n- **可用渠道数**: ${res.candidateChannelCount}\n- **鉴权凭据**: ${res.auth.status} (${res.auth.details})${domainStr}`;
-        return { ok: res.ok, action: 'probe', summary, data: res as unknown as T };
+        const probePassed = res.ok && res.status === 'HEALTHY';
+        const probeStatus = res.status;
+        const probeVerdict = res.status === 'HEALTHY' ? 'PASS' : (res.status === 'BLOCKED' ? 'BLOCKED' : 'DEGRADED');
+        const probeAcceptance = res.status === 'HEALTHY' ? 'ACCEPTED' : 'BLOCKED';
+        return {
+          ok: true,
+          action: 'probe',
+          passed: probePassed,
+          status: probeStatus,
+          verdict: probeVerdict,
+          acceptance: probeAcceptance,
+          summary,
+          data: res as unknown as T,
+          ...(res.ok ? {} : { error: res.status === 'BLOCKED' ? 'Probe blocked' : 'Probe degraded' }),
+        };
       }
       case 'plan': {
+        let modelId = args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined;
+        let mediaType = args.media_type || args.mediaType ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined;
+        const requirement = typeof args.requirement === 'string' ? args.requirement : undefined;
+
+        if (modelId === undefined || isNaN(modelId) || !mediaType) {
+          if (requirement) {
+            const parsed = parseChangeIntent(requirement);
+            if (modelId === undefined || isNaN(modelId)) {
+              modelId = parsed.modelId;
+            }
+            if (!mediaType) {
+              mediaType = parsed.mediaType;
+            }
+          }
+        }
+
+        const missingInputs: string[] = [];
+        if (modelId === undefined || isNaN(modelId)) missingInputs.push('model_id');
+        if (!mediaType) missingInputs.push('media_type');
+
+        if (missingInputs.length > 0) {
+          const summary = `### ⚠️ Panqu 分流推导阻断 (缺失必填参数)\n- **缺失参数**: ${missingInputs.join(', ')}\n- **说明**: plan 需要明确的 model_id 与 media_type (直接传入或从 requirement 中推导)。禁止私自猜测参数。`;
+          return {
+            ok: true,
+            action: 'plan',
+            status: 'BLOCKED_MISSING_INPUT',
+            verdict: 'BLOCKED',
+            acceptance: 'BLOCKED',
+            missingInputs,
+            summary,
+            error: `Missing required inputs: ${missingInputs.join(', ')}`,
+          };
+        }
+
         const res = await plan({
-          modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
-          mediaType: args.media_type || args.mediaType ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined,
+          modelId,
+          mediaType,
           flowType: typeof args.flow_type === 'string' ? args.flow_type : typeof args.flowType === 'string' ? args.flowType : undefined,
           changeType: (args.change_type || args.changeType) as any,
-          requirement: typeof args.requirement === 'string' ? args.requirement : undefined,
+          requirement,
           resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
           duration: typeof args.duration === 'number' ? args.duration : undefined,
           aspectRatio: typeof args.aspect_ratio === 'string' ? args.aspect_ratio : typeof args.aspectRatio === 'string' ? args.aspectRatio : undefined,
@@ -210,12 +295,47 @@ export class DevTestMcpService {
 - **测试计划**: 共 ${res.testPlan?.tests.length || 0} 项测试 (就绪 ${res.testPlan?.tests.filter((t) => t.status === 'READY').length || 0} 项)${skippedStr}${forecastStr}${missingInputsStr}${blockedStr}${domainPlanStr}${nextStepStr}
 - **候选渠道**: ${res.candidateChannels.join(', ') || '无可用渠道'}
 - **推导依据**: ${res.reason}`;
-        return { ok: res.ok, action: 'plan', summary, data: res as unknown as T };
+        const planStatus = res.blocked && res.blocked.length > 0 ? 'BLOCKED' : (res.ok ? 'READY' : 'BLOCKED');
+        const planVerdict = res.decision || (res.ok ? 'PASS' : 'FAIL');
+        const planAcceptance = res.acceptanceForecast || (res.blocked && res.blocked.length > 0 ? 'BLOCKED' : 'ACCEPTED');
+        return {
+          ok: res.ok,
+          action: 'plan',
+          status: planStatus,
+          verdict: planVerdict,
+          acceptance: planAcceptance,
+          missingInputs: res.missingInputs,
+          summary,
+          data: res as unknown as T,
+        };
       }
       case 'execute': {
-        const modelId = Number(args.model_id ?? args.modelId ?? 84);
-        const mediaType = ((args.media_type || args.mediaType || 'video') as string).toLowerCase() as 'video' | 'image';
-        const mode = args.mode === 'real' ? 'real' : 'mock';
+        const rawModelId = args.model_id !== undefined ? Number(args.model_id) : (args.modelId !== undefined ? Number(args.modelId) : undefined);
+        const rawMediaType = (args.media_type || args.mediaType) ? String(args.media_type || args.mediaType).toLowerCase() : undefined;
+        const rawMode = args.mode !== undefined ? String(args.mode).toLowerCase() : undefined;
+
+        const missingInputs: string[] = [];
+        if (rawModelId === undefined || isNaN(rawModelId)) missingInputs.push('model_id');
+        if (!rawMediaType || (rawMediaType !== 'video' && rawMediaType !== 'image')) missingInputs.push('media_type');
+        if (!rawMode || (rawMode !== 'mock' && rawMode !== 'real')) missingInputs.push('mode');
+
+        if (missingInputs.length > 0) {
+          const summary = `### ⚠️ Panqu 任务执行阻断 (缺失必填参数)\n- **缺失参数**: ${missingInputs.join(', ')}\n- **说明**: execute 必须显式指定 model_id, media_type, mode ('mock' | 'real')。禁止静默回退默认值。`;
+          return {
+            ok: true,
+            action: 'execute',
+            status: 'BLOCKED_MISSING_INPUT',
+            verdict: 'BLOCKED',
+            acceptance: 'BLOCKED',
+            missingInputs,
+            summary,
+            error: `Missing required inputs: ${missingInputs.join(', ')}`,
+          };
+        }
+
+        const modelId = rawModelId!;
+        const mediaType = rawMediaType as 'video' | 'image';
+        const mode = rawMode as 'real' | 'mock';
         const resolution = typeof args.resolution === 'string' ? args.resolution : undefined;
         const duration = typeof args.duration === 'number' ? args.duration : undefined;
         const prompt = typeof args.prompt === 'string' ? args.prompt : undefined;
@@ -230,8 +350,42 @@ export class DevTestMcpService {
           : typeof args.pollTimeoutSec === 'number'
           ? args.pollTimeoutSec
           : undefined;
+        const terminalStatus = typeof args.terminal_status === 'string'
+          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+          : typeof args.terminalStatus === 'string'
+          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+          : undefined;
         const dbExtraConfirmed = Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed);
         const gatewayChannelConfirmed = Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed);
+
+        // Real mode gate: require session file or PANQU_SESSION_COOKIES_FILE or local session.json
+        if (mode === 'real') {
+          const sessionFilePath = sessionFile
+            || process.env.PANQU_SESSION_COOKIES_FILE
+            || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
+          if (!sessionFilePath || !existsSync(sessionFilePath)) {
+            const summary = `### ⚠️ Panqu 真实执行阻断 (缺少有效会话)\n- **执行模式**: REAL\n- **状态**: BLOCKED\n- **原因**: 真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json，或设置 PANQU_SESSION_COOKIES_FILE 环境变量）。\n- **说明**: 当前未提供会话凭据，已安全阻断，未发起真实请求。`;
+            return {
+              ok: true,
+              action: 'execute',
+              status: 'BLOCKED',
+              verdict: 'BLOCKED',
+              acceptance: 'BLOCKED',
+              summary,
+              error: 'Missing session credentials for real mode execution',
+              data: {
+                ok: false,
+                taskId: 0,
+                mode: 'real',
+                modelId,
+                mediaType,
+                status: 'BLOCKED',
+                points: 0,
+                message: '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
+              } as unknown as T,
+            };
+          }
+        }
 
         const res = await execute({
           modelId,
@@ -249,16 +403,36 @@ export class DevTestMcpService {
 
         if (!wait) {
           const nextInstruction = res.ok && res.taskId > 0
-            ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
+            ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}, model_id=${modelId}, media_type='${mediaType}'${env ? `, env='${env}'` : ''}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
             : '';
           const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}${nextInstruction}`;
-          return { ok: res.ok, action: 'execute', summary, data: res as unknown as T };
+          return {
+            ok: true,
+            action: 'execute',
+            passed: false,
+            status: res.ok ? 'SUBMITTED' : (res.status || 'FAILED'),
+            verdict: res.ok ? 'SUBMITTED' : 'FAIL',
+            acceptance: res.ok ? 'IN_FLIGHT' : 'BLOCKED',
+            summary,
+            data: res as unknown as T,
+            ...(res.ok ? {} : { error: res.message }),
+          };
         }
 
         // wait enabled: execute -> verify continuous closed-loop pipeline
         if (!res.ok || !res.taskId || res.taskId <= 0) {
-          const summary = `### 📋 Panqu 任务执行回执 [FAILED]\n- **执行状态**: FAILED\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
-          return { ok: false, action: 'execute', summary, data: res as unknown as T, error: res.message };
+          const summary = `### 📋 Panqu 任务执行回执 [FAILED]\n- **执行状态**: ${res.status || 'FAILED'}\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
+          return {
+            ok: false,
+            action: 'execute',
+            passed: false,
+            status: res.status || 'FAILED',
+            verdict: 'FAIL',
+            acceptance: 'REJECTED',
+            summary,
+            data: res as unknown as T,
+            error: res.message,
+          };
         }
 
         const verifyRes = await verify({
@@ -273,6 +447,7 @@ export class DevTestMcpService {
           customPoints,
           pointsPerSecond,
           pollTimeoutSec,
+          terminalStatus,
           isSimulated: res.isSimulated,
           dbExtraConfirmed,
           gatewayChannelConfirmed,
@@ -314,14 +489,39 @@ export class DevTestMcpService {
   - 业务验证: <${businessSuccessStr}>
 ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('; ')}` : ''}
 - **本地复现**: npm run devtest -- verify --task ${verifyRes.taskId} --model ${verifyRes.modelId} --media ${verifyRes.mediaType}`;
-
-        return { ok: verifyRes.passed, action: 'execute', summary, data: verifyRes as unknown as T };
+        const report = formatVerifyReport(verifyRes);
+        return {
+          ok: true,
+          action: 'execute',
+          passed: verifyRes.passed,
+          status: verifyRes.status,
+          verdict: verifyRes.verdict,
+          acceptance: verifyRes.acceptance,
+          summary,
+          report,
+          data: verifyRes as unknown as T,
+        };
       }
       case 'verify': {
+        const rawTaskId = args.task_id !== undefined ? Number(args.task_id) : (args.taskId !== undefined ? Number(args.taskId) : undefined);
+        if (rawTaskId === undefined || isNaN(rawTaskId) || rawTaskId <= 0) {
+          const missingInputs = ['task_id'];
+          return {
+            ok: true,
+            action: 'verify',
+            status: 'BLOCKED_MISSING_INPUT',
+            verdict: 'BLOCKED',
+            acceptance: 'BLOCKED',
+            missingInputs,
+            summary: `### ⚠️ Panqu 任务验真阻断 (缺失必填参数)\n- **缺失参数**: task_id\n- **说明**: verify 必须提供合法的 task_id (> 0)。禁止在缺失 task_id 时执行验真。`,
+            error: 'Missing required input: task_id',
+          };
+        }
+        const taskId = rawTaskId;
         const terminalStatus = typeof args.terminal_status === 'string'
-          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
+          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
           : typeof args.terminalStatus === 'string'
-          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT')
+          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
           : undefined;
         const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
           ? args.poll_timeout_sec
@@ -330,7 +530,7 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
           : undefined;
 
         const res = await verify({
-          taskId: Number(args.task_id ?? args.taskId ?? 0),
+          taskId,
           modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
           mediaType: (args.media_type || args.mediaType) ? ((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined,
           expectedPoints: typeof args.expected_points === 'number' ? args.expected_points : typeof args.expectedPoints === 'number' ? args.expectedPoints : undefined,
@@ -387,10 +587,22 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
         const summary = `🎯 概况：模型 #${res.modelId} (${res.mediaType}) · [${res.mode.toUpperCase()}] · 任务 #${res.taskId}
 🔍 验真：最终裁决 <${res.passed ? 'ALL PASS' : res.status}> · 生产验收 <${res.acceptance}>${completenessStr} · 业务成功 <${businessSuccessStr}> · 任务状态 <${taskStatus}> · 产物结构 <${artifactStatus}> · 账单对账 <${billingStatus}> · 失败净扣归零 <${netZero}> · 防重复扣费 <${antiDouble}>${extraNotice}${candidateNote}${res.reasons.length > 0 ? `\n⚠️ 详情：${res.reasons.join('; ')}` : ''}
 💻 复现：npm run devtest -- verify --task ${res.taskId} --model ${res.modelId} --media ${res.mediaType}`;
-        return { ok: res.ok, action: 'verify', summary, data: res as unknown as T };
+        const report = formatVerifyReport(res);
+        return {
+          ok: true,
+          action: 'verify',
+          passed: res.passed,
+          status: res.status,
+          verdict: res.verdict,
+          acceptance: res.acceptance,
+          missingInputs: res.evidenceCompleteness?.missingEvidence,
+          summary,
+          report,
+          data: res as unknown as T,
+        };
       }
       default:
-        return { ok: false, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };
+        return { ok: false, isError: true, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };
     }
   }
 
@@ -512,4 +724,169 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
       },
     };
   }
+}
+
+/**
+ * 格式化输出完整的 DevTest 物理验真与防资损对账报告（纯净文本/Markdown，双模通用）
+ */
+export function formatVerifyReport(result: VerifyKernelResult): string {
+  const taskStatusText = result.evidence.task.status;
+  const ownershipText = result.evidence.media.ownership;
+  const mediaStatusText = result.evidence.media.status;
+  const billingStatusText = result.evidence.billing.status;
+  const antiDoubleText = result.evidence.invariants.details?.antiDoubleBilling.status ?? (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
+  const netZeroText = result.evidence.invariants.details?.netChargeZero.status ?? (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
+  const refundIdemText = result.evidence.invariants.details?.refundIdempotency.status ?? (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
+  const finalVerdictText = result.verdict;
+
+  const lines: string[] = [];
+
+  lines.push(`🎯 概况：Task #${result.taskId} · [${result.executionMode.toUpperCase()}] · ${result.status}`);
+  lines.push('');
+  lines.push('🔍 验真：');
+  lines.push(`Task <${taskStatusText}>`);
+  lines.push(`Artifact ownership <${ownershipText}>`);
+  lines.push(`Media <${mediaStatusText}>`);
+  lines.push(`Billing <${billingStatusText}>`);
+  lines.push(`antiDoubleBilling <${antiDoubleText}>`);
+  lines.push(`netChargeZero <${netZeroText}>`);
+  lines.push(`refundIdempotency <${refundIdemText}>`);
+  lines.push(`生产验收裁决 <${result.acceptance}>`);
+  lines.push(`最终技术判定 <${finalVerdictText}>`);
+  lines.push('');
+  lines.push('💻 复现：');
+  lines.push(`npm run devtest -- verify --task ${result.taskId} --model ${result.modelId} --media ${result.mediaType}`);
+
+  if (!result.passed && result.reasons.length > 0) {
+    lines.push('');
+    lines.push('⚠️ 缺陷：');
+    for (const r of result.reasons) lines.push(`- ${r}`);
+  }
+
+  lines.push('');
+  lines.push('======================================================');
+  lines.push(`🔬 DevTest 物理验真与防资损对账明细 [任务 #${result.taskId}] [${result.executionMode.toUpperCase()}]`);
+
+  if (!result.artifact && result.billingAudit === 'SKIPPED_NO_LOGS') {
+    lines.push('⚠️ 提示: 当前未连接真实主站获取产物 URL / 账单流水，仅执行脱机静态演算，非线上真实验收结果。');
+  }
+
+  let acceptanceLabel: string;
+  if (result.acceptance === 'ACCEPTED') {
+    acceptanceLabel = '● ACCEPTED (生产级四态验收通过)';
+  } else if (result.acceptance === 'REJECTED') {
+    acceptanceLabel = '● REJECTED (验收驳回: 存在缺陷或非预期回归)';
+  } else if (result.acceptance === 'BLOCKED') {
+    acceptanceLabel = result.status === 'PROCESSING'
+      ? '● BLOCKED / IN_FLIGHT (轮询窗口耗尽: 任务仍在排队处理中)'
+      : '● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)';
+  } else {
+    acceptanceLabel = '● UNVERIFIED (验收待确认: 测试通过但关键证据未闭环)';
+  }
+  lines.push(`生产验收裁决: ${acceptanceLabel}`);
+  lines.push(`证据完整度: ${result.evidenceCompleteness.isComplete ? '✔ COMPLETE' : '○ INCOMPLETE'} (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})`);
+  if (result.evidenceCompleteness.missingEvidence.length > 0) {
+    lines.push(`  待补证据: ${result.evidenceCompleteness.missingEvidence.join(', ')}`);
+  }
+
+  let verdictLabel: string;
+  if (result.passed) {
+    verdictLabel = '● ALL PASS (验真与账务全部通过)';
+  } else if (result.status === 'PROCESSING') {
+    verdictLabel = `● PROCESSING (排队处理中: ${result.progress ?? 0}%)`;
+  } else if (result.status === 'UNVERIFIED') {
+    verdictLabel = '● UNVERIFIED (凭据缺失，未通过线上验收)';
+  } else {
+    verdictLabel = '● FAILED (存在违背或缺陷)';
+  }
+  lines.push(`技术裁决: ${verdictLabel}`);
+
+  lines.push('');
+  lines.push(`1. 任务状态与执行 (Task Execution): ${result.evidence.task.status === 'PASS' ? '✔ PASS' : result.evidence.task.status === 'PROCESSING' ? '● PROCESSING' : result.evidence.task.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.task.source}]`);
+  if (result.evidence.task.error) {
+    lines.push(`   错误信息: ${result.evidence.task.error}`);
+  }
+
+  lines.push('');
+  lines.push(`2. 产物物理结构验真 (Media Inspection): ${result.evidence.media.status === 'PASS' ? '✔ PASS' : result.evidence.media.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.media.source}]`);
+  if (result.artifact) {
+    if (result.probeDurationMs !== undefined) {
+      lines.push(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
+    }
+    lines.push(`   容器标识: ${result.artifact.containerIdentified ? `✔ 规范合法 (${(result.artifact.format || 'mp4').toUpperCase()} container structure PASS)` : '✖ 缺失'} | 格式: ${result.artifact.format || 'unknown'} | 结构有效: ${result.artifact.decodable ? `✔ YES` : '✖ NO'} | 归属确认: ${result.evidence.media.ownership === 'VERIFIED' ? `✔ 绑定成功` : '○ 未绑定'}`);
+    if (result.artifact.dimensions) {
+      lines.push(`   分辨率: ${result.artifact.dimensions.width}x${result.artifact.dimensions.height}`);
+    }
+    if (result.artifact.durationSeconds !== undefined) {
+      lines.push(`   时长: ${result.artifact.durationSeconds} 秒`);
+    }
+    if (result.artifact.hasMdat !== undefined) {
+      lines.push(`   数据块校验: ${result.artifact.hasMdat !== false ? '✔ 音视频裸流有效' : '✖ 缺少 mdat 数据块'}`);
+    }
+    if (result.artifact.reasons.length > 0) {
+      for (const r of result.artifact.reasons) lines.push(`   ⚠ ${r}`);
+    }
+  } else {
+    lines.push(`   ${result.evidence.media.reason || '未获取产物二进制 Buffer'}`);
+  }
+
+  lines.push('');
+  lines.push(`3. 防资损账务对账 (Billing & Invariants): ${result.evidence.billing.status === 'PASS' ? '✔ PASS' : result.evidence.billing.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.billing.source}]`);
+  if (result.billing) {
+    lines.push(`   对账结果: ${result.billing.passed ? '✔ PASS' : '✖ MISMATCH'}`);
+    lines.push(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
+    if (result.invariants) {
+      lines.push(`   核心不变量核验 (Invariants: ${result.evidence.invariants.status}):`);
+      lines.push(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? '✔ 符合' : '✖ 存在多重扣费'}`);
+      lines.push(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? '✔ 符合' : '✖ 失败未完全退款'}`);
+      lines.push(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? '✔ 符合' : '✖ 重复退款'}`);
+    }
+  } else {
+    lines.push('   未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]');
+  }
+
+  if (result.expectedVsActual) {
+    lines.push('');
+    lines.push('4. 预期与实际对比 (Expected vs Actual Matrix):');
+    const diffItems = result.expectedVsActual.items || result.expectedVsActual.diffs || [];
+    for (const item of diffItems) {
+      const statusTag = `[${item.status}]`;
+      const matchIcon = item.matched ? '✔ MATCH' : '✖ DIFF';
+      lines.push(`   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`);
+      if (item.diff && item.diff !== 'MATCH') {
+        lines.push(`     差异说明: ${item.diff}`);
+      }
+    }
+    if (result.expectedVsActual.evidenceStatus?.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED') {
+      lines.push('');
+      lines.push('📌 关键证据提醒: [MANUAL_DB_EVIDENCE_REQUIRED]');
+      lines.push(`   ${result.expectedVsActual.manualVerificationGuide?.notice}`);
+      lines.push(`   SQL 指引: ${result.expectedVsActual.manualVerificationGuide?.extraQuerySql}`);
+    }
+  }
+
+  if (result.reasons.length > 0) {
+    lines.push('');
+    lines.push('核验明细 / 告警:');
+    for (const r of result.reasons) lines.push(`  👉 ${r}`);
+  }
+
+  lines.push('');
+  lines.push('🚀 下一步行动:');
+  if (result.acceptance === 'ACCEPTED') {
+    lines.push('  ✔ 验收全部通过！测试证据闭环，可合流上线 / 交付生产。');
+  } else if (result.acceptance === 'BLOCKED') {
+    if (result.status === 'PROCESSING') {
+      lines.push(`  ⏳ 任务仍处于 PROCESSING/QUEUED 状态，本次 polling window 已耗尽。这并非业务失败，请继续执行 npm run devtest -- verify --task ${result.taskId} --model ${result.modelId} --media ${result.mediaType} 追踪终态闭环。`);
+    } else {
+      lines.push('  ⚠️ 验收阻断：请先补充缺失的刊例定价或环境会话凭据。');
+    }
+  } else if (result.acceptance === 'REJECTED') {
+    lines.push('  ✖ 验收驳回：发现明确业务缺陷或非预期回归，请联系研发排查。');
+  } else {
+    lines.push('  ○ 待闭环确认：执行 SQL 查询任务 extra 确认分流落库后，追加 --db-extra-confirmed 重新验真。');
+  }
+  lines.push('======================================================');
+
+  return lines.join('\n');
 }

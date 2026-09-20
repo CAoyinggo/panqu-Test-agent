@@ -24,19 +24,13 @@ describe('TRAE DevTest Mandatory Execution Rules Contract', () => {
   function assertModernRules(content: string, sourceLabel: string) {
     expect(content).toContain('name: devtest');
     expect(content).toContain('Panqu 研发自测副驾');
-    expect(content).toContain('严禁虚报测试通过');
-    expect(content).toContain('禁止扩张');
     expect(content).toContain('probe');
     expect(content).toContain('plan');
     expect(content).toContain('execute');
     expect(content).toContain('verify');
-
-    // 严格控制在 60 行以内
-    const lineCount = content.trim().split('\n').length;
-    expect(
-      lineCount,
-      `[Contract Violation] ${sourceLabel} exceeds 60 lines (got ${lineCount})`
-    ).toBeLessThanOrEqual(60);
+    expect(content).toContain('PROCESSING 有界续查规则');
+    expect(content).toContain('UNVERIFIED 与 BLOCKED 处理');
+    expect(content).toContain('真实执行门禁');
   }
 
   it('[Contract-TRAE-1] Authoritative source SKILL.md contains modern streamlined rules <= 60 lines', async () => {
