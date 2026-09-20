@@ -22,13 +22,14 @@ export interface SubmitMediaTaskOptions {
   mediaType: 'video' | 'image';
   modelId: number;
   prompt?: string;
-  projectId?: number;
+  projectId: number;
   csrfToken?: string;
   resolution?: string;
   aspectRatio?: string;
   duration?: number;
   serviceline?: string;
   extraParams?: Record<string, string>;
+  alias?: string;
 }
 
 export interface SubmitMediaTaskResult {
@@ -74,6 +75,41 @@ export async function fetchWithRetry(url: string, options: RequestInit, retries 
   throw lastError;
 }
 
+export async function fetchCsrfToken(baseUrl: string, cookies: string): Promise<string> {
+  const url = new URL('/ajax/refreshtoken', baseUrl).toString();
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: 'GET',
+      headers: {
+        Cookie: cookies,
+        'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+      },
+    },
+    1
+  );
+
+  if (!response.ok) {
+    throw new Error(`CSRF_REQUEST_FAILED: HTTP ${response.status} ${response.statusText}`);
+  }
+
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('CSRF_RESPONSE_NOT_JSON: /ajax/refreshtoken 响应非有效 JSON');
+  }
+
+  const token = data?.data?.__token__ || data?.data?.token || data?.__token__;
+  if (!token || typeof token !== 'string') {
+    throw new Error('CSRF_TOKEN_MISSING: /ajax/refreshtoken 返回结构中未提取到有效 token');
+  }
+
+  return token;
+}
+
 export async function loadPanquSession(sessionFilePath?: string, targetEnv = 'test'): Promise<PanquSession> {
   const resolvedPath = sessionFilePath || process.env.PANQU_SESSION_COOKIES_FILE;
   if (!resolvedPath) throw new Error('SESSION_CONFIG_REQUIRED: 请显式提供会话文件路径或 PANQU_SESSION_COOKIES_FILE');
@@ -92,14 +128,91 @@ export async function loadPanquSession(sessionFilePath?: string, targetEnv = 'te
   return session;
 }
 
+export const RESERVED_SUBMIT_FIELDS = new Set([
+  '__token__',
+  'project_id',
+  'row[name]',
+  'row[type]',
+  'row[selmodelsId]',
+  'row[extra][selmodels]',
+  'row[extra][task_type]',
+  'row[extra][cueword]',
+  'row[extra][prompt]',
+  'row[extra][duration]',
+  'row[extra][video_resolution]',
+  'row[extra][video_aspect_ratio]',
+  'row[extra][resolution]',
+  'row[extra][serviceline]',
+]);
+
 export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<SubmitMediaTaskResult> {
   const { baseUrl, cookies, mediaType, modelId } = options;
   const startTime = Date.now();
+
+  // 1. Project ID 校验与装载（来自 Session，禁止静默回退默认值，缺失/非法直接阻断且零网络请求）
+  if (
+    options.projectId === undefined ||
+    options.projectId === null ||
+    typeof options.projectId !== 'number' ||
+    !Number.isInteger(options.projectId) ||
+    options.projectId <= 0
+  ) {
+    return {
+      ok: false,
+      taskId: 0,
+      message: 'project_id 必须为有效正整数 [BLOCKED]',
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  // 2. 视频模型别名校验（发生在任何网络请求包括 CSRF 刷新之前）
+  let videoAlias: string | undefined;
+  if (mediaType === 'video') {
+    const rawAlias = typeof options.alias === 'string' ? options.alias.trim() : undefined;
+    videoAlias = rawAlias && rawAlias.length > 0 ? rawAlias : (modelId === 84 ? 'Wan3.0' : undefined);
+    if (!videoAlias) {
+      return {
+        ok: false,
+        taskId: 0,
+        message: `未知视频模型 #${modelId} 缺少显式别名 (alias)，禁止默认回退为 Wan3.0 [BLOCKED_MISSING_INPUT]`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  // 3. extraParams 保留字段门禁（必须在 CSRF GET 和任务 POST 之前 fail-closed，禁止覆盖安全字段）
+  if (options.extraParams) {
+    const forbiddenKeys = Object.keys(options.extraParams).filter((k) => RESERVED_SUBMIT_FIELDS.has(k));
+    if (forbiddenKeys.length > 0) {
+      return {
+        ok: false,
+        taskId: 0,
+        message: `extraParams 包含禁止覆盖的保留参数 [${forbiddenKeys.join(', ')}] [BLOCKED_RESERVED_EXTRA_PARAM]`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  // 4. CSRF Token 获取与 Fail-closed 保护（视频接口必须具备有效 CSRF Token）
+  let csrfToken = options.csrfToken;
+  if (!csrfToken && mediaType === 'video') {
+    try {
+      csrfToken = await fetchCsrfToken(baseUrl, cookies);
+    } catch (err) {
+      return {
+        ok: false,
+        taskId: 0,
+        message: `CSRF 获取失败: ${err instanceof Error ? err.message : String(err)} [BLOCKED]`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
   const safePrompt = options.prompt || (mediaType === 'video' ? 'devtest_sample_video' : 'devtest_sample_image');
   const taskName = `devtest_${mediaType}_${Date.now()}`;
   const bodyParams = new URLSearchParams();
-  bodyParams.set('__token__', options.csrfToken ?? '');
-  bodyParams.set('project_id', String(options.projectId ?? 10));
+  bodyParams.set('__token__', csrfToken || '');
+  bodyParams.set('project_id', String(options.projectId));
   bodyParams.set('row[name]', taskName);
 
   let submitUrl = '';
@@ -107,7 +220,7 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
     submitUrl = new URL('/aivideo/videonew/add', baseUrl).toString();
     bodyParams.set('row[type]', '6');
     bodyParams.set('row[selmodelsId]', String(modelId));
-    bodyParams.set('row[extra][selmodels]', `${modelId}-Wan3.0`);
+    bodyParams.set('row[extra][selmodels]', `${modelId}-${videoAlias}`);
     bodyParams.set('row[extra][task_type]', '28');
     bodyParams.set('row[extra][cueword]', safePrompt);
     bodyParams.set('row[extra][duration]', String(options.duration ?? 4));
@@ -125,17 +238,21 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
     for (const [k, v] of Object.entries(options.extraParams)) bodyParams.set(k, v);
   }
 
-  const response = await fetchWithRetry(submitUrl, {
-    method: 'POST',
-    headers: {
-      Cookie: cookies,
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
-      'X-Requested-With': 'XMLHttpRequest',
-      Accept: 'application/json, text/javascript, */*; q=0.01',
+  const response = await fetchWithRetry(
+    submitUrl,
+    {
+      method: 'POST',
+      headers: {
+        Cookie: cookies,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+      },
+      body: bodyParams.toString(),
     },
-    body: bodyParams.toString(),
-  });
+    1
+  );
 
   const durationMs = Date.now() - startTime;
   const rawText = await response.text();

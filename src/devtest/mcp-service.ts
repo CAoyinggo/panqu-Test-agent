@@ -344,6 +344,7 @@ export class DevTestMcpService {
         const price = typeof args.price === 'number' ? args.price : undefined;
         const customPoints = typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined;
         const pointsPerSecond = typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined;
+        const alias = typeof args.alias === 'string' ? args.alias : undefined;
         const wait = Boolean(args.wait);
         const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
           ? args.poll_timeout_sec
@@ -367,7 +368,9 @@ export class DevTestMcpService {
             const summary = `### ⚠️ Panqu 真实执行阻断 (缺少有效会话)\n- **执行模式**: REAL\n- **状态**: BLOCKED\n- **原因**: 真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json，或设置 PANQU_SESSION_COOKIES_FILE 环境变量）。\n- **说明**: 当前未提供会话凭据，已安全阻断，未发起真实请求。`;
             return {
               ok: true,
+              isError: false,
               action: 'execute',
+              passed: false,
               status: 'BLOCKED',
               verdict: 'BLOCKED',
               acceptance: 'BLOCKED',
@@ -399,20 +402,37 @@ export class DevTestMcpService {
           price,
           customPoints,
           pointsPerSecond,
+          alias,
         });
 
         if (!wait) {
+          const isBlocked = res.status === 'BLOCKED';
           const nextInstruction = res.ok && res.taskId > 0
             ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}, model_id=${modelId}, media_type='${mediaType}'${env ? `, env='${env}'` : ''}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
             : '';
           const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}${nextInstruction}`;
+          if (isBlocked) {
+            return {
+              ok: true,
+              isError: false,
+              action: 'execute',
+              passed: false,
+              status: 'BLOCKED',
+              verdict: 'BLOCKED',
+              acceptance: 'BLOCKED',
+              summary,
+              data: res as unknown as T,
+              error: res.message,
+            };
+          }
           return {
-            ok: true,
+            ok: res.ok,
+            isError: false,
             action: 'execute',
             passed: false,
             status: res.ok ? 'SUBMITTED' : (res.status || 'FAILED'),
             verdict: res.ok ? 'SUBMITTED' : 'FAIL',
-            acceptance: res.ok ? 'IN_FLIGHT' : 'BLOCKED',
+            acceptance: res.ok ? 'IN_FLIGHT' : 'REJECTED',
             summary,
             data: res as unknown as T,
             ...(res.ok ? {} : { error: res.message }),
@@ -421,14 +441,16 @@ export class DevTestMcpService {
 
         // wait enabled: execute -> verify continuous closed-loop pipeline
         if (!res.ok || !res.taskId || res.taskId <= 0) {
-          const summary = `### 📋 Panqu 任务执行回执 [FAILED]\n- **执行状态**: ${res.status || 'FAILED'}\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
+          const isBlocked = res.status === 'BLOCKED';
+          const summary = `### 📋 Panqu 任务执行回执 [${res.status || 'FAILED'}]\n- **执行状态**: ${res.status || 'FAILED'}\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
           return {
-            ok: false,
+            ok: isBlocked ? true : false,
+            isError: false,
             action: 'execute',
             passed: false,
-            status: res.status || 'FAILED',
-            verdict: 'FAIL',
-            acceptance: 'REJECTED',
+            status: isBlocked ? 'BLOCKED' : (res.status || 'FAILED'),
+            verdict: isBlocked ? 'BLOCKED' : 'FAIL',
+            acceptance: isBlocked ? 'BLOCKED' : 'REJECTED',
             summary,
             data: res as unknown as T,
             error: res.message,
@@ -451,6 +473,7 @@ export class DevTestMcpService {
           isSimulated: res.isSimulated,
           dbExtraConfirmed,
           gatewayChannelConfirmed,
+          alias,
         });
 
         const taskStatus = verifyRes.evidence.task.status;
@@ -556,6 +579,7 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
           projectId: typeof args.project_id === 'number' ? args.project_id : undefined,
           folderId: typeof args.folder_id === 'number' ? args.folder_id : undefined,
           isFolderInProject: typeof args.is_folder_in_project === 'boolean' ? args.is_folder_in_project : undefined,
+          alias: typeof args.alias === 'string' ? args.alias : undefined,
         });
 
         const taskStatus = res.evidence.task.status;

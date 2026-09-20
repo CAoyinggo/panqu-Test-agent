@@ -286,6 +286,85 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
       expect(res.structuredContent.acceptance).toBe('BLOCKED');
     });
 
+    it('TD #54 显式传入 alias=td 与 custom_points=60：MCP execute 正常接收并返回 points=60', async () => {
+      const rpcReq = {
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'tools/call',
+        params: {
+          name: 'devtest',
+          arguments: {
+            action: 'execute',
+            model_id: 54,
+            media_type: 'video',
+            alias: 'td',
+            custom_points: 60,
+            mode: 'mock',
+          },
+        },
+      };
+      const rpcRes = await processMcpRequest(service, rpcReq);
+      const res = rpcRes?.result as any;
+      expect(res.isError).toBe(false);
+      expect(res.structuredContent.ok).toBe(true);
+      expect(res.structuredContent.data.points).toBe(60);
+      expect(res.structuredContent.data.taskId).toBeGreaterThan(0);
+    });
+
+    it('未知视频模型缺少 alias 时：wait=false 返回 ok=true，isError 为 false，status/verdict/acceptance 均为 BLOCKED', async () => {
+      const rpcReq = {
+        jsonrpc: '2.0',
+        id: 102,
+        method: 'tools/call',
+        params: {
+          name: 'devtest',
+          arguments: {
+            action: 'execute',
+            model_id: 54,
+            media_type: 'video',
+            custom_points: 60,
+            mode: 'mock',
+            wait: false,
+          },
+        },
+      };
+      const rpcRes = await processMcpRequest(service, rpcReq);
+      const res = rpcRes?.result as any;
+      expect(res.isError).toBe(false);
+      expect(res.structuredContent.ok).toBe(true);
+      expect(res.structuredContent.passed).toBe(false);
+      expect(res.structuredContent.status).toBe('BLOCKED');
+      expect(res.structuredContent.verdict).toBe('BLOCKED');
+      expect(res.structuredContent.acceptance).toBe('BLOCKED');
+    });
+
+    it('未知视频模型缺少 alias 时：wait=true 亦统一返回 ok=true，isError 为 false，status/verdict/acceptance 均为 BLOCKED', async () => {
+      const rpcReq = {
+        jsonrpc: '2.0',
+        id: 103,
+        method: 'tools/call',
+        params: {
+          name: 'devtest',
+          arguments: {
+            action: 'execute',
+            model_id: 54,
+            media_type: 'video',
+            custom_points: 60,
+            mode: 'mock',
+            wait: true,
+          },
+        },
+      };
+      const rpcRes = await processMcpRequest(service, rpcReq);
+      const res = rpcRes?.result as any;
+      expect(res.isError).toBe(false);
+      expect(res.structuredContent.ok).toBe(true);
+      expect(res.structuredContent.passed).toBe(false);
+      expect(res.structuredContent.status).toBe('BLOCKED');
+      expect(res.structuredContent.verdict).toBe('BLOCKED');
+      expect(res.structuredContent.acceptance).toBe('BLOCKED');
+    });
+
     it('probe BLOCKED 时，isError 为 false，passed 为 false，status/verdict/acceptance 均为 BLOCKED', async () => {
       const probeSpy = vi.spyOn(
         await import('../../../src/devtest/core-kernel.js'),

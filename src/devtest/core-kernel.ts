@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { EnvironmentProbe, discoverModelContract, parseChangeIntent, type EnvProbeReport } from './env-probe.js';
+import { EnvironmentProbe, discoverModelContract, parseChangeIntent, STATIC_MODELS, type EnvProbeReport } from './env-probe.js';
 import {
   RoutingOracle,
   type MainSiteConfigSnapshot,
@@ -1115,6 +1115,7 @@ export interface ExecuteKernelOptions {
   customPoints?: number;
   pointsPerSecond?: number;
   price?: number;
+  alias?: string;
 }
 export interface ExecuteKernelResult {
   ok: boolean; taskId: number; simulationId?: string; isSimulated?: boolean; mode: 'mock' | 'real'; modelId: number; mediaType: 'video' | 'image';
@@ -1134,6 +1135,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     customPoints,
     pointsPerSecond,
     price: options.price,
+    alias: options.alias,
   });
 
   const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
@@ -1150,6 +1152,40 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
       points: 0,
       message: `模型 #${modelId} 刊例定价未确定 (${contract.pricing.source})，拒绝伪造定价执行任务 [BLOCKED / MANUAL_REQUIRED]。请通过 --price 或 --points-per-second 显式提供真实单价。`,
     };
+  }
+
+  // 视频模型别名门禁与 effectiveAlias 解析：已知模型允许默认别名；未知视频模型缺少显式 alias 且无确定 contract 别名时直接阻断
+  let effectiveAlias: string | undefined;
+  if (mediaType === 'video') {
+    const explicitAlias = typeof options.alias === 'string' ? options.alias.trim() : undefined;
+    if (explicitAlias && explicitAlias.length > 0) {
+      effectiveAlias = explicitAlias;
+    } else if (STATIC_MODELS.video[modelId]) {
+      effectiveAlias = modelId === 84 ? 'Wan3.0' : STATIC_MODELS.video[modelId].alias;
+    } else if (
+      contract.alias &&
+      contract.alias.determined === true &&
+      contract.alias.allowPass === true &&
+      contract.alias.source !== 'SOURCE_DEFAULT_FALLBACK' &&
+      contract.alias.source !== 'MANUAL_REQUIRED' &&
+      typeof contract.alias.value === 'string' &&
+      contract.alias.value.trim().length > 0
+    ) {
+      effectiveAlias = contract.alias.value.trim();
+    }
+
+    if (!effectiveAlias) {
+      return {
+        ok: false,
+        taskId: 0,
+        mode,
+        modelId,
+        mediaType,
+        status: 'BLOCKED',
+        points: 0,
+        message: `未知视频模型 #${modelId} 缺少显式 alias，拒绝猜测为 Wan3.0 执行 [BLOCKED_MISSING_INPUT]。请显式传入 alias 参数。`,
+      };
+    }
   }
 
   const points = BillingOracle.calculateExpectedPoints({
@@ -1178,11 +1214,47 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     }
     try {
       const session = await loadPanquSession(sessionFilePath, options.env || 'test');
+      if (!session.project_id || typeof session.project_id !== 'number' || !Number.isInteger(session.project_id) || session.project_id <= 0) {
+        return {
+          ok: false,
+          taskId: 0,
+          mode: 'real',
+          modelId,
+          mediaType,
+          status: 'BLOCKED',
+          points,
+          message: 'Session 缺失有效正整数 project_id，拒绝回退默认项目执行 [BLOCKED]',
+        };
+      }
       const res = await submitMediaTask({
-        baseUrl: session.base_url, cookies: session.cookie_string, csrfToken: session.csrf_token,
-        projectId: session.project_id, mediaType, modelId, prompt: options.prompt, resolution,
-        aspectRatio: options.aspectRatio, duration, serviceline: options.serviceline,
+        baseUrl: session.base_url,
+        cookies: session.cookie_string,
+        csrfToken: session.csrf_token,
+        projectId: session.project_id,
+        mediaType,
+        modelId,
+        prompt: options.prompt,
+        resolution,
+        aspectRatio: options.aspectRatio,
+        duration,
+        serviceline: options.serviceline,
+        alias: effectiveAlias,
       });
+      if (!res.ok) {
+        const isBlocked = res.message.includes('BLOCKED') || res.message.includes('CSRF');
+        return {
+          ok: false,
+          taskId: 0,
+          mode: 'real',
+          modelId,
+          mediaType,
+          status: isBlocked ? 'BLOCKED' : 'FAILED',
+          points,
+          message: res.message,
+          credentialsMasked: session.cookie_string.replace(/=[^;]+/g, '=***'),
+          rawResponse: res.rawResponse,
+        };
+      }
       return {
         ok: res.ok, taskId: res.taskId, mode: 'real', modelId, mediaType, status: res.ok ? 'SUBMITTED' : 'FAILED',
         points, message: res.ok ? `真实${mediaType === 'video' ? '视频' : '图片'}任务提交成功 (taskId: #${res.taskId})` : res.message,
@@ -1338,6 +1410,7 @@ export interface VerifyKernelOptions {
   projectId?: number;
   folderId?: number;
   isFolderInProject?: boolean;
+  alias?: string;
 }
 export interface VerifyKernelResult {
   ok: boolean; passed: boolean; taskId: number; modelId: number; mediaType: 'video' | 'image';
@@ -1372,6 +1445,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     customPoints: customPoints ?? (mediaType === 'image' ? options.expectedPoints : undefined),
     pointsPerSecond,
     price: options.price,
+    alias: options.alias,
   });
 
   const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);

@@ -119,6 +119,155 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
       expect(res.status).toBe('ERROR');
       expect(res.message).toContain('sessionFile');
     });
+
+    it('TD #54 显式传入 alias=td 与 custom_points=60：plan、execute、verify 的 expectedPoints 均为 60，不乘以 duration', async () => {
+      const planRes = await plan({
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        customPoints: 60,
+        duration: 5,
+      });
+      expect(planRes.expectedPoints).toBe(60);
+
+      const execRes = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        customPoints: 60,
+        duration: 5,
+        mode: 'mock',
+      });
+      expect(execRes.points).toBe(60);
+
+      const verRes = await verify({
+        taskId: 54001,
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        customPoints: 60,
+        duration: 5,
+        terminalStatus: 'SUCCESS',
+        scoreLogs: [{ task_id: 54001, type: 2, score: -60 }],
+      });
+      expect(verRes.evidence.billing.expectedPoints).toBe(60);
+    });
+
+    it('未知视频模型缺少 alias 时直接返回 BLOCKED_MISSING_INPUT，不得回退 Wan3.0', async () => {
+      const res = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        customPoints: 60,
+        mode: 'mock',
+      });
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe('BLOCKED');
+      expect(res.message).toContain('BLOCKED_MISSING_INPUT');
+      expect(res.message).toContain('Wan3.0');
+    });
+
+    it('未知视频模型即使传入 discoverModelContract 的 fallback contract，execute 仍必须返回 BLOCKED，taskId=0', async () => {
+      const contract = discoverModelContract(54, 'video', { customPoints: 60 });
+      expect(contract.alias.source).toBe('SOURCE_DEFAULT_FALLBACK');
+      expect(contract.alias.determined).toBe(false);
+      expect(contract.alias.allowPass).toBe(false);
+
+      // 1. mock 模式下传入 fallback contract 必须返回 BLOCKED，taskId=0
+      const mockRes = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        contract,
+        mode: 'mock',
+      });
+      expect(mockRes.ok).toBe(false);
+      expect(mockRes.taskId).toBe(0);
+      expect(mockRes.status).toBe('BLOCKED');
+      expect(mockRes.message).toContain('BLOCKED_MISSING_INPUT');
+
+      // 2. 纯空白 alias 即使有 contract 亦必须被阻断
+      const blankAliasRes = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        alias: '   ',
+        contract,
+        mode: 'mock',
+      });
+      expect(blankAliasRes.ok).toBe(false);
+      expect(blankAliasRes.taskId).toBe(0);
+      expect(blankAliasRes.status).toBe('BLOCKED');
+      expect(blankAliasRes.message).toContain('BLOCKED_MISSING_INPUT');
+
+      // 3. 保留 TD #54 显式 alias=td 的正常放行路径
+      const tdRes = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        contract,
+        mode: 'mock',
+      });
+      expect(tdRes.ok).toBe(true);
+      expect(tdRes.status).toBe('SUBMITTED');
+      expect(tdRes.taskId).toBeGreaterThan(0);
+    });
+
+    it('真实执行 Session 缺少有效正整数 project_id 时返回结构化 BLOCKED，不得回退 project_id=10', async () => {
+      const loadSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
+        env: 'test',
+        base_url: 'https://test.panqu.com',
+        cookie_string: 'PHPSESSID=session_no_project',
+      } as any);
+      const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask');
+
+      const res = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        customPoints: 60,
+        mode: 'real',
+        sessionFile: 'test-session.json',
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe('BLOCKED');
+      expect(res.message).toContain('project_id');
+      expect(submitSpy).not.toHaveBeenCalled();
+      loadSpy.mockRestore();
+      submitSpy.mockRestore();
+    });
+
+    it('真实执行有效 Session project_id=365 时正常透传 project_id=365', async () => {
+      const loadSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
+        env: 'test',
+        base_url: 'https://test.panqu.com',
+        cookie_string: 'PHPSESSID=session_365',
+        project_id: 365,
+        csrf_token: 'valid_csrf_token',
+      } as any);
+      const submitSpy = vi.spyOn(mediaFlow, 'submitMediaTask').mockResolvedValueOnce({
+        ok: true,
+        taskId: 54321,
+        message: 'ok',
+        durationMs: 50,
+      });
+
+      const res = await execute({
+        modelId: 54,
+        mediaType: 'video',
+        alias: 'td',
+        customPoints: 60,
+        mode: 'real',
+        sessionFile: 'test-session.json',
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.taskId).toBe(54321);
+      expect(submitSpy).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: 365,
+        alias: 'td',
+      }));
+      loadSpy.mockRestore();
+      submitSpy.mockRestore();
+    });
   });
 
   describe('4. verify (物理验真与三大账务不变量核验)', () => {
@@ -1274,7 +1423,7 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     });
 
     const customContract = {
-      ...discoverModelContract(977, 'video', { price: 10 }),
+      ...discoverModelContract(977, 'video', { price: 10, alias: 'model-977' }),
       supportedResolutions: { value: ['480p'], source: 'SOURCE_INPUT' as const, determined: true, allowPass: true },
     };
 

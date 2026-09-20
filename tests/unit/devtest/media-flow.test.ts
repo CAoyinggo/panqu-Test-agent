@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   fetchWithRetry,
+  fetchCsrfToken,
   loadPanquSession,
   submitMediaTask,
   pollTaskStatus,
@@ -93,6 +94,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         cookies: 'PHPSESSID=session_img_123',
         mediaType: 'image',
         modelId: 201,
+        projectId: 10,
         resolution: '2k',
         serviceline: 'r',
       });
@@ -119,8 +121,10 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       const res = await submitMediaTask({
         baseUrl: 'https://test.panqu.com',
         cookies: 'PHPSESSID=session_fail_123',
+        csrfToken: 'token_csrf_fail',
         mediaType: 'video',
         modelId: 84,
+        projectId: 10,
       });
 
       expect(res.ok).toBe(false);
@@ -139,8 +143,10 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         submitMediaTask({
           baseUrl: 'https://test.panqu.com',
           cookies: 'PHPSESSID=session_error_123',
+          csrfToken: 'token_csrf_502',
           mediaType: 'video',
           modelId: 84,
+          projectId: 10,
         })
       ).rejects.toThrow('SUBMIT_RESPONSE_NOT_JSON: HTTP 502 响应非 JSON');
     });
@@ -159,17 +165,419 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       const res = await submitMediaTask({
         baseUrl: 'https://test.panqu.com',
         cookies: 'PHPSESSID=test',
+        csrfToken: 'csrf_test_token',
         mediaType: 'video',
         modelId: 50,
+        alias: 'custom_model',
+        projectId: 10,
         extraParams: { custom_tag: 'vip_user', scene_id: '99' },
       });
 
       const params = new URLSearchParams(recordedBody);
       expect(params.get('row[extra][cueword]')).toBe('devtest_sample_video');
+      expect(params.get('row[extra][selmodels]')).toBe('50-custom_model');
       expect(params.get('custom_tag')).toBe('vip_user');
       expect(params.get('scene_id')).toBe('99');
       expect(res.ok).toBe(true);
       expect(res.taskId).toBe(12345);
+    });
+
+    it('Session 含 csrf_token：不调用 /ajax/refreshtoken，POST 直接使用该 Token 且不在结果中泄露', async () => {
+      const calls: string[] = [];
+      let submitBody = '';
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        calls.push(String(url));
+        submitBody = String(init?.body || '');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, msg: 'ok', data: { id: 10001 } }),
+        } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_with_csrf',
+        csrfToken: 'explicit_csrf_token_secret',
+        mediaType: 'video',
+        modelId: 84,
+        projectId: 365,
+      });
+
+      expect(calls.some((u) => u.includes('/ajax/refreshtoken'))).toBe(false);
+      expect(calls.some((u) => u.includes('/aivideo/videonew/add'))).toBe(true);
+      const params = new URLSearchParams(submitBody);
+      expect(params.get('__token__')).toBe('explicit_csrf_token_secret');
+      expect(params.get('project_id')).toBe('365');
+      expect(res.ok).toBe(true);
+      expect(JSON.stringify(res)).not.toContain('explicit_csrf_token_secret');
+    });
+
+    it('Session 不含 csrf_token：先调用一次 GET /ajax/refreshtoken，成功取得 Token 后只提交一次 POST', async () => {
+      const calls: { url: string; method: string }[] = [];
+      let submitBody = '';
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method || 'GET' });
+        if (String(url).includes('/ajax/refreshtoken')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ code: 1, data: { __token__: 'refreshed_csrf_token_789' } }),
+          } as unknown as Response;
+        }
+        submitBody = String(init?.body || '');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, msg: 'ok', data: { id: 10002 } }),
+        } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_without_csrf',
+        mediaType: 'video',
+        modelId: 84,
+        projectId: 365,
+      });
+
+      expect(calls.length).toBe(2);
+      expect(calls[0].url).toContain('/ajax/refreshtoken');
+      expect(calls[0].method).toBe('GET');
+      expect(calls[1].url).toContain('/aivideo/videonew/add');
+      expect(calls[1].method).toBe('POST');
+      const params = new URLSearchParams(submitBody);
+      expect(params.get('__token__')).toBe('refreshed_csrf_token_789');
+      expect(params.get('project_id')).toBe('365');
+      expect(res.ok).toBe(true);
+      expect(res.taskId).toBe(10002);
+    });
+
+    it('CSRF 获取失败：不发送视频提交 POST，返回安全结构化失败 (BLOCKED)，不泄露 Cookie', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        if (String(url).includes('/ajax/refreshtoken')) {
+          return {
+            ok: false,
+            status: 403,
+            statusText: 'Forbidden',
+          } as unknown as Response;
+        }
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=sensitive_secret_cookie_999',
+        mediaType: 'video',
+        modelId: 84,
+        projectId: 365,
+      });
+
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toContain('/ajax/refreshtoken');
+      expect(calls.some((u) => u.includes('/aivideo/videonew/add'))).toBe(false);
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain('BLOCKED');
+      expect(res.message).toContain('CSRF');
+      expect(JSON.stringify(res)).not.toContain('sensitive_secret_cookie_999');
+    });
+
+    it('TD #54 显式传入 alias=td：正确构造 selmodelsId=54、selmodels=54-td、task_type=28', async () => {
+      let submitBody = '';
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        submitBody = String(init?.body || '');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, msg: 'ok', data: { id: 54001 } }),
+        } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=td_session',
+        csrfToken: 'td_csrf',
+        mediaType: 'video',
+        modelId: 54,
+        alias: 'td',
+        projectId: 365,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.taskId).toBe(54001);
+      const params = new URLSearchParams(submitBody);
+      expect(params.get('row[selmodelsId]')).toBe('54');
+      expect(params.get('row[extra][selmodels]')).toBe('54-td');
+      expect(params.get('row[extra][task_type]')).toBe('28');
+      expect(params.get('project_id')).toBe('365');
+    });
+
+    it('未知视频模型缺少 alias：不得回退为 Wan3.0，不得提交真实请求，返回 BLOCKED_MISSING_INPUT', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=unknown_session',
+        csrfToken: 'unknown_csrf',
+        mediaType: 'video',
+        modelId: 999,
+        projectId: 365,
+      });
+
+      expect(calls.length).toBe(0);
+      expect(res.ok).toBe(false);
+      expect(res.taskId).toBe(0);
+      expect(res.message).toContain('BLOCKED_MISSING_INPUT');
+      expect(res.message).toContain('Wan3.0');
+    });
+
+    it('Session 缺少 project_id 或非正整数：不得回退 project_id=10，不发送 POST，返回 BLOCKED', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=invalid_project_session',
+        csrfToken: 'some_csrf',
+        mediaType: 'video',
+        modelId: 84,
+        projectId: -1,
+      });
+
+      expect(calls.length).toBe(0);
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain('BLOCKED');
+      expect(res.message).toContain('project_id');
+    });
+
+    it('创建任务 POST 禁止自动重试：模拟网络 transport error 时，创建 POST 调用次数严格等于 1', async () => {
+      let postCallCount = 0;
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          postCallCount++;
+          throw new Error('Simulated network transport socket error');
+        }
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      await expect(
+        submitMediaTask({
+          baseUrl: 'https://test.panqu.com',
+          cookies: 'PHPSESSID=transport_err_session',
+          csrfToken: 'valid_csrf_token',
+          mediaType: 'video',
+          modelId: 84,
+          projectId: 365,
+        })
+      ).rejects.toThrow('Simulated network transport socket error');
+
+      expect(postCallCount).toBe(1);
+    });
+
+    it('projectId 边界严格 fail-closed：完全省略、非 number、非整数、<=0 时均返回 BLOCKED 且 fetch 调用次数严格为 0', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      // 1. 完全省略 projectId
+      const resMissing = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        csrfToken: 'csrf',
+        mediaType: 'image',
+        modelId: 201,
+      } as any);
+      expect(resMissing.ok).toBe(false);
+      expect(resMissing.taskId).toBe(0);
+      expect(resMissing.message).toContain('BLOCKED');
+      expect(resMissing.message).toContain('project_id');
+
+      // 2. 非 number
+      const resString = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        csrfToken: 'csrf',
+        mediaType: 'image',
+        modelId: 201,
+        projectId: '365' as any,
+      });
+      expect(resString.ok).toBe(false);
+      expect(resString.taskId).toBe(0);
+      expect(resString.message).toContain('BLOCKED');
+
+      // 3. 非整数
+      const resFloat = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        csrfToken: 'csrf',
+        mediaType: 'image',
+        modelId: 201,
+        projectId: 365.5,
+      });
+      expect(resFloat.ok).toBe(false);
+      expect(resFloat.taskId).toBe(0);
+      expect(resFloat.message).toContain('BLOCKED');
+
+      // 4. <= 0
+      const resZero = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        csrfToken: 'csrf',
+        mediaType: 'image',
+        modelId: 201,
+        projectId: 0,
+      });
+      expect(resZero.ok).toBe(false);
+      expect(resZero.taskId).toBe(0);
+      expect(resZero.message).toContain('BLOCKED');
+
+      expect(calls.length).toBe(0);
+    });
+
+    it('alias 门禁在 CSRF 请求之前触发：未知视频模型缺少 alias（或纯空白）且无 csrfToken 时，fetch 调用次数严格为 0，返回 BLOCKED_MISSING_INPUT', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      // 1. 无 alias 且无 csrfToken
+      const resNoAlias = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        mediaType: 'video',
+        modelId: 999,
+        projectId: 365,
+      });
+      expect(resNoAlias.ok).toBe(false);
+      expect(resNoAlias.taskId).toBe(0);
+      expect(resNoAlias.message).toContain('BLOCKED_MISSING_INPUT');
+      expect(calls.length).toBe(0);
+
+      // 2. 纯空白 alias 且无 csrfToken
+      const resWhitespaceAlias = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=test',
+        mediaType: 'video',
+        modelId: 999,
+        alias: '   ',
+        projectId: 365,
+      });
+      expect(resWhitespaceAlias.ok).toBe(false);
+      expect(resWhitespaceAlias.taskId).toBe(0);
+      expect(resWhitespaceAlias.message).toContain('BLOCKED_MISSING_INPUT');
+      expect(calls.length).toBe(0);
+    });
+
+    it('extraParams 尝试覆盖 project_id 和 row[extra][selmodels]：必须在网络请求前阻断并返回 BLOCKED_RESERVED_EXTRA_PARAM', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_td',
+        csrfToken: 'token_td',
+        mediaType: 'video',
+        modelId: 54,
+        alias: 'td',
+        projectId: 365,
+        extraParams: {
+          project_id: '10',
+          'row[extra][selmodels]': '54-Wan3.0',
+        },
+      });
+
+      expect(calls.length).toBe(0);
+      expect(res.ok).toBe(false);
+      expect(res.taskId).toBe(0);
+      expect(res.message).toContain('BLOCKED_RESERVED_EXTRA_PARAM');
+      expect(res.message).toContain('project_id');
+      expect(res.message).toContain('row[extra][selmodels]');
+      expect(res.message).not.toContain('54-Wan3.0');
+      expect(res.message).not.toContain('token_td');
+    });
+
+    it('extraParams 尝试覆盖 __token__ 或 row[selmodelsId]：同样必须零请求 BLOCKED 并返回 BLOCKED_RESERVED_EXTRA_PARAM', async () => {
+      const calls: string[] = [];
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url));
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_td',
+        mediaType: 'video',
+        modelId: 54,
+        alias: 'td',
+        projectId: 365,
+        extraParams: {
+          __token__: 'hacked_token',
+          'row[selmodelsId]': '999',
+        },
+      });
+
+      expect(calls.length).toBe(0);
+      expect(res.ok).toBe(false);
+      expect(res.taskId).toBe(0);
+      expect(res.message).toContain('BLOCKED_RESERVED_EXTRA_PARAM');
+      expect(res.message).toContain('__token__');
+      expect(res.message).toContain('row[selmodelsId]');
+      expect(res.message).not.toContain('hacked_token');
+    });
+
+    it('非保留扩展字段（如 custom_tag, scene_id）：继续允许透传且只提交 1 次 POST', async () => {
+      let postCallCount = 0;
+      let recordedBody = '';
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          postCallCount++;
+          recordedBody = String(init?.body || '');
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ code: 1, data: 66001 }),
+          } as unknown as Response;
+        }
+        return { ok: true, status: 200, text: async () => '{}' } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_td',
+        csrfToken: 'token_td',
+        mediaType: 'video',
+        modelId: 54,
+        alias: 'td',
+        projectId: 365,
+        extraParams: {
+          custom_tag: 'test_tag_val',
+          scene_id: '123',
+        },
+      });
+
+      expect(postCallCount).toBe(1);
+      expect(res.ok).toBe(true);
+      expect(res.taskId).toBe(66001);
+      const params = new URLSearchParams(recordedBody);
+      expect(params.get('custom_tag')).toBe('test_tag_val');
+      expect(params.get('scene_id')).toBe('123');
+      expect(params.get('project_id')).toBe('365');
+      expect(params.get('row[extra][selmodels]')).toBe('54-td');
     });
   });
 
