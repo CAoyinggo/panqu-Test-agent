@@ -1,16 +1,15 @@
 /**
- * Panqu AI DevTest — Canonical Shadow Comparison Test Suite
- * Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison
+ * Panqu AI DevTest — Canonical Regression Test Suite
+ * Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Expectations)
  *
  * 核心架构边界 (遵守 docs/ARCHITECTURE_FREEZE.md 受控扩展原则):
  * 1. 本对比套件仅存在于测试目录，严禁在 core-kernel、CLI、MCP 或任何生产调用链中执行；
- * 2. 所有 20 个测试场景必须实际调用 core-kernel.verify() 获取真实的 VerifyKernelResult，
- *    严禁在主测试场景中手工构造或预填旧版裁决；
+ * 2. 严禁重新引入旧版 verify 源码，历史基准值明确为冻结的 golden expectations；
  * 3. 运行全程严禁网络请求：通过 vi.stubGlobal('fetch', ...) 阻断，一旦发生网络调用立即失败；
  * 4. 严格归一化比较状态为 PASS / FAIL / UNVERIFIED；
  * 5. 严格验证六类差异分类与迁移安全门槛：
  *    - EXPECTED_STRICTER 必须具备白名单原因码且显式标记 expectedStricter=true，未标记的强制归入 NEEDS_REVIEW；
- *    - REGRESSION_RISK 必须严格为 0 (严禁新引擎比旧引擎更宽松冒进)；
+ *    - REGRESSION_RISK 必须严格为 0 (严禁新引擎比历史黄金预期更宽松冒进)；
  *    - MAPPING_GAP 必须严格为 0 (任一 MAPPING_FAILED 均阻断门禁)；
  *    - evidenceIds 必须全部来自 mapper 实际生成的 Envelope，严禁预填；
  *    - P0 假 PASS 场景通过 tags: ['P0_FALSE_PASS'] 识别，不依赖固定编号。
@@ -25,7 +24,6 @@ import * as coreKernel from '../../../src/devtest/core-kernel.js';
 import type { VerifyKernelOptions, VerifyKernelResult } from '../../../src/devtest/core-kernel.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 import {
-  normalizeLegacyVerdict,
   classifyShadowDifference,
   runSingleShadowComparison,
   buildShadowSummary,
@@ -34,7 +32,7 @@ import {
   type ShadowComparisonRecord,
 } from './helpers/canonical-shadow-helper.js';
 
-describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () => {
+describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Expectations)', () => {
   const FIXED_TIME = '2026-09-21T12:00:00.000Z';
 
   // 阻断全局 fetch，确保离线运行严格零网络请求
@@ -107,7 +105,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
   };
 
   // ==========================================================================
-  // 定义 20 个必须实际执行 verify() 的影子比对测试场景
+  // 定义 20 个表驱动 Canonical 回归测试场景 (对照冻结的 Golden Expectations)
   // ==========================================================================
   const shadowTestCases: ShadowTestCase[] = [
     // 场景 1: 任务、媒体、账单全部通过
@@ -116,6 +114,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '任务、媒体、账单全部通过',
       testId: 'shadow-sc-01',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       verifyOptions: {
         taskId: 1001,
         modelId: 84,
@@ -134,7 +133,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-01', 70, 2),
       reasonCode: 'FULL_PASS_MATCH',
-      notes: '基准正向场景，真实调用 verify() 判定 PASS，双引擎一致判定 PASS',
+      notes: '基准正向场景，实际执行判定 PASS，与冻结黄金预期一致',
     },
 
     // 场景 2: 任务终态失败
@@ -143,6 +142,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '任务终态失败',
       testId: 'shadow-sc-02',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1002,
         modelId: 84,
@@ -161,7 +161,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-02', 70, 2),
       reasonCode: 'TASK_TERMINAL_FAILED',
-      notes: '任务终态为 FAILED，真实 verify() 判定 FAIL，双引擎一致判定 FAIL',
+      notes: '任务终态为 FAILED，实际执行判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 3: 任务仍为 SUBMITTED/PROCESSING
@@ -170,6 +170,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '任务仍为 SUBMITTED/PROCESSING',
       testId: 'shadow-sc-03',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1003,
         modelId: 84,
@@ -184,7 +185,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-03', 70, 2),
       reasonCode: 'TASK_STILL_PROCESSING',
-      notes: '任务异步处理中，真实 verify() 判定 PROCESSING，归一化一致为 UNVERIFIED',
+      notes: '任务异步处理中，实际执行判定 PROCESSING，归一化与冻结黄金预期 UNVERIFIED 一致',
     },
 
     // 场景 4: 媒体二进制失败
@@ -193,6 +194,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '媒体二进制失败',
       testId: 'shadow-sc-04',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1004,
         modelId: 84,
@@ -209,7 +211,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-04', 70, 2),
       reasonCode: 'MEDIA_BINARY_CORRUPTED',
-      notes: '产物二进制不可解码，真实 verify() 拦截为 FAIL，双引擎一致判定 FAIL',
+      notes: '产物二进制不可解码，实际执行拦截为 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 5: 媒体证据缺失
@@ -218,6 +220,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '媒体证据缺失',
       testId: 'shadow-sc-05',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1005,
         modelId: 84,
@@ -233,7 +236,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-05', 70, 2),
       reasonCode: 'MEDIA_EVIDENCE_MISSING',
-      notes: '缺少产物 Buffer，真实 verify() 判定 UNVERIFIED，双引擎一致判定 UNVERIFIED',
+      notes: '缺少产物 Buffer，实际执行判定 UNVERIFIED，与冻结黄金预期一致',
     },
 
     // 场景 6: 账单核验失败
@@ -242,6 +245,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '账单核验失败',
       testId: 'shadow-sc-06',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1006,
         modelId: 84,
@@ -258,7 +262,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-06', 70, 2),
       reasonCode: 'BILLING_AUDIT_MISMATCH',
-      notes: '扣费 140 与预期 70 不符，真实 verify() 判定 FAIL，双引擎一致判定 FAIL',
+      notes: '扣费 140 与预期 70 不符，实际执行判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 7: 账单证据缺失
@@ -267,6 +271,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '账单证据缺失',
       testId: 'shadow-sc-07',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1007,
         modelId: 84,
@@ -282,7 +287,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-07', 70, 2),
       reasonCode: 'BILLING_LEDGER_MISSING',
-      notes: '缺少账单流水，真实 verify() 判定 UNVERIFIED，双引擎一致判定 UNVERIFIED',
+      notes: '缺少账单流水，实际执行判定 UNVERIFIED，与冻结黄金预期一致',
     },
 
     // 场景 8: actualChannel 仅来自用户声明 (P0 假 PASS 收紧场景)
@@ -291,6 +296,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: 'actualChannel 仅来自用户声明',
       testId: 'shadow-sc-08',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       tags: ['P0_FALSE_PASS'],
       expectedStricter: true,
       reasonCode: 'USER_ASSERTION_ONLY_TIGHTENED',
@@ -318,7 +324,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '旧版离线对手填渠道放行 PASS；新引擎强制隔离声明为 USER_ASSERTION，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes: '历史基准对离线手填渠道放行 PASS；新引擎强制隔离声明为 USER_ASSERTION，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 9: 服务端实际渠道与目标渠道不一致
@@ -327,6 +333,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '服务端实际渠道与目标渠道不一致',
       testId: 'shadow-sc-09',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1009,
         modelId: 84,
@@ -343,7 +350,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-09', 70, 2),
       reasonCode: 'CHANNEL_MISMATCH',
-      notes: '服务端实际渠道 54 与目标 2 不一致，真实 verify() 判定 FAIL，双引擎一致判定 FAIL',
+      notes: '服务端实际渠道 54 与目标 2 不一致，实际执行判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 10: 发生 fallback
@@ -352,6 +359,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '发生 fallback',
       testId: 'shadow-sc-10',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1010,
         modelId: 84,
@@ -368,7 +376,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-10', 70, 2),
       reasonCode: 'FALLBACK_EXECUTION_REJECTED',
-      notes: '目标通道未完成而由兜底生成，真实 verify() 拒收判定 FAIL，双引擎一致判定 FAIL',
+      notes: '目标通道未完成而由兜底生成，实际执行拒收判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 11: 用户声明与服务端渠道冲突
@@ -377,6 +385,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '用户声明与服务端渠道冲突',
       testId: 'shadow-sc-11',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1011,
         modelId: 84,
@@ -394,7 +403,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-11', 70, 2),
       reasonCode: 'EVIDENCE_CONFLICT_CHANNEL',
-      notes: '服务端渠道事实 54 强制优先且不满足预期 2，同时报冲突，双引擎一致判定 FAIL',
+      notes: '服务端渠道事实 54 强制优先且不满足预期 2，同时报冲突，实际执行判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 12: 只有静态网关配置 (P0 假 PASS 收紧场景)
@@ -403,6 +412,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '只有静态网关配置',
       testId: 'shadow-sc-12',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       tags: ['P0_FALSE_PASS'],
       expectedStricter: true,
       reasonCode: 'STATIC_CONTRACT_UNVERIFIED_FOR_REAL',
@@ -416,7 +426,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         terminalStatus: 'SUCCESS',
         artifactBuffer: validMp4,
         scoreLogs: [{ task_id: 1012, type: 2, score: -70, memo: '预扣' }],
-        gatewayChannelConfirmed: true, // 旧版离线仅凭静态契约放行
+        gatewayChannelConfirmed: true, // 历史基准仅凭静态契约放行
         dbExtraConfirmed: true,
       },
       spec: createBaseSpec('shadow-sc-12', 70, 2, {
@@ -428,7 +438,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '旧版仅凭代码静态配置查表放行 PASS；新引擎在 REAL Spec 下缺少 SERVER_API 渠道证据，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes: '历史基准仅凭代码静态配置查表放行 PASS；新引擎在 REAL Spec 下缺少 SERVER_API 渠道证据，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 13: 可信网关快照存在
@@ -437,6 +447,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '可信网关快照存在',
       testId: 'shadow-sc-13',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       verifyOptions: {
         taskId: 1013,
         modelId: 84,
@@ -463,7 +474,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-13', 70, 2),
       reasonCode: 'TRUSTED_GATEWAY_SNAPSHOT_PASS',
-      notes: '具备可信只读采集快照与服务端事实，真实 verify() 判定 PASS，双引擎一致判定 PASS',
+      notes: '具备可信只读采集快照与服务端事实，实际执行判定 PASS，与冻结黄金预期一致',
     },
 
     // 场景 14: requiredEvidence 缺失
@@ -472,6 +483,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: 'requiredEvidence 缺失',
       testId: 'shadow-sc-14',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1014,
         modelId: 84,
@@ -487,7 +499,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-14', 70, 2),
       reasonCode: 'REQUIRED_EVIDENCE_MISSING',
-      notes: '缺少路由执行事实，真实 verify() 判定 UNVERIFIED，双引擎一致判定 UNVERIFIED',
+      notes: '缺少路由执行事实，实际执行判定 UNVERIFIED，与冻结黄金预期一致',
     },
 
     // 场景 15: FIXTURE 试图满足 REAL 证据 (P0 假 PASS 收紧场景)
@@ -496,6 +508,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: 'FIXTURE 试图满足 REAL 证据',
       testId: 'shadow-sc-15',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       tags: ['P0_FALSE_PASS'],
       expectedStricter: true,
       reasonCode: 'REJECT_FIXTURE_FOR_REAL_SPEC',
@@ -523,7 +536,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '旧版在 fixture 模式下全绿放行 PASS；新引擎在 REAL Spec 下拒绝 FIXTURE 证据冒充，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes: '历史基准在 fixture 模式放行 PASS；新引擎在 REAL Spec 下拒绝 FIXTURE 冒充，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 16: getEditData/extra 证据缺失
@@ -532,6 +545,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: 'getEditData/extra 证据缺失',
       testId: 'shadow-sc-16',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1016,
         modelId: 84,
@@ -566,7 +580,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         ],
       }),
       reasonCode: 'EXTRA_DIVERSION_EVIDENCE_MISSING',
-      notes: '分流 extra 落库证据缺失，真实 verify() 判定 UNVERIFIED，双引擎一致判定 UNVERIFIED',
+      notes: '分流 extra 落库证据缺失，实际执行判定 UNVERIFIED，与冻结黄金预期一致',
     },
 
     // 场景 17: 定价 UNVERIFIED
@@ -575,6 +589,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '定价 UNVERIFIED',
       testId: 'shadow-sc-17',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'UNVERIFIED',
       verifyOptions: {
         taskId: 1017,
         modelId: 9999, // 未知模型无真实刊例定价
@@ -588,7 +603,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         costLimit: { maxCostPoints: 0 },
       }),
       reasonCode: 'PRICING_UNVERIFIED_BLOCKS_PASS',
-      notes: '未知模型缺少真实刊例定价，真实 verify() 阻断为 UNVERIFIED，双引擎一致判定 UNVERIFIED',
+      notes: '未知模型缺少真实刊例定价，实际执行阻断为 UNVERIFIED，与冻结黄金预期一致',
     },
 
     // 场景 18: 关键断言失败
@@ -597,6 +612,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '关键断言失败',
       testId: 'shadow-sc-18',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1018,
         modelId: 84,
@@ -613,7 +629,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       },
       spec: createBaseSpec('shadow-sc-18', 70, 2),
       reasonCode: 'CRITICAL_ASSERTION_FAILED',
-      notes: '关键断言扣费金额 70 比对失败（实际 999），真实 verify() 判定 FAIL，双引擎一致判定 FAIL',
+      notes: '关键断言扣费金额 70 比对失败（实际 999），实际执行判定 FAIL，与冻结黄金预期一致',
     },
 
     // 场景 19: 非关键断言失败
@@ -622,6 +638,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '非关键断言失败',
       testId: 'shadow-sc-19',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'PASS',
       verifyOptions: {
         taskId: 1019,
         modelId: 84,
@@ -665,7 +682,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         ],
       }),
       reasonCode: 'NON_CRITICAL_ASSERTION_SOFT_FAIL',
-      notes: '非关键断言未命中不阻断 PASS 判定，真实 verify() 判定 PASS，双引擎一致判定 PASS',
+      notes: '非关键断言未命中不阻断 PASS 判定，实际执行判定 PASS，与冻结黄金预期一致',
     },
 
     // 场景 20: 多条同 key 证据发生 PASS/FAIL 冲突
@@ -674,6 +691,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       name: '多条同 key 证据发生 PASS/FAIL 冲突',
       testId: 'shadow-sc-20',
       capturedAt: FIXED_TIME,
+      goldenExpectation: 'FAIL',
       verifyOptions: {
         taskId: 1020,
         modelId: 84,
@@ -712,15 +730,15 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         },
       ],
       reasonCode: 'SAME_KEY_EVIDENCE_CONFLICT',
-      notes: '同 key 存在 PASS 与 FAIL 冲突，fail-closed 判定 FAIL，双引擎一致判定 FAIL',
+      notes: '同 key 存在 PASS 与 FAIL 冲突，fail-closed 判定 FAIL，与冻结黄金预期一致',
     },
   ];
 
   // ==========================================================================
-  // 测试组 1: 证明 20 个场景真实执行了 verify()，无手工预填旧裁决
+  // 测试组 1: 证明 20 个场景真实执行了 Canonical verify() 与冻结黄金预期比对
   // ==========================================================================
-  describe('一、真实执行 core-kernel.verify() 与分类验证', () => {
-    it('1. 证明 Shadow 场景确实调用了 verify()', async () => {
+  describe('一、执行 Canonical verify 与冻结黄金预期比对验证', () => {
+    it('1. 证明表驱动用例实际调用了 Canonical 驱动的 verify()', async () => {
       const verifySpy = vi.spyOn(coreKernel, 'verify');
       const sc1 = shadowTestCases[0];
 
@@ -732,14 +750,14 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       expect(record.actualLegacyResult).toBeDefined();
       expect(record.actualLegacyResult?.status).toBe('SUCCESS');
       expect(record.actualLegacyResult?.verdict).toBe('PASS');
-      expect(record.legacyVerdict).toBe('PASS');
+      expect(record.goldenExpectation).toBe('PASS');
     });
 
-    it('2. 证明如果 verify() 实际结果变化，对比结果会随之联动变化', async () => {
+    it('2. 证明如果 verify() 实际结果变化，比对结果会随之联动变化', async () => {
       // 原本为 SUCCESS
       const baseTc = shadowTestCases[0];
       const record1 = await runSingleShadowComparison(baseTc);
-      expect(record1.legacyVerdict).toBe('PASS');
+      expect(record1.goldenExpectation).toBe('PASS');
       expect(record1.canonicalVerdict).toBe('PASS');
 
       // 改变输入入参使实际 verify() 变为 FAILED
@@ -758,13 +776,22 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       };
 
       const record2 = await runSingleShadowComparison(modifiedTc);
-      expect(record2.legacyVerdict).toBe('FAIL');
       expect(record2.canonicalVerdict).toBe('FAIL');
       expect(record2.rawLegacyVerdict).toBe('FAIL');
     });
 
+    it('2b. 证明：缺少 goldenExpectation 必须直接失败，严禁从 verify 结果推导', async () => {
+      const tcWithoutGolden = {
+        ...shadowTestCases[0],
+        goldenExpectation: undefined as any,
+      };
+      await expect(runSingleShadowComparison(tcWithoutGolden)).rejects.toThrowError(
+        /缺少必须的 goldenExpectation/
+      );
+    });
+
     for (const tc of shadowTestCases) {
-      it(`场景 ${tc.index}: ${tc.name} -> 真实执行旧裁决并分类`, async () => {
+      it(`场景 ${tc.index}: ${tc.name} -> 执行 Canonical 验证并比对冻结黄金预期`, async () => {
         const record = await runSingleShadowComparison(tc);
 
         // 真实执行证据检查
@@ -781,11 +808,11 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         // 差异分类断言
         if (tc.tags?.includes('P0_FALSE_PASS')) {
           expect(record.category).toBe('EXPECTED_STRICTER');
-          expect(record.legacyVerdict).toBe('PASS');
+          expect(record.goldenExpectation).toBe('PASS');
           expect(record.canonicalVerdict).toBe('UNVERIFIED');
         } else {
           expect(record.category).toBe('MATCH');
-          expect(record.canonicalVerdict).toBe(record.legacyVerdict);
+          expect(record.canonicalVerdict).toBe(record.goldenExpectation);
         }
 
         expect(record.reasonCode.length).toBeGreaterThan(0);
@@ -797,9 +824,9 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
   // 测试组 2: 严格门禁逻辑与六大核心证明
   // ==========================================================================
   describe('二、严格门禁逻辑与收紧规则证明', () => {
-    it('3. 证明：未标记 expectedStricter 的旧 PASS / 新 UNVERIFIED 强制归入 NEEDS_REVIEW', () => {
+    it('3. 证明：未标记 expectedStricter 的历史黄金 PASS / 新 UNVERIFIED 强制归入 NEEDS_REVIEW', () => {
       const unapprovedRecord = classifyShadowDifference({
-        legacyNormalized: 'PASS',
+        goldenExpectation: 'PASS',
         canonicalVerdict: 'UNVERIFIED',
         mappingSuccess: true,
         isExpectedStricterScenario: false, // 未标记
@@ -809,7 +836,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
 
       // 即使标记了 expectedStricter=true，但 reasonCode 不在白名单中，也必须归入 NEEDS_REVIEW
       const illegalReasonRecord = classifyShadowDifference({
-        legacyNormalized: 'PASS',
+        goldenExpectation: 'PASS',
         canonicalVerdict: 'UNVERIFIED',
         mappingSuccess: true,
         isExpectedStricterScenario: true,
@@ -821,7 +848,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
     it('4. 证明：显式批准且在白名单中的 P0 收紧归入 EXPECTED_STRICTER', () => {
       for (const allowedReason of ALLOWED_EXPECTED_STRICTER_REASONS) {
         const approved = classifyShadowDifference({
-          legacyNormalized: 'PASS',
+          goldenExpectation: 'PASS',
           canonicalVerdict: 'UNVERIFIED',
           mappingSuccess: true,
           isExpectedStricterScenario: true,
@@ -838,7 +865,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
           scenarioName: '正常场景',
           testId: 't-1',
           tags: [],
-          legacyVerdict: 'PASS',
+          goldenExpectation: 'PASS',
           rawLegacyVerdict: 'PASS',
           canonicalVerdict: 'PASS',
           category: 'MATCH',
@@ -853,7 +880,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
           scenarioName: '映射失败场景',
           testId: 't-2',
           tags: [],
-          legacyVerdict: 'FAIL',
+          goldenExpectation: 'FAIL',
           rawLegacyVerdict: 'FAIL',
           canonicalVerdict: 'MAPPING_FAILED',
           category: 'MAPPING_GAP', // 映射失败
@@ -878,7 +905,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         scenarioName: '无实际信封场景',
         testId: 't-empty-env',
         tags: ['P0_FALSE_PASS'],
-        legacyVerdict: 'PASS',
+        goldenExpectation: 'PASS',
         rawLegacyVerdict: 'PASS',
         canonicalVerdict: 'UNVERIFIED',
         category: 'EXPECTED_STRICTER',
@@ -901,7 +928,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
         scenarioName: '编号重排后的 P0 场景',
         testId: 't-reordered-p0',
         tags: ['P0_FALSE_PASS'],
-        legacyVerdict: 'PASS',
+        goldenExpectation: 'PASS',
         rawLegacyVerdict: 'PASS',
         canonicalVerdict: 'UNVERIFIED',
         category: 'EXPECTED_STRICTER',
@@ -920,7 +947,7 @@ describe('Phase 1.5B 真实执行旧版 verify 的离线 Shadow Comparison', () 
       expect(() => fetch('http://example.com/api')).toThrowError('NETWORK_ACCESS_FORBIDDEN');
     });
 
-    it('9 & 10. 汇总 20 个实际离线场景，证明满足全部迁移安全门槛 (REGRESSION_RISK=0, MAPPING_GAP=0)', async () => {
+    it('9 & 10. 汇总 20 个表驱动场景，证明满足全部迁移安全门槛 (REGRESSION_RISK=0, MAPPING_GAP=0)', async () => {
       const records: ShadowComparisonRecord[] = [];
       for (const tc of shadowTestCases) {
         records.push(await runSingleShadowComparison(tc));
