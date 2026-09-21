@@ -6,6 +6,8 @@
  * 2. 全链路证据采集与跨系统标识对齐：主站 extra 快照、网关日志与降级重试证据强校验。
  */
 
+import type { TargetDisambiguationInput, TargetDisambiguationResult, TargetKind } from './types.js';
+
 export type DiversionRouteMode = 'newapi' | 'legacy' | 'off';
 export type FlowMediaType = 'video' | 'image' | 'canvas';
 export type FlowStepStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED' | 'NOT_APPLICABLE' | 'UNVERIFIED' | 'PASS' | 'FAIL';
@@ -86,6 +88,7 @@ export interface GatewayChannelConfig {
   weight: number;
   dailyQuotaLimit: number;
   usedQuota: number;
+  sourceMode?: 'SOURCE_STATIC_CONTRACT' | 'SOURCE_REAL_GATEWAY' | 'UNVERIFIED';
 }
 
 export interface GatewayRoutingVerdict {
@@ -405,4 +408,276 @@ export class RoutingOracle {
       reason: `模型 (${modelId}) 属于非 Seedance 系列，不进入分流重试队列，直接标记失败`,
     };
   }
+
+  public static disambiguateTarget(
+    input: TargetDisambiguationInput,
+    customChannels?: GatewayChannelConfig[],
+  ): TargetDisambiguationResult {
+    const hasRealSnapshot = Boolean(
+      customChannels &&
+      customChannels.length > 0 &&
+      customChannels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY')
+    );
+    const channels = customChannels && customChannels.length > 0 ? customChannels : DEFAULT_KNOWN_GATEWAY_CHANNELS;
+    const channelSource: 'SOURCE_STATIC_CONTRACT' | 'SOURCE_REAL_GATEWAY' | 'UNVERIFIED' =
+      hasRealSnapshot ? 'SOURCE_REAL_GATEWAY' : 'SOURCE_STATIC_CONTRACT';
+
+    const modelMap: Record<number, string> = {
+      15: 'seedance-2.0',
+      78: 'seedance-2.5',
+      84: 'wan3.0-video',
+      88: 'wan3.0-video-prime',
+      12: 'pan-banana-pro',
+      201: 'runninghub-nano-banana-2',
+    };
+    const reverseModelMap: Record<string, number> = {
+      'seedance-2.0': 15,
+      'seedance-2.5': 78,
+      'wan3.0-video': 84,
+      'wan3.0-video-prime': 88,
+      'pan-banana-pro': 12,
+      'runninghub-nano-banana-2': 201,
+    };
+
+    let targetKind = input.targetKind;
+    let channelId = input.channelId;
+    let channelName = input.channelName;
+    let modelId = input.modelId;
+    let modelAlias = input.modelAlias;
+    const projectId = input.projectId;
+
+    // 解析 rawTarget，例如 "#54", "54", "channel 54", "TD_国际"
+    if (input.rawTarget !== undefined && input.rawTarget !== null) {
+      const rawStr = String(input.rawTarget).trim();
+      const numMatch = rawStr.match(/\d+/);
+      const parsedNum = numMatch ? Number(numMatch[0]) : undefined;
+
+      if (rawStr.toLowerCase().startsWith('channel') || rawStr.includes('渠道') || parsedNum === 54 || rawStr === 'TD_国际') {
+        targetKind = 'channel';
+        if (parsedNum) channelId = parsedNum;
+        if (rawStr.includes('TD_国际')) channelName = 'TD_国际';
+      } else if (rawStr.toLowerCase().startsWith('model') || rawStr.includes('模型')) {
+        targetKind = 'model';
+        if (parsedNum) modelId = parsedNum;
+      } else if (parsedNum !== undefined) {
+        const matchedCh = channels.find((c) => c.id === parsedNum || c.name === rawStr);
+        if (matchedCh) {
+          targetKind = 'channel';
+          channelId = matchedCh.id;
+          channelName = matchedCh.name;
+        } else {
+          modelId = parsedNum;
+        }
+      }
+    }
+
+    // 核心消歧拦截：检查是否把渠道当成了模型（如传入 modelId: 54 或 2）
+    if (modelId === 54 && modelAlias !== 'td') {
+      const ch54 = channels.find((c) => c.id === 54);
+      return {
+        ok: false,
+        targetKind: 'channel',
+        channelId: 54,
+        channelName: ch54?.name || 'TD_国际',
+        modelId: 0,
+        modelAlias: '',
+        projectId,
+        isDisambiguated: false,
+        channelSource,
+        supportedModels: [
+          { id: 15, alias: 'seedance-2.0' },
+          { id: 78, alias: 'seedance-2.5' },
+        ],
+        error: `BLOCKED_AMBIGUOUS_ID (BLOCKED_MISSING_INPUT): #54 是网关渠道 '${ch54?.name || 'TD_国际'}' (channel_id: 54)，而非模型 ID (不得回退 Wan3.0)！该渠道承接模型为 #15 (seedance-2.0) 与 #78 (seedance-2.5)。请显式指定 --channel 54 --model 15 或 --model 78。`,
+      };
+    }
+
+    if (modelId === 2 && modelAlias !== 'rh') {
+      const ch2 = channels.find((c) => c.id === 2);
+      return {
+        ok: false,
+        targetKind: 'channel',
+        channelId: 2,
+        channelName: ch2?.name || 'RH-国际',
+        modelId: 0,
+        modelAlias: '',
+        projectId,
+        isDisambiguated: false,
+        channelSource,
+        supportedModels: [
+          { id: 15, alias: 'seedance-2.0' },
+          { id: 78, alias: 'seedance-2.5' },
+        ],
+        error: `BLOCKED_AMBIGUOUS_ID (BLOCKED_MISSING_INPUT): #2 是网关渠道 '${ch2?.name || 'RH-国际'}' (channel_id: 2)，而非模型 ID！该渠道承接模型为 #15 (seedance-2.0) 与 #78 (seedance-2.5)。请显式指定 --channel 2 --model 78 或 --model 15。`,
+      };
+    }
+
+    // 若指定了 channelId 或 channelName，判定为渠道测试
+    if (channelId !== undefined || channelName !== undefined || targetKind === 'channel') {
+      const ch = channels.find((c) => (channelId !== undefined && c.id === channelId) || (channelName && c.name === channelName));
+      if (!ch) {
+        return {
+          ok: false,
+          targetKind: 'channel',
+          channelId,
+          channelName,
+          modelId: modelId || 0,
+          modelAlias: modelAlias || '',
+          projectId,
+          isDisambiguated: false,
+          channelSource: 'UNVERIFIED',
+          error: `BLOCKED_UNKNOWN_CHANNEL: 未识别的渠道标识 (channelId: ${channelId}, channelName: ${channelName})`,
+        };
+      }
+
+      const supportedModels = ch.models.map((m) => ({
+        id: reverseModelMap[m] || 0,
+        alias: m,
+      }));
+
+      // 若未指定 modelId，且渠道承接多个模型，必须显式消歧
+      if (!modelId && !modelAlias) {
+        if (supportedModels.length === 1) {
+          modelId = supportedModels[0].id;
+          modelAlias = supportedModels[0].alias;
+        } else {
+          return {
+            ok: false,
+            targetKind: 'channel',
+            channelId: ch.id,
+            channelName: ch.name,
+            modelId: 0,
+            modelAlias: '',
+            projectId,
+            isDisambiguated: false,
+            channelSource,
+            supportedModels,
+            error: `BLOCKED_AMBIGUOUS_CHANNEL: 渠道 #${ch.id} ('${ch.name}') 承接多个模型 (${supportedModels.map((m) => `#${m.id} ${m.alias}`).join(', ')})。执行前必须显式指定目标模型 ID (--model)。`,
+          };
+        }
+      }
+
+      if (modelId && !modelAlias) {
+        modelAlias = modelMap[modelId] || `model-${modelId}`;
+      } else if (!modelId && modelAlias) {
+        modelId = reverseModelMap[modelAlias] || 0;
+      }
+
+      const resolvedAlias = modelAlias || '';
+      const resolvedModelId = modelId || 0;
+      const isModelSupported = (resolvedAlias ? ch.models.includes(resolvedAlias) : false) || (resolvedModelId > 0 && supportedModels.some((m) => m.id === resolvedModelId));
+      if (!isModelSupported) {
+        return {
+          ok: false,
+          targetKind: 'channel',
+          channelId: ch.id,
+          channelName: ch.name,
+          modelId: modelId || 0,
+          modelAlias: modelAlias || '',
+          projectId,
+          isDisambiguated: false,
+          channelSource,
+          supportedModels,
+          error: `BLOCKED_CHANNEL_MODEL_MISMATCH: 渠道 #${ch.id} ('${ch.name}') 不支持模型 #${modelId} ('${modelAlias}')。该渠道仅承接: ${supportedModels.map((m) => `#${m.id} (${m.alias})`).join(', ')}。`,
+        };
+      }
+
+      return {
+        ok: true,
+        targetKind: 'channel',
+        channelId: ch.id,
+        channelName: ch.name,
+        modelId: modelId || 0,
+        modelAlias: modelAlias || '',
+        projectId,
+        isDisambiguated: true,
+        channelSource,
+        supportedModels,
+        warning: channelSource === 'SOURCE_STATIC_CONTRACT'
+          ? `渠道 #${ch.id} ('${ch.name}') 当前仅具备静态契约信息 (SOURCE_STATIC_CONTRACT)，非线上实时快照`
+          : undefined,
+      };
+    }
+
+    // 默认模型模式
+    const resolvedModelId = modelId || 0;
+    const resolvedAlias = modelAlias || modelMap[resolvedModelId] || (resolvedModelId > 0 ? `model-${resolvedModelId}` : '');
+    return {
+      ok: resolvedModelId > 0,
+      targetKind: 'model',
+      modelId: resolvedModelId,
+      modelAlias: resolvedAlias,
+      projectId,
+      isDisambiguated: true,
+      channelSource: 'UNVERIFIED',
+      ...(resolvedModelId <= 0 ? { error: 'BLOCKED_MISSING_MODEL: 未提供有效的 modelId 或 channelId' } : {}),
+    };
+  }
+}
+
+/**
+ * 离线静态已知网关渠道契约 (DEFAULT_KNOWN_GATEWAY_CHANNELS)
+ * 永久约束：本表仅为离线名称解析与测试夹具契约 (SOURCE_STATIC_CONTRACT)，绝不能表述为当前线上实时事实。
+ * 线上 status / weight / quota 随时可能发生动态变更，REAL 模式核验必须使用只读动态快照；无法获取时判定为 UNVERIFIED / BLOCKED。
+ */
+export const DEFAULT_KNOWN_GATEWAY_CHANNELS: GatewayChannelConfig[] = [
+  { id: 2, name: 'RH-国际', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 54, name: 'TD_国际', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 36, name: '万相', group: 'panqu_test', models: ['wan3.0-video', 'wan3.0-video-prime'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 39, name: 'RH视频', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 40, name: 'RH图片', group: 'panqu_test', models: ['pan-banana-pro', 'runninghub-nano-banana-2'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 41, name: '菲玲', group: 'panqu_test', models: ['feiling-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  { id: 42, name: 'MiniMax', group: 'panqu_test', models: ['minimax-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+];
+
+export interface TrustedGatewaySnapshot {
+  environment: 'test' | 'preonline' | 'prod' | 'offline' | string;
+  capturedAt: string;
+  sourceEndpoint: string;
+  collectionStatus: 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'UNKNOWN';
+  provenance: 'API_READONLY_COLLECTOR' | 'USER_ASSERTION' | 'FIXTURE';
+  channels: GatewayChannelConfig[];
+  collectorVersion?: string;
+  ttlMs?: number;
+}
+
+export interface GatewaySnapshotValidationResult {
+  valid: boolean;
+  reason?: string;
+  snapshot?: TrustedGatewaySnapshot;
+}
+
+/**
+ * 校验只读网关快照的可信度
+ * 必须满足：未缺失、状态 SUCCESS、来源 API_READONLY_COLLECTOR、合法端点、未过期且渠道非空
+ * 任何不满足项一律 fail-closed
+ */
+export function validateTrustedGatewaySnapshot(
+  snapshot?: TrustedGatewaySnapshot,
+  options?: { maxAgeMs?: number; expectedEnv?: string }
+): GatewaySnapshotValidationResult {
+  if (!snapshot) {
+    return { valid: false, reason: 'MISSING_SNAPSHOT: 未提供网关渠道快照 [BLOCKED_MISSING_TRUSTED_COLLECTOR]' };
+  }
+  if (snapshot.collectionStatus !== 'SUCCESS') {
+    return { valid: false, reason: `COLLECTION_FAILED: 快照采集状态不为 SUCCESS (${snapshot.collectionStatus})` };
+  }
+  if (snapshot.provenance !== 'API_READONLY_COLLECTOR') {
+    return { valid: false, reason: `UNTRUSTED_PROVENANCE: 来源不属于可信 API 只读采集器 (${snapshot.provenance})` };
+  }
+  if (!snapshot.sourceEndpoint || !snapshot.sourceEndpoint.startsWith('/')) {
+    return { valid: false, reason: `INVALID_ENDPOINT: 来源端点无效 (${snapshot.sourceEndpoint})` };
+  }
+  if (!snapshot.capturedAt || isNaN(Date.parse(snapshot.capturedAt))) {
+    return { valid: false, reason: `INVALID_TIMESTAMP: 快照捕获时间无效 (${snapshot.capturedAt})` };
+  }
+  const ageMs = Date.now() - Date.parse(snapshot.capturedAt);
+  const maxAge = snapshot.ttlMs ?? options?.maxAgeMs ?? (60 * 60 * 1000);
+  if (ageMs < 0 || ageMs > maxAge) {
+    return { valid: false, reason: `SNAPSHOT_EXPIRED: 快照已过期 (age: ${Math.round(ageMs / 1000)}s, max: ${Math.round(maxAge / 1000)}s)` };
+  }
+  if (!Array.isArray(snapshot.channels) || snapshot.channels.length === 0) {
+    return { valid: false, reason: 'EMPTY_CHANNELS: 快照中不包含任何渠道数据' };
+  }
+  return { valid: true, snapshot };
 }

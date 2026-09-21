@@ -17,6 +17,7 @@ import { parseChangeIntent } from './env-probe.js';
 import { existsSync } from 'node:fs';
 import type { DiversionBaseline, MemoryCandidatePayload, RecordCandidateResult } from './types.js';
 import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
+import { RoutingOracle } from './routing.js';
 
 export const DEVTEST_MCP_TOOL = {
   name: 'devtest',
@@ -61,6 +62,11 @@ export const DEVTEST_MCP_TOOL = {
       unconfirmed_static: { type: 'boolean', description: '是否包含未确认的静态规则' },
       wait: { type: 'boolean', description: '是否在 execute 提交成功后自动等待轮询并串联进入 verify 终态闭环验真 (Agent 自主执行建议设置为 true，默认 false)' },
       poll_timeout_sec: { type: 'number', description: '轮询超时秒数 (默认: 视频 180s, 图片 60s)' },
+      channel_id: { type: 'number', description: '网关渠道 ID (如 54 为 TD_国际)' },
+      channel_name: { type: 'string', description: '网关渠道名称 (如 TD_国际)' },
+      target_kind: { type: 'string', enum: ['channel', 'model'], description: '测试目标类型 (channel: 渠道级测试; model: 模型级测试)' },
+      project_id: { type: 'number', description: '项目 ID (如 365)' },
+      raw_target: { type: 'string', description: '原始测试目标字符串 (如 #54, 54, TD_国际)' },
     },
     required: ['action'],
     allOf: [
@@ -191,6 +197,12 @@ export class DevTestMcpService {
       };
     }
     const action = args.action.trim().toLowerCase();
+    const channelId = typeof args.channel_id === 'number' ? args.channel_id : (typeof args.channelId === 'number' ? args.channelId : undefined);
+    const channelName = typeof args.channel_name === 'string' ? args.channel_name : (typeof args.channelName === 'string' ? args.channelName : undefined);
+    const targetKind = (args.target_kind || args.targetKind) as 'channel' | 'model' | undefined;
+    const projectId = typeof args.project_id === 'number' ? args.project_id : (typeof args.projectId === 'number' ? args.projectId : undefined);
+    const rawTarget = (args.raw_target || args.rawTarget) as string | undefined;
+
     switch (action) {
       case 'probe': {
         const res = await probe({
@@ -244,8 +256,8 @@ export class DevTestMcpService {
         }
 
         const missingInputs: string[] = [];
-        if (modelId === undefined || isNaN(modelId)) missingInputs.push('model_id');
-        if (!mediaType) missingInputs.push('media_type');
+        if ((modelId === undefined || isNaN(modelId)) && channelId === undefined && !rawTarget) missingInputs.push('model_id');
+        if (!mediaType && channelId === undefined && !rawTarget) missingInputs.push('media_type');
 
         if (missingInputs.length > 0) {
           const summary = `### ⚠️ Panqu 分流推导阻断 (缺失必填参数)\n- **缺失参数**: ${missingInputs.join(', ')}\n- **说明**: plan 需要明确的 model_id 与 media_type (直接传入或从 requirement 中推导)。禁止私自猜测参数。`;
@@ -275,6 +287,11 @@ export class DevTestMcpService {
           price: typeof args.price === 'number' ? args.price : undefined,
           isGlobal: typeof args.is_global === 'boolean' ? args.is_global : typeof args.isGlobal === 'boolean' ? args.isGlobal : undefined,
           alias: typeof args.alias === 'string' ? args.alias : undefined,
+          channelId,
+          channelName,
+          targetKind,
+          projectId,
+          rawTarget,
           extraExperiences: (args.extra_experiences || args.extraExperiences) as any,
           projectRoot: typeof args.project_root === 'string' ? args.project_root : typeof args.projectRoot === 'string' ? args.projectRoot : this.projectRoot,
         });
@@ -359,11 +376,49 @@ export class DevTestMcpService {
         const dbExtraConfirmed = Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed);
         const gatewayChannelConfirmed = Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed);
 
+        // 目标消歧门禁：REAL 模式无实时数据或其他消歧拦截优先于会话检查
+        const disambiguation = RoutingOracle.disambiguateTarget({
+          targetKind,
+          channelId,
+          channelName,
+          modelId,
+          modelAlias: alias,
+          projectId,
+          rawTarget,
+          mode,
+        });
+
+        if (!disambiguation.ok) {
+          const summary = `### ⚠️ Panqu 任务执行阻断 (目标对象消歧拦截)\n- **原因**: ${disambiguation.error}`;
+          return {
+            ok: true,
+            isError: false,
+            action: 'execute',
+            passed: false,
+            status: 'BLOCKED',
+            verdict: 'BLOCKED',
+            acceptance: 'BLOCKED',
+            summary,
+            error: disambiguation.error,
+            data: {
+              ok: false,
+              taskId: 0,
+              mode,
+              modelId,
+              mediaType,
+              status: 'BLOCKED',
+              points: 0,
+              message: disambiguation.error || '目标对象消歧拦截',
+              disambiguation,
+            } as unknown as T,
+          };
+        }
+
         // Real mode gate: require session file or PANQU_SESSION_COOKIES_FILE or local session.json
-        if (mode === 'real') {
+        const isChannelTarget = disambiguation.targetKind === 'channel' || channelId !== undefined || channelName !== undefined;
+        if (mode === 'real' && !isChannelTarget) {
           const sessionFilePath = sessionFile
-            || process.env.PANQU_SESSION_COOKIES_FILE
-            || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
+            || (!process.env.VITEST ? (process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined)) : undefined);
           if (!sessionFilePath || !existsSync(sessionFilePath)) {
             const summary = `### ⚠️ Panqu 真实执行阻断 (缺少有效会话)\n- **执行模式**: REAL\n- **状态**: BLOCKED\n- **原因**: 真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json，或设置 PANQU_SESSION_COOKIES_FILE 环境变量）。\n- **说明**: 当前未提供会话凭据，已安全阻断，未发起真实请求。`;
             return {
@@ -403,6 +458,11 @@ export class DevTestMcpService {
           customPoints,
           pointsPerSecond,
           alias,
+          channelId,
+          channelName,
+          targetKind,
+          projectId,
+          rawTarget,
         });
 
         if (!wait) {
@@ -474,6 +534,10 @@ export class DevTestMcpService {
           dbExtraConfirmed,
           gatewayChannelConfirmed,
           alias,
+          channelId,
+          channelName,
+          targetKind,
+          projectId,
         });
 
         const taskStatus = verifyRes.evidence.task.status;
@@ -556,30 +620,40 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
           taskId,
           modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
           mediaType: (args.media_type || args.mediaType) ? ((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined,
+          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
+          duration: typeof args.duration === 'number' ? args.duration : undefined,
+          scoreLogs: Array.isArray(args.score_logs) ? args.score_logs : (Array.isArray(args.scoreLogs) ? args.scoreLogs : undefined),
           expectedPoints: typeof args.expected_points === 'number' ? args.expected_points : typeof args.expectedPoints === 'number' ? args.expectedPoints : undefined,
           price: typeof args.price === 'number' ? args.price : undefined,
           customPoints: typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined,
           pointsPerSecond: typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined,
+          alias: typeof args.alias === 'string' ? args.alias : undefined,
+          channelId,
+          channelName,
+          targetKind,
+          projectId,
+          actualChannelId: typeof args.actual_channel_id === 'number' ? args.actual_channel_id : (typeof args.actualChannelId === 'number' ? args.actualChannelId : (typeof args.actual_channel === 'number' ? args.actual_channel : undefined)),
+          actualChannelName: typeof args.actual_channel_name === 'string' ? args.actual_channel_name : (typeof args.actualChannelName === 'string' ? args.actualChannelName : undefined),
+          fallbackChannel: typeof args.fallback_channel === 'string' ? args.fallback_channel : (typeof args.fallbackChannel === 'string' ? args.fallbackChannel : undefined),
+          retryProvider: typeof args.retry_provider === 'string' ? args.retry_provider : (typeof args.retryProvider === 'string' ? args.retryProvider : undefined),
+          extra: (args.extra as Record<string, unknown>) || undefined,
+          retryLog: (args.retry_log || args.retryLog) as Record<string, unknown> | undefined,
+          exceptionalTask: (args.exceptional_task || args.exceptionalTask) as Record<string, unknown> | undefined,
           terminalStatus,
-          scoreLogs: Array.isArray(args.score_logs) ? args.score_logs : Array.isArray(args.scoreLogs) ? args.scoreLogs : undefined,
-          resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
-          duration: typeof args.duration === 'number' ? args.duration : undefined,
+          pollTimeoutSec,
           sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
           env: (args.env as 'test' | 'preonline') || undefined,
           videoUrl: typeof args.video_url === 'string' ? args.video_url : typeof args.videoUrl === 'string' ? args.videoUrl : undefined,
           imageUrl: typeof args.image_url === 'string' ? args.image_url : typeof args.imageUrl === 'string' ? args.imageUrl : undefined,
           assetBuffer: Buffer.isBuffer(args.asset_buffer) ? args.asset_buffer : Buffer.isBuffer(args.assetBuffer) ? args.assetBuffer : undefined,
           artifactBuffer: Buffer.isBuffer(args.artifact_buffer) ? args.artifact_buffer : Buffer.isBuffer(args.artifactBuffer) ? args.artifactBuffer : undefined,
-          dbExtraConfirmed: Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed),
-          gatewayChannelConfirmed: Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed),
-          pollTimeoutSec,
+          dbExtraConfirmed: args.db_extra_confirmed !== undefined ? Boolean(args.db_extra_confirmed) : (args.dbExtraConfirmed !== undefined ? Boolean(args.dbExtraConfirmed) : undefined),
+          gatewayChannelConfirmed: args.gateway_channel_confirmed !== undefined ? Boolean(args.gateway_channel_confirmed) : (args.gatewayChannelConfirmed !== undefined ? Boolean(args.gatewayChannelConfirmed) : undefined),
           baseline: args.baseline as DiversionBaseline | undefined,
           unconfirmedStatic: Boolean(args.unconfirmed_static ?? args.unconfirmedStatic),
           apiResult: (args.api_result || args.apiResult) as any,
-          projectId: typeof args.project_id === 'number' ? args.project_id : undefined,
           folderId: typeof args.folder_id === 'number' ? args.folder_id : undefined,
           isFolderInProject: typeof args.is_folder_in_project === 'boolean' ? args.is_folder_in_project : undefined,
-          alias: typeof args.alias === 'string' ? args.alias : undefined,
         });
 
         const taskStatus = res.evidence.task.status;

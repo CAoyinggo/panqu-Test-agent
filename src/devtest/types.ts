@@ -24,6 +24,7 @@ export type {
 export type {
   PanquSession, SubmitMediaTaskOptions, SubmitMediaTaskResult,
   TaskStatusSnapshot, PollTaskStatusOptions,
+  TaskRuntimeDetails, EndpointQueryRecord,
 } from "./media-flow.js";
 
 export type {
@@ -387,4 +388,51 @@ export interface MergeKnowledgeResult {
   skippedCount: number;
   conflictItems?: Array<{ id: string; reason: string; existingClaim?: string; incomingClaim?: string }>;
   error?: string;
+}
+
+export type TargetKind = 'channel' | 'model';
+
+export type ChannelSourceMode = 'SOURCE_STATIC_CONTRACT' | 'SOURCE_REAL_GATEWAY' | 'UNVERIFIED';
+
+export interface TargetDisambiguationInput {
+  targetKind?: TargetKind;
+  channelId?: number;
+  channelName?: string;
+  modelId?: number;
+  modelAlias?: string;
+  projectId?: number;
+  rawTarget?: string | number;
+  mode?: 'mock' | 'real';
+}
+
+export interface TargetDisambiguationResult {
+  ok: boolean;
+  targetKind: TargetKind;
+  channelId?: number;
+  channelName?: string;
+  modelId: number;
+  modelAlias: string;
+  projectId?: number;
+  isDisambiguated: boolean;
+  channelSource?: ChannelSourceMode;
+  supportedModels?: Array<{ id: number; alias: string }>;
+  warning?: string;
+  error?: string;
+}
+
+export interface TrustedGatewaySnapshot {
+  environment: 'test' | 'preonline' | 'prod' | 'offline' | string;
+  capturedAt: string;
+  sourceEndpoint: string;
+  collectionStatus: 'SUCCESS' | 'FAILED' | 'EXPIRED' | 'UNKNOWN';
+  provenance: 'API_READONLY_COLLECTOR' | 'USER_ASSERTION' | 'FIXTURE';
+  channels: any[];
+  collectorVersion?: string;
+  ttlMs?: number;
+}
+
+export interface GatewaySnapshotValidationResult {
+  valid: boolean;
+  reason?: string;
+  snapshot?: TrustedGatewaySnapshot;
 }

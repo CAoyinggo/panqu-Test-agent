@@ -27,15 +27,20 @@ export {
   pollTaskStatus,
   loadPanquSession,
   fetchWithRetry,
+  queryTaskRuntimeDetails,
   type PanquSession,
   type SubmitMediaTaskOptions,
   type SubmitMediaTaskResult,
   type TaskStatusSnapshot,
   type PollTaskStatusOptions,
+  type TaskRuntimeDetails,
+  type EndpointQueryRecord,
 } from './media-flow.js';
 
 export {
   RoutingOracle,
+  DEFAULT_KNOWN_GATEWAY_CHANNELS,
+  validateTrustedGatewaySnapshot,
   type DiversionRouteMode,
   type VideoRoutingInput,
   type ImageRoutingInput,
@@ -48,6 +53,8 @@ export {
   type GatewayRoutingVerdict,
   type BatchDistributionResult,
   type FallbackRoutingVerdict,
+  type TrustedGatewaySnapshot,
+  type GatewaySnapshotValidationResult,
 } from './routing.js';
 
 export {
@@ -89,6 +96,9 @@ export {
   type BuildSyncPayloadOptions,
   type BuildSyncPayloadResult,
   type MergeKnowledgeResult,
+  type TargetKind,
+  type TargetDisambiguationInput,
+  type TargetDisambiguationResult,
 } from './types.js';
 
 export {
@@ -157,3 +167,64 @@ export {
   feedResultIntoLearning,
   type ExtractLearningOptions,
 } from './exploration/learning.js';
+
+export {
+  validateCanonicalTestSpec,
+  validateEvidenceEnvelope,
+  SUPPORTED_ASSERTION_OPERATORS,
+  SUPPORTED_OBSERVATION_STATUSES,
+  evaluateRequiredEvidence,
+  type AssertionOperator,
+  type ExecutionMode,
+  type SideEffectPolicy,
+  type TargetType,
+  type TestCostLimit,
+  type TestTarget,
+  type DeterministicAssertion,
+  type AiAssistedStep,
+  type CanonicalTestSpec,
+  type EvidenceSourceType,
+  type EvidenceCollectionStatus,
+  type EvidenceObservationStatus,
+  type EvidenceError,
+  type CanonicalEvidenceEnvelope,
+  type ProtocolValidationError,
+  type ProtocolValidationResult,
+  type RequiredEvidenceEvaluationItem,
+  type RequiredEvidenceEvaluationResult,
+} from './canonical-protocol.js';
+
+export {
+  FORBIDDEN_VERDICT_FIELDS,
+  type ExecutionStatus,
+  type ExecutionError,
+  type ExecutionResult,
+  type ForbiddenVerdictField,
+  type ExecutionAdapter,
+  type EvidenceProducerContext,
+  type EvidenceProducer,
+} from './execution-ports.js';
+
+export {
+  mapPlanToCanonicalTestSpec,
+  mapProbeToCanonicalEvidence,
+  mapExecuteToExecutionResult,
+  mapVerifyToCanonicalEvidence,
+  redactSensitiveData,
+  isSensitiveKey,
+  type MappingIssue,
+  type MappingResult,
+  type MapPlanOptions,
+  type MapProbeOptions,
+  type MapExecuteOptions,
+  type MapVerifyOptions,
+} from './legacy-protocol-mappers.js';
+
+export {
+  evaluateCanonicalVerdict,
+  evaluateOperator,
+  getNestedValue,
+  type CanonicalVerdict,
+  type CanonicalVerdictResult,
+  type AssertionEvaluationResult,
+} from './canonical-verdict-engine.js';

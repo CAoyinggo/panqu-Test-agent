@@ -1,15 +1,20 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { EnvironmentProbe, discoverModelContract, parseChangeIntent, STATIC_MODELS, type EnvProbeReport } from './env-probe.js';
 import {
   RoutingOracle,
+  DEFAULT_KNOWN_GATEWAY_CHANNELS,
+  validateTrustedGatewaySnapshot,
   type MainSiteConfigSnapshot,
   type GatewayRoutingVerdict,
   type GatewayChannelConfig,
   type MainSiteRoutingVerdict,
+  type TrustedGatewaySnapshot,
+  type GatewaySnapshotValidationResult,
 } from './routing.js';
 import { BillingOracle, type ScoreLogEntry, type BillingAuditReport } from './billing.js';
 import { inspectMp4Buffer, inspectImageBuffer, type MediaInspectionResult } from './media-inspector.js';
-import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, type PanquSession, type TaskStatusSnapshot } from './media-flow.js';
+import { submitMediaTask, pollTaskStatus, loadPanquSession, queryTaskBillingLogs, queryTaskRuntimeDetails, type PanquSession, type TaskStatusSnapshot, type TaskRuntimeDetails } from './media-flow.js';
 import type {
   ChangeScenario,
   DiscoveredModelContract,
@@ -26,6 +31,9 @@ import type {
   EvidenceCompleteness,
   ProductionAcceptanceReport,
   MemoryCandidatePayload,
+  TargetKind,
+  TargetDisambiguationInput,
+  TargetDisambiguationResult,
 } from './types.js';
 import {
   resolveDomainContext,
@@ -37,6 +45,22 @@ import {
   type BusinessVerificationResult,
   type Experience,
 } from './domain-knowledge.js';
+import type {
+  CanonicalTestSpec,
+  CanonicalEvidenceEnvelope,
+  ExecutionMode,
+  DeterministicAssertion,
+} from './canonical-protocol.js';
+import {
+  evaluateCanonicalVerdict,
+  type CanonicalVerdictResult,
+} from './canonical-verdict-engine.js';
+import {
+  buildCanonicalEvidenceFromVerifyFacts,
+  projectCanonicalVerdictToLegacy,
+  type CanonicalVerifyFacts,
+  type LegacyLifecycleContext,
+} from './legacy-protocol-mappers.js';
 
 export interface ProbeKernelOptions {
   env?: string; baseUrl?: string; gatewayUrl?: string; sessionFile?: string; mock?: boolean; timeoutMs?: number;
@@ -108,6 +132,11 @@ export interface PlanKernelOptions {
   sessionFile?: string;
   extraExperiences?: Experience[];
   projectRoot?: string;
+  channelId?: number;
+  channelName?: string;
+  targetKind?: TargetKind;
+  projectId?: number;
+  rawTarget?: string | number;
 }
 
 export interface PlanKernelResult {
@@ -130,9 +159,11 @@ export interface PlanKernelResult {
   changeContract?: ChangeContract;
   testPlan: TestPlan;
   blocked: TestPlanBlockedItem[];
-  pricingStatus: 'DETERMINED' | 'MANUAL_REQUIRED';
+  pricingStatus: 'DETERMINED' | 'MANUAL_REQUIRED' | 'UNVERIFIED';
   missingInputs?: string[];
   acceptanceForecast?: AcceptanceResult;
+  executable?: boolean;
+  blockerCode?: string;
   testerActionSummary?: {
     automatedSummary: string[];
     skippedSummary: string[];
@@ -140,6 +171,7 @@ export interface PlanKernelResult {
     nextStep: string;
   };
   domainPlan?: DomainExecutionPlan;
+  disambiguation?: TargetDisambiguationResult;
 }
 
 export function generateDynamicTestPlan(
@@ -829,7 +861,67 @@ export function generateDynamicTestPlan(
 
 export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult> {
   const intent = options.requirement ? parseChangeIntent(options.requirement) : undefined;
-  const modelId = options.modelId ?? intent?.modelId ?? 84;
+  const disambiguation = RoutingOracle.disambiguateTarget({
+    targetKind: options.targetKind,
+    channelId: options.channelId,
+    channelName: options.channelName,
+    modelId: options.modelId ?? intent?.modelId,
+    modelAlias: options.alias,
+    projectId: options.projectId,
+    rawTarget: options.rawTarget,
+  }, options.channels);
+
+  if (!disambiguation.ok) {
+    const dummyContract = discoverModelContract(options.modelId || 84, options.mediaType || 'video');
+    return {
+      ok: false,
+      modelId: options.modelId || 0,
+      mediaType: options.mediaType || 'video',
+      flowType: 'direct',
+      decision: 'BLOCKED_AMBIGUOUS_TARGET',
+      willDivert: false,
+      routeLine: 0,
+      expectedPoints: 0,
+      gatewayRouting: {
+        isBlockedByQuota: false,
+        candidateChannelIds: [],
+        allowedChannels: [],
+        probabilities: {},
+        rejectedReasons: {},
+      },
+      candidateChannels: [],
+      reason: disambiguation.error || '目标对象歧义，已被门禁拦截',
+      scenario: 'VIDEO_NEW_MODEL',
+      scenarioName: '对象消歧阻断',
+      changeType: 'new_model',
+      contract: dummyContract,
+      testPlan: {
+        scenario: 'VIDEO_NEW_MODEL',
+        scenarioName: '对象消歧阻断',
+        modelId: options.modelId || 0,
+        mediaType: options.mediaType || 'video',
+        changeType: 'new_model',
+        contract: dummyContract,
+        tests: [],
+        blocked: [{
+          field: 'target_id',
+          reason: disambiguation.error || '目标 ID 歧义',
+          requiredAction: '请显式区分 --channel 与 --model',
+        }],
+        expectedEvidence: ['03_gateway_channels.json'],
+        summary: disambiguation.error || '消歧拦截',
+      },
+      blocked: [{
+        field: 'target_id',
+        reason: disambiguation.error || '目标 ID 歧义',
+        requiredAction: '请显式区分 --channel 与 --model',
+      }],
+      pricingStatus: 'MANUAL_REQUIRED',
+      disambiguation,
+    };
+  }
+
+  const modelId = disambiguation.modelId || (options.modelId ?? intent?.modelId ?? 84);
   const mediaType = options.mediaType ?? intent?.mediaType ?? 'video';
   const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : intent?.customPoints);
   const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : intent?.pointsPerSecond);
@@ -842,6 +934,7 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     ...options,
     modelId,
     mediaType,
+    alias: disambiguation.modelAlias || options.alias,
     isGlobal: isGlobalOpt,
     customPoints,
     pointsPerSecond,
@@ -867,9 +960,26 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     ? 'direct'
     : 'diversion';
 
+  const targetChannelId = disambiguation.channelId ?? options.channelId;
+  const targetChannelName = disambiguation.channelName ?? options.channelName;
+
+  const isRhPricingConflict = Boolean(
+    (targetChannelId === 2 || targetChannelName === 'RH-国际') &&
+    modelId === 78 &&
+    options.price === undefined &&
+    options.pointsPerSecond === undefined &&
+    options.customPoints === undefined
+  );
+
+  if (isRhPricingConflict) {
+    contract.pricing.isPricingDetermined = false;
+    contract.pricing.allowPass = false;
+    contract.pricing.source = 'MANUAL_REQUIRED';
+  }
+
   const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
   const resolution = options.resolution ?? contract.supportedResolutions.value[0] ?? (mediaType === 'video' ? '720p' : '1k');
-  const expectedPoints = BillingOracle.calculateExpectedPoints({
+  const expectedPoints = isRhPricingConflict ? 0 : BillingOracle.calculateExpectedPoints({
     mediaType,
     modelId,
     duration,
@@ -946,9 +1056,32 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
 
   const targetModel = baseConfig.modelAliases?.[modelId] || contract.alias.value;
   const targetGroup = mainVerdict.expectedSnapshot?.newapiGroup || 'panqu_test';
-  const channels: GatewayChannelConfig[] = options.channels || (mainVerdict.willDivert
-    ? [{ id: 1, name: `${targetModel}主渠道`, group: targetGroup, models: [targetModel], status: 1, weight: 100, dailyQuotaLimit: 0, usedQuota: 0 }]
-    : []);
+  let channels: GatewayChannelConfig[];
+
+  if (options.channels && options.channels.length > 0) {
+    channels = targetChannelId !== undefined ? options.channels.filter(c => c.id === targetChannelId) : options.channels;
+  } else if (targetChannelId !== undefined) {
+    const matchedKnown = DEFAULT_KNOWN_GATEWAY_CHANNELS.find(c => c.id === targetChannelId);
+    if (matchedKnown) {
+      channels = [matchedKnown];
+    } else {
+      channels = [{
+        id: targetChannelId,
+        name: targetChannelName || `channel-${targetChannelId}`,
+        group: targetGroup,
+        models: [targetModel],
+        status: 1,
+        weight: 10,
+        dailyQuotaLimit: 0,
+        usedQuota: 0,
+        sourceMode: 'SOURCE_STATIC_CONTRACT',
+      }];
+    }
+  } else if (mainVerdict.willDivert) {
+    channels = [{ id: 1, name: `${targetModel}主渠道`, group: targetGroup, models: [targetModel], status: 1, weight: 100, dailyQuotaLimit: 0, usedQuota: 0 }];
+  } else {
+    channels = [];
+  }
 
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
   const testPlan = generateDynamicTestPlan(contract, options, mainVerdict, gwVerdict, expectedPoints);
@@ -1058,6 +1191,27 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
   };
   testPlan.changeContract = changeContract;
 
+  let executable = true;
+  let blockerCode: string | undefined;
+
+  if (targetChannelId !== undefined) {
+    executable = false;
+    blockerCode = 'BLOCKED_CANNOT_ENFORCE_CHANNEL';
+    testPlan.blocked.push({
+      field: 'channel_enforcement',
+      reason: `主站提交接口 (/aivideo/videonew/add) 不支持指定下游渠道参数，无法确保请求路由至目标渠道 #${targetChannelId} ('${targetChannelName || targetChannelId}') [BLOCKED_CANNOT_ENFORCE_CHANNEL]`,
+      requiredAction: '需服务端接口支持渠道锁定，或在网关层将该模型独占绑定至目标渠道',
+    });
+  }
+
+  if (isRhPricingConflict) {
+    testPlan.blocked.push({
+      field: 'pricing',
+      reason: 'RH 国际版适用单价存在冲突 (静态刊例 28 pt/s vs 历史实际/排期 21 pt/s)，单价尚未确认为线上事实 [UNVERIFIED]',
+      requiredAction: '请提供明确经过审计的 RH 渠道计费标准或显式指定 --price',
+    });
+  }
+
   const missingInputs: string[] = [];
   if (!contract.pricing.isPricingDetermined || !contract.pricing.allowPass) {
     missingInputs.push('pricing');
@@ -1075,7 +1229,7 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     }
   }
 
-  const acceptanceForecast: AcceptanceResult = missingInputs.length > 0 ? 'BLOCKED' : 'UNVERIFIED';
+  const acceptanceForecast: AcceptanceResult = testPlan.blocked.length > 0 ? 'BLOCKED' : 'UNVERIFIED';
 
   return {
     ok: true,
@@ -1097,11 +1251,14 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     changeContract,
     testPlan,
     blocked: testPlan.blocked,
-    pricingStatus: contract.pricing.isPricingDetermined ? 'DETERMINED' : 'MANUAL_REQUIRED',
+    pricingStatus: isRhPricingConflict ? 'UNVERIFIED' : (contract.pricing.isPricingDetermined ? 'DETERMINED' : 'MANUAL_REQUIRED'),
     missingInputs,
     acceptanceForecast,
+    executable,
+    blockerCode,
     testerActionSummary: testPlan.testerActionSummary,
     domainPlan,
+    disambiguation,
   };
 }
 
@@ -1109,6 +1266,7 @@ export interface ExecuteKernelOptions {
   modelId: number; mediaType: 'video' | 'image'; resolution?: string; duration?: number;
   aspectRatio?: string; mode?: 'mock' | 'real'; prompt?: string; sessionFile?: string;
   env?: 'test' | 'preonline'; serviceline?: string;
+  channels?: GatewayChannelConfig[];
   contract?: DiscoveredModelContract;
   flow?: string;
   flowType?: 'direct' | 'diversion';
@@ -1116,16 +1274,70 @@ export interface ExecuteKernelOptions {
   pointsPerSecond?: number;
   price?: number;
   alias?: string;
+  channelId?: number;
+  channelName?: string;
+  targetKind?: TargetKind;
+  projectId?: number;
+  rawTarget?: string | number;
 }
 export interface ExecuteKernelResult {
   ok: boolean; taskId: number; simulationId?: string; isSimulated?: boolean; mode: 'mock' | 'real'; modelId: number; mediaType: 'video' | 'image';
   status: 'SUBMITTED' | 'SUCCESS' | 'FAILED' | 'ERROR' | 'BLOCKED'; points: number; message: string;
   credentialsMasked?: string; rawResponse?: Record<string, unknown>;
+  disambiguation?: TargetDisambiguationResult;
+  blockerCode?: string;
 }
 
 export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKernelResult> {
-  const { modelId, mediaType } = options;
+  const disambiguation = RoutingOracle.disambiguateTarget({
+    targetKind: options.targetKind,
+    channelId: options.channelId,
+    channelName: options.channelName,
+    modelId: options.modelId,
+    modelAlias: options.alias,
+    projectId: options.projectId,
+    rawTarget: options.rawTarget,
+    mode: options.mode,
+  }, options.channels);
+
+  if (!disambiguation.ok) {
+    return {
+      ok: false,
+      taskId: 0,
+      mode: options.mode === 'real' ? 'real' : 'mock',
+      modelId: options.modelId,
+      mediaType: options.mediaType,
+      status: 'BLOCKED',
+      points: 0,
+      message: disambiguation.error || '目标对象消歧拦截',
+      disambiguation,
+    };
+  }
+
+  const modelId = disambiguation.modelId || options.modelId;
+  const passedAlias = disambiguation.modelAlias || options.alias;
+  const mediaType = options.mediaType;
   const mode = options.mode === 'real' ? 'real' : 'mock';
+
+  // 目标渠道真实执行门禁：若显式指定了目标渠道，由于主站提交接口 (/aivideo/videonew/add)
+  // 不支持指定下游渠道参数，无法保证真实路由至目标渠道，主动阻断，严禁伪造参数提交 [BLOCKED_CANNOT_ENFORCE_CHANNEL]
+  if (mode === 'real' && (disambiguation.targetKind === 'channel' || options.channelId !== undefined || options.channelName !== undefined)) {
+    const extraSnapshotNotice = disambiguation.channelSource === 'SOURCE_STATIC_CONTRACT'
+      ? '（附加证据缺口：该渠道缺少线上实时快照，当前仅为 SOURCE_STATIC_CONTRACT 静态契约）'
+      : '';
+    return {
+      ok: false,
+      taskId: 0,
+      mode: 'real',
+      modelId,
+      mediaType,
+      status: 'BLOCKED',
+      points: 0,
+      blockerCode: 'BLOCKED_CANNOT_ENFORCE_CHANNEL',
+      message: `BLOCKED_CANNOT_ENFORCE_CHANNEL: 主站提交接口 (/aivideo/videonew/add) 不支持指定下游渠道参数，无法保证任务命中目标渠道 #${disambiguation.channelId} ('${disambiguation.channelName || `channel-${disambiguation.channelId}`}'); 严禁伪造参数发起真实提交。前置条件：需服务端接口支持渠道锁定，或在网关层将该模型独占绑定至目标渠道。${extraSnapshotNotice}`,
+      disambiguation,
+    };
+  }
   const customPoints = options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
   const pointsPerSecond = options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
 
@@ -1135,7 +1347,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     customPoints,
     pointsPerSecond,
     price: options.price,
-    alias: options.alias,
+    alias: passedAlias,
   });
 
   const duration = options.duration ?? contract.supportedDurations?.value?.[0] ?? (mediaType === 'video' ? 4 : undefined);
@@ -1151,13 +1363,14 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
       status: 'BLOCKED',
       points: 0,
       message: `模型 #${modelId} 刊例定价未确定 (${contract.pricing.source})，拒绝伪造定价执行任务 [BLOCKED / MANUAL_REQUIRED]。请通过 --price 或 --points-per-second 显式提供真实单价。`,
+      disambiguation,
     };
   }
 
-  // 视频模型别名门禁与 effectiveAlias 解析：已知模型允许默认别名；未知视频模型缺少显式 alias 且无确定 contract 别名时直接阻断
+  // 视频模型别名门禁与 effectiveAlias 解析
   let effectiveAlias: string | undefined;
   if (mediaType === 'video') {
-    const explicitAlias = typeof options.alias === 'string' ? options.alias.trim() : undefined;
+    const explicitAlias = typeof passedAlias === 'string' ? passedAlias.trim() : undefined;
     if (explicitAlias && explicitAlias.length > 0) {
       effectiveAlias = explicitAlias;
     } else if (STATIC_MODELS.video[modelId]) {
@@ -1184,6 +1397,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
         status: 'BLOCKED',
         points: 0,
         message: `未知视频模型 #${modelId} 缺少显式 alias，拒绝猜测为 Wan3.0 执行 [BLOCKED_MISSING_INPUT]。请显式传入 alias 参数。`,
+        disambiguation,
       };
     }
   }
@@ -1196,10 +1410,10 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     customPoints: customPoints ?? contract.pricing.customPoints?.value,
     pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
   });
+
   if (mode === 'real') {
     const sessionFilePath = options.sessionFile
-      || process.env.PANQU_SESSION_COOKIES_FILE
-      || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
+      || (!process.env.VITEST ? (process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined)) : undefined);
     if (!sessionFilePath) {
       return {
         ok: false,
@@ -1210,6 +1424,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
         status: 'ERROR',
         points,
         message: '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
+        disambiguation,
       };
     }
     try {
@@ -1224,6 +1439,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
           status: 'BLOCKED',
           points,
           message: 'Session 缺失有效正整数 project_id，拒绝回退默认项目执行 [BLOCKED]',
+          disambiguation,
         };
       }
       const res = await submitMediaTask({
@@ -1253,15 +1469,17 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
           message: res.message,
           credentialsMasked: session.cookie_string.replace(/=[^;]+/g, '=***'),
           rawResponse: res.rawResponse,
+          disambiguation,
         };
       }
       return {
         ok: res.ok, taskId: res.taskId, mode: 'real', modelId, mediaType, status: res.ok ? 'SUBMITTED' : 'FAILED',
         points, message: res.ok ? `真实${mediaType === 'video' ? '视频' : '图片'}任务提交成功 (taskId: #${res.taskId})` : res.message,
         credentialsMasked: session.cookie_string.replace(/=[^;]+/g, '=***'), rawResponse: res.rawResponse,
+        disambiguation,
       };
     } catch (err) {
-      return { ok: false, taskId: 0, mode: 'real', modelId, mediaType, status: 'ERROR', points, message: `提交异常: ${err instanceof Error ? err.message : String(err)}`, };
+      return { ok: false, taskId: 0, mode: 'real', modelId, mediaType, status: 'ERROR', points, message: `提交异常: ${err instanceof Error ? err.message : String(err)}`, disambiguation };
     }
   }
   const simulatedTaskId = 29000 + Math.floor(Math.random() * 1000);
@@ -1270,6 +1488,7 @@ export async function execute(options: ExecuteKernelOptions): Promise<ExecuteKer
     ok: true, taskId: simulatedTaskId, simulationId, isSimulated: true, mode: 'mock', modelId, mediaType, status: 'SUBMITTED', points,
     message: `[OFFLINE 离线仿真] 仅生成离线模拟 ID (${simulationId})，未向主站发起真实请求 (模拟任务 ID #${simulatedTaskId}，预扣 ${points} 积分)`,
     credentialsMasked: 'PHPSESSID=***; session_env=mock_test',
+    disambiguation,
   };
 }
 
@@ -1402,6 +1621,7 @@ export interface VerifyKernelOptions {
   dbExtra?: Record<string, unknown>;
   gatewayChannelConfirmed?: boolean;
   channels?: GatewayChannelConfig[];
+  gatewaySnapshot?: TrustedGatewaySnapshot;
   unconfirmedStatic?: boolean;
   customPoints?: number;
   pointsPerSecond?: number;
@@ -1411,6 +1631,20 @@ export interface VerifyKernelOptions {
   folderId?: number;
   isFolderInProject?: boolean;
   alias?: string;
+  channelId?: number;
+  channelName?: string;
+  targetKind?: TargetKind;
+  actualChannelId?: number;
+  actualChannelName?: string;
+  fallbackChannel?: string;
+  retryProvider?: string;
+  extra?: Record<string, unknown>;
+  session?: PanquSession;
+  taskDetail?: Record<string, unknown>;
+  retryLog?: Record<string, unknown>;
+  exceptionalTask?: Record<string, unknown>;
+  changeType?: 'new_model' | 'diversion_change';
+  spec?: CanonicalTestSpec;
 }
 export interface VerifyKernelResult {
   ok: boolean; passed: boolean; taskId: number; modelId: number; mediaType: 'video' | 'image';
@@ -1430,6 +1664,20 @@ export interface VerifyKernelResult {
   contract?: DiscoveredModelContract;
   businessValidation?: BusinessVerificationResult;
   memoryCandidate?: MemoryCandidatePayload;
+  hasEvidenceConflict?: boolean;
+  conflictReasons?: string[];
+  isActualChannelAssertedOnly?: boolean;
+  channelDetail?: BusinessVerificationResult['channelDetail'];
+  provenance?: {
+    actualChannelId: string;
+    fallbackChannel: string;
+    retryProvider: string;
+    extra: string;
+    gatewayChannel?: string;
+  };
+  canonicalVerdict?: CanonicalVerdictResult;
+  canonicalEnvelopes?: CanonicalEvidenceEnvelope[];
+  canonicalSpec?: CanonicalTestSpec;
 }
 
 export async function verify(options: VerifyKernelOptions): Promise<VerifyKernelResult> {
@@ -1462,8 +1710,10 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' = options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
 
   let session: PanquSession | null = null;
-  const autoSession = options.sessionFile || process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined);
-  if (options.sessionFile) {
+  const autoSession = options.sessionFile || (!process.env.VITEST ? (process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined)) : undefined);
+  if (options.session) {
+    session = options.session;
+  } else if (options.sessionFile) {
     try { session = await loadPanquSession(options.sessionFile, options.env || 'test'); }
     catch (err) {
       const msg = `加载凭据失败: ${err instanceof Error ? err.message : String(err)}`;
@@ -1534,7 +1784,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   let artifactBuffer = options.assetBuffer ?? options.artifactBuffer;
   let artifactTailBuffer = options.tailBuffer;
   let probeDurationMs: number | undefined;
-  let terminalStatus: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
+  let terminalStatus: 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN' | 'PROCESSING';
   let taskEvidence: TaskEvidence;
   let mediaArtifactSource = artifactBuffer ? 'FIXTURE_BUFFER' : 'missing_buffer';
   let artifactOwnership: 'VERIFIED' | 'UNVERIFIED' = options.artifactOwnership === 'UNVERIFIED' || options.artifactOwnership === 'UNBOUND' ? 'UNVERIFIED' : 'VERIFIED';
@@ -1551,58 +1801,9 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       onProgress: options.onProgress,
     });
     if (finalSnapshot.taskStatus === 1) {
-      const msg = `任务 #${taskId} 仍在排队/生成中 (进度: ${finalSnapshot.progress ?? 0}%)，未到达终态。本次轮询窗口已耗尽，处于异步非终态（非业务失败）。请继续使用 devtest verify --task ${taskId} 追踪终态闭环。`;
-      const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
-      const completeness: EvidenceCompleteness = {
-        requiredEvidence,
-        availableEvidence: [],
-        missingEvidence: ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'diversionDbExtra'],
-        isComplete: false,
-      };
-      const acceptanceReport: ProductionAcceptanceReport = {
-        scenario: contract.scenario,
-        acceptance: 'BLOCKED',
-        verified: [],
-        unverified: requiredEvidence,
-        manualEvidenceRequired: ['taskCompletion'],
-        unexpectedChanges: [],
-        reasons: [msg],
-        summaryText: `[BLOCKED / IN_FLIGHT] ${msg}`,
-      };
-      const businessValidation: BusinessVerificationResult = {
-        status: 'UNVERIFIED',
-        technicalSuccess: true,
-        businessSuccess: false,
-        verdictDetail: {
-          apiVerified: true,
-          taskStateVerified: false,
-          artifactBound: false,
-          oracleConsistent: false,
-          relationsValid: true,
-        },
-        matchedFailurePatterns: [],
-        reasons: [msg],
-        credibility: 'CONFIRMED',
-      };
-      return {
-        ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING',
-        acceptance: 'BLOCKED',
-        progress: finalSnapshot.progress, mode: 'real', executionMode: 'real', billingAudit: 'SKIPPED_NO_LOGS',
-        evidence: {
-          task: { status: 'PROCESSING', source: 'live_polling', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: finalSnapshot.progress },
-          media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
-          billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
-          invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
-          business: businessValidation,
-        },
-        reasons: [msg],
-        contract,
-        evidenceCompleteness: completeness,
-        acceptanceReport,
-        businessValidation,
-      };
-    }
-    if (finalSnapshot.taskStatus === 3 || finalSnapshot.taskStatus === 4) {
+      terminalStatus = 'PROCESSING';
+      taskEvidence = { status: 'PROCESSING', source: 'live_polling', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: finalSnapshot.progress };
+    } else if (finalSnapshot.taskStatus === 3 || finalSnapshot.taskStatus === 4) {
       terminalStatus = 'FAILED';
       taskEvidence = { status: 'FAIL', source: 'live_polling', terminalStatus: 'FAILED', taskStatus: finalSnapshot.taskStatus, error: finalSnapshot.error || '未知服务端错误', progress: finalSnapshot.progress };
     } else if (finalSnapshot.taskStatus === 2) {
@@ -1638,59 +1839,12 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   } else {
     if (options.terminalStatus) {
       if (options.terminalStatus === 'PROCESSING') {
-        const msg = `任务 #${taskId} 仍在排队/生成中，未到达终态。处于异步非终态（非业务失败）。请继续使用 devtest verify --task ${taskId} 追踪终态闭环。`;
-        const requiredEvidence = ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'pricingDetermined', 'diversionDbExtra'];
-        const completeness: EvidenceCompleteness = {
-          requiredEvidence,
-          availableEvidence: [],
-          missingEvidence: ['taskTerminalStatus', 'mediaArtifactDecodable', 'billingLedgerReconciled', 'diversionDbExtra'],
-          isComplete: false,
-        };
-        const acceptanceReport: ProductionAcceptanceReport = {
-          scenario: contract.scenario,
-          acceptance: 'BLOCKED',
-          verified: [],
-          unverified: requiredEvidence,
-          manualEvidenceRequired: ['taskCompletion'],
-          unexpectedChanges: [],
-          reasons: [msg],
-          summaryText: `[BLOCKED / IN_FLIGHT] ${msg}`,
-        };
-        const businessValidation: BusinessVerificationResult = {
-          status: 'UNVERIFIED',
-          technicalSuccess: true,
-          businessSuccess: false,
-          verdictDetail: {
-            apiVerified: true,
-            taskStateVerified: false,
-            artifactBound: false,
-            oracleConsistent: false,
-            relationsValid: true,
-          },
-          matchedFailurePatterns: [],
-          reasons: [msg],
-          credibility: 'CONFIRMED',
-        };
-        return {
-          ok: true, passed: false, taskId, modelId, mediaType, status: 'PROCESSING', verdict: 'PROCESSING',
-          acceptance: 'BLOCKED',
-          progress: 50, mode: 'mock', executionMode: 'offline', billingAudit: 'SKIPPED_NO_LOGS',
-          evidence: {
-            task: { status: 'PROCESSING', source: 'provided', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: 50 },
-            media: { status: 'UNVERIFIED', source: 'in_flight', ownership: 'UNVERIFIED', reason: '任务生成中，尚无产物' },
-            billing: { status: 'UNVERIFIED', source: 'in_flight', expectedPoints, expectedChargeSource, reason: '任务生成中，终态账单未对账' },
-            invariants: { status: 'UNVERIFIED', reason: '任务未到达终态' },
-            business: businessValidation,
-          },
-          reasons: [msg],
-          contract,
-          evidenceCompleteness: completeness,
-          acceptanceReport,
-          businessValidation,
-        };
+        terminalStatus = 'PROCESSING';
+        taskEvidence = { status: 'PROCESSING', source: 'provided', terminalStatus: 'UNKNOWN', taskStatus: 1, progress: (options as any).progress ?? 50 };
+      } else {
+        terminalStatus = options.terminalStatus;
+        taskEvidence = { status: terminalStatus === 'FAILED' ? 'FAIL' : terminalStatus === 'SUCCESS' ? 'PASS' : 'UNVERIFIED', source: 'provided', terminalStatus };
       }
-      terminalStatus = options.terminalStatus;
-      taskEvidence = { status: terminalStatus === 'FAILED' ? 'FAIL' : terminalStatus === 'SUCCESS' ? 'PASS' : 'UNVERIFIED', source: 'provided', terminalStatus };
     } else {
       terminalStatus = 'UNKNOWN';
       taskEvidence = { status: 'UNVERIFIED', source: 'unqueried', terminalStatus: 'UNKNOWN', error: `未连接真实主站查询且未显式传入终态，任务 #${taskId} 终态未知 [UNVERIFIED]` };
@@ -1879,9 +2033,245 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     };
   }
 
-  const isDbExtraVerified = Boolean(options.dbExtraConfirmed || options.dbExtra);
+  let runtimeDetails: TaskRuntimeDetails | undefined;
+  if (session && !session.base_url.includes('example.com')) {
+    try {
+      runtimeDetails = await queryTaskRuntimeDetails(taskId, session, { projectId: options.projectId ?? session.project_id });
+    } catch {
+      /* 容忍只读查询非致命抖动 */
+    }
+  }
+
+  // 目标渠道消歧与判定
+  const targetDisambiguation = (options.channelId !== undefined || options.channelName !== undefined || options.targetKind === 'channel')
+    ? RoutingOracle.disambiguateTarget({
+        targetKind: options.targetKind,
+        channelId: options.channelId,
+        channelName: options.channelName,
+        modelId,
+        modelAlias: options.alias,
+        projectId: options.projectId,
+        mode: options.isSimulated ? 'mock' : (session ? 'real' : 'mock'),
+      })
+    : undefined;
+
+  const targetChannelId = targetDisambiguation?.channelId ?? options.channelId;
+  const targetChannelName = targetDisambiguation?.channelName ?? options.channelName;
+
+  const rawExceptionalExtra = runtimeDetails?.rawExceptionalTask?.extra as Record<string, unknown> | undefined;
+  const optionsExceptionalExtra = options.exceptionalTask?.extra as Record<string, unknown> | undefined;
+
+  // 1. 服务端只读事实提取 (Server Facts)
+  const serverActualChannelId = runtimeDetails?.actualChannelId
+    ?? (options.retryLog?.newapi_channel_id ? Number(options.retryLog.newapi_channel_id) : undefined);
+  const serverActualChannelName = runtimeDetails?.actualChannelName
+    ?? (options.retryLog?.newapi_provider_name ? String(options.retryLog.newapi_provider_name) : undefined)
+    ?? (runtimeDetails?.rawExceptionalTask?.line_name ? String(runtimeDetails.rawExceptionalTask.line_name) : undefined);
+  const serverFallbackChannel = runtimeDetails?.fallbackChannel
+    ?? (options.retryLog?.fallback_channel ? String(options.retryLog.fallback_channel) : undefined);
+  const serverRetryProvider = runtimeDetails?.retryProvider
+    ?? (rawExceptionalExtra?.retry_provider ? String(rawExceptionalExtra.retry_provider) : undefined)
+    ?? (optionsExceptionalExtra?.retry_provider ? String(optionsExceptionalExtra.retry_provider) : undefined);
+
+  // 2. 调用者入参手填断言 (Asserted Inputs)
+  const assertedActualChannelId = options.actualChannelId;
+  const assertedActualChannelName = options.actualChannelName;
+  const assertedFallbackChannel = options.fallbackChannel;
+  const assertedRetryProvider = options.retryProvider;
+
+  // 3. 证据冲突检测 (EVIDENCE_CONFLICT)
+  let hasEvidenceConflict = false;
+  const conflictReasons: string[] = [];
+
+  if (serverActualChannelId !== undefined && assertedActualChannelId !== undefined && serverActualChannelId !== assertedActualChannelId) {
+    hasEvidenceConflict = true;
+    conflictReasons.push(`实际渠道证据冲突 [EVIDENCE_CONFLICT]: 服务端事实为 Channel #${serverActualChannelId} ('${serverActualChannelName || serverActualChannelId}'), 调用者手填断言为 Channel #${assertedActualChannelId} ('${assertedActualChannelName || assertedActualChannelId}')。必须优先采用服务端事实。`);
+  }
+
+  const normServerFallback = (serverFallbackChannel && serverFallbackChannel !== 'none') ? serverFallbackChannel : undefined;
+  const normAssertedFallback = (assertedFallbackChannel && assertedFallbackChannel !== 'none') ? assertedFallbackChannel : undefined;
+  if (normServerFallback !== undefined && assertedFallbackChannel === 'none') {
+    hasEvidenceConflict = true;
+    conflictReasons.push(`兜底渠道证据冲突 [EVIDENCE_CONFLICT]: 服务端事实存在兜底 '${normServerFallback}', 调用者断言为无兜底 (none)。必须优先采用服务端事实。`);
+  } else if (normServerFallback !== undefined && normAssertedFallback !== undefined && normServerFallback !== normAssertedFallback) {
+    hasEvidenceConflict = true;
+    conflictReasons.push(`兜底渠道证据冲突 [EVIDENCE_CONFLICT]: 服务端事实为 fallback='${normServerFallback}', 调用者断言为 '${normAssertedFallback}'。必须优先采用服务端事实。`);
+  }
+
+  const normServerRetry = (serverRetryProvider && serverRetryProvider !== 'none') ? serverRetryProvider : undefined;
+  const normAssertedRetry = (assertedRetryProvider && assertedRetryProvider !== 'none') ? assertedRetryProvider : undefined;
+  if (normServerRetry !== undefined && assertedRetryProvider === 'none') {
+    hasEvidenceConflict = true;
+    conflictReasons.push(`重试 Provider 证据冲突 [EVIDENCE_CONFLICT]: 服务端事实存在重试 provider '${normServerRetry}', 调用者断言为无重试 (none)。必须优先采用服务端事实。`);
+  } else if (normServerRetry !== undefined && normAssertedRetry !== undefined && normServerRetry !== normAssertedRetry) {
+    hasEvidenceConflict = true;
+    conflictReasons.push(`重试 Provider 证据冲突 [EVIDENCE_CONFLICT]: 服务端事实为 retryProvider='${normServerRetry}', 调用者断言为 '${normAssertedRetry}'。必须优先采用服务端事实。`);
+  }
+
+  // 4. 事实仲裁：服务端只读事实强制优先于手填输入！
+  const actualChannelId = serverActualChannelId ?? assertedActualChannelId;
+  const actualChannelName = (serverActualChannelId !== undefined ? serverActualChannelName : undefined) ?? assertedActualChannelName ?? serverActualChannelName;
+  const fallbackChannel = serverFallbackChannel ?? assertedFallbackChannel;
+  const retryProvider = serverRetryProvider ?? assertedRetryProvider;
+
+  const isActualChannelAssertedOnly = Boolean(session && !options.isSimulated) && serverActualChannelId === undefined && assertedActualChannelId !== undefined;
+
+  // 5. 记录字段精确 Provenance
+  let channelProvenance: string;
+  if (runtimeDetails?.actualChannelId !== undefined) {
+    channelProvenance = 'HTTP_API:retrylog';
+  } else if (options.retryLog?.newapi_channel_id !== undefined) {
+    channelProvenance = 'SERVER_RETRYLOG_FIXTURE';
+  } else if (assertedActualChannelId !== undefined) {
+    channelProvenance = (session && !options.isSimulated) ? 'CLI_ASSERTED_INPUT (UNVERIFIED_FOR_REAL)' : 'FIXTURE_ASSERTED';
+  } else {
+    channelProvenance = 'UNVERIFIED';
+  }
+
+  let fallbackProvenance: string;
+  if (runtimeDetails?.fallbackChannel !== undefined) {
+    fallbackProvenance = 'HTTP_API:retrylog';
+  } else if (options.retryLog?.fallback_channel !== undefined) {
+    fallbackProvenance = 'SERVER_RETRYLOG_FIXTURE';
+  } else if (assertedFallbackChannel !== undefined) {
+    fallbackProvenance = (session && !options.isSimulated) ? 'CLI_ASSERTED_INPUT (UNVERIFIED_FOR_REAL)' : 'FIXTURE_ASSERTED';
+  } else {
+    fallbackProvenance = 'UNVERIFIED';
+  }
+
+  let retryProvenance: string;
+  if (runtimeDetails?.retryProvider !== undefined) {
+    retryProvenance = 'HTTP_API:exceptional-task';
+  } else if (rawExceptionalExtra?.retry_provider !== undefined || optionsExceptionalExtra?.retry_provider !== undefined) {
+    retryProvenance = 'SERVER_EXCEPTIONAL_FIXTURE';
+  } else if (assertedRetryProvider !== undefined) {
+    retryProvenance = (session && !options.isSimulated) ? 'CLI_ASSERTED_INPUT (UNVERIFIED_FOR_REAL)' : 'FIXTURE_ASSERTED';
+  } else {
+    retryProvenance = 'UNVERIFIED';
+  }
+
+  // 6. extra 对象与来源追踪 (绝不把 exceptional-task 的 extra 冒充为 HTTP_API:getEditData)
+  let extraObj: Record<string, unknown> | undefined;
+  let extraProvenance: string;
+
+  if (runtimeDetails?.extra) {
+    extraObj = runtimeDetails.extra;
+    extraProvenance = runtimeDetails.extraSource || 'HTTP_API:getEditData';
+  } else if (runtimeDetails?.rawExceptionalTask?.extra) {
+    const rowExtra = typeof runtimeDetails.rawExceptionalTask.extra === 'string'
+      ? JSON.parse(runtimeDetails.rawExceptionalTask.extra)
+      : runtimeDetails.rawExceptionalTask.extra;
+    extraObj = rowExtra as Record<string, unknown>;
+    extraProvenance = 'HTTP_API:exceptional-task';
+  } else if (options.dbExtra) {
+    extraObj = options.dbExtra;
+    extraProvenance = 'DB_READONLY_QUERY';
+  } else if (options.extra) {
+    extraObj = options.extra;
+    extraProvenance = 'CLI_MANUAL_INPUT';
+  } else if (options.exceptionalTask?.extra) {
+    extraObj = options.exceptionalTask.extra as Record<string, unknown>;
+    extraProvenance = 'FIXTURE:exceptional-task';
+  } else if (options.taskDetail?.extra) {
+    extraObj = options.taskDetail.extra as Record<string, unknown>;
+    extraProvenance = 'TASK_DETAIL';
+  } else {
+    extraProvenance = 'UNVERIFIED';
+  }
+
+  const isDbExtraVerified = Boolean(
+    options.dbExtraConfirmed ||
+    options.dbExtra ||
+    (extraObj && typeof extraObj === 'object' && (extraObj.diversion !== undefined || extraObj.newapi_image !== undefined))
+  );
+
+  let channelMatched: boolean | undefined;
+  let isFallbackExecution = false;
+  let channelMismatchReason: string | undefined;
+
+  if (targetChannelId !== undefined) {
+    if (hasEvidenceConflict) {
+      channelMatched = false;
+      channelMismatchReason = `渠道或兜底证据存在冲突 [EVIDENCE_CONFLICT]: ${conflictReasons.join('; ')}`;
+    } else if (isActualChannelAssertedOnly) {
+      channelMatched = undefined;
+      channelMismatchReason = `实际渠道仅来自调用者断言 (#${assertedActualChannelId})，缺少服务端只读运行时凭据证实 [UNVERIFIED]`;
+    } else if (actualChannelId !== undefined) {
+      if (actualChannelId === targetChannelId) {
+        channelMatched = true;
+      } else {
+        channelMatched = false;
+        channelMismatchReason = `目标渠道不匹配: 预期渠道 #${targetChannelId} ('${targetChannelName || targetChannelId}'), 服务端实际执行渠道为 #${actualChannelId} ('${actualChannelName || actualChannelId}') [CHANNEL_MISMATCH]`;
+      }
+    } else {
+      channelMismatchReason = `缺少服务端执行渠道证据，无法核验是否由目标渠道 #${targetChannelId} ('${targetChannelName || targetChannelId}') 履约 [UNVERIFIED]`;
+    }
+
+    const effectiveFallback = (fallbackChannel && fallbackChannel !== 'none') ? fallbackChannel : (retryProvider && retryProvider !== 'none' ? retryProvider : undefined);
+    if (effectiveFallback) {
+      isFallbackExecution = true;
+      const fallbackReason = `目标渠道未产出成片，成片由兜底通道 (${effectiveFallback}) 生成，不得误判为目标渠道合格 [FALLBACK_ARTIFACT_NOT_ACCEPTED]`;
+      channelMismatchReason = channelMismatchReason ? `${channelMismatchReason}; ${fallbackReason}` : fallbackReason;
+    }
+  }
+
+  const isRealMode = Boolean(session && !options.isSimulated);
   const isGatewayChannelRequired = mediaType === 'video' && contract.routing.value.willDivert;
-  const isGatewayChannelVerified = Boolean(options.gatewayChannelConfirmed || (options.channels && options.channels.length > 0));
+
+  const snapshotValidation = options.gatewaySnapshot
+    ? validateTrustedGatewaySnapshot(options.gatewaySnapshot, { expectedEnv: options.env })
+    : undefined;
+
+  // 可信快照门禁：
+  // 1. REAL 模式下：必须由 validateTrustedGatewaySnapshot 验证通过 (provenance === 'API_READONLY_COLLECTOR' + status === 'SUCCESS')；
+  //    调用者在普通 channels 中手工传入 sourceMode === 'SOURCE_REAL_GATEWAY' 而无可信快照记录的，一律视为未经验证断言，fail-closed！
+  // 2. OFFLINE/FIXTURE 模式下：允许使用 options.gatewaySnapshot 或 options.channels 的 sourceMode === 'SOURCE_REAL_GATEWAY' 桩数据放行。
+  const hasRealGatewaySnapshot = isRealMode
+    ? Boolean(snapshotValidation?.valid)
+    : Boolean(
+        snapshotValidation?.valid ||
+        (options.channels && options.channels.length > 0 && options.channels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY'))
+      );
+
+  const hasServerActualChannelFact = serverActualChannelId !== undefined && !isActualChannelAssertedOnly;
+
+  // 核心安全门禁：REAL 模式下，options.gatewayChannelConfirmed=true 或 options.channels 手工声称 sourceMode 属于用户声明，绝不能单独满足网关渠道验证！
+  // REAL 模式只接受：(1) 由可信只读 API 采集路径获得的有效快照；或 (2) 服务端运行时返回的非调用者断言渠道事实
+  const isGatewayChannelVerified = isRealMode
+    ? Boolean(hasRealGatewaySnapshot || hasServerActualChannelFact)
+    : Boolean(
+        options.gatewayChannelConfirmed ||
+        hasRealGatewaySnapshot ||
+        serverActualChannelId !== undefined
+      );
+
+  let gatewayChannelEvidence: string;
+  let gatewayChannelProvenance: string;
+
+  if (hasRealGatewaySnapshot) {
+    gatewayChannelEvidence = 'SOURCE_REAL_GATEWAY';
+    gatewayChannelProvenance = snapshotValidation?.snapshot
+      ? `API_READONLY_COLLECTOR (${snapshotValidation.snapshot.sourceEndpoint})`
+      : 'SOURCE_REAL_GATEWAY';
+  } else if (hasServerActualChannelFact) {
+    gatewayChannelEvidence = 'SERVER_RUN_FACT';
+    gatewayChannelProvenance = channelProvenance;
+  } else if (options.gatewaySnapshot && !snapshotValidation?.valid) {
+    // 提供了快照但校验失败（过期、失败、来源不明等），严格 fail-closed
+    gatewayChannelEvidence = 'INVALID_GATEWAY_SNAPSHOT';
+    gatewayChannelProvenance = `FAIL_CLOSED (${snapshotValidation?.reason || 'INVALID_SNAPSHOT'})`;
+  } else if (isRealMode && options.channels && options.channels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY')) {
+    // REAL 模式下调用者手工传 sourceMode=SOURCE_REAL_GATEWAY 但无可信快照
+    gatewayChannelEvidence = 'USER_ASSERTION_REJECTED';
+    gatewayChannelProvenance = 'CLI_ASSERTED_INPUT (BLOCKED_MISSING_TRUSTED_COLLECTOR)';
+  } else if (options.gatewayChannelConfirmed) {
+    // 兼容保留：仅在 OFFLINE/FIXTURE 模式被视为 USER_ASSERTION/FIXTURE，绝不得标记为 SERVER_API，REAL 模式禁止放行
+    gatewayChannelEvidence = isRealMode ? 'USER_ASSERTION_REJECTED' : 'USER_ASSERTION (FIXTURE)';
+    gatewayChannelProvenance = isRealMode ? 'CLI_ASSERTED_INPUT (UNVERIFIED_FOR_REAL)' : 'FIXTURE_ASSERTED';
+  } else {
+    gatewayChannelEvidence = 'MANUAL_REQUIRED';
+    gatewayChannelProvenance = 'UNVERIFIED (BLOCKED_MISSING_TRUSTED_COLLECTOR)';
+  }
 
   let regressionDiff: DiversionRegressionDiff | undefined;
   if (options.baseline) {
@@ -2033,7 +2423,7 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     modelId,
     mediaType,
     apiResult: options.apiResult,
-    taskTerminalStatus: terminalStatus,
+    taskTerminalStatus: terminalStatus === 'PROCESSING' ? 'UNKNOWN' : terminalStatus,
     mediaEvidence: {
       status: mediaEvidence.status,
       format: mediaEvidence.format,
@@ -2059,9 +2449,23 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       folderId: options.folderId,
       isFolderInProject: options.isFolderInProject,
     } : undefined,
+    channelAssertion: targetChannelId !== undefined ? {
+      targetChannelId,
+      targetChannelName,
+      actualChannelId,
+      actualChannelName,
+      fallbackChannel,
+      retryProvider,
+      hasEvidenceConflict,
+      conflictReasons,
+      isActualChannelAssertedOnly,
+    } : undefined,
   });
 
   const reasons: string[] = [];
+  if (taskEvidence.status === 'PROCESSING' || terminalStatus === 'PROCESSING') {
+    reasons.push(`任务 #${taskId} 仍在排队/生成中 (进度: ${(taskEvidence as any).progress ?? (options as any).progress ?? 0}%)，未到达终态。`);
+  }
   if (taskEvidence.status === 'FAIL') reasons.push(`任务执行失败: ${taskEvidence.error || '任务状态异常'}`);
   if (taskEvidence.status === 'UNVERIFIED') reasons.push(taskEvidence.error || '任务状态未确认 [UNVERIFIED]');
   if (mediaEvidence.status === 'FAIL') reasons.push(`产物物理完整性校验失败: ${mediaEvidence.reason || '文件损坏'}`);
@@ -2079,42 +2483,27 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       reasons.push(`[配置冲突] ${c.message}`);
     }
   }
+  if (hasEvidenceConflict) {
+    for (const c of conflictReasons) {
+      if (!reasons.includes(c)) reasons.push(c);
+    }
+  }
+  if (isActualChannelAssertedOnly) {
+    reasons.push('实际执行渠道仅来自调用者入参断言，无服务端运行时证据证实 [PROVISIONAL_EVIDENCE]');
+  }
+  if (channelMismatchReason) {
+    reasons.push(`[渠道履约失败] ${channelMismatchReason}`);
+  }
   if (businessValidation.status === 'FAIL') {
     for (const r of businessValidation.reasons) {
       if (!reasons.includes(r)) reasons.push(r);
     }
   }
 
-  const hasFailures = taskEvidence.status === 'FAIL'
-    || mediaEvidence.status === 'FAIL'
-    || billingEvidence.status === 'FAIL'
-    || invariantsEvidence.status === 'FAIL'
-    || Boolean(regressionDiff?.isRegression)
-    || contract.conflicts.length > 0
-    || businessValidation.status === 'FAIL';
+  const targetChannelFailed = targetChannelId !== undefined && (channelMatched === false || isFallbackExecution);
+  const targetChannelUnverified = targetChannelId !== undefined && channelMatched === undefined;
 
-  const allPassed = taskEvidence.status === 'PASS'
-    && mediaEvidence.status === 'PASS'
-    && billingEvidence.status === 'PASS'
-    && invariantsEvidence.status === 'PASS'
-    && !regressionDiff?.isRegression
-    && contract.pricing.allowPass
-    && contract.conflicts.length === 0
-    && businessValidation.status === 'PASS';
 
-  let verdictStatus: 'SUCCESS' | 'FAILED' | 'UNVERIFIED';
-  let verdict: 'PASS' | 'FAIL' | 'UNVERIFIED';
-
-  if (hasFailures) {
-    verdictStatus = 'FAILED';
-    verdict = 'FAIL';
-  } else if (allPassed) {
-    verdictStatus = 'SUCCESS';
-    verdict = 'PASS';
-  } else {
-    verdictStatus = 'UNVERIFIED';
-    verdict = 'UNVERIFIED';
-  }
 
   const diffItems: DiffItem[] = [
     {
@@ -2166,12 +2555,20 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
       expected: contract.isGlobal.value
         ? 'extra.diversion=10 (global)'
         : 'extra.diversion=10 (org) / extra.newapi_image=1',
-      actual: isDbExtraVerified ? (options.dbExtra ? JSON.stringify(options.dbExtra) : 'CONFIRMED_VIA_READONLY_QUERY') : 'NOT_RETURNED_BY_HTTP_API (MANUAL_DB_EVIDENCE_REQUIRED)',
+      actual: isDbExtraVerified
+        ? `CONFIRMED_VIA_READONLY_HTTP_API (${JSON.stringify(extraObj)})`
+        : (runtimeDetails?.endpoints?.getEditData?.queryStatus === 'UNVERIFIED_MISSING_PROJECT_ID'
+          ? 'UNVERIFIED_MISSING_PROJECT_ID'
+          : 'NOT_FOUND_IN_HTTP_API_OR_DB (MANUAL_REQUIRED)'),
       matched: isDbExtraVerified,
       status: isDbExtraVerified ? 'PASS' : 'MANUAL_REQUIRED',
-      diff: isDbExtraVerified ? 'MATCH' : 'HTTP API 不返回 extra 字段，需以只读权限查询 DB 验证落库',
+      diff: isDbExtraVerified
+        ? 'MATCH'
+        : (runtimeDetails?.endpoints?.getEditData?.queryStatus === 'UNVERIFIED_MISSING_PROJECT_ID'
+          ? '缺少 projectId，无法查询 /aivideo/v2/video/getEditData 接口 [UNVERIFIED_MISSING_PROJECT_ID]'
+          : '未从只读 HTTP 接口获取到 extra.diversion，需以只读权限查询 DB 验证落库 [MANUAL_REQUIRED]'),
       critical: false,
-      evidence: isDbExtraVerified ? 'DB_READONLY_QUERY' : 'MANUAL_DB_EVIDENCE_REQUIRED',
+      evidence: extraProvenance,
     },
     {
       field: 'businessValidation',
@@ -2186,17 +2583,75 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     },
   ];
 
+  if (hasEvidenceConflict) {
+    diffItems.push({
+      field: 'evidenceConflict',
+      layer: 'routing',
+      expected: 'Caller assertions match server facts',
+      actual: 'EVIDENCE_CONFLICT',
+      matched: false,
+      status: 'FAIL',
+      diff: conflictReasons.join('; '),
+      critical: true,
+      evidence: 'EVIDENCE_CONFLICT',
+    });
+  }
+
+  if (targetChannelId !== undefined) {
+    diffItems.push({
+      field: 'channelAttribution',
+      layer: 'routing',
+      expected: `Channel #${targetChannelId} ('${targetChannelName || targetChannelId}')`,
+      actual: actualChannelId !== undefined
+        ? `Channel #${actualChannelId} ('${actualChannelName || actualChannelId}')${isFallbackExecution ? ` [Fallback: ${fallbackChannel || retryProvider}]` : ''}`
+        : 'UNVERIFIED_RUNTIME_CHANNEL',
+      matched: channelMatched === true && !isFallbackExecution && !hasEvidenceConflict && !isActualChannelAssertedOnly,
+      status: (channelMatched === true && !isFallbackExecution && !hasEvidenceConflict && !isActualChannelAssertedOnly)
+        ? 'PASS'
+        : (channelMatched === false || isFallbackExecution || hasEvidenceConflict)
+        ? 'FAIL'
+        : 'BLOCKED',
+      diff: hasEvidenceConflict
+        ? `存在证据冲突: ${conflictReasons.join('; ')}`
+        : isActualChannelAssertedOnly
+        ? '实际执行渠道仅来自调用者入参断言，无服务端运行时证据证实 [UNVERIFIED_ASSERTED_INPUT]'
+        : (channelMismatchReason || 'MATCH'),
+      critical: true,
+      evidence: channelProvenance,
+    });
+  }
+
   if (isGatewayChannelRequired) {
+    const isCallerAssertedReal = isRealMode && (
+      Boolean(options.gatewayChannelConfirmed) ||
+      Boolean(options.channels && options.channels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY'))
+    );
+    const snapshotFailure = options.gatewaySnapshot && !snapshotValidation?.valid;
+
     diffItems.push({
       field: 'gatewayChannel',
       layer: 'routing',
       expected: 'NewAPI upstream channel configured',
-      actual: isGatewayChannelVerified ? (options.channels ? `${options.channels.length} channel(s)` : 'CONFIRMED') : 'MISSING_GATEWAY_CHANNEL_EVIDENCE',
+      actual: isGatewayChannelVerified
+        ? (hasRealGatewaySnapshot
+          ? `${(options.gatewaySnapshot?.channels || options.channels)?.length} channel(s) (REAL_GATEWAY_SNAPSHOT)`
+          : (hasServerActualChannelFact ? `Channel #${serverActualChannelId}` : 'CONFIRMED (FIXTURE)'))
+        : (snapshotFailure
+          ? `FAIL_CLOSED (${snapshotValidation?.reason})`
+          : (isCallerAssertedReal
+            ? 'UNVERIFIED_USER_ASSERTION (REAL模式禁止手填或伪造网关快照)'
+            : 'MISSING_GATEWAY_CHANNEL_EVIDENCE [BLOCKED_MISSING_TRUSTED_COLLECTOR]')),
       matched: isGatewayChannelVerified,
       status: isGatewayChannelVerified ? 'PASS' : 'MANUAL_REQUIRED',
-      diff: isGatewayChannelVerified ? 'MATCH' : '缺少 NewAPI 网关上游通道确认证据 [MANUAL_GATEWAY_CHANNEL_REQUIRED]',
+      diff: isGatewayChannelVerified
+        ? 'MATCH'
+        : (snapshotFailure
+          ? `网关渠道快照未通过可信校验: ${snapshotValidation?.reason} [FAIL_CLOSED]`
+          : (isCallerAssertedReal
+            ? 'REAL 模式下禁止仅凭用户声明或手工入参 sourceMode=SOURCE_REAL_GATEWAY 满足网关渠道验证 [BLOCKED_MISSING_TRUSTED_COLLECTOR]'
+            : '缺少 NewAPI 网关上游通道确认证据 [MANUAL_GATEWAY_CHANNEL_REQUIRED:BLOCKED_MISSING_TRUSTED_COLLECTOR]')),
       critical: true,
-      evidence: isGatewayChannelVerified ? 'GATEWAY_API' : 'MANUAL_REQUIRED',
+      evidence: gatewayChannelEvidence,
     });
   }
 
@@ -2274,6 +2729,9 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
   if (isGatewayChannelRequired) {
     requiredEvidence.push('gatewayChannelConfirmed');
   }
+  if (targetChannelId !== undefined) {
+    requiredEvidence.push('targetChannelFulfilled');
+  }
   if (options.baseline) {
     requiredEvidence.push('baselineRegressionVerified');
   }
@@ -2319,6 +2777,16 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     }
   }
 
+  if (targetChannelId !== undefined) {
+    if (channelMatched === true && !isFallbackExecution) {
+      availableEvidence.push('targetChannelFulfilled');
+    } else if (targetChannelFailed) {
+      missingEvidence.push('targetChannelFulfilled:FAILED');
+    } else {
+      missingEvidence.push('targetChannelFulfilled:UNVERIFIED');
+    }
+  }
+
   if (options.baseline) {
     if (regressionDiff && regressionDiff.regressionStatus === 'CLEAN') {
       availableEvidence.push('baselineRegressionVerified');
@@ -2337,24 +2805,237 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     isComplete,
   };
 
-  // 生产验收最终裁决判定
-  let acceptance: AcceptanceResult;
-  if (hasFailures || (regressionDiff && regressionDiff.isRegression) || contract.conflicts.length > 0) {
-    acceptance = 'REJECTED';
-  } else if (
-    !contract.pricing.allowPass ||
-    !contract.pricing.isPricingDetermined ||
-    contract.pricing.source === 'SOURCE_DEFAULT_FALLBACK' ||
-    (taskEvidence.status === 'FAIL' && taskEvidence.source === 'session_error') ||
-    options.unconfirmedStatic ||
-    terminalStatus === 'UNKNOWN'
-  ) {
-    acceptance = 'BLOCKED';
-  } else if (allPassed && isComplete && !regressionDiff?.isRegression && contract.pricing.allowPass && contract.conflicts.length === 0) {
-    acceptance = 'ACCEPTED';
-  } else {
-    acceptance = 'UNVERIFIED';
+  // ==========================================================================
+  // Canonical Verdict Engine 唯一最终业务裁决求值
+  // ==========================================================================
+  const capturedAt = (options as any).capturedAt || new Date().toISOString();
+  const testId = (options as any).testId || (options as any).spec?.testId || `verify-${taskId}`;
+  const environment = (options as any).environment || (options as any).spec?.environment || 'test';
+  const rawMode: 'real' | 'offline' | 'fixture' = (session || (options as any).executionMode === 'real' || executionMode === 'real') ? 'real' : (executionMode === 'offline' ? 'offline' : 'fixture');
+  const canonicalExecutionMode: ExecutionMode = rawMode === 'real' ? 'REAL' : (rawMode === 'offline' ? 'OFFLINE' : 'FIXTURE');
+
+  const facts: CanonicalVerifyFacts = {
+    testId,
+    capturedAt,
+    environment,
+    executionMode: rawMode,
+    taskId,
+    modelId,
+    mediaType,
+    progress: (options as any).progress,
+    task: taskEvidence,
+    artifact: artifact ? {
+      ...artifact,
+      ownership: artifactOwnership,
+      status: mediaEvidence.status,
+    } : undefined,
+    artifactOwnership,
+    billing: billing ? {
+      status: billingEvidence.status,
+      passed: billing.passed,
+      settledPoints: billing.settledPoints,
+      netDeductedPoints: billing.netDeductedPoints,
+      preDeductedPoints: billing.preDeductedPoints,
+      expectedPoints,
+      hasViolations: Boolean(
+        billing.duplicateCharged ||
+        billing.duplicateRefunded ||
+        billing.missingRefund ||
+        billing.underCharged ||
+        billing.overCharged ||
+        billing.antiDoubleBilling === false ||
+        billing.netChargeZero === false ||
+        billing.refundIdempotency === false
+      ),
+    } : undefined,
+    billingAudit: (billing && scoreLogsToReconcile && scoreLogsToReconcile.length > 0) ? 'AUDITED' : 'SKIPPED_NO_LOGS',
+    expectedChargeSource: billingEvidence?.expectedChargeSource,
+    pricingAllowPass: contract?.pricing?.allowPass,
+    invariants,
+    channelDetail: businessValidation?.channelDetail,
+    provenance: {
+      actualChannelId: channelProvenance,
+      fallbackChannel: fallbackProvenance,
+      retryProvider: retryProvenance,
+      extra: extraProvenance,
+      gatewayChannel: gatewayChannelProvenance,
+    },
+    isActualChannelAssertedOnly,
+    hasEvidenceConflict,
+    conflictReasons,
+    regressionDiff: regressionDiff ? {
+      isRegression: regressionDiff.isRegression,
+      regressionStatus: regressionDiff.regressionStatus,
+      unexpectedChanges: regressionDiff.unexpectedChanges,
+    } : undefined,
+    contractConflicts: contract.conflicts.length > 0 ? contract.conflicts : undefined,
+    businessValidationStatus: businessValidation.status,
+    gatewayChannelFact: (isGatewayChannelRequired && (options.gatewaySnapshot || options.gatewayChannelConfirmed || options.channels)) ? {
+      verified: isGatewayChannelVerified,
+      required: true,
+      failureReason: options.gatewaySnapshot && !snapshotValidation?.valid ? snapshotValidation?.reason : undefined,
+    } : undefined,
+    isDbExtraVerified,
+  };
+
+  const evidenceRes = buildCanonicalEvidenceFromVerifyFacts(facts);
+  let envelopes: CanonicalEvidenceEnvelope[] = evidenceRes.success && evidenceRes.value ? evidenceRes.value : [];
+  if (Array.isArray((options as any).extraEnvelopes)) {
+    envelopes = [...envelopes, ...(options as any).extraEnvelopes];
   }
+
+  let canonicalSpec: CanonicalTestSpec;
+  if ((options as any).spec) {
+    canonicalSpec = (options as any).spec;
+  } else {
+    const isRealSpec = canonicalExecutionMode === 'REAL';
+    const taskKey = isRealSpec ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
+    const routingKey = isRealSpec ? 'SERVER_API:ROUTING_CHANNEL' : 'FIXTURE:ROUTING_CHANNEL';
+
+    const reqEvidence: string[] = [taskKey];
+    if (mediaType === 'video' || mediaType === 'image') {
+      reqEvidence.push('MEDIA_BINARY:CONTAINER_CHECK');
+    }
+    const isBillingInScope = (contract.pricing.allowPass && contract.pricing.isPricingDetermined && contract.pricing.source !== 'SOURCE_DEFAULT_FALLBACK')
+      || (expectedPoints !== undefined && expectedPoints > 0)
+      || (scoreLogsToReconcile && scoreLogsToReconcile.length > 0)
+      || (!contract.pricing.allowPass || !contract.pricing.isPricingDetermined);
+    if (isBillingInScope) {
+      reqEvidence.push('BILLING_LEDGER:TASK_RECORDS');
+    }
+    if (targetChannelId !== undefined) {
+      reqEvidence.push(routingKey);
+    }
+    if (options.baseline) {
+      reqEvidence.push(isRealSpec ? 'SERVER_API:REGRESSION_BASELINE' : 'FIXTURE:REGRESSION_BASELINE');
+    }
+    // 业务一致性、证据冲突、领域校验总是加入必需证据 (禁止仅在失败时加入)
+    reqEvidence.push(isRealSpec ? 'SERVER_API:CONTRACT_CONSISTENCY' : 'FIXTURE:CONTRACT_CONSISTENCY');
+    reqEvidence.push(isRealSpec ? 'SERVER_API:EVIDENCE_CONFLICT' : 'FIXTURE:EVIDENCE_CONFLICT');
+    reqEvidence.push(isRealSpec ? 'SERVER_API:BUSINESS_VALIDATION' : 'FIXTURE:BUSINESS_VALIDATION');
+
+    // 网关渠道证据要求 (REAL 模式或显式传入网关配置/确认时要求)
+    const isGatewayInScope = isRealSpec || options.gatewayChannelConfirmed !== undefined || options.gatewaySnapshot !== undefined || options.channels !== undefined;
+    if (isGatewayChannelRequired && isGatewayInScope) {
+      reqEvidence.push(isRealSpec ? 'SERVER_API:GATEWAY_CHANNEL' : 'FIXTURE:GATEWAY_CHANNEL');
+    }
+
+    // 需要核验 extra.diversion 时，即使没有 DB/API 证据也必须要求对应 evidenceKey
+    const isDiversionScenario = contract.scenario === 'IMAGE_DIVERSION_CHANGE' || contract.scenario === 'VIDEO_DIVERSION_CHANGE' || (options as any).changeType === 'diversion_change';
+    const isExtraRequired = !contract.isGlobal.value && isDiversionScenario;
+    if (isExtraRequired) {
+      reqEvidence.push(isRealSpec ? 'SERVER_API:EXTRA_DIVERSION' : 'FIXTURE:EXTRA_DIVERSION');
+    }
+
+    const deterministicAssertions: DeterministicAssertion[] = [];
+
+    // 计费断言
+    if (typeof expectedPoints === 'number' && contract.pricing.allowPass && contract.pricing.isPricingDetermined && terminalStatus !== 'UNKNOWN') {
+      deterministicAssertions.push({
+        field: 'billing.actualCharge',
+        operator: 'EQUALS',
+        expectedValue: expectedPoints,
+        description: '预期刊例积分扣减值与实际计费一致',
+        critical: true,
+        evidenceKey: 'BILLING_LEDGER:TASK_RECORDS',
+        actualField: 'actualCharge',
+      });
+    }
+
+    // 路由承接渠道断言
+    if (typeof targetChannelId === 'number' && targetChannelId > 0) {
+      deterministicAssertions.push({
+        field: 'routing.expectedChannelId',
+        operator: 'EQUALS',
+        expectedValue: targetChannelId,
+        description: '预期承接网关渠道 ID',
+        critical: true,
+        evidenceKey: routingKey,
+        actualField: 'actualValue',
+      });
+    }
+
+    // 回归基线断言
+    if (options.baseline) {
+      deterministicAssertions.push({
+        field: 'regression.isRegression',
+        operator: 'EQUALS',
+        expectedValue: false,
+        description: '基线比对无非预期回归',
+        critical: true,
+        evidenceKey: isRealSpec ? 'SERVER_API:REGRESSION_BASELINE' : 'FIXTURE:REGRESSION_BASELINE',
+        actualField: 'isRegression',
+      });
+    }
+
+    // 契约一致性断言 (总是加入)
+    deterministicAssertions.push({
+      field: 'contract.conflictsCount',
+      operator: 'EQUALS',
+      expectedValue: 0,
+      description: '配置无冲突',
+      critical: true,
+      evidenceKey: isRealSpec ? 'SERVER_API:CONTRACT_CONSISTENCY' : 'FIXTURE:CONTRACT_CONSISTENCY',
+      actualField: 'conflictsCount',
+    });
+
+    // 证据冲突断言 (总是加入)
+    deterministicAssertions.push({
+      field: 'evidence.hasConflict',
+      operator: 'EQUALS',
+      expectedValue: false,
+      description: '无多方证据冲突',
+      critical: true,
+      evidenceKey: isRealSpec ? 'SERVER_API:EVIDENCE_CONFLICT' : 'FIXTURE:EVIDENCE_CONFLICT',
+      actualField: 'hasConflict',
+    });
+
+    canonicalSpec = {
+      testId,
+      requirementId: `REQ-VERIFY-${contract.scenario || 'UNKNOWN'}-${modelId}`,
+      scenario: contract.scenario || 'VERIFY_ACCEPTANCE',
+      environment,
+      executionMode: isRealSpec ? 'REAL' : 'FIXTURE',
+      target: {
+        targetType: 'model',
+        modelId,
+        expectedChannelId: targetChannelId,
+      },
+      inputs: {
+        taskId,
+        expectedPoints,
+        targetChannelId,
+        pricingDetermined: contract.pricing.isPricingDetermined,
+        pricingAllowPass: contract.pricing.allowPass,
+      },
+      deterministicAssertions,
+      costLimit: {
+        maxCostPoints: 0,
+        allowZeroCostOnly: true,
+      },
+      sideEffectPolicy: 'READ_ONLY',
+      requiredEvidence: reqEvidence,
+      metadata: {
+        allowPassPricing: contract.pricing.allowPass,
+      },
+    };
+  }
+
+  // 生产环境唯一业务裁决求值
+  const canonicalResult = evaluateCanonicalVerdict(canonicalSpec, envelopes);
+
+  const isProcessing = Boolean((options as any).isProcessing) || options.terminalStatus === 'PROCESSING' || taskEvidence.status === 'PROCESSING';
+
+  // 单向兼容投影为下游消费展示结构：仅传入生命周期展示上下文，严禁传入业务验收事实
+  const displayContext: LegacyLifecycleContext = {
+    terminalStatus,
+    isProcessing,
+    progress: (options as any).progress,
+  };
+
+  const presentation = projectCanonicalVerdictToLegacy(canonicalResult, displayContext);
+  const acceptance: AcceptanceResult = presentation.acceptance;
+  const verdict = presentation.verdict;
 
   const verifiedList: string[] = availableEvidence.slice();
   const unverifiedList: string[] = missingEvidence.filter((e) => !e.startsWith('MANUAL_'));
@@ -2375,10 +3056,10 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     };
   }
 
-  const reportReasons: string[] = [...reasons];
-  if (acceptance === 'UNVERIFIED') {
+  const reportReasons: string[] = Array.from(new Set([...reasons, ...presentation.reasons]));
+  if (acceptance === 'UNVERIFIED' || acceptance === 'BLOCKED') {
     if (!isDbExtraVerified) {
-      reportReasons.push('[证据不足] HTTP API 无法确认 extra 字段落库，需 DB 只读查询验证 extra.diversion=10 [MANUAL_DB_EVIDENCE_REQUIRED]');
+      reportReasons.push('[证据不足] 无法确认 extra 字段落库，需只读查询 /aivideo/v2/video/getEditData 或只读 DB 验证 extra.diversion=10 [MANUAL_DB_EVIDENCE_REQUIRED]');
     }
     if (isGatewayChannelRequired && !isGatewayChannelVerified) {
       reportReasons.push('[证据不足] 缺少 NewAPI 视频模型网关渠道与上游通道确认 [MANUAL_GATEWAY_CHANNEL_REQUIRED]');
@@ -2404,8 +3085,8 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     taskId,
     modelId,
     mediaType,
-    matched: allCriticalMatched,
-    allMatched: allCriticalMatched,
+    matched: presentation.passed,
+    allMatched: presentation.passed,
     diffs: diffItems,
     items: diffItems,
     missingEvidence: isDbExtraVerified ? (regressionDiff?.missingEvidence || []) : ['MANUAL_DB_EVIDENCE_REQUIRED:extra.diversion', ...(regressionDiff?.missingEvidence || [])],
@@ -2417,13 +3098,15 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     },
     manualVerificationGuide: {
       extraQuerySql: `SELECT id, extra, user_group_id, created_at FROM ai_tasks WHERE id = ${taskId} LIMIT 1;`,
-      notice: '主站 HTTP 查询接口（/apiGetStatus 或任务详情接口）不返回 extra 字段。如需核实真实分流落库 (extra.diversion=10)，请以只读权限查询 DB ai_tasks 表。',
+      notice: isDbExtraVerified
+        ? '已通过只读 HTTP API (/aivideo/v2/video/getEditData) 成功获取 extra 分流落库证据，无需手动查询数据库。'
+        : '主站 HTTP 查询接口（/apiGetStatus 或常规任务详情接口）不返回 extra 字段。如需核实真实分流落库 (extra.diversion=10)，可优先通过只读 HTTP API (/aivideo/v2/video/getEditData) 或以只读权限查询 DB ai_tasks 表。',
     },
     regressionDiff,
     evidenceCompleteness,
   };
 
-  const memoryCandidate = (verdictStatus === 'FAILED' || businessValidation.matchedFailurePatterns.length > 0)
+  const memoryCandidate = (presentation.status === 'FAILED' || presentation.verdict === 'FAIL' || businessValidation.matchedFailurePatterns.length > 0)
     ? formatMemoryCandidate({
         taskId,
         modelId,
@@ -2436,15 +3119,16 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
 
   return {
     ok: true,
-    passed: verdictStatus === 'SUCCESS',
+    passed: presentation.passed,
     taskId,
     modelId,
     mediaType,
-    status: verdictStatus,
-    verdict,
+    status: presentation.status,
+    verdict: presentation.verdict,
     acceptance,
     mode: session ? 'real' : 'mock',
     executionMode,
+    progress: (options as any).progress ?? (taskEvidence as any).progress,
     probeDurationMs,
     artifact,
     billing,
@@ -2458,5 +3142,19 @@ export async function verify(options: VerifyKernelOptions): Promise<VerifyKernel
     contract,
     businessValidation,
     memoryCandidate,
+    hasEvidenceConflict,
+    conflictReasons,
+    isActualChannelAssertedOnly,
+    channelDetail: businessValidation.channelDetail,
+    provenance: {
+      actualChannelId: channelProvenance,
+      fallbackChannel: fallbackProvenance,
+      retryProvider: retryProvenance,
+      extra: extraProvenance,
+      gatewayChannel: gatewayChannelProvenance,
+    },
+    canonicalVerdict: canonicalResult,
+    canonicalEnvelopes: envelopes,
+    canonicalSpec,
   };
 }

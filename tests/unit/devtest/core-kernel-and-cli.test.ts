@@ -481,6 +481,16 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         scoreLogs: [
           { task_id: 88803, type: 2, score: -28, memo: '预扣' },
         ],
+        gatewaySnapshot: {
+          environment: 'test',
+          capturedAt: new Date().toISOString(),
+          sourceEndpoint: '/aivideo/channel/index',
+          collectionStatus: 'SUCCESS',
+          provenance: 'API_READONLY_COLLECTOR',
+          channels: [
+            { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+          ],
+        },
       });
 
       pollSpy.mockRestore();
@@ -1205,6 +1215,16 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
       artifactBuffer: validMp4,
       expectedPoints: 28,
       expectedChargeSource: 'REAL_BILLING_FACT',
+      gatewaySnapshot: {
+        environment: 'test',
+        capturedAt: new Date().toISOString(),
+        sourceEndpoint: '/aivideo/channel/index',
+        collectionStatus: 'SUCCESS',
+        provenance: 'API_READONLY_COLLECTOR',
+        channels: [
+          { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+        ],
+      },
     });
 
     expect(res.ok).toBe(true);
@@ -1645,7 +1665,16 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v5.4.0 Hardening)', ()
       cookies: 'PHPSESSID=mock_session_123',
       assetBuffer: validMp4,
       dbExtraConfirmed: true,
-      gatewayChannelConfirmed: true,
+      gatewaySnapshot: {
+        environment: 'test',
+        capturedAt: new Date().toISOString(),
+        sourceEndpoint: '/aivideo/channel/index',
+        collectionStatus: 'SUCCESS',
+        provenance: 'API_READONLY_COLLECTOR',
+        channels: [
+          { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+        ],
+      },
       scoreLogs: [
         { task_id: 91001, type: 2, score: -56, memo: 'Wan 3.0 4s 扣除' },
       ],

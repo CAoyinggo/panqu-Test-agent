@@ -672,7 +672,8 @@ export class EnvironmentProbe {
   public static async probe(options: EnvProbeOptions = {}): Promise<EnvProbeReport> {
     const env = options.env || 'test';
     const baseUrl = options.baseUrl || (env === 'preonline' ? 'https://preonline.panqu.com' : 'https://test.panqu.com');
-    const gatewayUrl = options.gatewayUrl || 'https://aiapis.panqu.com';
+    const gatewayUrl = options.gatewayUrl
+      || (env === 'test' ? 'https://apitest.panqu.com' : 'https://aiapis.panqu.com');
     const timeoutMs = options.timeoutMs ?? 5000;
     const isMock = options.mock ?? true;
 
@@ -685,7 +686,7 @@ export class EnvironmentProbe {
         this.assertAllowedRealUrl(gatewayUrl, new Set([...localHosts, 'aiapis.panqu.com']), true);
       } else {
         this.assertAllowedRealUrl(baseUrl, new Set(['test.panqu.com', 'preonline.panqu.com', 'sandbox.panqu.com']));
-        this.assertAllowedRealUrl(gatewayUrl, new Set(['aiapis.panqu.com', 'test-aiapis.panqu.com', 'preonline-aiapis.panqu.com', 'sandbox-aiapis.panqu.com']));
+        this.assertAllowedRealUrl(gatewayUrl, new Set(['aiapis.panqu.com', 'apitest.panqu.com', 'test-aiapis.panqu.com', 'preonline-aiapis.panqu.com', 'sandbox-aiapis.panqu.com']));
       }
     }
 

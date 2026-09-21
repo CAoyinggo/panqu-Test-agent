@@ -55,15 +55,18 @@ CLI 与 TRAE MCP 必须继续共享同一个 `core-kernel`。
 
 ---
 
-# 2. 永久禁止架构变更
+# 2. 核心语义冻结与受控扩展规则
 
-未经明确的人工授权，严禁：
+系统**核心领域语义、验证规则与唯一最终裁决权永久冻结**。未经明确的人工授权，禁止改变核心边界或重构核心拓扑。
+
+### 永久禁止项
+未经明确人工授权，严禁：
 
 * 新增 Web UI
 * 新增 Dashboard
 * 新增数据库层
-* 新增 Redis / MQ / Cache 架构
-* 新增 Agent
+* 新增 Redis / MQ / Cache 等持久化或中间件架构
+* 新增独立 Agent
 * 新增 AI 推理层
 * 新增智能评分系统
 * 新增 Report / 七章报告 / 大盘系统
@@ -73,8 +76,8 @@ CLI 与 TRAE MCP 必须继续共享同一个 `core-kernel`。
 * 把 core-kernel 拆成大量没有业务价值的中间层
 * 增加新的核心入口
 * 增加第五个核心动作
-* 改变 CLI / MCP 双入口模式
-* 改变四大核心动作定义
+* 改变 CLI / MCP 双入口同源模式
+* 改变四大核心动作定义与验证不变量
 * 用“架构升级”为理由重新组织整个 `src/devtest`
 * 为了代码风格而大规模重构
 * 为了增加功能而改变现有领域边界
@@ -83,6 +86,55 @@ CLI 与 TRAE MCP 必须继续共享同一个 `core-kernel`。
 **禁止为了“看起来更企业级”而增加复杂度。**
 
 如果某个优化只能通过改变上述架构实现，默认拒绝该优化。
+
+---
+
+## 2.1 受控适配器扩展原则 (Controlled Adapter Extension Rules)
+
+为支持多环境与多终端测试能力的可控演进，将原“绝对禁止任何架构扩展”明确为：**核心领域语义冻结，允许通过标准端口增加可选适配器**。
+
+所有新引入的适配器（Execution Adapters / Evidence Producers）必须严格满足以下六项边界：
+
+1. **核心领域语义冻结**：Task、Artifact、Media、Billing、Invariants、Acceptance 的核心语义与验证标准不得被任何适配器改变或弱化。
+2. **标准端口接入**：适配器必须通过核心定义的标准端口接入（如 Canonical TestSpec、Canonical Evidence Envelope），禁止侵入 `core-kernel` 内部修改核心流程。
+3. **职责严格受限**：适配器**只能负责执行操作或采集证据**，严禁包含任何业务验收判断或裁决逻辑。
+4. **唯一最终裁决 (Single Verdict Engine)**：适配器**绝对不得拥有最终裁决权**。所有适配器采集的证据必须包装为标准证据信封，统一提交给唯一裁决引擎（Single Verdict Engine / core-kernel verify）进行无状态判定。
+5. **四可隔离原则**：适配器必须**可开关**（配置/入参可选，默认关闭）、**可替换**、**可单测**（纯离线 Fixture 隔离测试）、**可删除**（完整移除适配器代码零污染核心功能）。
+6. **重型依赖与设施单独授权**：外部第三方服务、重型运行时依赖（如浏览器引擎、外部 CLI/测试框架）和持久化设施仍属于高风险基础设施，必须经过单独人工授权方可引入。
+
+---
+
+## 2.2 本次人工授权范围 (Human Authorization Scope)
+
+记录当前阶段已获得人工明确授权的具体边界与严格禁止项：
+
+### 已获授权事项：
+1. **Phase 0 可信度收口**：
+   - 渠道消歧与 `channelMatched` 语义闭环；
+   - 关闭 `gatewayChannelConfirmed` 与 `sourceMode=SOURCE_REAL_GATEWAY` 手工声明绕过漏洞；
+   - 真实模式调用者断言证据降级（强制标记 `USER_ASSERTION_REJECTED`）；
+   - 只读 HTTP 接口 extra 分流落库事实获取与 fail-closed 门禁。
+2. **Phase 1 受控演进基础契约**：
+   - Canonical TestSpec 契约规范定义；
+   - Canonical Evidence Envelope 统一证据信封设计；
+   - 标准端口（Execution Adapter / Evidence Producer 最小接口）定义；
+   - Single Verdict Engine 唯一最终裁决引擎收口。
+
+### 明确未授权事项（严禁擅自实施）：
+* 本授权**不代表未来无限架构修改授权**；
+* **严禁一次性或未经授权接入** Playwright、Midscene、Promptfoo、ReportPortal 或 wardenIQ 等重量级外部框架/运行时依赖；
+* 严禁自行搭建持久化数据库、中间件服务或外部网络守护进程。
+
+---
+
+## 2.3 TrustedGatewaySnapshot 与采集器边界规则
+
+针对 NewAPI 网关渠道快照证据（`SOURCE_REAL_GATEWAY`），确立永久性可信边界：
+
+1. **可验证只读路径**：可信快照必须且仅能来自经过验证的只读 API 采集器（`API_READONLY_COLLECTOR`，如 `/aivideo/channel/index` 只读快照），且快照信封必须包含：`environment`、`capturedAt`、`sourceEndpoint`、`collectionStatus=SUCCESS`、`provenance`。
+2. **禁止调用者声明升级**：CLI、MCP、编程入参等任何调用者单方传入的 `gatewayChannelConfirmed=true` 或 `sourceMode='SOURCE_REAL_GATEWAY'` 均为 `USER_ASSERTION`，严禁在 REAL 模式升级为可信证据。
+3. **缺失采集器时严格 Fail-Closed**：在当前代码库尚未接入真实只读网关快照采集器之前，标记为 `BLOCKED_MISSING_TRUSTED_COLLECTOR`，REAL 模式验收**必须严格保持 BLOCKED**，坚决禁止虚假放行（零假 PASS）。
+4. **适配器边界规范**：未来真实只读快照采集器实现时，必须作为标准的 `EvidenceProducer` / `API Adapter` 接入，通过标准证据信封传递，严禁在 core-kernel 之外任意位置散落采集逻辑或引入写副作用。
 
 ---
 

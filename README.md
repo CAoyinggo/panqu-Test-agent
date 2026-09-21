@@ -8,9 +8,10 @@
 | **运行时要求** | Node.js `>=20` · TypeScript `>=5.9` · ESM 纯模块 |
 | **双模同源入口** | 本地终端 `devtest` CLI (`bin/devtest-cli.ts`) · IDE 辅助 `devtest-mcp` (`bin/devtest-mcp.ts`) |
 | **四大核心动作** | `probe()` 环境探活 · `plan()` 分流推导 · `execute()` 任务派发 · `verify()` 验真对账 |
+| **唯一裁决引擎** | `CanonicalVerdictEngine`：基于 Canonical TestSpec 与统一证据信封的单裁决权威 |
 | **E2E 闭环能力** | 支持 `--wait` / `wait: true`：`execute` 自动桥接 `verify` 完成全链路验收 |
-| **测试验证矩阵** | **21 个测试套件 · 286 项单元测试全部通过 (100% PASS)** |
-| **架构规范** | 严格遵守 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md) 永久冻结原则，零中心上帝类，零虚假大盘 |
+| **测试验证矩阵** | **28 个测试套件 · 490 项单元测试全部通过 (100% PASS)** |
+| **架构规范** | 严格遵守 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md) 永久冻结与受控适配器扩展原则，零中心上帝类，零虚假大盘 |
 | **发布形式** | GitHub 源码快照与 Trae MCP 配置对齐；真实环境执行必须显式提供合法凭据 |
 
 ---
@@ -42,10 +43,11 @@
 Panqu DevTest 是专门针对 Panqu AI 多模态图片生成与视频生成业务链路设计的轻量、纯净、无副作用的测试工程副驾。它提供从环境可用性探测、多渠道分流推导、测试任务受控提交，到二进制物理产物深度解构、线上积分账单对账和金融安全不变量审计的全流程质量门禁体系。
 
 ### 1.2 解决什么问题
-- **多渠道路由歧义**：厘清并验证模型调用是走 Direct 渠道还是 NewAPI 智能网关分流，防止模型路由配置错误。
+- **多渠道路由歧义**：厘清并验证模型调用是走 Direct 渠道还是 NewAPI 智能网关分流，消除模型与渠道混淆，防止路由配置错误。
 - **异步长链路不可靠**：生视频等任务属于耗时异步任务，DevTest 建立带网络抖动容忍与指数退避的终态轮询监视器。
 - **虚假产物与损坏逃逸**：杜绝“HTTP 状态码 200 即代表生成成功”的假象，深入解析容器文件二进制头尾 Box 结构。
 - **账务资损与超扣漏洞**：核实扣费流水与定价基准的一致性，防止重复扣费以及任务失败未全额退款等资损事故。
+- **调用者单方声明伪造**：杜绝入参手工声明 `gatewayChannelConfirmed=true` 绕过核验，缺少只读网关快照采集器时严格阻断。
 
 ### 1.3 服务对象是谁
 - **AI 研发工程师**：用于在本地或开发机快速自测模型适配情况与路由分流策略。
@@ -87,29 +89,29 @@ DevTest 负责**测试编排、质量门禁、物理证据链验真、验收闭�
                ▼              ▼              ▼              ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                     编排层 (Orchestrator Layer)                        │
-│          env-probe       routing      media-flow   media-inspector     │
-│                             │                            │             │
-│                      domain-knowledge                 billing          │
-│                             │                                          │
-│                    exploration (mutation)                              │
-└────────────────────────────────────────────────────────────────────────┘
-                                     │ 规则与不变量约束
+│   env-probe      routing      media-flow    media-inspector   billing  │
+│   domain-knowledge         execution-ports    legacy-protocol-mappers  │
+└────────────────────────────────────┬───────────────────────────────────┘
+                                     │ 证据信封汇聚
                                      ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                      门禁层 (Gate Layer)                               │
+│       CanonicalVerdictEngine (唯一裁决引擎) · Canonical Evidence       │
 │   Fail-Closed 原则 · 四维物理证据链 · 三大金融安全不变量 · 零假 PASS 判定  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 1. **内核层 (Core Kernel)**：`src/devtest/core-kernel.ts`。统一封装并驱动四大核心动作，杜绝中心化上帝类与冗余层级。
-2. **编排层 (Orchestrator)**：由单一职责的领域模块组成，各模块无循环依赖，独立负责探活、路由、媒体流、容器解析与对账。
-3. **门禁层 (Gate)**：执行事实核验，凡证据链不完整或不变量被违背，一票否决阻断通过。
+2. **编排层 (Orchestrator)**：单一职责的领域模块集合，包含探活、路由消歧、媒体执行流、物理结构解析、账务对账、标准执行端口与协议映射器。
+3. **门禁层 (Gate)**：收口于 `CanonicalVerdictEngine`，执行强类型确定性断言核验与金融不变量审计，凡证据链不完整或不变量被违背，一票否决阻断通过。
 4. **呈现层 (Presentation)**：CLI 终端与 Trae MCP 服务完全同源调用，逻辑 100% 保持一致。
 
 ### 2.2 核心设计原则
 - **严格遵守架构冻结**：完全遵循 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md)，严禁擅自新增第 5 个核心动作或上帝编排器。
+- **受控适配器扩展原则 (Controlled Adapter Extension Rules)**：核心领域语义冻结，仅允许通过标准端口（Canonical TestSpec / Canonical Evidence Envelope）接入可选适配器。
+- **唯一裁决引擎权威 (Single Verdict Engine)**：适配器只负责执行或采集证据，绝对不拥有最终裁决权；所有最终判定均由 `CanonicalVerdictEngine` 统一收口。
 - **证据前置，事实第一**：一切结论以物理字节切片与真实账单流水为依据，拒绝主观臆断。
-- **Fail-Closed (防逃逸闭门)**：任何网络超时、接口异常、账单缺漏或格式未知情况，默认裁决为 `UNVERIFIED` / `BLOCKED`，绝对禁止默认放行。
+- **Fail-Closed (防逃逸闭门)**：任何网络超时、接口异常、账单缺漏或调用者单方声明未核验情况，默认裁决为 `UNVERIFIED` / `BLOCKED`，绝对禁止默认放行。
 - **零副作用原则**：只读操作绝不产生写网络调用或落库修改；测试任务执行具有明确环境标识与隔离机制。
 
 ---
@@ -120,9 +122,9 @@ DevTest 负责**测试编排、质量门禁、物理证据链验真、验收闭�
 
 ```mermaid
 flowchart LR
-    A["probe() 环境探活"] --> B["plan() 分流推导"]
+    A["probe() 环境探活"] --> B["plan() 分流推导与消歧"]
     B --> C["execute() 任务派发"]
-    C --> D["verify() 验真对账"]
+    C --> D["verify() 验真与唯一裁决"]
     style A fill:#e1f5fe,stroke:#0288d1
     style B fill:#fff3e0,stroke:#f57c00
     style C fill:#f3e5f5,stroke:#7b1fa2
@@ -132,9 +134,9 @@ flowchart LR
 | 环节 | 核心输入 | 核心输出 | 领域依赖 | 阶段约束 |
 |---|---|---|---|---|
 | **`probe`** | 环境目标 (`env`)、会话文件 (`sessionFile`)、超时阈值 (`timeoutMs`)、仿真标志 (`mock`) | 网关健康状态、Session 有效性与脱敏凭据、模型白名单与能力画像 | `env-probe.ts` | 严格只读；探活通过不代表下游业务必然成功 |
-| **`plan`** | 模型 ID (`modelId`)、媒体类型 (`mediaType`)、分辨率 (`resolution`)、时长 (`duration`)、提示词 (`prompt`) | 分流决策 (Direct / NewAPI)、候选渠道、基准积分预算 (`expectedPoints`)、测试用例计划 | `routing.ts`<br>`domain-knowledge.ts` | 纯内存推导；推导预算不等于线上扣费事实 |
-| **`execute`** | 模型与媒体参数、执行模式 (`mock` / `real`)、授权会话 (`sessionFile`)、闭环等待标志 (`wait`) | 任务编号 (`taskId`)、执行状态 (`SUBMITTED`/`SUCCESS`)、预扣积分 (`points`)、仿真标记 (`isSimulated`) | `media-flow.ts` | `mode=real` 时发起真实网络提交；`wait=true` 时自动桥接至 `verify` |
-| **`verify`** | 任务 ID (`taskId`)、模型规格、产物 URL (`videoUrl`)、预期基准积分、轮询超时阈值 (`pollTimeoutSec`) | 4D 证据审计报告、三大金融安全不变量状态、最终技术裁决 (`passed`)、生产验收结果 (`acceptance`) | `media-flow.ts`<br>`media-inspector.ts`<br>`billing.ts` | 严格只读轮询与物理字节解析；缺证据则 Fail-Closed |
+| **`plan`** | 模型 ID (`modelId`)、媒体类型 (`mediaType`)、分辨率 (`resolution`)、时长 (`duration`)、提示词 (`prompt`)、渠道与目标消歧入参 | 分流决策 (Direct / NewAPI)、候选渠道、基准积分预算 (`expectedPoints`)、测试用例计划、消歧结果 | `routing.ts`<br>`domain-knowledge.ts` | 纯内存推导；推导预算不等于线上扣费事实 |
+| **`execute`** | 模型与媒体参数、执行模式 (`mock` / `real`)、授权会话 (`sessionFile`)、闭环等待标志 (`wait`)、渠道消歧参数 | 任务编号 (`taskId`)、执行状态 (`SUBMITTED`/`SUCCESS`/`BLOCKED`)、预扣积分 (`points`)、仿真标记 (`isSimulated`) | `media-flow.ts`<br>`routing.ts` | `mode=real` 需合法会话；消歧未通过直接安全阻断；`wait=true` 自动桥接至 `verify` |
+| **`verify`** | 任务 ID (`taskId`)、模型规格、产物 URL (`videoUrl`)、预期基准积分、轮询超时阈值 (`pollTimeoutSec`) | 4D 证据审计报告、三大金融安全不变量状态、Canonical 裁决结果 (`passed`)、生产验收结果 (`acceptance`) | `canonical-verdict-engine.ts`<br>`media-inspector.ts`<br>`billing.ts` | 严格只读；由 CanonicalVerdictEngine 统一定夺，缺证据则 Fail-Closed |
 
 ---
 
@@ -145,7 +147,8 @@ flowchart LR
 - **Session 状态感知**：加载并验证凭证的有效性，若已失效则提示重新授权。
 - **模型白名单与能力画像**：获取系统支持的模型 ID 集合，解析每个模型支持的分辨率（如 720p, 1080p）、生成时长（如 4s, 5s）与媒体类型。
 
-### 4.2 `plan()`：契约构建与分流推导
+### 4.2 `plan()`：契约构建、消歧与分流推导
+- **目标对象消歧 (`disambiguateTarget`)**：严格区分模型目标（modelId / alias）、网关渠道目标（channelId / channelName）以及场景目标，防止混淆。
 - **业务分流决策**：基于模型配置特征，自动推导出应采用 Direct 直连模式还是 NewAPI 网关分流，并列出可用渠道 (`candidateChannels`)。
 - **成本预算推导**：结合时长、分辨率及刊例计算推导预扣积分基准值（标明为 `DEVTEST_EXPECTATION`，防伪装成真实流水）。
 - **风控与参数防御**：基于领域知识库（`domain-knowledge.ts`）检查提示词敏感词风险、比例参数合法性与失效模式预警（FP-001 ~ FP-005）。
@@ -159,17 +162,18 @@ flowchart LR
 - **受控离线仿真 (`mode: 'mock'`)**：
   - 离线生成模拟任务 ID（带有明确 `simulationId` 且 `isSimulated: true`），完全不发起外部网络请求，适用于本地回归与 CI 校验。
 
-### 4.4 `verify()`：4D 证据验真与终态对账
+### 4.4 `verify()`：4D 证据验真与唯一裁决
 - **异步轮询**：只读调用 `POST /aivideo/v2/task_status/apiGetStatus`，带重试及网络抖动容忍，持续追踪任务到达终态。
 - **物理产物容器检验**：拉取视频/图片文件头部及切片二进制流，按 ISO-14496 规范解析 Box 结构，严打零帧虚假文件。
 - **真实账单流水对账**：调用 FastAdmin `AdminScore` 积分流水及 `/aivideo/v2/billing/apiPersonalRecords` 接口，核对实际扣费。
 - **三大金融安全不变量审计**：审计防重复扣费、失败净扣归零和退款幂等性。
+- **唯一裁决引擎收口**：将任务凭据、物理媒体证据、账单对账事实封装为 `CanonicalEvidenceEnvelope`，交由 `CanonicalVerdictEngine` 进行强类型裁决，杜绝多套标准产生歧义。
 
 ---
 
 ## 5. E2E 闭环 (--wait 与 wait: true)
 
-为解决传统测试中“任务提交后断连、无法闭环验证产物与账务”的痛点，DevTest 在 CLI 和 MCP 中均完整打通了全自动连续闭环流水线：
+DevTest 在 CLI 和 MCP 中均完整打通了全自动连续闭环流水线：
 
 ```text
 [execute 开始] ───► 任务提交 (POST generate)
@@ -184,6 +188,9 @@ flowchart LR
                    账务流水对账 (queryTaskBillingLogs + BillingOracle)
                          │
                          ▼ (审计 3 大金融不变量)
+                   CanonicalVerdictEngine 统一裁决
+                         │
+                         ▼ (强类型断言裁决)
 [完成输出] ───────► 输出全维技术裁决与生产验收报告
 ```
 
@@ -203,17 +210,19 @@ flowchart LR
 
 ### 6.1 核心裁决判定公式
 > [!IMPORTANT]
-> 系统最终技术裁决严格遵守逻辑与公式：
-> $$\text{Final Verdict} = \text{Task SUCCESS} \land \text{Artifact PASS} \land \text{Billing PASS}$$
+> 系统最终技术裁决由 `CanonicalVerdictEngine` 严格执行：
+> $$\text{Final Verdict} = \text{Task SUCCESS} \land \text{Artifact PASS} \land \text{Billing PASS} \land \text{Invariants PASS}$$
 
-只有当且仅当以下三项条件同时满足时，最终裁决才允许判定为 **PASS**（或 `ALL PASS`）：
+只有当且仅当以下全部条件同时满足时，最终裁决才允许判定为 **PASS**（或 `ALL PASS`）：
 1. **Task SUCCESS**：异步任务成功到达业务成功终态（无服务端报错或超时）。
 2. **Artifact PASS**：媒体物理文件存在、可下载，且二进制容器结构完整（包含合法签名、完整 Box 拓扑及有效音视频轨）。
-3. **Billing PASS**：账单扣费记录严格等于 1 条、扣费积分与推导基准吻合、且三大金融安全不变量全部满足。
+3. **Billing PASS**：账单扣费记录严格等于 1 条、扣费积分与推导基准吻合。
+4. **Invariants PASS**：三大金融安全不变量（防重复扣费、失败净扣归零、退款幂等）全部满足。
 
 ### 6.2 缺证据时的 Fail-Closed 规则
 - 缺少任意一项有效凭据，一律**禁止默认通过**。
-- 若网络抖动或未授权导致无法获取真实账单流水（如 `SKIPPED_NO_LOGS`），系统技术裁决严格标记为 `UNVERIFIED`，生产验收严格标记为 `BLOCKED`，指明“账务证据缺失，证据链不闭环”。
+- 若网络抖动或未授权导致无法获取真实账单流水（如 `SKIPPED_NO_LOGS`），系统技术裁决严格标记为 `UNVERIFIED`，生产验收严格标记为 `BLOCKED`。
+- **禁止调用者声明升级**：入参单方传入 `gatewayChannelConfirmed=true` 属于 `USER_ASSERTION`，在缺少真实只读网关快照采集器时，严格判定为 `BLOCKED_MISSING_TRUSTED_COLLECTOR`，坚决不放行。
 
 ---
 
@@ -322,7 +331,7 @@ DevTest MCP 严格只对外暴露以 `devtest` 为核心的测试副驾工具。
 
 | 工具名称 | 职责定义 | 参数与调用能力 |
 |---|---|---|
-| **`devtest`** | **唯一核心测试副驾入口**（直通 `core-kernel.ts`） | 4 项 action：`probe`, `plan`, `execute`, `verify`<br>支持 `wait`, `poll_timeout_sec`, `session_file`, `video_url` 等完整参数 |
+| **`devtest`** | **唯一核心测试副驾入口**（直通 `core-kernel.ts`） | 4 项 action：`probe`, `plan`, `execute`, `verify`<br>支持 `wait`, `poll_timeout_sec`, `session_file`, `video_url`, `channel_id`, `target_kind` 等完整参数 |
 | **`devtest_record_candidate`** | **受控知识候选录入入口**（专用于外部代理与 GitHub 审查） | 录入业务规则到 `shared-memory/candidates/inbox.md`<br>状态严格为待审 `[ ]`，需人工审核后晋升，绝不入侵核心测试逻辑 |
 
 ### 9.3 IDE 配置方式
@@ -439,7 +448,7 @@ DevTest 核验账单流水由两处真实数据源核验支撑：
 项目内建完备的单元测试与回归测试矩阵，所有测试用例均为真实断言：
 
 ```bash
-# 执行全量单元测试与回归矩阵
+# 执行全量单元测试与回归矩阵 (28 个套件，490 项测试)
 npm test
 
 # 生产级 TypeScript 编译与资源同步
@@ -447,35 +456,42 @@ npm run build
 ```
 
 ### 当前测试验证基线
-- **测试套件总数**：**21 个测试文件**
-- **测试用例总数**：**286 项测试**
-- **通过率**：**100% 全部通过 (286 passed)**
+- **测试套件总数**：**28 个测试文件**
+- **测试用例总数**：**490 项测试**
+- **通过率**：**100% 全部通过 (490 passed)**
 
 ```text
+ ✓ tests/unit/devtest/billing.test.ts (14 tests)
+ ✓ tests/unit/devtest/canonical-protocol.test.ts (24 tests)
+ ✓ tests/unit/devtest/canonical-shadow-comparison.test.ts (13 tests)
+ ✓ tests/unit/devtest/canonical-verdict-engine.test.ts (23 tests)
+ ✓ tests/unit/devtest/core-kernel-and-cli.test.ts (72 tests)
+ ✓ tests/unit/devtest/core-kernel-canonical-switch.test.ts (10 tests)
+ ✓ tests/unit/devtest/devtest-trae-rules-contract.test.ts (3 tests)
+ ✓ tests/unit/devtest/domain-knowledge.test.ts (12 tests)
  ✓ tests/unit/devtest/dynamic-plan.test.ts (47 tests)
- ✓ tests/unit/devtest/self-evolving-tester.test.ts (13 tests)
+ ✓ tests/unit/devtest/env-probe.test.ts (4 tests)
+ ✓ tests/unit/devtest/execution-ports.test.ts (16 tests)
+ ✓ tests/unit/devtest/exploration/exploration-policy-acceptance.test.ts (4 tests)
+ ✓ tests/unit/devtest/exploration/learning-acceptance.test.ts (6 tests)
+ ✓ tests/unit/devtest/exploration/mutation-acceptance.test.ts (6 tests)
+ ✓ tests/unit/devtest/exploration/production-loop-audit.test.ts (6 tests)
+ ✓ tests/unit/devtest/exploration/runner-acceptance.test.ts (6 tests)
+ ✓ tests/unit/devtest/exploration/state-graph-acceptance.test.ts (3 tests)
+ ✓ tests/unit/devtest/knowledge-decoupling.test.ts (9 tests)
  ✓ tests/unit/devtest/knowledge-promotion.test.ts (9 tests)
  ✓ tests/unit/devtest/knowledge-sync-payload.test.ts (10 tests)
+ ✓ tests/unit/devtest/legacy-protocol-mappers.test.ts (21 tests)
  ✓ tests/unit/devtest/mcp-candidate-record.test.ts (10 tests)
- ✓ tests/unit/devtest/routing.test.ts (15 tests)
- ✓ tests/unit/devtest/env-probe.test.ts (4 tests)
- ✓ tests/unit/devtest/knowledge-decoupling.test.ts (9 tests)
- ✓ tests/unit/devtest/domain-knowledge.test.ts (12 tests)
- ✓ tests/unit/devtest/exploration/mutation-acceptance.test.ts (6 tests)
- ✓ tests/unit/devtest/devtest-trae-rules-contract.test.ts (3 tests)
- ✓ tests/unit/devtest/mcp-high-level-tools.test.ts (7 tests)
- ✓ tests/unit/devtest/exploration/production-loop-audit.test.ts (6 tests)
- ✓ tests/unit/devtest/billing.test.ts (14 tests)
- ✓ tests/unit/devtest/exploration/runner-acceptance.test.ts (6 tests)
+ ✓ tests/unit/devtest/mcp-high-level-tools.test.ts (10 tests)
+ ✓ tests/unit/devtest/media-flow.test.ts (98 tests)
  ✓ tests/unit/devtest/media-inspector.test.ts (10 tests)
- ✓ tests/unit/devtest/exploration/state-graph-acceptance.test.ts (3 tests)
- ✓ tests/unit/devtest/exploration/learning-acceptance.test.ts (6 tests)
- ✓ tests/unit/devtest/exploration/exploration-policy-acceptance.test.ts (4 tests)
- ✓ tests/unit/devtest/core-kernel-and-cli.test.ts (63 tests)
- ✓ tests/unit/devtest/media-flow.test.ts (29 tests)
+ ✓ tests/unit/devtest/routing-disambiguation.test.ts (17 tests)
+ ✓ tests/unit/devtest/routing.test.ts (15 tests)
+ ✓ tests/unit/devtest/self-evolving-tester.test.ts (13 tests)
 
- Test Files  21 passed (21)
-      Tests  286 passed (286)
+ Test Files  28 passed (28)
+      Tests  490 passed (490)
 ```
 
 ---
@@ -483,8 +499,22 @@ npm run build
 ## 14. 架构冻结说明
 
 本项目受 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md) 约束，架构处于永久冻结状态。
-- **不可逾越的红线**：禁止新增第 5 个核心动作；禁止新增上帝类 Manager/Coordinator；禁止加入 Web UI 或重型数据库；禁止改变 CLI / MCP 双模同源结构。
-- **架构演进原则**：业务新特征与新模型必须通过在编排层领域模块（如 `domain-knowledge.ts` 或规则收件箱）中沉淀知识，或者完善 `core-kernel.ts` 既有 4 大动作的内涵来实现，严禁外扩架构。
+
+### 14.1 不可逾越的红线
+- 禁止新增第 5 个核心动作；
+- 禁止新增上帝类 Manager/Coordinator；
+- 禁止加入 Web UI 或外部持久化数据库；
+- 禁止改变 CLI / MCP 双模同源架构。
+
+### 14.2 受控适配器扩展与人工授权规范 (Section 2.1 - 2.3)
+根据架构冻结规范最新修正：
+1. **受控适配器扩展原则**：核心领域语义冻结，仅允许通过标准端口定义（`ExecutionPort` / `EvidenceProducerPort`）挂载可选适配器。
+2. **唯一裁决引擎权威**：适配器只负责执行与采集证据，无权作出最终业务裁决，所有裁决统一交由 `CanonicalVerdictEngine`。
+3. **Phase 0 & Phase 1 授权范围**：
+   - 渠道消歧与目标路由消歧收口；
+   - 真实模式下关闭调用者手工声明绕过，严格要求真实只读网关快照采集器；
+   - 建立 Canonical TestSpec、Canonical Evidence Envelope、标准端口与唯一裁决引擎。
+4. **TrustedGatewaySnapshot 边界**：缺少合法只读快照采集器时，REAL 模式验收严格保持 `BLOCKED`，坚决贯彻零假 PASS。
 
 ---
 
@@ -499,9 +529,13 @@ panqu-Test-agent/
 │   └── devtest-mcp.ts                # IDE 辅助 stdio MCP 服务主入口
 ├── src/devtest/
 │   ├── core-kernel.ts                # 四大核心动作统一调度器 (probe, plan, execute, verify)
+│   ├── canonical-protocol.ts         # Canonical TestSpec 与 Evidence Envelope 领域规范
+│   ├── canonical-verdict-engine.ts   # Single Verdict Engine 唯一最终裁决引擎
+│   ├── execution-ports.ts            # 执行适配器与证据生产者最小端口定义
+│   ├── legacy-protocol-mappers.ts    # 旧版四大动作与 Canonical 协议双向映射器
 │   ├── mcp-service.ts                # MCP stdio 服务封装与参数 Schema
 │   ├── env-probe.ts                  # 环境探活、网关连通性与模型契约发现
-│   ├── routing.ts                    # Direct 直连与 NewAPI 智能网关分流决策
+│   ├── routing.ts                    # Direct 直连与 NewAPI 智能网关分流决策及消歧器
 │   ├── domain-knowledge.ts           # 领域失效模式知识库、知识晋升与 GitHub 同步
 │   ├── media-flow.ts                 # 媒体任务真实网络提交与状态轮询
 │   ├── media-inspector.ts            # MP4 (Faststart / 尾部 moov 切片) 与图片物理结构解析
@@ -521,6 +555,13 @@ panqu-Test-agent/
 │       └── state-graph.ts            # 状态转移图谱
 ├── tests/unit/devtest/
 │   ├── core-kernel-and-cli.test.ts   # 核心内核与 CLI / wait 闭环契约测试
+│   ├── core-kernel-canonical-switch.test.ts # 唯一裁决引擎切换安全反证测试 (10 大反证门禁)
+│   ├── canonical-protocol.test.ts    # Canonical 协议类型与断言测试
+│   ├── canonical-verdict-engine.test.ts # 唯一裁决引擎独立算法测试
+│   ├── canonical-shadow-comparison.test.ts # 影子对比一致性测试
+│   ├── execution-ports.test.ts       # 执行端口与采集器端口测试
+│   ├── legacy-protocol-mappers.test.ts # 协议映射器双向一致性测试
+│   ├── routing-disambiguation.test.ts# 渠道与目标消歧门禁测试
 │   ├── media-flow.test.ts            # 媒体提交与抖动重试轮询测试
 │   ├── media-inspector.test.ts       # 媒体二进制容器解析测试
 │   ├── billing.test.ts               # 计费对账与金融不变量测试
@@ -537,7 +578,7 @@ panqu-Test-agent/
 │   ├── self-evolving-tester.test.ts  # 自演化测试器测试
 │   └── exploration/                  # 探索与变异专项测试 (6 套件)
 ├── docs/
-│   └── ARCHITECTURE_FREEZE.md        # 核心架构永久冻结规范
+│   └── ARCHITECTURE_FREEZE.md        # 核心架构永久冻结与受控扩展规范
 ├── scripts/
 │   └── copy-assets.mjs               # 构建资源与内置技能复制脚本
 ├── .trae/
@@ -550,17 +591,19 @@ panqu-Test-agent/
 
 ## 16. 版本与发布记录
 
-### 当前版本：`v5.4.0` (2026-09-18 同步)
+### 当前版本：`v5.4.0` (Phase 1 权威收口)
 
-#### 本次同步核心更新亮点：
-1. **CLI 与 MCP 端到端闭环 (--wait / wait: true)**：
-   - 彻底解决任务提交后需手动核验的断层问题，`execute` 可直接自动桥接 `verify`，串联轮询等待、产物二进制切片解析、账单流水对账与金融安全审计。
-2. **MP4 尾部 `moov` Box 范围切片支持**：
-   - 适配万相 Wan3.0 等模型生成的尾部元数据 MP4 结构，通过 HTTP Range 获取尾部 64KB 切片，杜绝结构有效却误报文件破损。
-3. **严格贯彻 Fail-Closed 与诚实声明原则**：
-   - 缺少账单流水凭证统一判定为 `UNVERIFIED`，生产验收严格判定为 `BLOCKED`；
-   - 诚实声明当前未接入逐帧视频解码器，`actualDecoded` 始终返回 `null`，严禁谎报。
-4. **全量测试矩阵扩展与校准**：
-   - 测试用例由 275 项平滑扩充至 **286 项**，21 个测试套件 100% PASS，保障高可靠代码质量。
+#### 本次核心更新亮点：
+1. **Phase 1 Canonical 协议与 Single Verdict Engine 唯一裁决收口**：
+   - 引入标准化的 `CanonicalTestSpec`、`CanonicalEvidenceEnvelope` 与 `CanonicalVerificationVerdict`；
+   - 彻底将 `core-kernel.ts` verify 的裁决判定委托给唯一的 `CanonicalVerdictEngine`，杜绝多套裁决标准可能存在的语义逃逸；
+   - 新增 10 大核心安全反证测试，证明缺少真实只读网关快照或底层分流证据时严格保持 `BLOCKED`。
+2. **Phase 0 目标对象消歧与防伪造门禁**：
+   - 建立 `RoutingOracle.disambiguateTarget`，严格消歧模型 ID、渠道 ID 与工程上下文；
+   - 禁止调用者通过 `gatewayChannelConfirmed=true` 单方声明伪造通过，真实模式强制校验可信采集器。
+3. **全量测试矩阵升级**：
+   - 测试套件扩展至 **28 个文件**，测试用例增加至 **490 项**，100% 全部通过。
+4. **受控适配器扩展原则确立**：
+   - 严格在 `docs/ARCHITECTURE_FREEZE.md` 中规范适配器扩展边界，确保未来扩展不污染核心调度拓扑。
 5. **Trae MCP 生产配置对齐**：
    - 更新本地与全局 MCP 配置至最新 Git 提交快照，确保智能体使用环境与 GitHub 最新主线完全一致。

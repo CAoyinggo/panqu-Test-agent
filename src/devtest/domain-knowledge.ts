@@ -28,10 +28,12 @@ import {
 // ============================================================================
 
 export type KnowledgeCredibility =
-  | 'CONFIRMED'  // 官方定义 / 线上已验证事实（直接信任并作为强断言基准）
-  | 'OBSERVED'   // 真实执行中观察到的现象（作为经验参考，不可作为排他硬断言）
-  | 'INFERRED'   // Agent 根据现有事实逻辑推断（必须注明不确定性与推断依据）
-  | 'UNKNOWN';   // 当前未知（严禁自行编造，必须明确缺口并要求人工/环境确认）
+  | 'CONFIRMED'    // 官方定义 / 线上已验证事实（直接信任并作为强断言基准）
+  | 'OBSERVED'     // 真实执行中观察到的现象（作为经验参考，不可作为排他硬断言）
+  | 'INFERRED'     // Agent 根据现有事实逻辑推断（必须注明不确定性与推断依据）
+  | 'UNKNOWN'      // 当前未知（严禁自行编造，必须明确缺口并要求人工/环境确认）
+  | 'PROVISIONAL'  // 仅来自调用者入参断言/临时假设（未获服务端只读背书）
+  | 'SUSPICIOUS';  // 存在冲突或存疑（严禁作为确认事实）
 
 export interface CredibleFact<T> {
   value: T;
@@ -664,6 +666,33 @@ export const PANQU_FAILURE_PATTERNS: Record<string, FailurePattern> = {
     symptom: 'Task 终态为 3 (Failed)，但 pq_score_log 中无 type=1 退款流水，导致 netDeductedPoints > 0',
     verification: '严格执行 BillingOracle.netChargeZero 不变量校验，失败任务净扣不为 0 立即裁决 FAIL',
     related_domain: ['BillingLedger', 'Task', 'PQ_SCORE_LOG'],
+    confidence: 'CONFIRMED',
+  },
+  PATTERN_GATEWAY_CHANNEL_MISMATCH: {
+    id: 'FP-006',
+    name: '指定目标渠道未履约或发生渠道漂移',
+    trigger: '网关路由组配置变动、渠道权重调度漂移或下游上游通道故障切换',
+    symptom: '测试期望验证指定渠道 (如 RH-国际 #2)，但服务端实际路由至其他渠道 (如 TD_国际 #54)',
+    verification: '比对目标渠道与 retrylog/exceptionaltask 实际渠道，渠道不符判定验收失败',
+    related_domain: ['Channel', 'Routing', 'Task'],
+    confidence: 'CONFIRMED',
+  },
+  PATTERN_FALLBACK_ARTIFACT_NOT_ACCEPTED: {
+    id: 'FP-007',
+    name: '兜底成片冒充目标渠道合格',
+    trigger: '目标渠道生成失败后触发后端重试/兜底补偿链路 (如 volc_new)',
+    symptom: '前端任务最终状态为成功，产物有效，但实际是由兜底供应商生成，目标渠道本身失败',
+    verification: '检查 retrylog.fallback_channel 及 exceptionaltask.extra.retry_provider，兜底生成的产物不得计入目标渠道合格',
+    related_domain: ['Channel', 'Fallback', 'Artifact'],
+    confidence: 'CONFIRMED',
+  },
+  PATTERN_EVIDENCE_CONFLICT: {
+    id: 'FP-008',
+    name: '调用者入参与服务端只读事实冲突',
+    trigger: '外部命令行或测试入参试图手工指定与服务端实际只读事实相反的渠道或兜底参数',
+    symptom: '服务端事实为实际渠道 54、发生 volc_new 兜底，但调用者输入断言为渠道 2、无兜底',
+    verification: '服务端只读事实强制优先，检测到调用者与服务端事实冲突立即判定 EVIDENCE_CONFLICT 并拒收',
+    related_domain: ['Channel', 'Evidence', 'Audit'],
     confidence: 'CONFIRMED',
   },
 };
@@ -1651,6 +1680,17 @@ export interface BusinessVerificationInput {
     folderId?: number;
     isFolderInProject?: boolean;
   };
+  channelAssertion?: {
+    targetChannelId?: number;
+    targetChannelName?: string;
+    actualChannelId?: number;
+    actualChannelName?: string;
+    fallbackChannel?: string;
+    retryProvider?: string;
+    hasEvidenceConflict?: boolean;
+    conflictReasons?: string[];
+    isActualChannelAssertedOnly?: boolean;
+  };
 }
 
 export interface BusinessVerificationResult {
@@ -1663,6 +1703,20 @@ export interface BusinessVerificationResult {
     artifactBound: boolean;
     oracleConsistent: boolean;
     relationsValid: boolean;
+    channelMatched?: boolean;
+    fallbackAvoided?: boolean;
+  };
+  channelDetail?: {
+    channelMatched?: boolean;
+    fallbackAvoided?: boolean;
+    targetChannelId?: number;
+    targetChannelName?: string;
+    actualChannelId?: number;
+    actualChannelName?: string;
+    fallbackChannel?: string;
+    retryProvider?: string;
+    status: 'PASS' | 'FAIL' | 'UNVERIFIED';
+    reason?: string;
   };
   matchedFailurePatterns: string[];
   reasons: string[];
@@ -1671,7 +1725,7 @@ export interface BusinessVerificationResult {
 
 /**
  * 业务级验真核心函数：
- * 明确区分 Technical Success (API 200/入队) 与 Business Success (真正业务成功)
+ * 明确区分 Technical Success (API 200/入队/容器合法) 与 Business Success (真正业务成功/渠道履约)
  */
 export function evaluateBusinessVerification(input: BusinessVerificationInput): BusinessVerificationResult {
   const reasons: string[] = [];
@@ -1729,8 +1783,92 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     reasons.push('[资损告警 FP-005] 失败任务净扣不为 0 或少/超额退款，违背失败净扣归零不变量');
   }
 
+  // 5. 渠道履约与兜底冒充核验 (目标渠道约束)
+  let channelMatched: boolean | undefined;
+  let fallbackAvoided: boolean | undefined;
+  let channelDetail: BusinessVerificationResult['channelDetail'];
+
+  if (input.channelAssertion?.targetChannelId !== undefined) {
+    const targetId = input.channelAssertion.targetChannelId;
+    const targetName = input.channelAssertion.targetChannelName || `channel-${targetId}`;
+    const actualId = input.channelAssertion.actualChannelId;
+    const actualName = input.channelAssertion.actualChannelName || (actualId ? `channel-${actualId}` : 'unknown');
+    const fallback = input.channelAssertion.fallbackChannel || input.channelAssertion.retryProvider;
+    const isFallback = Boolean(fallback && fallback !== 'none');
+
+    if (input.channelAssertion.hasEvidenceConflict) {
+      matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_EVIDENCE_CONFLICT.id);
+      reasons.push(
+        `[证据冲突 FP-008] 调用者入参与服务端只读事实存在严重冲突: ${(input.channelAssertion.conflictReasons || []).join('; ')}`
+      );
+    }
+
+    if (input.channelAssertion.isActualChannelAssertedOnly) {
+      reasons.push(
+        `[渠道证据存疑] 实际执行渠道 #${actualId} 仅来自调用者入参断言，无服务端运行时只读证据证实 [PROVISIONAL_EVIDENCE]`
+      );
+    }
+
+    if (input.channelAssertion.hasEvidenceConflict) {
+      channelMatched = false;
+      fallbackAvoided = false;
+    } else if (input.channelAssertion.isActualChannelAssertedOnly) {
+      // 仅来自调用者入参断言，不可判定为确认匹配
+      channelMatched = undefined;
+      fallbackAvoided = isFallback ? false : undefined;
+    } else if (actualId !== undefined) {
+      if (actualId === targetId) {
+        channelMatched = true;
+      } else {
+        channelMatched = false;
+        matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_GATEWAY_CHANNEL_MISMATCH.id);
+        reasons.push(
+          `[渠道履约失败 FP-006] 目标渠道 #${targetId} ('${targetName}') 与服务端实际路由渠道 #${actualId} ('${actualName}') 不匹配 [CHANNEL_MISMATCH]`
+        );
+      }
+    } else {
+      reasons.push(
+        `[渠道未验真] 缺少服务端实际执行渠道证据，无法证明任务由目标渠道 #${targetId} ('${targetName}') 履约 [UNVERIFIED]`
+      );
+    }
+
+    if (!input.channelAssertion.hasEvidenceConflict) {
+      if (isFallback) {
+        fallbackAvoided = false;
+        matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_FALLBACK_ARTIFACT_NOT_ACCEPTED.id);
+        reasons.push(
+          `[渠道履约失败 FP-007] 目标渠道未产出成片，成片由兜底通道 (${fallback}) 生成，不得误判为目标渠道合格 [FALLBACK_ARTIFACT_NOT_ACCEPTED]`
+        );
+      } else if (!input.channelAssertion.isActualChannelAssertedOnly) {
+        fallbackAvoided = true;
+      }
+    }
+
+    const channelStatus: 'PASS' | 'FAIL' | 'UNVERIFIED' =
+      input.channelAssertion.hasEvidenceConflict || channelMatched === false || fallbackAvoided === false
+        ? 'FAIL'
+        : channelMatched === true && fallbackAvoided === true
+        ? 'PASS'
+        : 'UNVERIFIED';
+
+    channelDetail = {
+      channelMatched,
+      fallbackAvoided,
+      targetChannelId: targetId,
+      targetChannelName: targetName,
+      actualChannelId: actualId,
+      actualChannelName: actualName,
+      fallbackChannel: input.channelAssertion.fallbackChannel,
+      retryProvider: input.channelAssertion.retryProvider,
+      status: channelStatus,
+      reason: channelStatus === 'FAIL'
+        ? (input.channelAssertion.hasEvidenceConflict ? '证据冲突 (EVIDENCE_CONFLICT)' : (channelMatched === false ? `渠道不匹配 (#${targetId} vs #${actualId})` : `兜底产物 (${fallback})`))
+        : channelStatus === 'UNVERIFIED' ? (input.channelAssertion.isActualChannelAssertedOnly ? '渠道仅来自人工断言' : '缺少执行渠道数据') : '渠道一致且无兜底',
+    };
+  }
+
   // 综合评定
-  const technicalSuccess = apiOk;
+  const technicalSuccess = apiOk && (taskSuccess || taskFailed);
   const artifactBound = input.mediaEvidence.status === 'PASS' && input.mediaEvidence.ownership === 'VERIFIED';
   const oracleConsistent = input.billingEvidence.status === 'PASS' && input.invariantsEvidence.status === 'PASS';
   const taskStateVerified = taskSuccess;
@@ -1742,6 +1880,8 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     input.billingEvidence.status === 'FAIL' ||
     input.invariantsEvidence.status === 'FAIL' ||
     !relationsValid ||
+    channelMatched === false ||
+    fallbackAvoided === false ||
     matchedPatterns.length > 0;
 
   const allBusinessPassed =
@@ -1750,6 +1890,8 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     artifactBound &&
     oracleConsistent &&
     relationsValid &&
+    (channelMatched === undefined || channelMatched === true) &&
+    (fallbackAvoided === undefined || fallbackAvoided === true) &&
     matchedPatterns.length === 0;
 
   let status: 'PASS' | 'FAIL' | 'UNVERIFIED';
@@ -1776,9 +1918,16 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
       artifactBound,
       oracleConsistent,
       relationsValid,
+      ...(channelMatched !== undefined ? { channelMatched } : {}),
+      ...(fallbackAvoided !== undefined ? { fallbackAvoided } : {}),
     },
+    channelDetail,
     matchedFailurePatterns: matchedPatterns,
     reasons,
-    credibility: 'CONFIRMED',
+    credibility: input.channelAssertion?.hasEvidenceConflict
+      ? 'SUSPICIOUS'
+      : input.channelAssertion?.isActualChannelAssertedOnly
+      ? 'PROVISIONAL'
+      : (status === 'PASS' || status === 'FAIL' ? 'CONFIRMED' : 'UNKNOWN'),
   };
 }

@@ -608,3 +608,303 @@ export async function queryTaskBillingLogs(
   };
 }
 
+export interface EndpointQueryRecord {
+  urlType: 'getEditData' | 'retrylog' | 'exceptionaltask';
+  url: string;
+  httpStatus?: number;
+  queryStatus: 'SUCCESS' | 'FAILED' | 'ERROR' | 'UNVERIFIED_MISSING_PROJECT_ID';
+  dataSource: string;
+  error?: string;
+  missingFields?: string[];
+  data?: Record<string, unknown>;
+}
+
+export interface TaskRuntimeDetails {
+  extra?: Record<string, unknown>;
+  extraSource?: 'HTTP_API:getEditData' | 'HTTP_API:exceptional-task';
+  backendTaskId?: number;
+  actualChannelId?: number;
+  actualChannelName?: string;
+  fallbackChannel?: string;
+  retryProvider?: string;
+  videoProvider?: string;
+  volcRouteProvider?: string;
+  newapiStatus?: string;
+  rawEditData?: Record<string, unknown>;
+  rawRetryLog?: Record<string, unknown>;
+  rawExceptionalTask?: Record<string, unknown>;
+  endpoints: Record<'getEditData' | 'retrylog' | 'exceptionaltask', EndpointQueryRecord>;
+  source?: string;
+}
+
+/**
+ * 真实只读查询任务运行时流转明细 (Runtime Details: extra / retrylog / exceptionaltask)
+ * 严格零副作用：仅发起只读 GET 请求，绝不执行任何写操作（无提交、无扣费、无退款、无重试）。
+ */
+export async function queryTaskRuntimeDetails(
+  taskId: number,
+  session: PanquSession,
+  options: { projectId?: number; timeoutMs?: number } = {}
+): Promise<TaskRuntimeDetails> {
+  const timeoutMs = options.timeoutMs ?? 8000;
+  const baseUrl = session.base_url;
+  const cookies = session.cookie_string;
+  const projectId = options.projectId ?? session.project_id;
+
+  const endpoints: Record<'getEditData' | 'retrylog' | 'exceptionaltask', EndpointQueryRecord> = {
+    getEditData: {
+      urlType: 'getEditData',
+      url: '',
+      queryStatus: 'FAILED',
+      dataSource: 'HTTP_API:getEditData',
+    },
+    retrylog: {
+      urlType: 'retrylog',
+      url: '',
+      queryStatus: 'FAILED',
+      dataSource: 'HTTP_API:retrylog',
+    },
+    exceptionaltask: {
+      urlType: 'exceptionaltask',
+      url: '',
+      queryStatus: 'FAILED',
+      dataSource: 'HTTP_API:exceptional-task',
+    },
+  };
+
+  const result: TaskRuntimeDetails = {
+    endpoints,
+  };
+
+  // 1. 查询 /aivideo/v2/video/getEditData?project_id=<projectId>&video_id=<taskId>
+  if (!projectId || projectId <= 0) {
+    endpoints.getEditData = {
+      urlType: 'getEditData',
+      url: new URL(`/aivideo/v2/video/getEditData?project_id=MISSING&video_id=${taskId}`, baseUrl).toString(),
+      queryStatus: 'UNVERIFIED_MISSING_PROJECT_ID',
+      dataSource: 'HTTP_API:getEditData',
+      error: '缺少 projectId，无法查询 /aivideo/v2/video/getEditData 接口 [UNVERIFIED_MISSING_PROJECT_ID]',
+      missingFields: ['projectId'],
+    };
+  } else {
+    const editUrl = new URL(`/aivideo/v2/video/getEditData?project_id=${projectId}&video_id=${taskId}`, baseUrl).toString();
+    endpoints.getEditData.url = editUrl;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetchWithRetry(
+          editUrl,
+          {
+            method: 'GET',
+            headers: {
+              Cookie: cookies,
+              'X-Requested-With': 'XMLHttpRequest',
+              Accept: 'application/json, text/javascript, */*; q=0.01',
+              'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+            },
+            signal: ctrl.signal,
+          },
+          1
+        );
+        endpoints.getEditData.httpStatus = res.status;
+        const text = await res.text();
+        let body: any;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          endpoints.getEditData.queryStatus = 'FAILED';
+          endpoints.getEditData.error = `响应非有效 JSON (HTTP ${res.status}): ${text.slice(0, 100)}`;
+        }
+
+        if (body) {
+          if (res.ok && body.code === 1 && body.data) {
+            endpoints.getEditData.queryStatus = 'SUCCESS';
+            endpoints.getEditData.data = body.data;
+            result.rawEditData = body.data;
+            if (body.data.extra) {
+              const parsedExtra = typeof body.data.extra === 'string' ? JSON.parse(body.data.extra) : body.data.extra;
+              result.extra = parsedExtra;
+              result.extraSource = 'HTTP_API:getEditData';
+            }
+          } else {
+            endpoints.getEditData.queryStatus = 'FAILED';
+            endpoints.getEditData.error = body.msg || `code=${body.code}`;
+          }
+        }
+      } catch (reqErr: any) {
+        endpoints.getEditData.queryStatus = 'ERROR';
+        endpoints.getEditData.error = reqErr?.message || String(reqErr);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err: any) {
+      endpoints.getEditData.queryStatus = 'ERROR';
+      endpoints.getEditData.error = err?.message || String(err);
+    }
+  }
+
+  // 2. 查询 /aivideo/diversion/retrylog?filter={"source_id":taskId}&op={"source_id":"="}
+  const filterParam = JSON.stringify({ source_id: taskId });
+  const opParam = JSON.stringify({ source_id: '=' });
+  const retryLogUrl = new URL(
+    `/aivideo/diversion/retrylog?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
+    baseUrl
+  ).toString();
+  endpoints.retrylog.url = retryLogUrl;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchWithRetry(
+        retryLogUrl,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: cookies,
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+          },
+          signal: ctrl.signal,
+        },
+        1
+      );
+      endpoints.retrylog.httpStatus = res.status;
+      const text = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        endpoints.retrylog.queryStatus = 'FAILED';
+        endpoints.retrylog.error = `响应非有效 JSON (HTTP ${res.status}): ${text.slice(0, 100)}`;
+      }
+
+      if (body) {
+        if (res.ok) {
+          endpoints.retrylog.queryStatus = 'SUCCESS';
+          const row = body?.rows?.[0];
+          if (row) {
+            endpoints.retrylog.data = row;
+            result.rawRetryLog = row;
+            if (row.newapi_channel_id !== undefined && row.newapi_channel_id !== null) {
+              result.actualChannelId = Number(row.newapi_channel_id);
+            }
+            if (row.newapi_provider_name) {
+              result.actualChannelName = String(row.newapi_provider_name);
+            }
+            if (row.fallback_channel) {
+              result.fallbackChannel = String(row.fallback_channel);
+            }
+            if (row.task_id) {
+              result.backendTaskId = Number(row.task_id);
+            }
+            if (row.newapi_status) {
+              result.newapiStatus = String(row.newapi_status);
+            }
+          } else {
+            endpoints.retrylog.missingFields = ['rows[0]'];
+          }
+        } else {
+          endpoints.retrylog.queryStatus = 'FAILED';
+          endpoints.retrylog.error = `HTTP ${res.status}`;
+        }
+      }
+    } catch (reqErr: any) {
+      endpoints.retrylog.queryStatus = 'ERROR';
+      endpoints.retrylog.error = reqErr?.message || String(reqErr);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err: any) {
+    endpoints.retrylog.queryStatus = 'ERROR';
+    endpoints.retrylog.error = err?.message || String(err);
+  }
+
+  // 3. 查询 /aivideo/exceptionaltaskdata/index?filter={"source_id":taskId}&op={"source_id":"="}
+  const expUrl = new URL(
+    `/aivideo/exceptionaltaskdata/index?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
+    baseUrl
+  ).toString();
+  endpoints.exceptionaltask.url = expUrl;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchWithRetry(
+        expUrl,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: cookies,
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+          },
+          signal: ctrl.signal,
+        },
+        1
+      );
+      endpoints.exceptionaltask.httpStatus = res.status;
+      const text = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        endpoints.exceptionaltask.queryStatus = 'FAILED';
+        endpoints.exceptionaltask.error = `响应非有效 JSON (HTTP ${res.status}): ${text.slice(0, 100)}`;
+      }
+
+      if (body) {
+        if (res.ok) {
+          endpoints.exceptionaltask.queryStatus = 'SUCCESS';
+          const row = body?.rows?.[0];
+          if (row) {
+            endpoints.exceptionaltask.data = row;
+            result.rawExceptionalTask = row;
+            if (!result.backendTaskId && row.id) {
+              result.backendTaskId = Number(row.id);
+            }
+            const rowExtra = typeof row.extra === 'string' ? JSON.parse(row.extra) : row.extra;
+            if (rowExtra?.retry_provider) {
+              result.retryProvider = String(rowExtra.retry_provider);
+            }
+            if (rowExtra?.video_provider) {
+              result.videoProvider = String(rowExtra.video_provider);
+            }
+            if (rowExtra?.volc_route_provider) {
+              result.volcRouteProvider = String(rowExtra.volc_route_provider);
+            }
+            if (!result.actualChannelName && row.line_name) {
+              result.actualChannelName = String(row.line_name);
+            }
+
+            // 若 getEditData 未取得 extra，但 exceptionaltask 有 extra，记录来源为 HTTP_API:exceptional-task
+            if (!result.extra && rowExtra) {
+              result.extra = rowExtra;
+              result.extraSource = 'HTTP_API:exceptional-task';
+            }
+          } else {
+            endpoints.exceptionaltask.missingFields = ['rows[0]'];
+          }
+        } else {
+          endpoints.exceptionaltask.queryStatus = 'FAILED';
+          endpoints.exceptionaltask.error = `HTTP ${res.status}`;
+        }
+      }
+    } catch (reqErr: any) {
+      endpoints.exceptionaltask.queryStatus = 'ERROR';
+      endpoints.exceptionaltask.error = reqErr?.message || String(reqErr);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err: any) {
+    endpoints.exceptionaltask.queryStatus = 'ERROR';
+    endpoints.exceptionaltask.error = err?.message || String(err);
+  }
+
+  return result;
+}
+

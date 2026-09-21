@@ -17,7 +17,7 @@ describe('EnvironmentProbe - 真实测试环境只读探针与巡检', () => {
     expect(report.status).toBe('HEALTHY');
     expect(report.env).toBe('test');
     expect(report.baseUrl).toBe('https://test.panqu.com');
-    expect(report.gatewayUrl).toBe('https://aiapis.panqu.com');
+    expect(report.gatewayUrl).toBe('https://apitest.panqu.com');
     expect(report.endpoints.length).toBeGreaterThanOrEqual(3);
     expect(report.endpoints.every((e) => e.reachable)).toBe(true);
     expect(report.modelReadiness).toBeDefined();

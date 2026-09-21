@@ -373,6 +373,7 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         expectedPoints: planRes.expectedPoints,
         baseline: planRes.testPlan?.baseline,
         scoreLogs: [{ task_id: 77701, type: 2, score: -planRes.expectedPoints, memo: '预扣' }],
+        dbExtraConfirmed: true,
       });
 
       expect(verifyRes.passed).toBe(true);
@@ -668,8 +669,8 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         // dbExtraConfirmed 未传
       });
 
-      // 技术层 pass，但生产验收必须为 UNVERIFIED
-      expect(verifyRes.passed).toBe(true);
+      // 缺少 extra.diversion 真实证据时不可判定 PASS，生产验收为 UNVERIFIED
+      expect(verifyRes.passed).toBe(false);
       expect(verifyRes.acceptance).toBe('UNVERIFIED');
       expect(verifyRes.evidenceCompleteness.isComplete).toBe(false);
       expect(verifyRes.evidenceCompleteness.missingEvidence.some((e) => e.includes('MANUAL_DB_EVIDENCE_REQUIRED'))).toBe(true);
