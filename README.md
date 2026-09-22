@@ -1,10 +1,10 @@
 # Panqu AI DevTest
 
-面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、端到端质量工程与自动化验收框架。源码版本为 **v5.4.0**，统一由一套纯 TypeScript 内核驱动，以完全同源逻辑提供本地终端 CLI 与 IDE 辅助 TRAE MCP 双入口。
+面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、端到端质量工程与自动化验收框架。源码版本为 **v6.0.0**，统一由一套纯 TypeScript 内核驱动，以完全同源逻辑提供本地终端 CLI 与 IDE 辅助 TRAE MCP 双入口。
 
 | 核心属性 | 当前规范与工程事实 |
 | --- | --- |
-| **版本 / 包名** | `test-flow@5.4.0` |
+| **版本 / 包名** | `test-flow@6.0.0` |
 | **运行时要求** | Node.js `>=20` · TypeScript `>=5.9` · ESM 纯模块 |
 | **双模同源入口** | 本地终端 `devtest` CLI (`bin/devtest-cli.ts`) · IDE 辅助 `devtest-mcp` (`bin/devtest-mcp.ts`) |
 | **四大核心动作** | `probe()` 环境探活 · `plan()` 分流推导 · `execute()` 任务派发 · `verify()` 验真对账 |
@@ -438,7 +438,7 @@ DevTest MCP 严格只对外暴露以 `devtest` 为核心的测试副驾工具。
       "env": {
         "NODE_OPTIONS": "",
         "NODE_USE_ENV_PROXY": "1",
-        "PANQU_MCP_INTEGRATION_VERSION": "5.4.0"
+        "PANQU_MCP_INTEGRATION_VERSION": "6.0.0"
       }
     },
     "panqu-test-mcp": {
@@ -451,7 +451,7 @@ DevTest MCP 严格只对外暴露以 `devtest` 为核心的测试副驾工具。
       "env": {
         "NODE_OPTIONS": "",
         "NODE_USE_ENV_PROXY": "1",
-        "PANQU_MCP_INTEGRATION_VERSION": "5.4.0"
+        "PANQU_MCP_INTEGRATION_VERSION": "6.0.0"
       }
     }
   }
@@ -632,7 +632,7 @@ panqu-Test-agent/
 │   ├── media-inspector.ts            # MP4 (Faststart / 尾部 moov 切片) 与图片物理结构解析
 │   ├── billing.ts                    # 账单流水对账与三大金融安全不变量审计 (BillingOracle)
 │   ├── types.ts                      # 契约接口、状态机与事实源类型定义
-│   ├── version.ts                    # 统一版本常量 (5.4.0)
+│   ├── version.ts                    # 统一版本常量 (6.0.0)
 │   ├── index.ts                      # 核心模块统一导出
 │   ├── assets/                       # 编译分发内置技能资产
 │   └── exploration/                  # 参数变异与探索器子模块
@@ -655,7 +655,7 @@ panqu-Test-agent/
 ├── .trae/
 │   ├── mcp.json                      # Trae 工作区 MCP 配置
 │   └── skills/                       # Trae IDE 辅助技能库
-├── package.json                      # 项目包配置与脚本 (v5.4.0)
+├── package.json                      # 项目包配置与脚本 (v6.0.0)
 └── tsconfig.json                     # TypeScript 编译配置
 ```
 
@@ -663,7 +663,7 @@ panqu-Test-agent/
 
 ## 16. 版本与发布记录
 
-### 当前版本：`v5.4.0` (成熟收口版)
+### 当前版本：`v6.0.0` (架构收敛与六大核心能力版)
 
 #### 本次核心更新亮点：
 1. **Canonical 协议与 Single Verdict Engine 唯一裁决收口**：

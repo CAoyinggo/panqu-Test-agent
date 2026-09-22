@@ -1670,7 +1670,7 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
   });
 });
 
-describe('E2E 闭环收口与防假 PASS 状态机测试 (v5.4.0 Hardening)', () => {
+describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', () => {
   it('闭环状态机 1: 轮询由排队转为终态成功 (1 -> 2)，同时满足产物验真与账务不变量，产出唯一的技术 PASS 与 ACCEPTED', async () => {
     const validMp4 = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 4 });
     const pollSpy = vi.spyOn(mediaFlow, 'pollTaskStatus').mockResolvedValueOnce({
