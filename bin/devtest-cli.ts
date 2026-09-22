@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Panqu AI DevTest 本地命令行工具 (Unified DevTest CLI)
+ * Panqu AI DevTest v6.0.0 本地命令行工具 (Unified DevTest CLI)
  *
  * 双模同源架构下的本地终端独立运行入口：
  * 提供 4 大核心业务命令：

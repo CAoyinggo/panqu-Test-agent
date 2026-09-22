@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Panqu AI DevTest v6.0.0 IDE 辅助 MCP 服务 (stdio JSON-RPC)
+ */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';

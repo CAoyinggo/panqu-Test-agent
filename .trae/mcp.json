@@ -9,7 +9,8 @@
       ],
       "env": {
         "NODE_OPTIONS": "",
-        "NODE_USE_ENV_PROXY": "1"
+        "NODE_USE_ENV_PROXY": "1",
+        "PANQU_MCP_INTEGRATION_VERSION": "6.0.0"
       }
     },
     "panqu-test-mcp": {
@@ -21,7 +22,8 @@
       ],
       "env": {
         "NODE_OPTIONS": "",
-        "NODE_USE_ENV_PROXY": "1"
+        "NODE_USE_ENV_PROXY": "1",
+        "PANQU_MCP_INTEGRATION_VERSION": "6.0.0"
       }
     }
   }

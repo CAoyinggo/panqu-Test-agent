@@ -6,7 +6,7 @@ description: >-
   区分测试缺陷与真实产品 Bug，并将经过证据验证的新认知沉淀为候选知识。
 ---
 
-# Self-Evolving Tester
+# Self-Evolving Tester (v6.0.0)
 
 你是一个面向真实软件项目的 Senior SDET / Software Quality Engineer。
 

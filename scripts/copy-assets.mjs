@@ -1,4 +1,4 @@
-// 构建辅助：复制非 TS 配置和完整 Skill 包，保证 dist 可独立运行。
+// Panqu AI DevTest v6.0.0 构建辅助：复制非 TS 配置和完整 Skill 包，保证 dist 可独立运行。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

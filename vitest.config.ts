@@ -1,3 +1,4 @@
+// Panqu AI DevTest v6.0.0 Vitest Configuration
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
