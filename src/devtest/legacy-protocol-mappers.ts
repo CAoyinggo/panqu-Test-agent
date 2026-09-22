@@ -34,6 +34,11 @@ import type {
 import type { CanonicalVerdictResult, CanonicalBlocker } from './canonical-verdict-engine.js';
 export type { CanonicalBlocker };
 import type { EvidenceCompleteness } from './types.js';
+import {
+  resolveRequirementTraceForSpec,
+  type RequirementTrace,
+  type ResolvedRequirementTrace,
+} from './requirement-trace.js';
 
 // ============================================================================
 // 一、结构化映射结果契约
@@ -108,10 +113,14 @@ export function redactSensitiveData(data: unknown): unknown {
 export interface MapPlanOptions {
   testId: string; // 必须由调用者显式提供 (Requirement 3)
   requirementId?: string;
+  requirementText?: string;
+  requirement?: string;
   environment?: string;
   executionMode?: ExecutionMode;
   sideEffectPolicy?: SideEffectPolicy;
   costLimit?: TestCostLimit;
+  changedPaths?: readonly string[];
+  traces?: readonly RequirementTrace[];
 }
 
 /**
@@ -123,7 +132,8 @@ export interface MapPlanOptions {
  * 4. REAL 计划需要付费但没有显式授权时，返回结构化 mapping issue；
  * 5. testId 必须由调用者提供，禁止隐式 Date.now()；
  * 6. 定价为 UNVERIFIED 时，不得生成确定的 billing.expectedPoints 关键断言；
- * 7. 根据场景精准生成 requiredEvidence (指定 expectedChannelId 时包含路由证据)。
+ * 7. 根据场景精准生成 requiredEvidence (指定 expectedChannelId 时包含路由证据)；
+ * 8. 前置接入 RequirementTrace 与影响分析结果，未提供时显式记录未执行，零伪造。
  */
 export function mapPlanToCanonicalTestSpec(
   planResult: PlanKernelResult,
@@ -171,7 +181,15 @@ export function mapPlanToCanonicalTestSpec(
   }
 
   const testId = options?.testId || '';
-  const requirementId = options?.requirementId || `REQ-${planResult.scenario || 'UNKNOWN'}-${planResult.modelId ?? 0}`;
+  const resolvedReq = resolveRequirementTraceForSpec({
+    requirementId: options?.requirementId,
+    requirementText: options?.requirementText,
+    requirement: options?.requirement,
+    changedPaths: options?.changedPaths,
+    traces: options?.traces,
+    testId,
+  });
+  const requirementId = resolvedReq.requirementId;
   const environment = options?.environment || 'test';
   const executionMode: ExecutionMode = options?.executionMode || 'FIXTURE';
 
@@ -325,6 +343,13 @@ export function mapPlanToCanonicalTestSpec(
     metadata: {
       mappedFrom: 'PlanKernelResult',
       scenarioName: planResult.scenarioName,
+      requirementText: resolvedReq.requirementText,
+      requirementTrace: resolvedReq.trace || {
+        requirementId: resolvedReq.requirementId,
+        requirementText: resolvedReq.requirementText,
+        impactAnalysis: resolvedReq.impactAnalysis,
+      },
+      impactAnalysis: resolvedReq.impactAnalysis,
     },
   };
 
@@ -336,6 +361,204 @@ export function mapPlanToCanonicalTestSpec(
     warnings,
   };
 }
+
+export interface MapProbeSpecOptions {
+  testId?: string;
+  requirementId?: string;
+  requirementText?: string;
+  requirement?: string;
+  environment?: string;
+  executionMode?: ExecutionMode;
+  changedPaths?: readonly string[];
+  traces?: readonly RequirementTrace[];
+}
+
+export function mapProbeToCanonicalTestSpec(
+  probeOptions: Record<string, unknown>,
+  probeResult?: Record<string, unknown>,
+  options?: MapProbeSpecOptions
+): CanonicalTestSpec {
+  const env = (probeOptions?.env as string) || options?.environment || 'test';
+  const isMock = Boolean(probeOptions?.mock);
+  const testId = options?.testId || `probe-${env}-${String(probeResult?.probedAt || 'latest')}`;
+  const resolvedReq = resolveRequirementTraceForSpec({
+    requirementId: (probeOptions?.requirementId as string) || options?.requirementId,
+    requirementText: (probeOptions?.requirementText as string) || options?.requirementText,
+    requirement: (probeOptions?.requirement as string) || options?.requirement,
+    changedPaths: options?.changedPaths,
+    traces: options?.traces,
+    testId,
+  });
+
+  const executionMode: ExecutionMode = options?.executionMode || (isMock ? 'OFFLINE' : 'REAL');
+  const taskKey = executionMode === 'REAL' ? 'SERVER_API:ENV_HEALTH' : 'FIXTURE:ENV_HEALTH';
+
+  return {
+    testId,
+    requirementId: resolvedReq.requirementId,
+    scenario: 'ENV_PROBE',
+    environment: env,
+    executionMode,
+    target: {
+      targetType: 'environment',
+      modelId: probeOptions?.modelId !== undefined ? Number(probeOptions.modelId) : undefined,
+    },
+    inputs: {
+      baseUrl: probeOptions?.baseUrl || probeResult?.baseUrl,
+      gatewayUrl: probeOptions?.gatewayUrl || probeResult?.gatewayUrl,
+      mock: isMock,
+    },
+    deterministicAssertions: [],
+    costLimit: {
+      maxCostPoints: 0,
+      allowZeroCostOnly: true,
+    },
+    sideEffectPolicy: 'READ_ONLY',
+    requiredEvidence: [taskKey],
+    metadata: {
+      action: 'probe',
+      requirementText: resolvedReq.requirementText,
+      requirementTrace: resolvedReq.trace || {
+        requirementId: resolvedReq.requirementId,
+        requirementText: resolvedReq.requirementText,
+        impactAnalysis: resolvedReq.impactAnalysis,
+      },
+      impactAnalysis: resolvedReq.impactAnalysis,
+    },
+  };
+}
+
+export interface MapExecuteSpecOptions {
+  testId?: string;
+  requirementId?: string;
+  requirementText?: string;
+  requirement?: string;
+  environment?: string;
+  executionMode?: ExecutionMode;
+  sideEffectPolicy?: SideEffectPolicy;
+  costLimit?: TestCostLimit;
+  allowSubmit?: boolean;
+  allowPaid?: boolean;
+  maxCostPoints?: number;
+  changedPaths?: readonly string[];
+  traces?: readonly RequirementTrace[];
+}
+
+export function mapExecuteToCanonicalTestSpec(
+  execOptions: Record<string, unknown>,
+  options?: MapExecuteSpecOptions
+): CanonicalTestSpec {
+  const env = (execOptions?.env as string) || options?.environment || 'test';
+  const mode = (execOptions?.mode as string) === 'real' ? 'REAL' : 'OFFLINE';
+  const modelId = Number(execOptions?.modelId || 84);
+  const scenario = (execOptions?.scenario as string) || (execOptions?.mediaType === 'image' ? 'IMAGE_NEW_MODEL' : 'VIDEO_NEW_MODEL');
+
+  // 纯映射器确定性 testId: 优先显式指定，否则基于稳定业务输入确定性生成，绝对禁止 Date.now() 或 Math.random()
+  const testId = (options?.testId as string)
+    || (execOptions?.testId as string)
+    || `exec-${modelId}-${mode.toLowerCase()}-${scenario.toLowerCase()}`;
+
+  const resolvedReq = resolveRequirementTraceForSpec({
+    requirementId: (execOptions?.requirementId as string) || options?.requirementId,
+    requirementText: (execOptions?.requirementText as string) || options?.requirementText,
+    requirement: (execOptions?.requirement as string) || options?.requirement,
+    changedPaths: options?.changedPaths,
+    traces: options?.traces,
+    testId,
+  });
+
+  const executionMode: ExecutionMode = options?.executionMode || mode;
+
+  // 核心安全约束 1: 默认 sideEffectPolicy 永远为 READ_ONLY，严禁根据 mode=real 自动生成 ALLOW_SUBMIT
+  let sideEffectPolicy: SideEffectPolicy = 'READ_ONLY';
+  if (options?.sideEffectPolicy) {
+    sideEffectPolicy = options.sideEffectPolicy;
+  } else if (execOptions?.sideEffectPolicy) {
+    sideEffectPolicy = execOptions.sideEffectPolicy as SideEffectPolicy;
+  } else if (options?.allowPaid || execOptions?.allowPaid) {
+    sideEffectPolicy = 'ALLOW_PAID';
+  } else if (options?.allowSubmit || execOptions?.allowSubmit) {
+    sideEffectPolicy = 'ALLOW_SUBMIT';
+  }
+
+  // 核心安全约束 2: 默认 costLimit 永远为 0，严禁根据价格或时长自动扩大授权预算
+  let costLimit: TestCostLimit = {
+    maxCostPoints: 0,
+    allowZeroCostOnly: true,
+  };
+  if (options?.costLimit) {
+    costLimit = options.costLimit;
+  } else if (execOptions?.costLimit) {
+    costLimit = execOptions.costLimit as TestCostLimit;
+  } else if (typeof options?.maxCostPoints === 'number') {
+    costLimit = {
+      maxCostPoints: options.maxCostPoints,
+      allowZeroCostOnly: options.maxCostPoints === 0,
+    };
+  } else if (typeof execOptions?.maxCostPoints === 'number') {
+    costLimit = {
+      maxCostPoints: Number(execOptions.maxCostPoints),
+      allowZeroCostOnly: Number(execOptions.maxCostPoints) === 0,
+    };
+  }
+
+  const taskKey = executionMode === 'REAL' ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
+
+  return {
+    testId,
+    requirementId: resolvedReq.requirementId,
+    scenario,
+    environment: env,
+    executionMode,
+    target: {
+      targetType: (execOptions?.targetKind as string) || 'model',
+      modelId,
+      expectedChannelId: execOptions?.channelId !== undefined ? Number(execOptions.channelId) : undefined,
+      channelId: execOptions?.channelId !== undefined ? Number(execOptions.channelId) : undefined,
+      projectId: execOptions?.projectId !== undefined ? Number(execOptions.projectId) : undefined,
+    },
+    inputs: {
+      mediaType: execOptions?.mediaType,
+      prompt: execOptions?.prompt,
+      resolution: (execOptions?.resolution as string | undefined)
+        || (execOptions?.contract as any)?.defaultResolution
+        || (execOptions?.contract as any)?.supportedResolutions?.value?.[0],
+      duration: typeof execOptions?.duration === 'number'
+        ? execOptions.duration
+        : (typeof (execOptions?.contract as any)?.defaultDuration === 'number'
+          ? (execOptions?.contract as any).defaultDuration
+          : ((execOptions?.contract as any)?.supportedDurations?.value?.[0])),
+      aspectRatio: execOptions?.aspectRatio || (execOptions?.contract as any)?.defaultAspectRatio,
+      serviceline: execOptions?.serviceline || (execOptions?.contract as any)?.serviceline,
+      flow: execOptions?.flow || (execOptions?.contract as any)?.flow,
+      flowType: execOptions?.flowType || (execOptions?.contract as any)?.flowType,
+      extraParams: execOptions?.extraParams,
+      mode: execOptions?.mode,
+    },
+    deterministicAssertions: [],
+    costLimit,
+    sideEffectPolicy,
+    requiredEvidence: [taskKey],
+    metadata: {
+      action: 'execute',
+      alias: (execOptions?.alias as string | undefined) || (execOptions?.contract as any)?.alias?.value,
+      price: (execOptions?.price as number | undefined),
+      customPoints: typeof execOptions?.customPoints === 'number' ? execOptions.customPoints : (execOptions?.contract as any)?.pricing?.customPoints?.value,
+      pointsPerSecond: typeof execOptions?.pointsPerSecond === 'number' ? execOptions.pointsPerSecond : (execOptions?.contract as any)?.pricing?.pointsPerSecond?.value,
+      contract: execOptions?.contract,
+      channelName: execOptions?.channelName,
+      rawTarget: execOptions?.rawTarget,
+      requirementText: resolvedReq.requirementText,
+      requirementTrace: resolvedReq.trace || {
+        requirementId: resolvedReq.requirementId,
+        requirementText: resolvedReq.requirementText,
+        impactAnalysis: resolvedReq.impactAnalysis,
+      },
+      impactAnalysis: resolvedReq.impactAnalysis,
+    },
+  };
+}
+
 
 // ============================================================================
 // 四、Mapper 2: probe → CanonicalEvidenceEnvelope[]
@@ -917,7 +1140,8 @@ export function buildCanonicalEvidenceFromVerifyFacts(
   if (taskEvidence) {
     const isTaskPass = taskEvidence.status === 'PASS';
     const isTaskInProgress = taskEvidence.status === 'PROCESSING' || taskEvidence.status === 'UNVERIFIED';
-    const collectionStatus: EvidenceCollectionStatus = 'SUCCESS';
+    const isSessionError = taskEvidence.source === 'session_error' || (Boolean(taskEvidence.error) && taskEvidence.error!.includes('加载凭据失败'));
+    const collectionStatus: EvidenceCollectionStatus = isSessionError ? 'BLOCKED' : 'SUCCESS';
     const evidenceKey = isReal ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
     const observationStatus: EvidenceObservationStatus = isTaskPass
       ? 'PASS'
@@ -948,10 +1172,14 @@ export function buildCanonicalEvidenceFromVerifyFacts(
       provenance: isReal
         ? (taskEvidence.source || 'SERVER_API (/aivideo/v2/task_status/apiGetStatus)')
         : 'FIXTURE (task_status_fixture)',
-      confidence: 1.0,
+      confidence: isSessionError ? 0 : 1.0,
       immutable: true,
       redacted: true,
       collectionStatus,
+      error: isSessionError ? {
+        code: 'SESSION_LOAD_FAILED',
+        message: taskEvidence.error || '加载凭据失败',
+      } : undefined,
     });
   }
 

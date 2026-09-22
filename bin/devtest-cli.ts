@@ -24,6 +24,10 @@ import {
   type VerifyKernelOptions,
   type VerifyKernelResult,
 } from '../src/devtest/core-kernel.js';
+import {
+  PanquMediaExecutionAdapter,
+  type ExecutionAdapter,
+} from '../src/devtest/execution-ports.js';
 import { DEVTEST_VERSION } from '../src/devtest/version.js';
 
 // ANSI 颜色辅助
@@ -300,7 +304,10 @@ function printVerifyResult(result: VerifyKernelResult): void {
   console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
 }
 
-export async function runDevTestCli(args: string[]): Promise<number> {
+export async function runDevTestCli(
+  args: string[],
+  dependencies?: { executionAdapter?: ExecutionAdapter }
+): Promise<number> {
   const { command, options, positionals } = parseCliArgs(args);
   const isJson = Boolean(options.json);
 
@@ -490,13 +497,36 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const projectId = options['project-id'] !== undefined ? Number(options['project-id']) : undefined;
         const rawTarget = options['raw-target'] as string | undefined;
         const wait = Boolean(options.wait);
-        const dbExtraConfirmed = Boolean(options['db-extra-confirmed'] || options.dbExtraConfirmed);
-        const gatewayChannelConfirmed = Boolean(options['gateway-channel-confirmed'] || options.gatewayChannelConfirmed);
+        const rawDbExtra = options['db-extra-confirmed'] ?? options.dbExtraConfirmed;
+        const dbExtraConfirmed = rawDbExtra !== undefined ? Boolean(rawDbExtra) : undefined;
+        const rawGwChannel = options['gateway-channel-confirmed'] ?? options.gatewayChannelConfirmed;
+        const gatewayChannelConfirmed = rawGwChannel !== undefined ? Boolean(rawGwChannel) : undefined;
         const pollTimeoutSec = typeof options['poll-timeout'] === 'number'
           ? options['poll-timeout'] as number
           : typeof options['poll-timeout-sec'] === 'number'
           ? options['poll-timeout-sec'] as number
           : undefined;
+
+        const sideEffectPolicy = (options['side-effect-policy'] || options.sideEffectPolicy) as any;
+        const allowSubmit = Boolean(options['allow-submit'] || options.allowSubmit);
+        const allowPaid = Boolean(options['allow-paid'] || options.allowPaid);
+        const maxCostPoints = typeof options['max-cost-points'] === 'number'
+          ? options['max-cost-points']
+          : typeof options.maxCostPoints === 'number'
+          ? options.maxCostPoints
+          : undefined;
+        const costLimit = maxCostPoints !== undefined
+          ? { maxCostPoints, allowZeroCostOnly: false }
+          : undefined;
+        const requirement = options.requirement as string | undefined;
+
+        const executionAdapter = dependencies?.executionAdapter
+          || (options as any).executionAdapter
+          || new PanquMediaExecutionAdapter({
+            sessionFile,
+            env,
+            enableLiveSubmit: mode === 'real',
+          });
 
         const execOptions: ExecuteKernelOptions = {
           modelId,
@@ -516,6 +546,13 @@ export async function runDevTestCli(args: string[]): Promise<number> {
           targetKind,
           projectId,
           rawTarget,
+          requirement,
+          sideEffectPolicy,
+          costLimit,
+          allowSubmit,
+          allowPaid,
+          maxCostPoints,
+          executionAdapter,
         };
 
         const result = await execute(execOptions);
@@ -604,8 +641,10 @@ export async function runDevTestCli(args: string[]): Promise<number> {
         const env = (options.env as 'test' | 'preonline') || 'test';
         const videoUrl = options['video-url'] as string | undefined;
         const imageUrl = options['image-url'] as string | undefined;
-        const dbExtraConfirmed = Boolean(options['db-extra-confirmed'] || options.dbExtraConfirmed);
-        const gatewayChannelConfirmed = Boolean(options['gateway-channel-confirmed'] || options.gatewayChannelConfirmed);
+        const rawDbExtra = options['db-extra-confirmed'] ?? options.dbExtraConfirmed;
+        const dbExtraConfirmed = rawDbExtra !== undefined ? Boolean(rawDbExtra) : undefined;
+        const rawGwChannel = options['gateway-channel-confirmed'] ?? options.gatewayChannelConfirmed;
+        const gatewayChannelConfirmed = rawGwChannel !== undefined ? Boolean(rawGwChannel) : undefined;
         const price = typeof options.price === 'number' ? options.price as number : undefined;
         const customPoints = typeof options['custom-points'] === 'number' ? options['custom-points'] as number : typeof options.customPoints === 'number' ? options.customPoints as number : undefined;
         const pointsPerSecond = typeof options['points-per-second'] === 'number' ? options['points-per-second'] as number : typeof options.pointsPerSecond === 'number' ? options.pointsPerSecond as number : undefined;

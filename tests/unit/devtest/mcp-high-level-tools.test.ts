@@ -3,9 +3,13 @@ import path from 'node:path';
 import { DevTestMcpService, DEVTEST_MCP_TOOL } from '../../../src/devtest/mcp-service.js';
 import { processMcpRequest } from '../../../bin/devtest-mcp.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
+import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
 
 describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
-  const service = new DevTestMcpService(path.resolve('.'));
+  const service = new DevTestMcpService({
+    projectRoot: path.resolve('.'),
+    executionAdapter: new TestOfflineExecutionAdapter(),
+  });
 
   describe('1. DEVTEST_MCP_TOOL Schema 规范', () => {
     it('仅暴露单个 devtest 工具，支持 probe, plan, execute, verify', () => {

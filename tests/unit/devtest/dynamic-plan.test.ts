@@ -7,6 +7,7 @@ import {
 } from '../../../src/devtest/env-probe.js';
 import { plan, execute, verify } from '../../../src/devtest/core-kernel.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
+import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
 
 describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discovery)', () => {
   describe('1. 场景识别引擎 (identifyChangeScenario)', () => {
@@ -251,6 +252,7 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         mediaType: 'image',
         mode: 'mock',
         contract: planRes.contract,
+        executionAdapter: new TestOfflineExecutionAdapter(),
       });
       expect(execRes.ok).toBe(true);
       expect(execRes.taskId).toBeGreaterThan(0);
@@ -318,6 +320,7 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         duration: 5,
         resolution: '720p',
         contract: planRes.contract,
+        executionAdapter: new TestOfflineExecutionAdapter(),
       });
       expect(execRes.ok).toBe(true);
       expect(execRes.taskId).toBeGreaterThan(0);
@@ -924,6 +927,7 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
           mediaType: 'image',
           flow: 'direct',
           price: 5,
+          executionAdapter: new TestOfflineExecutionAdapter({ points: 5 }),
         });
 
         expect(execRes.status).toBe('SUBMITTED');

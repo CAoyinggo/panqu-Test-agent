@@ -15,6 +15,8 @@ import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js
 import * as mediaFlow from '../../../src/devtest/media-flow.js';
 import { DevTestMcpService } from '../../../src/devtest/mcp-service.js';
 import { discoverModelContract } from '../../../src/devtest/env-probe.js';
+import { PanquMediaExecutionAdapter } from '../../../src/devtest/execution-ports.js';
+import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
 
 describe('DevTest 纯净内核层 (Core Kernel)', () => {
   describe('1. probe (环境探活)', () => {
@@ -97,6 +99,7 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         prompt: 'devtest_cinematic_landscape',
         duration: 5,
         resolution: '720p',
+        executionAdapter: new TestOfflineExecutionAdapter({ points: 70 }),
       });
 
       expect(res.ok).toBe(true);
@@ -113,10 +116,13 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         mediaType: 'video',
         mode: 'real',
         prompt: 'devtest_real_submit',
+        allowPaid: true,
+        maxCostPoints: 100,
+        executionAdapter: new PanquMediaExecutionAdapter({ enableLiveSubmit: true }),
       });
 
       expect(res.ok).toBe(false);
-      expect(res.status).toBe('ERROR');
+      expect(res.status).toBe('FAILED');
       expect(res.message).toContain('sessionFile');
     });
 
@@ -204,6 +210,7 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         alias: 'td',
         contract,
         mode: 'mock',
+        executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }),
       });
       expect(tdRes.ok).toBe(true);
       expect(tdRes.status).toBe('SUBMITTED');
@@ -225,6 +232,9 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         customPoints: 60,
         mode: 'real',
         sessionFile: 'test-session.json',
+        allowPaid: true,
+        maxCostPoints: 100,
+        executionAdapter: new PanquMediaExecutionAdapter({ sessionFile: 'test-session.json', enableLiveSubmit: true }),
       });
 
       expect(res.ok).toBe(false);
@@ -257,6 +267,9 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         customPoints: 60,
         mode: 'real',
         sessionFile: 'test-session.json',
+        allowPaid: true,
+        maxCostPoints: 100,
+        executionAdapter: new PanquMediaExecutionAdapter({ sessionFile: 'test-session.json', enableLiveSubmit: true }),
       });
 
       expect(res.ok).toBe(true);
@@ -590,7 +603,9 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
       logs.push(args.join(' '));
     });
 
-    const code = await runDevTestCli(['execute', '--model', '84', '--media', 'video', '--mode', 'mock', '--json']);
+    const code = await runDevTestCli(['execute', '--model', '84', '--media', 'video', '--mode', 'mock', '--json'], {
+      executionAdapter: new TestOfflineExecutionAdapter(),
+    });
     spy.mockRestore();
 
     expect(code).toBe(0);
@@ -647,7 +662,7 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
       '--alias', 'td',
       '--custom-points', '60',
       '--json',
-    ]);
+    ], { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) });
     spy.mockRestore();
 
     expect(code).toBe(0);
@@ -720,7 +735,7 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
       '--custom-points', '60',
       '--wait',
       '--json',
-    ]);
+    ], { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) });
     spy.mockRestore();
 
     // 脱机 mock 下 verify 凭据缺失返回 1 (UNVERIFIED)，不降低证据要求
@@ -1063,6 +1078,9 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
       modelId: 84,
       mediaType: 'video',
       mode: 'mock',
+      executionAdapter: new TestOfflineExecutionAdapter({
+        message: '任务提交成功 #9527 (受控仿真) [OFFLINE 离线仿真]',
+      }),
     });
 
     expect(execRes.mode).toBe('mock');
@@ -1427,6 +1445,9 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       mediaType: 'video',
       mode: 'real',
       sessionFile: 'session.json',
+      allowPaid: true,
+      maxCostPoints: 100,
+      executionAdapter: new PanquMediaExecutionAdapter({ sessionFile: 'session.json', enableLiveSubmit: true }),
     });
     expect(submitSpy).toHaveBeenCalled();
     const callArgs = submitSpy.mock.calls[0][0];
@@ -1478,6 +1499,9 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       mediaType: 'video',
       mode: 'real',
       sessionFile: 'session.json',
+      allowPaid: true,
+      maxCostPoints: 100,
+      executionAdapter: new PanquMediaExecutionAdapter({ sessionFile: 'session.json', enableLiveSubmit: true }),
     });
     expect(submitSpy).toHaveBeenCalled();
     const callArgs = submitSpy.mock.calls[0][0];
@@ -1507,7 +1531,14 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     expect(planRes.testerActionSummary?.nextStep).toContain('--duration 5');
 
     // 2. execute 显式传参
-    const execRes = await execute({ modelId: 84, mediaType: 'video', resolution: '720p', duration: 5, mode: 'mock' });
+    const execRes = await execute({
+      modelId: 84,
+      mediaType: 'video',
+      resolution: '720p',
+      duration: 5,
+      mode: 'mock',
+      executionAdapter: new TestOfflineExecutionAdapter({ points: 70 }),
+    });
     expect(execRes.points).toBe(70);
 
     // 3. verify 显式传参
@@ -1551,6 +1582,9 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       sessionFile: 'session.json',
       price: 10,
       contract: customContract,
+      allowPaid: true,
+      maxCostPoints: 100,
+      executionAdapter: new PanquMediaExecutionAdapter({ sessionFile: 'session.json', enableLiveSubmit: true }),
     });
 
     expect(submitSpy).toHaveBeenCalled();
@@ -1890,7 +1924,7 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v5.4.0 Hardening)', ()
       '--session-file', '/dummy/session.json',
       '--wait',
       '--json',
-    ]);
+    ], { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 91008 }) });
     pollSpy.mockRestore();
     sessionSpy.mockRestore();
     spy.mockRestore();
@@ -1954,7 +1988,7 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v5.4.0 Hardening)', ()
       '--db-extra-confirmed',
       '--gateway-channel-confirmed',
       '--json',
-    ]);
+    ], { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 84001 }) });
 
     pollSpy.mockRestore();
     querySpy.mockRestore();
@@ -2013,7 +2047,9 @@ describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
       total: 1,
     }));
 
-    const mcpService = new DevTestMcpService();
+    const mcpService = new DevTestMcpService({
+      executionAdapter: new TestOfflineExecutionAdapter({ taskId: 84001 }),
+    });
     const result = await mcpService.call({
       action: 'execute',
       model_id: 84,

@@ -8,6 +8,7 @@ import * as mediaFlow from "../../../src/devtest/media-flow.js";
 import { PANQU_FAILURE_PATTERNS } from "../../../src/devtest/domain-knowledge.js";
 import { runDevTestCli } from "../../../bin/devtest-cli.js";
 import { DevTestMcpService } from "../../../src/devtest/mcp-service.js";
+import { TestOfflineExecutionAdapter } from "../../helpers/test-adapters.js";
 
 describe("Routing Disambiguation & Gateway Channel Regression Tests", () => {
   const service = new DevTestMcpService(path.resolve("."));
@@ -178,7 +179,7 @@ describe("Routing Disambiguation & Gateway Channel Regression Tests", () => {
           "--mode", "mock",
           "--price", "14",
           "--json",
-        ]);
+        ], { executionAdapter: new TestOfflineExecutionAdapter() });
         expect(exitCode).toBe(0);
         const output = JSON.parse(logSpy.mock.calls[0][0]);
         expect(output.ok).toBe(true);

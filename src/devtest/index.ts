@@ -6,6 +6,7 @@ export {
   probe,
   plan,
   execute,
+  executeCanonical,
   verify,
   type ProbeKernelOptions,
   type ProbeKernelResult,
@@ -13,6 +14,7 @@ export {
   type PlanKernelResult,
   type ExecuteKernelOptions,
   type ExecuteKernelResult,
+  type ExecuteCanonicalDependencies,
   type VerifyKernelOptions,
   type VerifyKernelResult,
   type TaskEvidence,
@@ -196,6 +198,9 @@ export {
 
 export {
   FORBIDDEN_VERDICT_FIELDS,
+  mapCanonicalEnvironmentToPanquSessionEnv,
+  type PanquSessionEnvironment,
+  type EnvironmentMappingResult,
   type ExecutionStatus,
   type ExecutionError,
   type ExecutionResult,
@@ -228,3 +233,51 @@ export {
   type CanonicalVerdictResult,
   type AssertionEvaluationResult,
 } from './canonical-verdict-engine.js';
+
+export {
+  UIBrowserEvidenceProducer,
+  UIVisualAiEvidenceProducer,
+  readPngDimensions,
+  type BrowserRawCollection,
+  type VisualAiRawCollection,
+  type DeterministicProducerContext,
+} from './ui-adapters.js';
+
+export {
+  evaluateAgentOutput,
+  type AgentStructuredDecision,
+  type AgentToolCall,
+  type AgentOutputSample,
+  type GoldenEvaluationCriteria,
+  type AgentEvaluationInput,
+  type AgentVulnerabilityCode,
+  type AgentVulnerabilityFinding,
+  type AgentEvaluationStatus,
+  type AgentEvaluationReport,
+} from './agent-evaluation.js';
+
+export {
+  mapVerdictToExportRecord,
+  type ExportRecordStatus,
+  type ExportRecordAttribute,
+  type ExportRecordLogEntry,
+  type ExportableVerdictRecord,
+  type ResultSink,
+  type MapVerdictExportOptions,
+} from './result-sink.js';
+
+export {
+  analyzeImpact,
+  buildRequirementTraceIndex,
+  resolveRequirementTraceForSpec,
+  isStableRequirementId,
+  type RequirementTrace,
+  type RequirementTraceMap,
+  type CoverageGap,
+  type RiskInputType,
+  type RiskInputItem,
+  type ImpactAnalysisOptions,
+  type ImpactAnalysisResult,
+  type ResolvedRequirementTrace,
+  type ResolveRequirementTraceOptions,
+} from './requirement-trace.js';

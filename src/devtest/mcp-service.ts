@@ -14,10 +14,60 @@ import {
   type VerifyKernelResult,
 } from './core-kernel.js';
 import { parseChangeIntent } from './env-probe.js';
-import { existsSync } from 'node:fs';
 import type { DiversionBaseline, MemoryCandidatePayload, RecordCandidateResult } from './types.js';
 import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
-import { RoutingOracle } from './routing.js';
+import { PanquMediaExecutionAdapter, type ExecutionAdapter } from './execution-ports.js';
+
+/**
+ * 单一兼容投影器 (Single Compatibility Projector)
+ * 仅用于对外兼容旧调用方所需的 verdict / acceptance / passed 字段
+ * 严格约束 (Requirement 7):
+ * 1. 只接收 core-kernel 返回的 operationStatus / lifecycleStatus；
+ * 2. 绝对不得重新读取原始业务事实进行二次判定；
+ * 3. 绝对不得将 probe/plan/execute 的非验真状态伪造成业务 PASS/FAIL；
+ * 4. 缺少输入或门禁阻断属于请求状态，绝对不得伪装为业务通过。
+ */
+export function projectOperationToCompatibility(
+  action: 'probe' | 'plan' | 'execute',
+  status: string
+): {
+  readonly operationStatus: string;
+  readonly lifecycleStatus: string;
+  readonly passed: boolean;
+  readonly verdict: string;
+  readonly acceptance: string;
+} {
+  const isBlocked = status.startsWith('BLOCKED');
+  if (isBlocked) {
+    return {
+      operationStatus: status,
+      lifecycleStatus: status,
+      passed: false,
+      verdict: 'BLOCKED',
+      acceptance: 'BLOCKED',
+    };
+  }
+
+  if (action === 'execute') {
+    const isSubmitted = status === 'SUBMITTED' || status === 'SUCCESS';
+    return {
+      operationStatus: status,
+      lifecycleStatus: status,
+      passed: false, // execute 只是派发/排队，无业务裁决，passed 永远为 false
+      verdict: isSubmitted ? 'SUBMITTED' : status,
+      acceptance: isSubmitted ? 'IN_FLIGHT' : status,
+    };
+  }
+
+  // probe / plan
+  return {
+    operationStatus: status,
+    lifecycleStatus: status,
+    passed: false, // 只有 verify 具有业务 pass 裁决权
+    verdict: status,
+    acceptance: status,
+  };
+}
 
 export const DEVTEST_MCP_TOOL = {
   name: 'devtest',
@@ -176,16 +226,31 @@ export interface McpCallResult<T = any> {
   status?: 'SUCCESS' | 'FAILED' | 'PROCESSING' | 'UNVERIFIED' | 'BLOCKED' | 'BLOCKED_MISSING_INPUT' | 'ERROR' | string;
   verdict?: 'PASS' | 'FAIL' | 'PROCESSING' | 'UNVERIFIED' | string;
   acceptance?: 'ACCEPTED' | 'REJECTED' | 'BLOCKED' | 'UNVERIFIED' | string;
+  operationStatus?: string;
+  lifecycleStatus?: string;
   action?: string;
   summary?: string;
   report?: string;
   data?: T;
   error?: string;
   missingInputs?: string[];
+  blockerCode?: string;
 }
 
 export class DevTestMcpService {
-  constructor(private readonly projectRoot = process.cwd()) {}
+  private readonly projectRoot: string;
+  private readonly defaultExecutionAdapter?: ExecutionAdapter;
+
+  constructor(
+    projectRootOrOptions: string | { projectRoot?: string; executionAdapter?: ExecutionAdapter } = process.cwd()
+  ) {
+    if (typeof projectRootOrOptions === 'string') {
+      this.projectRoot = projectRootOrOptions;
+    } else {
+      this.projectRoot = projectRootOrOptions?.projectRoot || process.cwd();
+      this.defaultExecutionAdapter = projectRootOrOptions?.executionAdapter;
+    }
+  }
 
   public async call<T = any>(args: Record<string, unknown>): Promise<McpCallResult<T>> {
     if (!args || typeof args !== 'object' || !args.action || typeof args.action !== 'string' || !args.action.trim()) {
@@ -222,17 +287,16 @@ export class DevTestMcpService {
           ? `\n- **领域对象**: ${res.domainAnalysis.identifiedObjects.map((o) => o.name).join(', ')}`
           : '';
         const summary = `### 📋 Panqu 环境探活回执\n- **环境**: ${res.env} | **状态**: ${res.status}\n- **主站**: ${res.baseUrl}\n- **网关**: ${res.gatewayUrl}\n- **可用渠道数**: ${res.candidateChannelCount}\n- **鉴权凭据**: ${res.auth.status} (${res.auth.details})${domainStr}`;
-        const probePassed = res.ok && res.status === 'HEALTHY';
-        const probeStatus = res.status;
-        const probeVerdict = res.status === 'HEALTHY' ? 'PASS' : (res.status === 'BLOCKED' ? 'BLOCKED' : 'DEGRADED');
-        const probeAcceptance = res.status === 'HEALTHY' ? 'ACCEPTED' : 'BLOCKED';
+        const proj = projectOperationToCompatibility('probe', res.status);
         return {
           ok: true,
           action: 'probe',
-          passed: probePassed,
-          status: probeStatus,
-          verdict: probeVerdict,
-          acceptance: probeAcceptance,
+          operationStatus: proj.operationStatus,
+          lifecycleStatus: proj.lifecycleStatus,
+          passed: proj.passed,
+          status: res.status,
+          verdict: proj.verdict,
+          acceptance: proj.acceptance,
           summary,
           data: res as unknown as T,
           ...(res.ok ? {} : { error: res.status === 'BLOCKED' ? 'Probe blocked' : 'Probe degraded' }),
@@ -261,12 +325,16 @@ export class DevTestMcpService {
 
         if (missingInputs.length > 0) {
           const summary = `### ⚠️ Panqu 分流推导阻断 (缺失必填参数)\n- **缺失参数**: ${missingInputs.join(', ')}\n- **说明**: plan 需要明确的 model_id 与 media_type (直接传入或从 requirement 中推导)。禁止私自猜测参数。`;
+          const proj = projectOperationToCompatibility('plan', 'BLOCKED_MISSING_INPUT');
           return {
             ok: true,
             action: 'plan',
+            operationStatus: proj.operationStatus,
+            lifecycleStatus: proj.lifecycleStatus,
+            passed: proj.passed,
             status: 'BLOCKED_MISSING_INPUT',
-            verdict: 'BLOCKED',
-            acceptance: 'BLOCKED',
+            verdict: proj.verdict,
+            acceptance: proj.acceptance,
             missingInputs,
             summary,
             error: `Missing required inputs: ${missingInputs.join(', ')}`,
@@ -313,14 +381,16 @@ export class DevTestMcpService {
 - **候选渠道**: ${res.candidateChannels.join(', ') || '无可用渠道'}
 - **推导依据**: ${res.reason}`;
         const planStatus = res.blocked && res.blocked.length > 0 ? 'BLOCKED' : (res.ok ? 'READY' : 'BLOCKED');
-        const planVerdict = res.decision || (res.ok ? 'PASS' : 'FAIL');
-        const planAcceptance = res.acceptanceForecast || (res.blocked && res.blocked.length > 0 ? 'BLOCKED' : 'ACCEPTED');
+        const proj = projectOperationToCompatibility('plan', planStatus);
         return {
           ok: res.ok,
           action: 'plan',
+          operationStatus: proj.operationStatus,
+          lifecycleStatus: proj.lifecycleStatus,
+          passed: proj.passed,
           status: planStatus,
-          verdict: planVerdict,
-          acceptance: planAcceptance,
+          verdict: proj.verdict,
+          acceptance: proj.acceptance,
           missingInputs: res.missingInputs,
           summary,
           data: res as unknown as T,
@@ -338,12 +408,16 @@ export class DevTestMcpService {
 
         if (missingInputs.length > 0) {
           const summary = `### ⚠️ Panqu 任务执行阻断 (缺失必填参数)\n- **缺失参数**: ${missingInputs.join(', ')}\n- **说明**: execute 必须显式指定 model_id, media_type, mode ('mock' | 'real')。禁止静默回退默认值。`;
+          const proj = projectOperationToCompatibility('execute', 'BLOCKED_MISSING_INPUT');
           return {
             ok: true,
             action: 'execute',
+            operationStatus: proj.operationStatus,
+            lifecycleStatus: proj.lifecycleStatus,
+            passed: false,
             status: 'BLOCKED_MISSING_INPUT',
-            verdict: 'BLOCKED',
-            acceptance: 'BLOCKED',
+            verdict: proj.verdict,
+            acceptance: proj.acceptance,
             missingInputs,
             summary,
             error: `Missing required inputs: ${missingInputs.join(', ')}`,
@@ -362,6 +436,7 @@ export class DevTestMcpService {
         const customPoints = typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined;
         const pointsPerSecond = typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined;
         const alias = typeof args.alias === 'string' ? args.alias : undefined;
+        const requirement = typeof args.requirement === 'string' ? args.requirement : undefined;
         const wait = Boolean(args.wait);
         const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
           ? args.poll_timeout_sec
@@ -373,77 +448,19 @@ export class DevTestMcpService {
           : typeof args.terminalStatus === 'string'
           ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
           : undefined;
-        const dbExtraConfirmed = Boolean(args.db_extra_confirmed ?? args.dbExtraConfirmed);
-        const gatewayChannelConfirmed = Boolean(args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed);
+        const rawDbExtra = args.db_extra_confirmed ?? args.dbExtraConfirmed;
+        const dbExtraConfirmed = rawDbExtra !== undefined ? Boolean(rawDbExtra) : undefined;
+        const rawGwChannel = args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed;
+        const gatewayChannelConfirmed = rawGwChannel !== undefined ? Boolean(rawGwChannel) : undefined;
 
-        // 目标消歧门禁：REAL 模式无实时数据或其他消歧拦截优先于会话检查
-        const disambiguation = RoutingOracle.disambiguateTarget({
-          targetKind,
-          channelId,
-          channelName,
-          modelId,
-          modelAlias: alias,
-          projectId,
-          rawTarget,
-          mode,
-        });
 
-        if (!disambiguation.ok) {
-          const summary = `### ⚠️ Panqu 任务执行阻断 (目标对象消歧拦截)\n- **原因**: ${disambiguation.error}`;
-          return {
-            ok: true,
-            isError: false,
-            action: 'execute',
-            passed: false,
-            status: 'BLOCKED',
-            verdict: 'BLOCKED',
-            acceptance: 'BLOCKED',
-            summary,
-            error: disambiguation.error,
-            data: {
-              ok: false,
-              taskId: 0,
-              mode,
-              modelId,
-              mediaType,
-              status: 'BLOCKED',
-              points: 0,
-              message: disambiguation.error || '目标对象消歧拦截',
-              disambiguation,
-            } as unknown as T,
-          };
-        }
-
-        // Real mode gate: require session file or PANQU_SESSION_COOKIES_FILE or local session.json
-        const isChannelTarget = disambiguation.targetKind === 'channel' || channelId !== undefined || channelName !== undefined;
-        if (mode === 'real' && !isChannelTarget) {
-          const sessionFilePath = sessionFile
-            || (!process.env.VITEST ? (process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined)) : undefined);
-          if (!sessionFilePath || !existsSync(sessionFilePath)) {
-            const summary = `### ⚠️ Panqu 真实执行阻断 (缺少有效会话)\n- **执行模式**: REAL\n- **状态**: BLOCKED\n- **原因**: 真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json，或设置 PANQU_SESSION_COOKIES_FILE 环境变量）。\n- **说明**: 当前未提供会话凭据，已安全阻断，未发起真实请求。`;
-            return {
-              ok: true,
-              isError: false,
-              action: 'execute',
-              passed: false,
-              status: 'BLOCKED',
-              verdict: 'BLOCKED',
-              acceptance: 'BLOCKED',
-              summary,
-              error: 'Missing session credentials for real mode execution',
-              data: {
-                ok: false,
-                taskId: 0,
-                mode: 'real',
-                modelId,
-                mediaType,
-                status: 'BLOCKED',
-                points: 0,
-                message: '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
-              } as unknown as T,
-            };
-          }
-        }
+        const executionAdapter = (args.execution_adapter || args.executionAdapter) as any
+          || this.defaultExecutionAdapter
+          || new PanquMediaExecutionAdapter({
+            sessionFile,
+            env,
+            enableLiveSubmit: mode === 'real',
+          });
 
         const res = await execute({
           modelId,
@@ -463,38 +480,35 @@ export class DevTestMcpService {
           targetKind,
           projectId,
           rawTarget,
+          requirement,
+          executionAdapter,
+          sideEffectPolicy: (args.side_effect_policy || args.sideEffectPolicy) as any,
+          costLimit: (args.cost_limit || args.costLimit) as any,
+          allowSubmit: Boolean(args.allow_submit ?? args.allowSubmit),
+          allowPaid: Boolean(args.allow_paid ?? args.allowPaid),
+          maxCostPoints: typeof args.max_cost_points === 'number' ? args.max_cost_points : (typeof args.maxCostPoints === 'number' ? args.maxCostPoints : undefined),
         });
 
         if (!wait) {
           const isBlocked = res.status === 'BLOCKED';
+          const proj = projectOperationToCompatibility('execute', res.status);
           const nextInstruction = res.ok && res.taskId > 0
             ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}, model_id=${modelId}, media_type='${mediaType}'${env ? `, env='${env}'` : ''}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
             : '';
           const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}${nextInstruction}`;
-          if (isBlocked) {
-            return {
-              ok: true,
-              isError: false,
-              action: 'execute',
-              passed: false,
-              status: 'BLOCKED',
-              verdict: 'BLOCKED',
-              acceptance: 'BLOCKED',
-              summary,
-              data: res as unknown as T,
-              error: res.message,
-            };
-          }
           return {
-            ok: res.ok,
+            ok: isBlocked ? true : res.ok,
             isError: false,
             action: 'execute',
+            operationStatus: proj.operationStatus,
+            lifecycleStatus: proj.lifecycleStatus,
             passed: false,
-            status: res.ok ? 'SUBMITTED' : (res.status || 'FAILED'),
-            verdict: res.ok ? 'SUBMITTED' : 'FAIL',
-            acceptance: res.ok ? 'IN_FLIGHT' : 'REJECTED',
+            status: res.status,
+            verdict: proj.verdict,
+            acceptance: proj.acceptance,
             summary,
             data: res as unknown as T,
+            blockerCode: (res as any).blockerCode,
             ...(res.ok ? {} : { error: res.message }),
           };
         }
@@ -502,17 +516,21 @@ export class DevTestMcpService {
         // wait enabled: execute -> verify continuous closed-loop pipeline
         if (!res.ok || !res.taskId || res.taskId <= 0) {
           const isBlocked = res.status === 'BLOCKED';
+          const proj = projectOperationToCompatibility('execute', res.status || 'FAILED');
           const summary = `### 📋 Panqu 任务执行回执 [${res.status || 'FAILED'}]\n- **执行状态**: ${res.status || 'FAILED'}\n- **回执信息**: ${res.message}\n- **说明**: 任务提交未成功，无法进入轮询验真阶段。`;
           return {
             ok: isBlocked ? true : false,
             isError: false,
             action: 'execute',
+            operationStatus: proj.operationStatus,
+            lifecycleStatus: proj.lifecycleStatus,
             passed: false,
-            status: isBlocked ? 'BLOCKED' : (res.status || 'FAILED'),
-            verdict: isBlocked ? 'BLOCKED' : 'FAIL',
-            acceptance: isBlocked ? 'BLOCKED' : 'REJECTED',
+            status: res.status || 'FAILED',
+            verdict: proj.verdict,
+            acceptance: proj.acceptance,
             summary,
             data: res as unknown as T,
+            blockerCode: (res as any).blockerCode,
             error: res.message,
           };
         }
