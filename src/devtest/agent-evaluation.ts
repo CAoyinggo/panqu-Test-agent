@@ -677,3 +677,54 @@ export function evaluateAgentOutput(
     }),
   });
 }
+
+// ============================================================================
+// 四、真实样本导入契约 (Real Sample Import Contract - Promptfoo Native Absorption)
+// ============================================================================
+
+export interface AgentSampleImportContract {
+  readonly importSource: string; // e.g. 'manual_fixture', 'production_log', 'session_dump'
+  readonly sampleId: string;
+  readonly isRealSample: boolean; // 必须明确声明是否为真实样本
+  readonly sample: AgentOutputSample;
+  readonly importedAt: string;
+  readonly promptText?: string;
+  readonly notes?: string;
+}
+
+export interface ValidateSampleImportResult {
+  readonly valid: boolean;
+  readonly error?: string;
+  readonly imported?: AgentSampleImportContract;
+}
+
+/**
+ * 校验导入的 Agent 样本是否符合真实样本契约
+ * 杜绝无来源或虚构样本
+ */
+export function validateAgentSampleImport(input: unknown): ValidateSampleImportResult {
+  if (!input || typeof input !== 'object') {
+    return { valid: false, error: '导入样本数据必须为非空对象' };
+  }
+  const item = input as Record<string, unknown>;
+  if (typeof item.importSource !== 'string' || item.importSource.trim() === '') {
+    return { valid: false, error: 'importSource 必须为非空字符串' };
+  }
+  if (typeof item.sampleId !== 'string' || item.sampleId.trim() === '') {
+    return { valid: false, error: 'sampleId 必须为非空字符串' };
+  }
+  if (typeof item.isRealSample !== 'boolean') {
+    return { valid: false, error: 'isRealSample 必须明确为布尔值 (必须声明是否为真实样本)' };
+  }
+  if (!item.sample || typeof item.sample !== 'object') {
+    return { valid: false, error: 'sample 必须为非空 AgentOutputSample 对象' };
+  }
+  const sample = item.sample as AgentOutputSample;
+  if (!sample.content && !sample.structuredDecision) {
+    return { valid: false, error: 'sample 必须至少包含 content 或 structuredDecision' };
+  }
+  return {
+    valid: true,
+    imported: item as unknown as AgentSampleImportContract,
+  };
+}

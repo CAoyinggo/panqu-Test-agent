@@ -9,6 +9,8 @@
  * 5. 零测试实现泄漏：生产模块只保留 ResultSink 端口和纯映射器，不包含任何内存或 Fixture 接收器。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   CanonicalVerdict,
   CanonicalVerdictResult,
@@ -220,4 +222,86 @@ export function mapVerdictToExportRecord(
   };
 
   return deepCloneAndFreeze(rawRecord);
+}
+
+// ============================================================================
+// 五、本地 NDJSON 单向结果追加导出器 (ReportPortal Native Absorption)
+// ============================================================================
+
+export interface NdjsonResultSinkOptions {
+  readonly filePath?: string;
+  readonly enabled?: boolean;
+  readonly redactSensitive?: boolean;
+  readonly writeFn?: (line: string) => void;
+}
+
+/**
+ * 本地 NDJSON 单向结果追加导出器
+ * 核心不变量：
+ * 1. 严格只写不读，单向追加，绝不向 core-kernel 或裁决引擎回写任何状态；
+ * 2. 默认脱敏敏感字段；
+ * 3. 确定性序列化；
+ * 4. 可配置关闭 (enabled: false)。
+ */
+export class NdjsonResultSink implements ResultSink<ExportableVerdictRecord> {
+  readonly sinkName = 'ndjson-result-sink';
+  private readonly filePath?: string;
+  private readonly enabled: boolean;
+  private readonly redactSensitive: boolean;
+  private readonly writeFn?: (line: string) => void;
+
+  constructor(options?: NdjsonResultSinkOptions) {
+    this.filePath = options?.filePath;
+    this.enabled = options?.enabled ?? true;
+    this.redactSensitive = options?.redactSensitive ?? true;
+    this.writeFn = options?.writeFn;
+  }
+
+  sink(record: Readonly<ExportableVerdictRecord>): void {
+    if (!this.enabled) {
+      return;
+    }
+
+    const sanitized = this.redactSensitive ? this.sanitizeRecord(record) : record;
+    const line = JSON.stringify(sanitized) + '\n';
+
+    if (this.writeFn) {
+      this.writeFn(line);
+      return;
+    }
+
+    if (this.filePath) {
+      const resolved = path.resolve(process.cwd(), this.filePath);
+      const dir = path.dirname(resolved);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.appendFileSync(resolved, line, 'utf-8');
+    }
+  }
+
+  private sanitizeRecord(record: Readonly<ExportableVerdictRecord>): Record<string, unknown> {
+    const raw = JSON.parse(JSON.stringify(record));
+    const mask = (obj: any) => {
+      if (!obj || typeof obj !== 'object') return;
+      if (Array.isArray(obj)) {
+        for (const item of obj) mask(item);
+        return;
+      }
+      if (typeof obj.key === 'string' && typeof obj.value === 'string') {
+        if (/token|secret|password|credential|authorization|auth/i.test(obj.key)) {
+          obj.value = '***REDACTED***';
+        }
+      }
+      for (const k of Object.keys(obj)) {
+        if (/token|secret|password|credential|authorization|auth/i.test(k) && typeof obj[k] === 'string') {
+          obj[k] = '***REDACTED***';
+        } else if (typeof obj[k] === 'object') {
+          mask(obj[k]);
+        }
+      }
+    };
+    mask(raw);
+    return raw;
+  }
 }

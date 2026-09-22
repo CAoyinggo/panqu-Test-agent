@@ -254,16 +254,21 @@ export {
   type AgentVulnerabilityFinding,
   type AgentEvaluationStatus,
   type AgentEvaluationReport,
+  validateAgentSampleImport,
+  type AgentSampleImportContract,
+  type ValidateSampleImportResult,
 } from './agent-evaluation.js';
 
 export {
   mapVerdictToExportRecord,
+  NdjsonResultSink,
   type ExportRecordStatus,
   type ExportRecordAttribute,
   type ExportRecordLogEntry,
   type ExportableVerdictRecord,
   type ResultSink,
   type MapVerdictExportOptions,
+  type NdjsonResultSinkOptions,
 } from './result-sink.js';
 
 export {
@@ -271,6 +276,11 @@ export {
   buildRequirementTraceIndex,
   resolveRequirementTraceForSpec,
   isStableRequirementId,
+  collectGitChangedPaths,
+  findAuthoritativeRequirementTraces,
+  resolveWardenMaturity,
+  analyzeGitImpact,
+  DEFAULT_REQUIREMENT_TRACE_SEARCH_PATHS,
   type RequirementTrace,
   type RequirementTraceMap,
   type CoverageGap,
@@ -280,4 +290,19 @@ export {
   type ImpactAnalysisResult,
   type ResolvedRequirementTrace,
   type ResolveRequirementTraceOptions,
+  type CollectGitChangedPathsOptions,
+  type CollectGitChangedPathsResult,
+  type FindRequirementTracesOptions,
+  type FindRequirementTracesStatus,
+  type FindRequirementTracesResult,
+  type AnalyzeGitImpactOptions,
+  type AnalyzeGitImpactStatus,
+  type AnalyzeGitImpactResult,
 } from './requirement-trace.js';
+
+export {
+  ABSORBED_CAPABILITIES_AUDIT,
+  getCapabilityAudit,
+  type CapabilityMaturityLevel,
+  type AbsorbedCapabilityAudit,
+} from './capability-maturity.js';

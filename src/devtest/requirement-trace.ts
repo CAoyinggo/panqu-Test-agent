@@ -8,7 +8,12 @@
  * 4. 严格不可变与确定性：输入输出均无副作用，输出对象深层冻结。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { CanonicalTestSpec } from './canonical-protocol.js';
+import type { CapabilityMaturityLevel } from './capability-maturity.js';
 
 // ============================================================================
 // 一、需求追踪契约 (RequirementTrace Contracts)
@@ -353,4 +358,335 @@ export function resolveRequirementTraceForSpec(
     trace: matchedTrace ? Object.freeze({ ...matchedTrace }) : undefined,
     impactAnalysis: analysis,
   });
+}
+
+// ============================================================================
+// 六、真实 Git 变更收集器 (Real Git Changed Paths Collector)
+// ============================================================================
+
+const execFileAsync = promisify(execFile);
+
+export interface CollectGitChangedPathsOptions {
+  readonly cwd?: string;
+  readonly maxBuffer?: number;
+}
+
+export interface CollectGitChangedPathsResult {
+  readonly ok: boolean;
+  readonly changedPaths: readonly string[];
+  readonly error?: string;
+}
+
+/**
+ * 只读收集 Git 工作区变更路径 (未暂存、已暂存、未跟踪)
+ * 核心不变量：
+ * 1. 使用 Node execFile 调用 git，参数为数组，严禁 shell 拼接；
+ * 2. 支持 unstaged、staged 与 untracked 文件；
+ * 3. 路径规范化、去重、稳定排序；
+ * 4. Git 失败或非仓库时 fail-closed，不返回空成功。
+ */
+export async function collectGitChangedPaths(
+  options?: CollectGitChangedPathsOptions
+): Promise<CollectGitChangedPathsResult> {
+  const cwd = options?.cwd || process.cwd();
+  const maxBuffer = options?.maxBuffer || 10 * 1024 * 1024;
+
+  try {
+    // 1. 检查是否在 git 工作树内
+    await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, maxBuffer });
+
+    // 2. 收集工作区变更：使用 porcelain=v1 -z -u
+    const { stdout } = await execFileAsync(
+      'git',
+      ['status', '--porcelain=v1', '-z', '-u'],
+      { cwd, maxBuffer }
+    );
+
+    const changedPathsSet = new Set<string>();
+    const parts = stdout.split('\0');
+    for (let i = 0; i < parts.length; i++) {
+      const entry = parts[i];
+      if (!entry) continue;
+      const status = entry.slice(0, 2);
+      const filePath = entry.slice(3);
+      if (filePath) {
+        changedPathsSet.add(normalizePath(filePath));
+      }
+      // 重命名 (R) 或拷贝 (C) 时紧跟旧/新路径
+      if (status.includes('R') || status.includes('C')) {
+        i++;
+        if (i < parts.length && parts[i]) {
+          changedPathsSet.add(normalizePath(parts[i]));
+        }
+      }
+    }
+
+    const sortedPaths = Array.from(changedPathsSet).sort();
+    return {
+      ok: true,
+      changedPaths: Object.freeze(sortedPaths),
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      changedPaths: Object.freeze([]),
+      error: `Git 变更收集失败 (fail-closed): ${errorMsg}`,
+    };
+  }
+}
+
+// ============================================================================
+// 七、权威需求映射查找与成熟度解析 (Authoritative Requirement Traces)
+// ============================================================================
+
+export interface FindRequirementTracesOptions {
+  readonly cwd?: string;
+  readonly filePath?: string;
+  readonly searchPaths?: readonly string[];
+}
+
+export type FindRequirementTracesStatus =
+  | 'LOADED'
+  | 'BLOCKED_DATA_MISSING'
+  | 'INVALID_REQUIREMENT_TRACE';
+
+export interface FindRequirementTracesResult {
+  readonly status: FindRequirementTracesStatus;
+  readonly traces: readonly RequirementTrace[];
+  readonly sourceFile?: string;
+  readonly error?: string;
+}
+
+export const DEFAULT_REQUIREMENT_TRACE_SEARCH_PATHS = [
+  'devtest-requirements.json',
+  'docs/devtest-requirements.json',
+  '.devtest/requirements.json',
+] as const;
+
+/**
+ * 查找并校验仓库中的权威需求映射文件
+ * 核心不变量：
+ * 1. 查找权威需求映射文件；
+ * 2. 校验 stable requirementId、sourceRefs、testIds；
+ * 3. 找不到权威映射时严格返回 BLOCKED_DATA_MISSING，禁止创建虚假映射。
+ */
+export function findAuthoritativeRequirementTraces(
+  options?: FindRequirementTracesOptions
+): FindRequirementTracesResult {
+  const cwd = options?.cwd || process.cwd();
+  const candidatePaths = options?.filePath
+    ? [options.filePath]
+    : options?.searchPaths || DEFAULT_REQUIREMENT_TRACE_SEARCH_PATHS;
+
+  let targetPath: string | undefined;
+  for (const relPath of candidatePaths) {
+    const absPath = path.isAbsolute(relPath) ? relPath : path.resolve(cwd, relPath);
+    if (fs.existsSync(absPath)) {
+      targetPath = absPath;
+      break;
+    }
+  }
+
+  if (!targetPath) {
+    return {
+      status: 'BLOCKED_DATA_MISSING',
+      traces: Object.freeze([]),
+      error: '未找到权威需求映射文件 (devtest-requirements.json)，拒绝创建虚假映射 (BLOCKED_DATA_MISSING)',
+    };
+  }
+
+  try {
+    const rawText = fs.readFileSync(targetPath, 'utf-8');
+    const parsed = JSON.parse(rawText);
+    if (!Array.isArray(parsed)) {
+      return {
+        status: 'INVALID_REQUIREMENT_TRACE',
+        traces: Object.freeze([]),
+        sourceFile: targetPath,
+        error: `需求映射文件 [${targetPath}] 根节点必须为数组`,
+      };
+    }
+
+    if (parsed.length === 0) {
+      return {
+        status: 'BLOCKED_DATA_MISSING',
+        traces: Object.freeze([]),
+        sourceFile: targetPath,
+        error: `权威映射文件为空 [${targetPath}] (BLOCKED_DATA_MISSING)`,
+      };
+    }
+
+    const validatedTraces: RequirementTrace[] = [];
+    for (let idx = 0; idx < parsed.length; idx++) {
+      const item = parsed[idx];
+      if (!item || typeof item !== 'object') {
+        return {
+          status: 'INVALID_REQUIREMENT_TRACE',
+          traces: Object.freeze([]),
+          sourceFile: targetPath,
+          error: `需求映射项 [索引 ${idx}] 必须为有效对象`,
+        };
+      }
+      if (!isStableRequirementId(item.requirementId)) {
+        return {
+          status: 'INVALID_REQUIREMENT_TRACE',
+          traces: Object.freeze([]),
+          sourceFile: targetPath,
+          error: `需求映射项 [索引 ${idx}] 的 requirementId ("${item.requirementId}") 不是合法的 stable requirementId`,
+        };
+      }
+      if (!Array.isArray(item.sourceRefs) || !item.sourceRefs.every((r: unknown) => typeof r === 'string' && r.trim() !== '')) {
+        return {
+          status: 'INVALID_REQUIREMENT_TRACE',
+          traces: Object.freeze([]),
+          sourceFile: targetPath,
+          error: `需求映射项 [${item.requirementId}] 的 sourceRefs 必须为非空字符串数组`,
+        };
+      }
+      if (!Array.isArray(item.testIds) || !item.testIds.every((t: unknown) => typeof t === 'string' && t.trim() !== '')) {
+        return {
+          status: 'INVALID_REQUIREMENT_TRACE',
+          traces: Object.freeze([]),
+          sourceFile: targetPath,
+          error: `需求映射项 [${item.requirementId}] 的 testIds 必须为非空字符串数组`,
+        };
+      }
+
+      validatedTraces.push(Object.freeze({
+        requirementId: item.requirementId,
+        sourceRefs: Object.freeze([...item.sourceRefs]),
+        testIds: Object.freeze([...item.testIds]),
+        description: typeof item.description === 'string' ? item.description : undefined,
+      }));
+    }
+
+    if (validatedTraces.length === 0) {
+      return {
+        status: 'BLOCKED_DATA_MISSING',
+        traces: Object.freeze([]),
+        sourceFile: targetPath,
+        error: `权威映射文件为空 [${targetPath}]，有效条目为 0 (BLOCKED_DATA_MISSING)`,
+      };
+    }
+
+    return {
+      status: 'LOADED',
+      traces: Object.freeze(validatedTraces),
+      sourceFile: targetPath,
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      status: 'INVALID_REQUIREMENT_TRACE',
+      traces: Object.freeze([]),
+      sourceFile: targetPath,
+      error: `需求映射文件 [${targetPath}] 解析失败: ${errorMsg}`,
+    };
+  }
+}
+
+/**
+ * 依据 Git 变更收集器与权威映射文件状态动态解析 wardenIQ 成熟度
+ */
+export function resolveWardenMaturity(context: {
+  readonly gitCollectorAvailable: boolean;
+  readonly hasAuthoritativeMapping: boolean;
+}): CapabilityMaturityLevel {
+  if (context.gitCollectorAvailable && context.hasAuthoritativeMapping) {
+    return 'IMPLEMENTED';
+  }
+  if (context.gitCollectorAvailable && !context.hasAuthoritativeMapping) {
+    return 'BLOCKED_DATA_MISSING';
+  }
+  return 'CONTRACT_ONLY';
+}
+
+// ============================================================================
+// 八、端到端 Git 变更影响分析执行器 (End-to-End Git Impact Analyzer)
+// ============================================================================
+
+export interface AnalyzeGitImpactOptions {
+  readonly cwd?: string;
+  readonly requirementsFile?: string;
+  readonly testSpecs?: readonly CanonicalTestSpec[];
+}
+
+export type AnalyzeGitImpactStatus =
+  | 'COMPLETED'
+  | 'BLOCKED_DATA_MISSING'
+  | 'GIT_COLLECTION_FAILED'
+  | 'INVALID_REQUIREMENT_TRACE';
+
+export interface AnalyzeGitImpactResult {
+  readonly status: AnalyzeGitImpactStatus;
+  readonly maturity: CapabilityMaturityLevel;
+  readonly changedPaths: readonly string[];
+  readonly traces: readonly RequirementTrace[];
+  readonly impactResult?: ImpactAnalysisResult;
+  readonly error?: string;
+}
+
+/**
+ * 端到端基于真实 Git 变更与权威需求映射执行影响分析
+ */
+export async function analyzeGitImpact(
+  options?: AnalyzeGitImpactOptions
+): Promise<AnalyzeGitImpactResult> {
+  const cwd = options?.cwd || process.cwd();
+
+  // 1. 收集真实 Git 变更
+  const gitRes = await collectGitChangedPaths({ cwd });
+  if (!gitRes.ok) {
+    return {
+      status: 'GIT_COLLECTION_FAILED',
+      maturity: resolveWardenMaturity({ gitCollectorAvailable: false, hasAuthoritativeMapping: false }),
+      changedPaths: Object.freeze([]),
+      traces: Object.freeze([]),
+      error: gitRes.error,
+    };
+  }
+
+  // 2. 查找权威需求映射
+  const tracesRes = findAuthoritativeRequirementTraces({
+    cwd,
+    filePath: options?.requirementsFile,
+  });
+
+  // 独立防御门禁：traces 长度为 0 时必须阻断，不得依赖上游假设
+  if (tracesRes.status !== 'LOADED' || tracesRes.traces.length === 0) {
+    const finalStatus = tracesRes.status === 'LOADED' || tracesRes.status === 'BLOCKED_DATA_MISSING'
+      ? 'BLOCKED_DATA_MISSING'
+      : tracesRes.status;
+
+    return {
+      status: finalStatus,
+      maturity: 'BLOCKED_DATA_MISSING',
+      changedPaths: gitRes.changedPaths,
+      traces: Object.freeze([]),
+      error: tracesRes.traces.length === 0 && tracesRes.status === 'LOADED'
+        ? `权威映射文件为空，有效条目为 0 (BLOCKED_DATA_MISSING)`
+        : tracesRes.error,
+    };
+  }
+
+  const maturity = resolveWardenMaturity({
+    gitCollectorAvailable: true,
+    hasAuthoritativeMapping: tracesRes.traces.length > 0,
+  });
+
+  // 3. 执行纯函数影响分析
+  const impact = analyzeImpact({
+    changedPaths: gitRes.changedPaths,
+    traces: tracesRes.traces,
+    testSpecs: options?.testSpecs,
+  });
+
+  return {
+    status: 'COMPLETED',
+    maturity,
+    changedPaths: gitRes.changedPaths,
+    traces: tracesRes.traces,
+    impactResult: impact,
+  };
 }

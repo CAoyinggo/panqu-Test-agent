@@ -84,12 +84,15 @@ function resolveEvidenceId(
 }
 
 // ============================================================================
-// 三、浏览器端确定性事实采集器 (Playwright 原生能力吸收)
+// 三、浏览器端确定性事实采集器 (Playwright 思想吸收 — DEFERRED_EXTERNAL_RUNTIME)
+// 注意：未安装 Playwright，不自制 CDP 浏览器框架；真实 UI 执行依赖外部独立运行时 (NOT_IN_ZERO_DEPENDENCY_SCOPE)
 // ============================================================================
 
 export class UIBrowserEvidenceProducer implements EvidenceProducer {
   readonly producerName = 'ui-browser-evidence-producer';
   readonly sourceType = 'BROWSER' as const;
+  readonly maturity = 'DEFERRED_EXTERNAL_RUNTIME' as const;
+  readonly scope = 'NOT_IN_ZERO_DEPENDENCY_SCOPE' as const;
 
   async produce(
     rawCollection: unknown,
@@ -468,12 +471,15 @@ export class UIBrowserEvidenceProducer implements EvidenceProducer {
 }
 
 // ============================================================================
-// 四、视觉辅助分析采集器 (Midscene 原生能力吸收)
+// 四、视觉辅助分析采集器 (Midscene 思想吸收 — DEFERRED_EXTERNAL_RUNTIME)
+// 注意：未安装 @midscene/web，真实视觉定位依赖外部独立运行时 (NOT_IN_ZERO_DEPENDENCY_SCOPE)
 // ============================================================================
 
 export class UIVisualAiEvidenceProducer implements EvidenceProducer {
   readonly producerName = 'ui-visual-ai-evidence-producer';
   readonly sourceType = 'AI_OBSERVATION' as const;
+  readonly maturity = 'DEFERRED_EXTERNAL_RUNTIME' as const;
+  readonly scope = 'NOT_IN_ZERO_DEPENDENCY_SCOPE' as const;
 
   async produce(
     rawCollection: unknown,

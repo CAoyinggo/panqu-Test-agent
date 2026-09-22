@@ -48,24 +48,25 @@ Canonical Verdict Engine (全系统唯一最终业务裁决源: 纯三态 PASS |
  └── ResultSink (只写不读单向导出，吸收 ReportPortal 思想，深冻结记录，绝不回写)
 ```
 
-## 1.2 五大思想吸收的边界与永久不变量 (Native Absorptions & Invariants)
+## 1.2 五大思想吸收的真实成熟度分类与永久不变量 (Maturity Model & Invariants)
 
-本项目通过轻量纯函数与 TypeScript 端口规范原生吸收了业界优秀思想，**完全未安装、未引入、未 vendor 任何重型外部包（零外部包依赖）**：
+本项目通过轻量纯函数与 TypeScript 端口规范吸收了业界优秀思想，**完全未安装、未引入、未 vendor 任何外部包（零外部包依赖）**。必须严格按以下四级成熟度客观界定，严禁夸大。成熟度（Maturity）与零依赖交付范围（Delivery Scope）是两个正交维度，严禁混用：
 
-1. **wardenIQ 思想吸收（需求关联与影响分析）**：
-   - 纯函数 `resolveRequirementTraceForSpec` 挂载于 `CanonicalTestSpec.metadata.requirementTrace`。
-   - 无明确需求或变更路径输入时必须真实记录未执行 (`{ executed: false, reason: 'NO_CHANGE_OR_REQUIREMENT_INPUT' }`)，严禁虚构或伪造关联。
-   - 保持零裁决权、零数据库与零任务系统依赖。
-2. **Canonical TestSpec 思想吸收（统一意图规约）**：
-   - 系统唯一规范测试意图载体，包含不可变声明式断言、费用上限、副作用策略与必需证据清单。
-3. **Playwright 确定性执行思想吸收（确定性证据模型）**：
-   - DOM、Network、Screenshot 为确定性物理证据（`DOM_EVENT` / `NETWORK_LOG` / `SCREENSHOT`）。
-4. **Midscene 视觉辅助思想吸收（AI 视觉辅助断言）**：
-   - Visual Assist 仅作为辅助观察（`AI_OBSERVATION`），只输出结构化断言建议或标注。
-   - **绝对不变量**：`AI_OBSERVATION` 绝不覆盖确定性断言失败，在无客观凭证时绝对禁止单独放行 PASS。
-5. **ReportPortal 思想吸收（单向结果持久化）**：
-   - `ResultSink` 最小接口只写不读，单向接收 `ExportableVerdictRecord`。
-   - `mapVerdictToExportRecord` 进行严格递归深冻结，core-kernel 与裁决引擎绝对不硬编码具体外部落地介质，严禁任何回写核心状态或篡改裁决的行为。
+### 真实成熟度四级审计 (Strict 4-Level Maturity Audit)
+
+| 开源项目思想 | 真实成熟度 (四级) | 交付范围 (正交维度) | 实际拥有了什么 (What We Have) | 没有什么 (What We Do NOT Have) | 运行时依赖状态 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Playwright** | `DEFERRED_EXTERNAL_RUNTIME` | `NOT_IN_ZERO_DEPENDENCY_SCOPE` | DOM/Network/Screenshot 证据信封规范、确定性上下文、只读/成本门禁、PNG二进制尺寸解析 | 真实浏览器控制、CDP 连接、真实页面交互（**不自制 CDP 框架，不声称真实 UI 执行**） | 未安装 playwright，依赖外部独立浏览器运行时，不在零依赖交付范围，禁止写为已接入 |
+| **Midscene** | `DEFERRED_EXTERNAL_RUNTIME` | `NOT_IN_ZERO_DEPENDENCY_SCOPE` | `AI_OBSERVATION` 信封契约、绝对不变量（AI 不能单独 PASS、不可覆盖确定性失败） | 真实多模态视觉大模型推理引擎、真实 UI 界面元素视觉定位执行器 | 未安装 @midscene/web，依赖外部视觉大模型运行时，不在零依赖交付范围，禁止写为已接入 |
+| **Promptfoo** | `BLOCKED_DATA_MISSING` | `IN_ZERO_DEPENDENCY_SCOPE` | 纯函数 Agent 评测引擎、八类核心漏洞检测、独立黄金预期比对逻辑、样本导入契约 | 被测智能体真实回答样本库（**缺真实数据时严格返回 BLOCKED_DATA_MISSING，零虚假指标**） | 零外部依赖，纯函数已就绪，但生产运行受限于真实样本供给 |
+| **ReportPortal** | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `ExportableVerdictRecord` 递归深冻结纯映射、`ResultSink` 最小端口、本地 NDJSON 单向结果追加导出器 | 远程服务客户端、网络上报协议栈、双向状态同步与回写能力（**只写不读，严禁回写核心状态**） | 零外部依赖，本地 NDJSON 导出已就绪，远程对接为 `CONTRACT_ONLY` |
+| **wardenIQ** | `BLOCKED_DATA_MISSING` | `IN_ZERO_DEPENDENCY_SCOPE` | 真实 Git 变更收集器 (`collectGitChangedPaths`)、纯函数影响分析 (`analyzeImpact`)、需求关联验证 | 仓库权威需求映射文件 (`devtest-requirements.json`)（**Git 变更可读但缺真实映射时严格标记 BLOCKED_DATA_MISSING，禁止创建虚假映射**） | 零外部依赖，Git 收集与分析就绪，受限于权威映射数据供给 |
+
+### 核心不变量 (Core Invariants)
+1. **CanonicalVerdictEngine 保持全系统唯一最终业务裁决源**：纯三态 (`PASS` | `FAIL` | `UNVERIFIED`)，所有适配器与采集器零裁决权。
+2. **AI_OBSERVATION 绝对不可单独放行 PASS，绝对不可覆盖确定性断言失败**。
+3. **ResultSink 严格只写不读**：单向持久化导出，输出脱敏，绝对禁止向 core-kernel 或裁决引擎回写任何状态。
+4. **缺失事实严格 Fail-Closed**：无真实样本、无客观凭证或缺需求映射时，必须返回 `BLOCKED_DATA_MISSING` 或 `UNRESOLVED_REQUIREMENT`，严禁从 TestSpec 借用期望值或伪造关联。
 
 核心代码资产保持在：
 
@@ -87,10 +88,10 @@ src/devtest/
 - **Canonical Verdict Engine** (`src/devtest/canonical-verdict-engine.ts`): 全系统唯一最终业务裁决源权威（纯三态 PASS / FAIL / UNVERIFIED），verify() 结果无条件穿透。
 - **CLI / MCP 生产接入层** (`bin/devtest-cli.ts`, `src/devtest/mcp-service.ts`): 负责注入默认生产 `PanquMediaExecutionAdapter`，仅通过 `projectOperationToCompatibility` 反映请求生命周期状态，绝不自行计算业务 PASS/FAIL。
 
-#### 第二类：可选注入适配器（库级能力） (Tier 2: Optional Injectable Adapters & Libraries)
-- **ResultSink** (`src/devtest/result-sink.ts`): 最小只写不读持久化导出端口，深冻结记录，单向导出，绝不回写或干预核心状态。
-- **UI Evidence Producers** (`src/devtest/ui-adapters.ts`): `UIBrowserEvidenceProducer` 与 `UIVisualAiEvidenceProducer`，纯库级能力，作为外部可选凭证收集器，绝不拥有裁决权。
-- **Agent Evaluation** (`src/devtest/agent-evaluation.ts`): 评测引擎纯库能力。
+#### 第二类：可选注入适配器与库级能力 (Tier 2: Optional Injectable Adapters & Libraries)
+- **ResultSink & NdjsonResultSink** (`src/devtest/result-sink.ts`): 最小只写不读持久化导出端口及本地 NDJSON 单向追加导出器，深冻结记录，单向导出，绝不回写或干预核心状态。
+- **UI Evidence Producers** (`src/devtest/ui-adapters.ts`): `UIBrowserEvidenceProducer` 与 `UIVisualAiEvidenceProducer`，纯协议与信封抽象 (`DEFERRED_EXTERNAL_RUNTIME`，交付范围为 `NOT_IN_ZERO_DEPENDENCY_SCOPE`)，作为外部可选凭证收集器，绝不拥有裁决权，不自制 CDP 浏览器，不属于零依赖交付范围，禁止写为已接入。
+- **Agent Evaluation** (`src/devtest/agent-evaluation.ts`): 评测引擎纯库能力，缺真实样本时严格标记 `BLOCKED_DATA_MISSING`。
 
 #### 第三类：测试专用 Fixture / Adapter（仅限 tests/） (Tier 3: Test-Only Fixtures & Adapters)
 - **TestOfflineExecutionAdapter** (`tests/helpers/test-adapters.ts`): 仅供测试套件用于离线/受控 Mock 执行仿真验证，支持模拟任务 ID。
@@ -98,10 +99,11 @@ src/devtest/
 - **静态测试凭证与 Fixture** (`tests/fixtures/`): 合成 MP4、PNG 样本等。
 - **绝对不变量**：测试专用适配器严禁导出到 `src/devtest/index.ts`，严禁在生产运行时默认加载。
 
-#### 第四类：尚未部署或仅吸收思想的外部工具 (Tier 4: Absorbed Concepts, Zero Dependencies)
+#### 第四类：思想吸收与外部依赖隔离 (Tier 4: Absorbed Concepts, Zero Dependencies)
 - **Playwright、Midscene、Promptfoo、ReportPortal、wardenIQ**：
   - 本项目**完全未安装、未引入、未 vendor** 上述外部框架源码或依赖；
-  - 仅通过原生纯函数与精简 TypeScript 接口吸收其设计思想（确定性物理证据、视觉辅助不可覆盖失败、意图断言驱动、单向结果持久化、需求关联分析）；
+  - 仅通过原生纯函数与精简 TypeScript 接口吸收其设计思想；
+  - 禁止将“吸收设计思想”夸大为“已完成真实集成”；
   - `package.json` 保持 100% 干净，零新增依赖。
 
 ---
@@ -170,15 +172,15 @@ src/devtest/
    - Canonical Evidence Envelope 统一证据信封设计；
    - 标准端口（ExecutionAdapter / EvidenceProducer 最小标准接口）定义；
    - Single Verdict Engine 唯一最终裁决引擎收口。
-3. **Phase 3 原生核心能力吸收授权 (Playwright / Midscene / Promptfoo / ReportPortal / wardenIQ)**：
-   - **Playwright / Midscene**：提取 DOM/网络/真实截图引用与视觉 AI 观察 Producer 至独立生产模块 (`ui-adapters.ts`)，输出统一 Canonical Evidence Envelope，严格由调用方提供 evidenceId 与 capturedAt 保证确定性；`UIFixtureExecutionAdapter` 隔离于测试 helper (`tests/helpers/ui-fixture-adapter.ts`)，生产模块无 fixture 执行器；
-   - **Promptfoo**：实现工具无关 Agent Evaluation 能力 (`agent-evaluation.ts`)，isRealSample 严格为 true 门禁，无结构化决策时标记 `BLOCKED_UNSTRUCTURED_OUTPUT`，依据独立 allowedResources 基线检测八大失效模式；缺少真实样本或黄金基线时严格标记 `BLOCKED_DATA_MISSING`，严禁从输出反推黄金预期；
-   - **ReportPortal**：定义最小只读 `ResultSink` 端口与 `CanonicalVerdictResult` 到标准导出记录递归深冻结纯映射 (`result-sink.ts`)，严格无回写能力，不冻结入参，不实现客户端与部署；`InMemoryResultSink` 仅作为测试消费器隔离于 tests/；
-   - **wardenIQ**：定义最小 `RequirementTrace` 模型与纯函数影响分析 (`requirement-trace.ts`)，输出 affectedTests、coverageGaps、riskInputs，保持可选、可删除、无裁决权，不接数据库与任务系统。
+3. **Phase 3 原生核心能力吸收边界与成熟度定级 (Playwright / Midscene / Promptfoo / ReportPortal / wardenIQ)**：
+   - **Playwright / Midscene (`DEFERRED_EXTERNAL_RUNTIME` + `NOT_IN_ZERO_DEPENDENCY_SCOPE`)**：定义 DOM/网络/真实截图引用与视觉 AI 观察信封抽象至独立生产模块 (`ui-adapters.ts`)，严格由调用方提供 evidenceId 与 capturedAt 保证确定性；不安装依赖、不自制 CDP 浏览器框架；成熟度定级为 `DEFERRED_EXTERNAL_RUNTIME`，交付范围明确标记为 `NOT_IN_ZERO_DEPENDENCY_SCOPE`（正交维度），不属于零依赖交付范围，严禁写为已接入；
+   - **Promptfoo (`BLOCKED_DATA_MISSING` / `CONTRACT_ONLY`)**：实现工具无关 Agent Evaluation 纯函数 (`agent-evaluation.ts`)，定义真实样本导入契约 (`AgentSampleImportContract`)；isRealSample 严格为 true 门禁，缺少真实样本或黄金基线时严格阻断为 `BLOCKED_DATA_MISSING`，严禁从输出反推黄金预期；
+   - **ReportPortal (`IMPLEMENTED` 本地 NDJSON / `CONTRACT_ONLY` 远程)**：实现最小只写不读 `ResultSink` 端口、递归深冻结纯映射及本地 `NdjsonResultSink` 单向结果追加导出器 (`result-sink.ts`)，严格无回写能力，不冻结入参；
+   - **wardenIQ (`BLOCKED_DATA_MISSING` / 缺真实映射)**：实现真实 Git 变更收集器 (`collectGitChangedPaths`) 与纯函数影响分析 (`requirement-trace.ts`)；在仓库未提供权威映射文件时严格标记 `BLOCKED_DATA_MISSING`，禁止创建虚假映射；只有分析纯函数时为 `CONTRACT_ONLY`，两者闭环后才为 `IMPLEMENTED`。
 
 ### 实际能力边界与接入状态声明：
-* **边界界定**：上述四项新能力当前均为**可复用库能力 (Reusable Library Capabilities)，尚未接入 core-kernel/CLI/MCP 运行时入口**。
-* **状态声明**：生产运行时动作（probe/plan/execute/verify）保持既有拓扑，本轮未新增 CLI/MCP 动作命令，严禁伪称端到端运行时接入已完成。
+* **边界界定**：上述能力按成熟度客观划分，严禁把 `CONTRACT_ONLY` 或 `DEFERRED_EXTERNAL_RUNTIME` 宣传为“已完成端到端接入”。成熟度与零依赖交付范围是两个正交维度。
+* **状态声明**：生产运行时动作（probe/plan/execute/verify）保持既有拓扑，未新增 CLI/MCP 冗余动作命令。
 * **智能体评测数据状态**：`BLOCKED_DATA_MISSING`（在未提供被测智能体真实回答样本或独立冻结基线时，生产流程严格返回 `BLOCKED_DATA_MISSING`，零假 PASS，绝不伪造指标）。
 
 ### 明确未授权事项（严禁擅自实施）：
