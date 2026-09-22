@@ -1,0 +1,58 @@
+[
+  {
+    "requirementId": "REQ-BILLING-001",
+    "description": "账单幂等退款与反重复计费审计",
+    "sourceRefs": [
+      "src/devtest/billing.ts"
+    ],
+    "testIds": [
+      "test-billing-idempotent-001",
+      "test-billing-anti-double-002"
+    ],
+    "provenance": "src/devtest/billing.ts（账单退款与扣费逻辑）与 tests/unit/devtest/requirement-trace.test.ts"
+  },
+  {
+    "requirementId": "REQ-ROUTING-001",
+    "description": "渠道消歧与 NewAPI 网关分流决策",
+    "sourceRefs": [
+      "src/devtest/routing.ts"
+    ],
+    "testIds": [
+      "test-routing-disambiguation-001"
+    ],
+    "provenance": "src/devtest/routing.ts（模型网关分流与渠道消歧决策）与 tests/unit/devtest/requirement-trace.test.ts"
+  },
+  {
+    "requirementId": "REQ-UI-AUDIT-001",
+    "description": "历史任务状态 UI 离线核对与证据链断言",
+    "sourceRefs": [
+      "src/devtest/ui-adapters.ts"
+    ],
+    "testIds": [
+      "test-ui-history-audit-001"
+    ],
+    "provenance": "src/devtest/ui-adapters.ts（UI 事实收集器契约）与 tests/unit/devtest/ui-adapter-contract-poc.test.ts"
+  },
+  {
+    "requirementId": "REQ-EXPORT-001",
+    "description": "裁决结果标准单向导出与脱敏",
+    "sourceRefs": [
+      "src/devtest/result-sink.ts"
+    ],
+    "testIds": [
+      "test-ndjson-export-001"
+    ],
+    "provenance": "src/devtest/result-sink.ts（单向持久化导出器）与 tests/unit/devtest/capability-maturity-and-reality.test.ts"
+  },
+  {
+    "requirementId": "REQ-AI-GUARD",
+    "description": "智能体评测八类漏洞防御与黄金预期比对",
+    "sourceRefs": [
+      "src/devtest/agent-evaluation.ts"
+    ],
+    "testIds": [
+      "eval-test-no-sample"
+    ],
+    "provenance": "src/devtest/agent-evaluation.ts（纯函数 Agent 评测引擎）与 tests/unit/devtest/capability-maturity-and-reality.test.ts"
+  }
+]
