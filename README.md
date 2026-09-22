@@ -19,14 +19,7 @@
 
 Panqu AI DevTest 是轻量、纯净、无副作用的测试工程副驾。它负责**测试意图编排、多维物理证据链验真与全链路验收闭环**，坚决**不承载模型训练与推理服务本身**。
 
-```text
-       ┌──────────────┐         ┌─────────────────────────┐         ┌───────────────────────┐
-       │ 需求与代码变更 │ ──────► │ Panqu AI DevTest (测试副驾) │ ──────► │ 确定性验收结论与门禁拦截 │
-       └──────────────┘         └─────────────────────────┘         └───────────────────────┘
-                                             │
-                                             ▼
-                                严格只读验真 · 零副作用 · 零假 PASS
-```
+> **业务原则：代码与需求变更 ➔ 测试副驾意图编排 ➔ 物理证据与真实对账 ➔ 确定性门禁裁决 (零副作用 · 零假 PASS)**
 
 > [!IMPORTANT]
 > **全系统唯一最终裁决权威**：全链路业务裁决统一收敛至 `CanonicalVerdictEngine` 纯三态（`PASS` | `FAIL` | `UNVERIFIED`）。任何领域支撑模块、执行适配器、CLI 或 MCP 均无权自制业务通过裁决。
@@ -35,76 +28,12 @@ Panqu AI DevTest 是轻量、纯净、无副作用的测试工程副驾。它负
 
 ## 🏛️ 全景架构拓扑 (Converged Architecture)
 
-框架全面遵循不可逆的单向数据流与单裁决权威拓扑，原生吸收业界五大核心思想，**零引入重型外部包依赖**：
+<div align="center">
 
-```text
-Requirement / Code Change
-            │
-            ▼
-RequirementTrace + Impact Analysis
-（wardenIQ 精华：需求关联、影响测试、覆盖缺口）
-            │
-            ▼
-Canonical TestSpec
-            │
-            ▼
-core-kernel
-  ├── probe()
-  ├── plan()
-  ├── execute()
-  └── verify()
-            │
-            ▼
-ExecutionAdapter / EvidenceProducer
-  ├── API / Panqu Media
-  └── UI Evidence
-        ├── DOM / Network / Screenshot
-        │   （Playwright 精华：确定性执行与证据）
-        └── Visual Assist
-            （Midscene 精华：视觉辅助，输出 AI_OBSERVATION）
-            │
-            ▼
-Canonical Evidence Envelope
-            │
-            ▼
-Canonical Verdict Engine
-（唯一 PASS / FAIL / UNVERIFIED 来源）
-            │
-            ├── CLI (本地终端命令行)
-            ├── MCP (IDE 辅助智能体服务)
-            └── ResultSink
-                （ReportPortal 精华：只写结果出口，禁止回写）
-```
+<img src="docs/assets/architecture-topology.png" alt="Panqu AI DevTest 目标收敛架构拓扑" width="100%" />
 
-```mermaid
-flowchart TD
-    classDef input fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef core fill:#ede7f6,stroke:#512da8,stroke-width:2px;
-    classDef adapter fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef gate fill:#ffebee,stroke:#c62828,stroke-width:2px;
-    classDef sink fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+</div>
 
-    REQ["需求与代码变更 (Requirement / Code Change)"]:::input
-    TRACE["RequirementTrace & 影响分析 (吸收 wardenIQ 精华)"]:::input
-    SPEC["Canonical TestSpec (不可变声明式测试意图)"]:::core
-    KERNEL["core-kernel (四大核心动作调度)"]:::core
-    ADAPTER["ExecutionAdapter & EvidenceProducer (收集层：零业务裁决权)"]:::adapter
-    ENVELOPE["Canonical Evidence Envelope (不可变证据信封)"]:::adapter
-    ENGINE["Canonical Verdict Engine (唯一裁决权威: PASS / FAIL / UNVERIFIED)"]:::gate
-    CLI["CLI (本地终端回执)"]:::sink
-    MCP["Trae MCP (IDE 辅助协议)"]:::sink
-    SINK["ResultSink (单向结果导出，吸收 ReportPortal 精华)"]:::sink
-
-    REQ --> TRACE
-    TRACE --> SPEC
-    SPEC --> KERNEL
-    KERNEL --> ADAPTER
-    ADAPTER --> ENVELOPE
-    ENVELOPE --> ENGINE
-    ENGINE --> CLI
-    ENGINE --> MCP
-    ENGINE --> SINK
-```
 
 | 环节 / 模块 | 核心职责与吸收理念 | 详细技术规约 |
 |---|---|---|
