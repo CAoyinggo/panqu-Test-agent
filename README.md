@@ -69,57 +69,62 @@ DevTest 负责**测试编排、质量门禁、物理证据链验真、验收闭�
 
 ## 2. 核心架构与设计原则
 
-### 2.1 五层分层架构拓扑
+### 2.1 目标收敛架构拓扑 (Converged Architecture Topology)
 
-系统严格遵循单核同源的分层架构拓扑与受控扩展标准：
+全系统严格遵循不可逆的单向数据流与单裁决权威拓扑：从需求或代码变更触发，经需求追溯与影响分析生成规范测试规约，由内核四大动作调度受控执行端口，汇聚为统一证据信封，最终由全系统唯一的裁决引擎裁定，并单向输出至终端、IDE MCP 与外部持久化 Sink：
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                   呈现层 (Presentation Layer)                          │
-│        本地终端 CLI (devtest)       │    IDE 辅助 MCP (devtest-mcp)     │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │ 共享调用
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                     内核层 (Core Kernel Layer)                         │
-│                          core-kernel.ts                                │
-│       ┌──────────────┬──────────────┬──────────────┬──────────────┐    │
-│       │   probe()    │    plan()    │  execute()   │   verify()   │    │
-│       └──────┬───────┴──────┬───────┴──────┬───────┴──────┬───────┘    │
-│              │              │              │              │            │
-│              │              │              │ 收集原生事实  ▼            │
-│              │              │              │   buildCanonicalEvidence  │
-│              │              │              │   构建 CanonicalTestSpec  │
-└──────────────┼──────────────┼──────────────┼──────────────┼────────────┘
-               ▼              ▼              ▼              ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                     编排层 (Orchestrator Layer)                        │
-│   env-probe      routing      media-flow    media-inspector   billing  │
-│   domain-knowledge   requirement-trace   result-sink   ui-adapters     │
-│   agent-evaluation   execution-ports     legacy-protocol-mappers       │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │ 统一不可变证据信封汇聚
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                      门禁层 (Gate Layer)                               │
-│       CanonicalVerdictEngine (唯一裁决引擎) · Canonical Evidence       │
-│   纯三态裁决 (PASS | FAIL | UNVERIFIED) · 门禁阻断 (UNVERIFIED + blocker) │
-│   Fail-Closed 原则 · 四维物理证据链 · 三大金融安全不变量 · 零假 PASS 判定  │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │ 单向兼容投影
-                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                兼容投影层 (Compatibility Projection Layer)             │
-│   projectCanonicalVerdictToLegacy() -> status / verdict / acceptance   │
-│   (acceptance: ACCEPTED | REJECTED | BLOCKED | UNVERIFIED)             │
-└────────────────────────────────────────────────────────────────────────┘
+Requirement / Code Change
+            │
+            ▼
+RequirementTrace + Impact Analysis
+（wardenIQ 精华：需求关联、影响测试、覆盖缺口）
+            │
+            ▼
+Canonical TestSpec
+            │
+            ▼
+core-kernel
+  ├── probe()
+  ├── plan()
+  ├── execute()
+  └── verify()
+            │
+            ▼
+ExecutionAdapter / EvidenceProducer
+  ├── API / Panqu Media
+  └── UI Evidence
+        ├── DOM / Network / Screenshot
+        │   （Playwright 精华：确定性执行与证据）
+        └── Visual Assist
+            （Midscene 精华：视觉辅助，输出 AI_OBSERVATION）
+            │
+            ▼
+Canonical Evidence Envelope
+            │
+            ▼
+Canonical Verdict Engine
+（唯一 PASS / FAIL / UNVERIFIED 来源）
+            │
+            ├── CLI
+            ├── MCP
+            └── ResultSink
+                （ReportPortal 精华：只写结果出口，禁止回写）
 ```
 
-1. **呈现层 (Presentation)**：CLI 终端 (`bin/devtest-cli.ts`) 与 Trae MCP 服务 (`bin/devtest-mcp.ts`) 完全同源，调用逻辑 100% 保持一致。
-2. **内核层 (Core Kernel)**：`src/devtest/core-kernel.ts`。统一驱动四大核心动作，杜绝中心化上帝类。
-3. **编排层 (Orchestrator)**：单一职责的领域模块集合，包含探活、路由消歧、媒体执行流、物理结构解析、账务对账、需求追溯、结果导出与智能体评测。
-4. **门禁层 (Gate)**：收口于 `CanonicalVerdictEngine`，执行强类型确定性断言核验与金融不变量审计，凡证据链不完整或不变量被违背，一票否决阻断通过。
-5. **兼容投影层 (Compatibility Projection)**：`legacy-protocol-mappers.ts`。负责将 Canonical 纯三态裁决单向映射为旧版 CLI/MCP 兼容结构。
+#### 五大思想吸收的真实落地与边界（零外部依赖，100% 原生纯函数）：
+1. **wardenIQ 需求追溯与影响分析（`src/devtest/requirement-trace.ts`）**：
+   - 区分稳定 `requirementId` 与文本描述，通过 `buildRequirementTraceIndex` 与 `analyzeImpact` 建立变更影响矩阵与覆盖缺口识别；
+   - 保持纯内存计算，无明确需求或代码变更输入时不虚构关联，零数据库依赖。
+2. **Canonical TestSpec 统一意图规约（`src/devtest/canonical-protocol.ts`）**：
+   - 全系统唯一规范测试规约载体，强类型包含声明式确定性断言、`costLimit`、`sideEffectPolicy`（默认 `READ_ONLY`）与必需证据清单。
+3. **Playwright 确定性证据模型（`src/devtest/ui-adapters.ts`）**：
+   - 严格采集 DOM、网络拦截与真实物理截图文件作为确定性客观事实，截图尺寸由 PNG IHDR 物理块直接解析提取。
+4. **Midscene 视觉辅助观察（`src/devtest/ui-adapters.ts`）**：
+   - 视觉辅助分析仅输出结构化 `AI_OBSERVATION`，**绝不拥有独立裁决权，绝不能覆盖确定性断言失败，严禁单独放行 PASS**。
+5. **ReportPortal 单向持久化出口（`src/devtest/result-sink.ts`）**：
+   - 抽象 `ResultSink` 最小接口，只写不读单向接收深冻结导出的 `ExportableVerdictRecord`，严禁任何回写核心状态或篡改裁决的行为。
+
 
 ### 2.2 核心设计原则
 - **严格遵守架构冻结**：完全遵循 [`docs/ARCHITECTURE_FREEZE.md`](docs/ARCHITECTURE_FREEZE.md)，严禁擅自新增第 5 个核心动作或上帝编排器。
