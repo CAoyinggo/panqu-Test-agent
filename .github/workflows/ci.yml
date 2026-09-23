@@ -250,6 +250,23 @@ jobs:
           else
             echo "⚠ 镜像扫描未运行：Docker 或 deploy/docker/Dockerfile 不可用"
           fi
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### 🛡️ Trivy 漏洞扫描运行状态"
+              if grep -q '"Target"' security-reports/trivy-config.json; then
+                echo "- **配置扫描**：已扫描实际目标"
+              else
+                echo "- ⚠️ **配置扫描未运行**：仓库中未包含 Dockerfile、Kubernetes 或 Terraform 等 IaC 配置文件（未发现扫描目标）"
+              fi
+              if command -v docker >/dev/null 2>&1 && [ -f deploy/docker/Dockerfile ]; then
+                echo "- **镜像扫描**：已构建并扫描镜像"
+              else
+                echo "- ⚠️ **镜像扫描未运行**：Docker 或 deploy/docker/Dockerfile 不可用"
+              fi
+              echo ""
+              echo "> ⚠️ **审查提示**：本 Job 状态（success）仅代表门禁脚本安全执行且无阻断异常，**不代表**配置扫描或镜像扫描已执行或已通过。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload Trivy Artifact
         if: always()
