@@ -2,7 +2,7 @@ name: DevTest CI Quality Gate (v6.0.0)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, "test/**"]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -50,3 +50,252 @@ jobs:
 
       - name: Package Verification
         run: npm pack
+
+  security-audit:
+    name: Security Gate - npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run npm audit check
+        run: |
+          mkdir -p security-reports
+          set -eu
+          scan_status=0
+          npm audit --audit-level=high --json > security-reports/npm-audit.json || scan_status=$?
+          node - security-reports/npm-audit.json "$scan_status" <<'NODE'
+          const fs = require('node:fs');
+          let report;
+          try { report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+          catch { console.error('❌ npm audit 未执行或报告无效'); process.exit(2); }
+          const counts = report?.metadata?.vulnerabilities;
+          if (report.error || !counts || !['low', 'moderate', 'high', 'critical'].every(k => Number.isInteger(counts[k]))) {
+            console.error('❌ npm audit 执行失败或报告字段缺失'); process.exit(2);
+          }
+          const blocking = counts.high + counts.critical;
+          if (blocking) { console.error(`❌ npm audit 发现 ${blocking} 个 HIGH/CRITICAL 漏洞`); process.exit(1); }
+          if (Number(process.argv[3]) !== 0) { console.error('❌ npm audit 异常退出'); process.exit(2); }
+          console.log(`✅ npm audit 完成：HIGH/CRITICAL=0，LOW/MODERATE=${counts.low + counts.moderate}`);
+          NODE
+
+      - name: Upload Audit Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: security-reports/
+          retention-days: 7
+
+  security-sast:
+    name: Security Gate - SAST (Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep SAST
+        run: |
+          mkdir -p security-reports && chmod 777 security-reports
+          docker run --rm --user root -v "$PWD:/src" returntocorp/semgrep:latest \
+            semgrep --config auto --json --output /src/security-reports/semgrep.json /src
+          python3 - security-reports/semgrep.json <<'PY'
+          import json, sys
+          try:
+              with open(sys.argv[1], encoding='utf-8') as stream:
+                  report = json.load(stream)
+              assert isinstance(report.get('results'), list)
+              assert isinstance(report.get('errors'), list)
+              assert isinstance(report.get('paths', {}).get('scanned'), list) and report['paths']['scanned']
+          except (OSError, ValueError, AttributeError, AssertionError):
+              print('❌ Semgrep 未执行或报告无效', file=sys.stderr)
+              sys.exit(2)
+          if report['errors']:
+              print('❌ Semgrep 报告包含扫描错误', file=sys.stderr)
+              sys.exit(2)
+          errors = sum(item.get('extra', {}).get('severity') == 'ERROR' for item in report['results'])
+          if errors:
+              print(f'❌ Semgrep 发现 {errors} 个 ERROR 级别问题', file=sys.stderr)
+              sys.exit(1)
+          print(f'✅ Semgrep 完成：扫描 {len(report["paths"]["scanned"])} 个文件，ERROR=0')
+          PY
+
+      - name: Upload SAST Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-sast-report
+          path: security-reports/
+          retention-days: 7
+
+  security-secrets:
+    name: Security Gate - Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks detect
+        run: |
+          mkdir -p security-reports && chmod 777 security-reports
+          set -eu
+          : > security-reports/gitleaks.json
+          scan_status=0
+          docker run --rm --user root -v "$PWD:/path" zricethezav/gitleaks:latest \
+            detect --redact --report-format json --report-path /path/security-reports/gitleaks.json --source /path --exit-code 42 || scan_status=$?
+          if [ ! -s security-reports/gitleaks.json ]; then
+            echo "❌ Gitleaks 未执行或报告缺失"
+            exit 2
+          fi
+          if [ "$scan_status" -eq 42 ]; then
+            if ! grep -q '"RuleID"' security-reports/gitleaks.json; then
+              echo "❌ Gitleaks 发现问题但报告无效"
+              exit 2
+            fi
+            echo "❌ Gitleaks 发现密钥泄露（报告已脱敏，仅保存为 artifact）"
+            exit 1
+          fi
+          if [ "$scan_status" -ne 0 ]; then
+            echo "❌ Gitleaks 扫描异常退出"
+            exit 2
+          fi
+          if [ "$(tr -d '[:space:]' < security-reports/gitleaks.json)" != '[]' ]; then
+            echo "❌ Gitleaks 无问题状态与报告不一致或报告无效"
+            exit 2
+          fi
+          echo "✅ Gitleaks 扫描完成：无密钥泄露"
+
+      - name: Upload Secrets Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-secrets-report
+          path: security-reports/
+          retention-days: 7
+
+  security-trivy:
+    name: Security Gate - Vulnerability (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy config scan and image guard
+        run: |
+          mkdir -p security-reports && chmod 777 security-reports
+          set -eu
+          : > security-reports/trivy-config.json
+          config_status=0
+          docker run --rm --user root -v "$PWD:/src" aquasec/trivy:latest \
+            config --exit-code 42 --severity HIGH,CRITICAL --format json --output /src/security-reports/trivy-config.json /src || config_status=$?
+          if [ ! -s security-reports/trivy-config.json ] || ! docker run --rm --user root -v "$PWD:/src" aquasec/trivy:latest convert --format json --output /dev/null /src/security-reports/trivy-config.json; then
+            echo "❌ Trivy 配置扫描未执行或报告无效"
+            exit 2
+          fi
+          if ! grep -q '"Target"' security-reports/trivy-config.json; then
+            echo "❌ Trivy 配置扫描没有实际扫描目标"
+            exit 2
+          fi
+          if [ "$config_status" -eq 42 ]; then
+            echo "⚠ Trivy 配置扫描发现 HIGH/CRITICAL 问题（沿用原有非阻断策略）"
+          elif [ "$config_status" -ne 0 ]; then
+            echo "❌ Trivy 配置扫描异常退出"
+            exit 2
+          else
+            echo "✅ Trivy 配置扫描完成：无 HIGH/CRITICAL 问题"
+          fi
+          if command -v docker >/dev/null 2>&1 && [ -f deploy/docker/Dockerfile ]; then
+            export DOCKER_BUILDKIT=1
+            docker build -f deploy/docker/Dockerfile -t test-flow:ci-scan .
+            : > security-reports/trivy-image.json
+            image_status=0
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src" aquasec/trivy:latest \
+              image --exit-code 42 --severity HIGH,CRITICAL --format json --output /src/security-reports/trivy-image.json test-flow:ci-scan || image_status=$?
+            if [ ! -s security-reports/trivy-image.json ] || ! docker run --rm -v "$PWD:/src" aquasec/trivy:latest convert --format json --output /dev/null /src/security-reports/trivy-image.json; then
+              echo "❌ Trivy 镜像扫描未执行或报告无效"
+              exit 2
+            fi
+            if ! grep -Eq '"ArtifactType"[[:space:]]*:[[:space:]]*"container_image"' security-reports/trivy-image.json; then
+              echo "❌ Trivy 报告不是容器镜像扫描结果"
+              exit 2
+            fi
+            if [ "$image_status" -eq 42 ]; then
+              echo "❌ 镜像扫描发现 HIGH/CRITICAL 漏洞"
+              exit 1
+            fi
+            if [ "$image_status" -ne 0 ]; then
+              echo "❌ Trivy 镜像扫描异常退出"
+              exit 2
+            fi
+            echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
+          else
+            echo "⚠ 镜像扫描未运行：Docker 或 deploy/docker/Dockerfile 不可用；仅完成 Trivy 配置扫描"
+          fi
+
+      - name: Upload Trivy Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-trivy-report
+          path: security-reports/
+          retention-days: 7
+
+  security-license:
+    name: Security Gate - License Compliance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run License check
+        run: |
+          mkdir -p security-reports
+          node <<'NODE'
+          const fs = require('node:fs');
+          let lock;
+          try { lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')); }
+          catch { console.error('❌ License 扫描未执行：锁文件缺失或无效'); process.exit(2); }
+          if (!lock.packages || typeof lock.packages !== 'object') {
+            console.error('❌ License 扫描报告来源无效'); process.exit(2);
+          }
+          const packages = Object.entries(lock.packages).filter(([name]) => name);
+          if (!packages.length) { console.error('❌ License 扫描未发现依赖清单'); process.exit(2); }
+          const unknown = packages.filter(([, info]) => !info.license).map(([name]) => name);
+          const gpl = packages.filter(([, info]) => /\b(?:A?GPL)(?:-[0-9.]+)?\b/i.test(info.license || '')).map(([name]) => name);
+          fs.writeFileSync('security-reports/license.json', JSON.stringify({ checked: packages.length, gpl, unknown }, null, 2));
+          console.log(`License 扫描完成：${packages.length} 个依赖，GPL=${gpl.length}，未知=${unknown.length}`);
+          if (gpl.length) console.warn('⚠ GPL 依赖仅告警（沿用原有非阻断策略）');
+          NODE
+
+      - name: Upload License Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-license-report
+          path: security-reports/
+          retention-days: 7
