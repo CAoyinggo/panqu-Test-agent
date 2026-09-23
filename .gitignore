@@ -10,6 +10,8 @@ test-flow-*.tgz
 .env.*
 session.json
 session-*.json
+db-credentials.json
+*credentials*.json
 
 # Logs & Temporary Files
 *.log

@@ -50,7 +50,7 @@ Canonical Verdict Engine (全系统唯一最终业务裁决源: 纯三态 PASS |
 
 ## 1.2 五大思想吸收的真实成熟度分类与永久不变量 (Maturity Model & Invariants)
 
-本项目通过轻量纯函数与 TypeScript 端口规范吸收了业界优秀思想，**完全未安装、未引入、未 vendor 任何外部包（零外部包依赖）**。必须严格按以下四级成熟度客观界定，严禁夸大。成熟度（Maturity）与零依赖交付范围（Delivery Scope）是两个正交维度，严禁混用：
+本项目通过轻量纯函数与 TypeScript 端口规范吸收了业界优秀思想，**本次思想吸收未新增 Playwright、Midscene 等外部框架依赖；项目已有 p-limit 运行时依赖**。必须严格按以下四级成熟度客观界定，严禁夸大。成熟度（Maturity）与零依赖交付范围（Delivery Scope）是两个正交维度，严禁混用：
 
 ### 真实成熟度四级审计 (Strict 4-Level Maturity Audit)
 
@@ -104,11 +104,11 @@ src/devtest/
   - 本项目**完全未安装、未引入、未 vendor** 上述外部框架源码或依赖；
   - 仅通过原生纯函数与精简 TypeScript 接口吸收其设计思想；
   - 禁止将“吸收设计思想”夸大为“已完成真实集成”；
-  - `package.json` 保持 100% 干净，零新增依赖。
+  - 本次思想吸收未新增 Playwright、Midscene 等外部框架依赖；项目已有 p-limit 运行时依赖。
 
-### 1.4 评审矩阵与能力边界澄清：未默认启用与死代码的判定标准 (Review Assessment Matrix & Capability Boundaries)
+### 1.4 评审矩阵与能力边界澄清：未默认启用与阻断行为的评审标准 (Review Assessment Matrix & Capability Boundaries)
 
-为杜绝后续架构评审中对“可选适配器未默认启用”与“死代码”的混淆，以及防止将“Fail-Closed 缺失事实阻断”误判为“系统缺陷”，在此建立全景评审矩阵并确立三项不可动摇的判定标准：
+为规范后续架构评审，避免仅凭“可选适配器未默认启用”简单判定代码状态，以及防止将“Fail-Closed 缺失事实阻断”误判为功能缺陷，在此建立全景评审矩阵并确立三项客观判定标准：
 
 #### 全景组件评审矩阵 (Comprehensive Component Assessment Matrix)
 
@@ -121,20 +121,20 @@ src/devtest/
 | **Canonical Evidence Envelope** (`canonical-protocol.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (统一证据载体) | 证据信封标准结构 | **有效生产代码**：强类型校验、不可变防伪防冒充凭证标准。 |
 | **Canonical Verdict Engine** (`canonical-verdict-engine.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (唯一最终裁决源) | 全系统唯一业务裁决求值中心 | **有效生产代码**：纯三态 (`PASS` \| `FAIL` \| `UNVERIFIED`)，verify() 结果无条件穿透。 |
 | **CLI / MCP 生产接入层** (`devtest-cli.ts`, `mcp-service.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (双模同源呈现) | 注入生产适配器，投影兼容展示 | **有效生产代码**：生命周期状态投影，绝不自行计算业务 PASS/FAIL。 |
-| **ResultSink & NdjsonResultSink** (`result-sink.ts`) | Tier 2 可选适配器 | `IMPLEMENTED` (本地) / `CONTRACT_ONLY` (远程) | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需配置开启) | 只写不读单向持久化导出 | **有效扩展代码（绝非死代码）**：遵守四可隔离原则，递归深冻结结果，单向输出脱敏，绝不回写状态；默认不写磁盘以防文件污染。 |
-| **UI Evidence Producers** (`ui-adapters.ts`) | Tier 2 可选适配器 | `DEFERRED_EXTERNAL_RUNTIME` | `NOT_IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需注入 extraEnvelopes) | 外部可选凭证收集，零裁决权 | **有效扩展代码（绝非死代码）**：纯协议与信封抽象，依赖外部 Playwright/Midscene 运行时，不自制 CDP 框架，零依赖交付范围外，严禁误判为已接入或死代码。 |
-| **Agent Evaluation** (`agent-evaluation.ts`) | Tier 2 库级纯函数 | `BLOCKED_DATA_MISSING` / `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (SDK 纯函数调用) | 评测信封输入 | **有效扩展代码（绝非死代码）**：纯函数评测引擎与八类漏洞检测，缺真实样本时严格返回 `BLOCKED_DATA_MISSING`，零假 PASS。 |
+| **ResultSink & NdjsonResultSink** (`result-sink.ts`) | Tier 2 可选适配器 | `IMPLEMENTED` (本地) / `CONTRACT_ONLY` (远程) | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需配置开启) | 只写不读单向持久化导出 | **可选扩展代码**：不能仅凭默认 CLI/MCP 未直接调用就判定为死代码；可根据实际调用、使用需求和维护成本继续评估。遵守四可隔离原则，递归深冻结结果，单向输出脱敏，绝不回写状态；默认不写磁盘以防文件污染。 |
+| **UI Evidence Producers** (`ui-adapters.ts`) | Tier 2 可选适配器 | `DEFERRED_EXTERNAL_RUNTIME` | `NOT_IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需注入 extraEnvelopes) | 外部可选凭证收集，零裁决权 | **可选扩展代码**：不能仅凭默认 CLI/MCP 未直接调用就判定为死代码；可根据实际调用、使用需求和维护成本继续评估。纯协议与信封抽象，依赖外部 Playwright/Midscene 运行时，不自制 CDP 框架，不在零新增外部依赖交付范围内，禁止写为已接入。 |
+| **Agent Evaluation** (`agent-evaluation.ts`) | Tier 2 库级纯函数 | `BLOCKED_DATA_MISSING` / `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (SDK 纯函数调用) | 评测信封输入 | **可选扩展代码**：不能仅凭默认 CLI/MCP 未直接调用就判定为死代码；可根据实际调用、使用需求和维护成本继续评估。纯函数评测引擎与八类漏洞检测，缺真实样本时严格返回 `BLOCKED_DATA_MISSING`，零假 PASS。 |
 | **测试专用 Fixtures & Adapters** (`tests/helpers/`) | Tier 3 测试专用 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `TEST_ONLY` (仅 tests/ 加载) | 离线仿真与契约验证 | **有效测试资产**：严禁导出到 `src/devtest/index.ts`，严禁生产运行时默认加载。 |
-| **五大思想吸收规范** (`Playwright / Midscene / Promptfoo / ReportPortal / wardenIQ`) | Tier 4 思想吸收 | 见 1.2 四级审计 | 见 1.2 交付范围 | `CONCEPT_ONLY` (原生轻量吸纳) | 原生轻量设计思想 | **架构设计理念**：零外部依赖，100% 干净 package.json，严禁夸大为已完成外部框架集成。 |
+| **五大思想吸收规范** (`Playwright / Midscene / Promptfoo / ReportPortal / wardenIQ`) | Tier 4 思想吸收 | 见 1.2 四级审计 | 见 1.2 交付范围 | `CONCEPT_ONLY` (原生轻量吸纳) | 原生轻量设计思想 | **架构设计理念**：本次思想吸收未新增 Playwright、Midscene 等外部框架依赖（项目已有 p-limit 运行时依赖），严禁夸大为已完成外部框架集成。 |
 
 #### 三大评审判定标准与核心原则 (Core Review Assessment Criteria)
 
-1. **判定标准一：未默认启用 ≠ 死代码 (Not Enabled by Default != Dead Code)**
-   - **架构设计依据**：Tier 2 模块（`NdjsonResultSink`、`UIBrowserEvidenceProducer`、`UIVisualAiEvidenceProducer`、`evaluateAgentOutput`）是基于“四可隔离原则”（**可开关、可替换、可单测、可删除**）与“**零外部依赖**”交付范围设计的标准适配器与库级能力。
-   - **判定红线**：它们通过标准端口注入或由调用方按需传入（如 `extraEnvelopes` 或可选 `resultSink` 注入），默认不在无参 CLI/MCP 中强行激活是为了保证生产链路的确定性、轻量与零写副作用。**严禁以“默认命令未直接调用”为由将其轻率判定为死代码**。
-2. **判定标准二：缺数据阻断 / 缺运行时延迟 ≠ 功能缺陷 (Blocked / Deferred != Defect)**
+1. **判定标准一：未默认启用模块的评估 (Evaluation of Modules Not Enabled by Default)**
+   - **架构设计依据**：Tier 2 模块（`NdjsonResultSink`、`UIBrowserEvidenceProducer`、`UIVisualAiEvidenceProducer`、`evaluateAgentOutput`）是基于“四可隔离原则”（**可开关、可替换、可单测、可删除**）与本次思想吸收未新增外部框架依赖的交付范围设计的标准适配器与库级能力。
+   - **判定准则**：它们通过标准端口注入或由调用方按需传入（如 `extraEnvelopes` 或可选 `resultSink` 注入），默认不在无参 CLI/MCP 中强行激活是为了保证生产链路的确定性、轻量与零写副作用。**不能仅凭默认 CLI/MCP 未直接调用就判定为死代码；可根据实际调用、使用需求和维护成本继续评估。**
+2. **判定标准二：阻断与延迟行为的判定依据 (Evaluation Criteria for Blocked and Deferred States)**
    - **安全门禁依据**：`Promptfoo` / `wardenIQ` 在缺真实样本或权威需求映射时，代码逻辑严格返回 `BLOCKED_DATA_MISSING` 或 `UNRESOLVED_REQUIREMENT`；`Playwright` / `Midscene` 标记为 `DEFERRED_EXTERNAL_RUNTIME`，明确不自制浏览器驱动。
-   - **判定红线**：这些阻断与延迟是系统坚守 Fail-Closed 原则和“零假 PASS”的物理门禁，属于符合预期的安全护栏，**严禁将正常的门禁拦截误判为未完成的半成品或功能缺陷**。
+   - **判定准则**：这些阻断与延迟是系统坚守 Fail-Closed 原则和“零假 PASS”的物理门禁。**阻断行为符合 Fail-Closed 要求；能力是否完成，仍须按约定交付范围和真实执行证据判断。**
 3. **判定标准三：不重复接入 Canonical，不强行激活可选模块 (No Redundant Canonical, No Forced Activation)**
    - **规约与裁决边界**：四大核心动作中，`probe()`、`plan()` 已通过 mappers 产出不可变 `CanonicalTestSpec`，`execute()` 已通过 `executeCanonical` 消费规约并调度 `ExecutionAdapter`，`verify()` 专职负责证据汇聚与裁决求值；全链路规约已完整闭环。**严禁为了“形式上的绝对统一”而在 probe/plan/execute 中重复接入裁决引擎或凭空捏造虚假证据**。
    - **运行时激活边界**：**严禁为了“提升代码覆盖率”或“向评审展示功能”而在默认 CLI/MCP 命令中强行加载外部无依赖支撑的模块**（如强行启动无运行时的浏览器采集器、伪造被测智能体输出、或强行向磁盘写入本地 NDJSON 文件）。
@@ -214,6 +214,10 @@ src/devtest/
    - 授权将 `core-kernel.ts` 按其**既有内聚函数边界**做纯物理文件分解，把 `generateDynamicTestPlan` 与 verify 证据流水线（`resolveVerifyContext` / `collectTaskEvidence` / `collectMediaEvidence` / `collectBillingEvidence` / `computeRegressionDiff` / `buildDiffItems` / `computeFinalVerdict`）抽取到由 `core-kernel` 单向 `import` 的新内部模块（`plan-generator.ts`、`verify-pipeline.ts`）；
    - **硬约束（不可违背）**：① 不新增核心动作（仍为 probe/plan/execute/verify）；② 严禁新增 Manager/Orchestrator/Service/Repository 等包装层或无价值“中间层”，仅做行为等价的代码搬迁；③ `core-kernel.ts` 仍为四大动作及其出入参类型的**唯一公共导出面**，`src/devtest/index.ts` 公共契约零变化；④ 单一裁决引擎、五维证据、Fail-closed、verify 永久只读等所有核心不变量零改动；⑤ 新模块只能单向向下依赖，严禁反向 `import` core-kernel，依赖无环护栏必须全绿；⑥ 全程行为等价，`npm test`（37 套件 / 668 用例）、`npm run build`、`dependency-cycle` 与 `architecture-convergence` 套件必须持续全绿；
    - 本授权**仅限此次物理分解**，不构成后续无限重构授权，不改变 §2「永久禁止项」的其余任何条款。
+5. **Phase 5 真实数据变更测试强制自动连库取证授权（2026-09-23 人工明确授权）**：
+   - **授权背景**：为杜绝“仅凭 HTTP 200 或网关接口返回即假定落库成功”的测试虚假放行隐患，人工明确授权：凡是执行涉及真实数据变更（任务派发、Task 落库、积分扣费/退款流水变动等写副作用场景）的测试，强制自动连接数据库进行只读取证；
+   - **连接规约**：自动读取项目工作区 `db-credentials.json`，通过 DBeaver 同款 SSH 隧道模式（跳板机 115.191.19.88:22）安全建立连接；
+   - **硬约束（不可违背）**：① 数据库连接严格保持只读（`READ_ONLY`），禁止在测试或验证中向数据库执行任何修改操作（INSERT/UPDATE/DELETE）；② 核心内核 `core-kernel` 保持 Fail-closed 和单向证据规约不变，数据库取证作为外部证据采集器接入，绝不将数据库连接作为生产内核基础架构的强依赖；③ 缺失数据库真实落库证据时，严格 Fail-Closed 判定为 `UNVERIFIED`，坚决执行零假 PASS。
 
 ### 实际能力边界与接入状态声明：
 * **边界界定**：上述能力按成熟度客观划分，严禁把 `CONTRACT_ONLY` 或 `DEFERRED_EXTERNAL_RUNTIME` 宣传为“已完成端到端接入”。成熟度与零依赖交付范围是两个正交维度。

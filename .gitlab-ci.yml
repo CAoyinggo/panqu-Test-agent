@@ -135,7 +135,25 @@ security:audit:
     policy: pull
   script:
     - npm ci
-    - bash scripts/security/audit.sh
+    - mkdir -p security-reports
+    - |
+      set -eu
+      scan_status=0
+      npm audit --audit-level=high --json > security-reports/npm-audit.json || scan_status=$?
+      node - security-reports/npm-audit.json "$scan_status" <<'NODE'
+      const fs = require('node:fs');
+      let report;
+      try { report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+      catch { console.error('❌ npm audit 未执行或报告无效'); process.exit(2); }
+      const counts = report?.metadata?.vulnerabilities;
+      if (report.error || !counts || !['low', 'moderate', 'high', 'critical'].every(k => Number.isInteger(counts[k]))) {
+        console.error('❌ npm audit 执行失败或报告字段缺失'); process.exit(2);
+      }
+      const blocking = counts.high + counts.critical;
+      if (blocking) { console.error(`❌ npm audit 发现 ${blocking} 个 HIGH/CRITICAL 漏洞`); process.exit(1); }
+      if (Number(process.argv[3]) !== 0) { console.error('❌ npm audit 异常退出'); process.exit(2); }
+      console.log(`✅ npm audit 完成：HIGH/CRITICAL=0，LOW/MODERATE=${counts.low + counts.moderate}`);
+      NODE
   artifacts:
     paths: [security-reports/]
     expire_in: 7 days
@@ -148,23 +166,37 @@ security:audit:
 # ── 2. 代码安全扫描（SAST - Semgrep） ──
 security:sast:
   stage: test
-  image: returntocorp/semgrep:latest
+  image:
+    name: returntocorp/semgrep:latest
+    entrypoint: [""]
   needs: []
   script:
-    - semgrep --config config/security/semgrep.yml --sarif --output security-reports/semgrep.sarif . || true
-    - semgrep --config config/security/semgrep.yml --json --output security-reports/semgrep.json . || true
+    - mkdir -p security-reports
+    - semgrep --config auto --json --output security-reports/semgrep.json .
     - |
-      ERROR_COUNT=$(grep -o '"severity": "ERROR"' security-reports/semgrep.json 2>/dev/null | wc -l || echo "0")
-      echo "Semgrep 扫描完成：$ERROR_COUNT 个 ERROR 级别问题"
-      if [ "$ERROR_COUNT" -gt 0 ]; then
-        echo "❌ 检测到硬编码密钥或严重安全问题"
-        exit 1
-      fi
-      echo "✅ SAST 扫描通过"
+      set -eu
+      python3 - security-reports/semgrep.json <<'PY'
+      import json, sys
+      try:
+          with open(sys.argv[1], encoding='utf-8') as stream:
+              report = json.load(stream)
+          assert isinstance(report.get('results'), list)
+          assert isinstance(report.get('errors'), list)
+          assert isinstance(report.get('paths', {}).get('scanned'), list) and report['paths']['scanned']
+      except (OSError, ValueError, AttributeError, AssertionError):
+          print('❌ Semgrep 未执行或报告无效', file=sys.stderr)
+          sys.exit(2)
+      if report['errors']:
+          print('❌ Semgrep 报告包含扫描错误', file=sys.stderr)
+          sys.exit(2)
+      errors = sum(item.get('extra', {}).get('severity') == 'ERROR' for item in report['results'])
+      if errors:
+          print(f'❌ Semgrep 发现 {errors} 个 ERROR 级别问题', file=sys.stderr)
+          sys.exit(1)
+      print(f'✅ Semgrep 完成：扫描 {len(report["paths"]["scanned"])} 个文件，ERROR=0')
+      PY
   artifacts:
     paths: [security-reports/]
-    reports:
-      sast: security-reports/semgrep.sarif
     expire_in: 7 days
     when: always
   rules:
@@ -175,20 +207,38 @@ security:sast:
 # ── 3. 密钥泄露扫描（Gitleaks） ──
 security:secrets:
   stage: test
-  image: zricethezav/gitleaks:latest
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
   needs: []
   script:
     - mkdir -p security-reports
-    - gitleaks detect --config config/security/gitleaks.toml --report-format json --report-path security-reports/gitleaks.json --source . || true
     - |
-      LEAK_COUNT=$(node -e "try{const r=require('./security-reports/gitleaks.json');console.log(r.length||0)}catch(e){console.log(0)}" 2>/dev/null || echo "0")
-      echo "Gitleaks 扫描完成：$LEAK_COUNT 个密钥泄露"
-      if [ "$LEAK_COUNT" -gt 0 ]; then
-        echo "❌ 检测到密钥泄露"
-        cat security-reports/gitleaks.json
+      set -eu
+      : > security-reports/gitleaks.json
+      scan_status=0
+      gitleaks detect --redact --report-format json --report-path security-reports/gitleaks.json --source . --exit-code 42 || scan_status=$?
+      if [ ! -s security-reports/gitleaks.json ]; then
+        echo "❌ Gitleaks 未执行或报告缺失"
+        exit 2
+      fi
+      if [ "$scan_status" -eq 42 ]; then
+        if ! grep -q '"RuleID"' security-reports/gitleaks.json; then
+          echo "❌ Gitleaks 发现问题但报告无效"
+          exit 2
+        fi
+        echo "❌ Gitleaks 发现密钥泄露（报告已脱敏，仅保存为 artifact）"
         exit 1
       fi
-      echo "✅ 未检测到密钥泄露"
+      if [ "$scan_status" -ne 0 ]; then
+        echo "❌ Gitleaks 扫描异常退出"
+        exit 2
+      fi
+      if [ "$(tr -d '[:space:]' < security-reports/gitleaks.json)" != '[]' ]; then
+        echo "❌ Gitleaks 无问题状态与报告不一致或报告无效"
+        exit 2
+      fi
+      echo "✅ Gitleaks 扫描完成：无密钥泄露"
   artifacts:
     paths: [security-reports/]
     expire_in: 7 days
@@ -211,19 +261,56 @@ security:trivy:
     DOCKER_BUILDKIT: "1"
   script:
     - mkdir -p security-reports
-    # 扫描 Dockerfile 配置
-    - trivy config --format json --output security-reports/trivy-config.json . || true
+    - |
+      set -eu
+      : > security-reports/trivy-config.json
+      config_status=0
+      trivy config --exit-code 42 --severity HIGH,CRITICAL --format json --output security-reports/trivy-config.json . || config_status=$?
+      if [ ! -s security-reports/trivy-config.json ] || ! trivy convert --format json --output /dev/null security-reports/trivy-config.json; then
+        echo "❌ Trivy 配置扫描未执行或报告无效"
+        exit 2
+      fi
+      if ! grep -q '"Target"' security-reports/trivy-config.json; then
+        echo "❌ Trivy 配置扫描没有实际扫描目标"
+        exit 2
+      fi
+      if [ "$config_status" -eq 42 ]; then
+        echo "⚠ Trivy 配置扫描发现 HIGH/CRITICAL 问题（沿用原有非阻断策略）"
+      elif [ "$config_status" -ne 0 ]; then
+        echo "❌ Trivy 配置扫描异常退出"
+        exit 2
+      else
+        echo "✅ Trivy 配置扫描完成：无 HIGH/CRITICAL 问题"
+      fi
     # 构建镜像并扫描（需要 Docker-in-Docker 或 Kaniko）
     # CI 环境中若无 Docker daemon，则仅扫描 Dockerfile 配置
     - |
-      if command -v docker &>/dev/null; then
+      set -eu
+      if command -v docker >/dev/null 2>&1 && [ -f deploy/docker/Dockerfile ]; then
         export DOCKER_BUILDKIT=1
         docker build -f deploy/docker/Dockerfile --cache-from=type=local,src=.docker-cache --cache-to=type=local,dest=.docker-cache -t test-flow:ci-scan .
-        trivy image --exit-code 1 --severity HIGH,CRITICAL --format json --output security-reports/trivy-image.json test-flow:ci-scan
+        : > security-reports/trivy-image.json
+        image_status=0
+        trivy image --exit-code 42 --severity HIGH,CRITICAL --format json --output security-reports/trivy-image.json test-flow:ci-scan || image_status=$?
+        if [ ! -s security-reports/trivy-image.json ] || ! trivy convert --format json --output /dev/null security-reports/trivy-image.json; then
+          echo "❌ Trivy 镜像扫描未执行或报告无效"
+          exit 2
+        fi
+        if ! grep -Eq '"ArtifactType"[[:space:]]*:[[:space:]]*"container_image"' security-reports/trivy-image.json; then
+          echo "❌ Trivy 报告不是容器镜像扫描结果"
+          exit 2
+        fi
+        if [ "$image_status" -eq 42 ]; then
+          echo "❌ 镜像扫描发现 HIGH/CRITICAL 漏洞"
+          exit 1
+        fi
+        if [ "$image_status" -ne 0 ]; then
+          echo "❌ Trivy 镜像扫描异常退出"
+          exit 2
+        fi
         echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
       else
-        echo "⚠ Docker 不可用，仅扫描 Dockerfile 配置"
-        echo "请在有 Docker 环境的 Runner 上执行完整镜像扫描"
+        echo "⚠ 镜像扫描未运行：Docker 或 deploy/docker/Dockerfile 不可用；仅完成 Trivy 配置扫描"
       fi
   artifacts:
     paths: [security-reports/]
@@ -250,12 +337,28 @@ security:license:
     policy: pull
   script:
     - npm ci
-    - bash scripts/security/license-check.sh
+    - mkdir -p security-reports
+    - |
+      node <<'NODE'
+      const fs = require('node:fs');
+      let lock;
+      try { lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')); }
+      catch { console.error('❌ License 扫描未执行：锁文件缺失或无效'); process.exit(2); }
+      if (!lock.packages || typeof lock.packages !== 'object') {
+        console.error('❌ License 扫描报告来源无效'); process.exit(2);
+      }
+      const packages = Object.entries(lock.packages).filter(([name]) => name);
+      if (!packages.length) { console.error('❌ License 扫描未发现依赖清单'); process.exit(2); }
+      const unknown = packages.filter(([, info]) => !info.license).map(([name]) => name);
+      const gpl = packages.filter(([, info]) => /\b(?:A?GPL)(?:-[0-9.]+)?\b/i.test(info.license || '')).map(([name]) => name);
+      fs.writeFileSync('security-reports/license.json', JSON.stringify({ checked: packages.length, gpl, unknown }, null, 2));
+      console.log(`License 扫描完成：${packages.length} 个依赖，GPL=${gpl.length}，未知=${unknown.length}`);
+      if (gpl.length) console.warn('⚠ GPL 依赖仅告警（沿用原有非阻断策略）');
+      NODE
   artifacts:
     paths: [security-reports/]
     expire_in: 7 days
     when: always
-  allow_failure: true  # GPL 仅警告，不阻塞
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
@@ -351,7 +454,7 @@ release:sbom:
   image:
     name: aquasec/trivy:latest
     entrypoint: [""]
-  needs: [release:image]
+  needs: ["release:image"]
   variables:
     TRIVY_USERNAME: "$CI_REGISTRY_USER"
     TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
@@ -378,7 +481,7 @@ release:sbom:
 release:deploy:
   stage: deploy
   image: alpine:latest
-  needs: [release:sbom]
+  needs: ["release:sbom"]
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/

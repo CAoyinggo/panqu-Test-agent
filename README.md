@@ -5,7 +5,7 @@
 **面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、物理证据验真与自动化验收门禁框架**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-38%20suites%20%7C%20677%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Tests](https://img.shields.io/badge/tests-38%20suites%20%7C%20695%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
 [![Coverage](https://img.shields.io/badge/coverage-85.87%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
@@ -176,10 +176,21 @@ DevTest 原生提供符合 Model Context Protocol 标准的 stdio 接口。在�
 
 ---
 
+### 3. 真实数据变更数据库取证 (Phase 5 授权规范)
+
+涉及真实任务派发与财务账目变动的测试场景，必须自动通过 SSH 隧道连接测试库进行物理落库只读取证：
+
+```bash
+# 验证测试数据库只读取证连接通道 (安全只读 · 零外部密码硬编码)
+python3 scripts/test-db-connection.py
+```
+
+---
+
 ## 🧪 质量门禁与测试矩阵 (100% PASS)
 
 ```bash
-# 运行全量 38 个套件、677 项单元测试
+# 运行全量 38 个套件、695 项单元测试
 npm test
 
 # 运行覆盖率门禁 (Lines/Statements/Functions >= 80%, Branches >= 70%)
@@ -190,7 +201,7 @@ npm run build
 ```
 
 <details>
-<summary><b>📊 点击展开查看 38 个测试套件明细 (677 项测试全部通过)</b></summary>
+<summary><b>📊 点击展开查看 38 个测试套件明细 (695 项测试全部通过)</b></summary>
 
 | 测试文件 | 测试用例数 | 状态 | 核心验证范围 |
 |---|---|---|---|
@@ -199,16 +210,19 @@ npm run build
 | `tests/unit/devtest/routing-disambiguation.test.ts` | 51 tests | ✅ PASS | 模型与网关渠道消歧及防伪造门禁 |
 | `tests/unit/devtest/dynamic-plan.test.ts` | 47 tests | ✅ PASS | 动态规划、定价刊例计算与风险失效规约 |
 | `tests/unit/devtest/media-flow.test.ts` | 42 tests | ✅ PASS | 媒体长链路轮询、指数退避与网络抖动容忍 |
+| `tests/unit/devtest/billing.test.ts` | 32 tests | ✅ PASS | 真实账务对账与三大金融安全不变量审计 |
 | `tests/unit/devtest/canonical-shadow-comparison.test.ts` | 30 tests | ✅ PASS | Canonical 唯一裁决引擎影子对比一致性 |
 | `tests/unit/devtest/canonical-protocol.test.ts` | 25 tests | ✅ PASS | Canonical TestSpec 与证据信封强类型校验 |
-| `tests/unit/devtest/capability-maturity-and-reality.test.ts` | 24 tests | ✅ PASS | 能力成熟度等级评估、现实验证与能力边界门禁 |
 | `tests/unit/devtest/ui-adapter-contract-poc.test.ts` | 23 tests | ✅ PASS | Playwright / Midscene 规范适配器契约与切片尺寸提取 |
 | `tests/unit/devtest/canonical-verdict-engine.test.ts` | 22 tests | ✅ PASS | 纯三态确定性断言算法与门禁阻断逻辑 |
 | `tests/unit/devtest/mcp-high-level-tools.test.ts` | 22 tests | ✅ PASS | MCP stdio JSON-RPC 通讯协议与 Schema |
 | `tests/unit/devtest/legacy-protocol-mappers.test.ts` | 20 tests | ✅ PASS | 兼容投影层双向映射一致性与单向投影 |
+| `tests/unit/devtest/verify-input-contract-alignment.test.ts` | 17 tests | ✅ PASS | Verify 入参对齐、参数校验与归一化门禁 |
 | `tests/unit/devtest/agent-evaluation.test.ts` | 16 tests | ✅ PASS | 智能体可信度离线评测引擎 (8 维漏洞检测) |
+| `tests/unit/devtest/dependency-cycle.test.ts` | 16 tests | ✅ PASS | 模块依赖无环检测与分层单向引用门禁 |
+| `tests/unit/devtest/requirement-trace.test.ts` | 16 tests | ✅ PASS | 需求关联双向索引构建与影响分析矩阵 |
 | `tests/unit/devtest/routing.test.ts` | 15 tests | ✅ PASS | 业务路由分流策略 (Direct / NewAPI) |
-| `tests/unit/devtest/billing.test.ts` | 14 tests | ✅ PASS | 真实账务对账与三大金融安全不变量审计 |
+| `tests/unit/devtest/capability-maturity-and-reality.test.ts` | 14 tests | ✅ PASS | 能力成熟度等级评估、现实验证与能力边界门禁 |
 | `tests/unit/devtest/self-evolving-tester.test.ts` | 13 tests | ✅ PASS | 业务知识自演化测试器契约 |
 | `tests/unit/devtest/domain-knowledge.test.ts` | 12 tests | ✅ PASS | 领域知识库召回与失效模式识别 |
 | `tests/unit/devtest/core-kernel-canonical-switch.test.ts` | 10 tests | ✅ PASS | 唯一裁决引擎切换 10 大安全反证门禁 |
@@ -218,15 +232,12 @@ npm run build
 | `tests/unit/devtest/media-inspector.test.ts` | 10 tests | ✅ PASS | MP4 ISO-14496 容器与尾部 moov 范围解析 |
 | `tests/unit/devtest/knowledge-decoupling.test.ts` | 9 tests | ✅ PASS | 知识资产解耦架构合规性 |
 | `tests/unit/devtest/knowledge-promotion.test.ts` | 9 tests | ✅ PASS | 候选知识审核晋升流程 |
+| `tests/unit/devtest/test-isolation.test.ts` | 9 tests | ✅ PASS | 全局状态隔离恢复、未捕获断言异常还原与框架级故障恢复 |
 | `tests/unit/devtest/result-sink.test.ts` | 7 tests | ✅ PASS | 单向结果持久化导出契约 (深冻结记录) |
-| `tests/unit/devtest/requirement-trace.test.ts` | 6 tests | ✅ PASS | 需求关联双向索引构建与影响分析矩阵 |
+| `tests/unit/devtest/public-api-contract.test.ts` | 5 tests | ✅ PASS | 公共导出 API 契约与版本稳定性校验 |
 | 探索与变异专项测试 (6 个套件) | 31 tests | ✅ PASS | 状态转移、学习沉淀、变异算子与生产循环审计 |
 | 其他专项契约测试 (2 个套件) | 7 tests | ✅ PASS | 环境探活与 Trae 技能规约契约 |
-| `tests/unit/devtest/verify-input-contract-alignment.test.ts` | 17 tests | ✅ PASS | Verify 入参对齐、参数校验与归一化门禁 |
-| `tests/unit/devtest/dependency-cycle.test.ts` | 16 tests | ✅ PASS | 模块依赖无环检测与分层单向引用门禁 |
-| `tests/unit/devtest/public-api-contract.test.ts` | 5 tests | ✅ PASS | 公共导出 API 契约与版本稳定性校验 |
-| `tests/unit/devtest/test-isolation.test.ts` | 9 tests | ✅ PASS | 全局状态隔离恢复、未捕获断言异常还原与框架级故障恢复 |
-| **全量总计** | **677 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
+| **全量总计** | **695 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
 
 </details>
 
