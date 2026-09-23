@@ -1,6 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import os from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +20,7 @@ afterEach(async () => {
 });
 
 describe('TRAE DevTest Mandatory Execution Rules Contract', () => {
-  function assertModernRules(content: string, sourceLabel: string) {
+  function assertModernRules(content: string, _sourceLabel: string) {
     expect(content).toContain('name: devtest');
     expect(content).toContain('Panqu 研发自测副驾');
     expect(content).toContain('probe');
@@ -45,12 +44,9 @@ describe('TRAE DevTest Mandatory Execution Rules Contract', () => {
     assertModernRules(content, 'Dist asset dist/src/devtest/assets/devtest/SKILL.md');
   });
 
-
-
   it('[Contract-TRAE-4] Workspace running copy in test-flow contains modern streamlined rules <= 60 lines', async () => {
     const copyPath = path.resolve(projectRoot, '.trae/skills/devtest/SKILL.md');
     const content = await readFile(copyPath, 'utf8');
     assertModernRules(content, `Workspace running copy ${copyPath}`);
   });
 });
-

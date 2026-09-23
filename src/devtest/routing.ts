@@ -6,11 +6,12 @@
  * 2. 全链路证据采集与跨系统标识对齐：主站 extra 快照、网关日志与降级重试证据强校验。
  */
 
-import type { TargetDisambiguationInput, TargetDisambiguationResult, TargetKind } from './types.js';
+import type { TargetDisambiguationInput, TargetDisambiguationResult } from './types.js';
 
 export type DiversionRouteMode = 'newapi' | 'legacy' | 'off';
 export type FlowMediaType = 'video' | 'image' | 'canvas';
-export type FlowStepStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED' | 'NOT_APPLICABLE' | 'UNVERIFIED' | 'PASS' | 'FAIL';
+export type FlowStepStatus =
+  'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED' | 'NOT_APPLICABLE' | 'UNVERIFIED' | 'PASS' | 'FAIL';
 
 export interface VideoRoutingInput {
   videoType: number;
@@ -63,12 +64,7 @@ export interface MainSiteConfigSnapshot {
 export interface MainSiteRoutingVerdict {
   willDivert: boolean;
   decision:
-    | 'NEWAPI_GLOBAL'
-    | 'NEWAPI_ORG_GROUP'
-    | 'NEWAPI_IMAGE'
-    | 'FALLBACK_LEGACY'
-    | 'FALLBACK_DIRECT'
-    | 'BLOCKED_ILLEGAL';
+    'NEWAPI_GLOBAL' | 'NEWAPI_ORG_GROUP' | 'NEWAPI_IMAGE' | 'FALLBACK_LEGACY' | 'FALLBACK_DIRECT' | 'BLOCKED_ILLEGAL';
   line: number;
   reason: string;
   expectedSnapshot?: {
@@ -125,39 +121,84 @@ export class RoutingOracle {
     customAliasGetter?: (id: number) => string,
   ): MainSiteRoutingVerdict {
     if (config.routeMode === 'off') {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '主站分流总开关为 off，全部回归直连链路' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: '主站分流总开关为 off，全部回归直连链路',
+      };
     }
     if (config.routeMode === 'legacy') {
-      return { willDivert: false, decision: 'FALLBACK_LEGACY', line: 6, reason: '主站分流模式为 legacy，回退原手动概率分流线路' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_LEGACY',
+        line: 6,
+        reason: '主站分流模式为 legacy，回退原手动概率分流线路',
+      };
     }
 
     const isWan3 = input.videoType === 105 || input.videoType === 106;
     if (!isWan3) {
       if (input.videoType !== 6) {
-        return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '非 wan3 且非 videoType=6，不满足 NewAPI 视频分流任务类型' };
+        return {
+          willDivert: false,
+          decision: 'FALLBACK_DIRECT',
+          line: 0,
+          reason: '非 wan3 且非 videoType=6，不满足 NewAPI 视频分流任务类型',
+        };
       }
       if ([16, 58].includes(input.modelId)) {
-        return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `模型 ${input.modelId} 属于排除直连清单 (seedance fast/mini 走主站直连)` };
+        return {
+          willDivert: false,
+          decision: 'FALLBACK_DIRECT',
+          line: 0,
+          reason: `模型 ${input.modelId} 属于排除直连清单 (seedance fast/mini 走主站直连)`,
+        };
       }
       if (input.taskType !== undefined && input.taskType !== 28) {
-        return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: 'Seedance 仅全能参考任务 (task_type=28) 支持分流' };
+        return {
+          willDivert: false,
+          decision: 'FALLBACK_DIRECT',
+          line: 0,
+          reason: 'Seedance 仅全能参考任务 (task_type=28) 支持分流',
+        };
       }
       if (input.refVideos && input.refVideos.length > 0) {
-        return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: 'Seedance 带参考视频任务继续直连供应商' };
+        return {
+          willDivert: false,
+          decision: 'FALLBACK_DIRECT',
+          line: 0,
+          reason: 'Seedance 带参考视频任务继续直连供应商',
+        };
       }
     }
 
     if (input.hasRealHuman) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '素材中检测到真人人像，拦截回退直连链路' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: '素材中检测到真人人像，拦截回退直连链路',
+      };
     }
 
     const cueword = input.cueword || '';
     if (cueword.length > 5000) {
-      return { willDivert: false, decision: 'BLOCKED_ILLEGAL', line: 0, reason: `提示词长度 (${cueword.length}) 超过 5000 字上限，主站前置拦截` };
+      return {
+        willDivert: false,
+        decision: 'BLOCKED_ILLEGAL',
+        line: 0,
+        reason: `提示词长度 (${cueword.length}) 超过 5000 字上限，主站前置拦截`,
+      };
     }
 
     if ((input.outputFormat || '').toLowerCase().trim() === 'mov') {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: 'MOV 输出格式不支持 NewAPI 分流，回退直连' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: 'MOV 输出格式不支持 NewAPI 分流，回退直连',
+      };
     }
 
     const resolveAlias = (id: number): string => {
@@ -185,16 +226,31 @@ export class RoutingOracle {
 
     const globalRule = config.globalRouteRules.video?.[input.modelId];
     if (!globalRule) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `模型 ${input.modelId} 未在全局渠道能力配置中登记，回退直连` };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: `模型 ${input.modelId} 未在全局渠道能力配置中登记，回退直连`,
+      };
     }
 
     const res = (input.resolution || '').toLowerCase().trim();
     const asp = (input.aspectRatio || '').toLowerCase().trim();
     if (res && !globalRule.resolutions.map((r) => r.toLowerCase()).includes(res)) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `分辨率 ${input.resolution} 不在全局渠道能力并集内，前置回退` };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: `分辨率 ${input.resolution} 不在全局渠道能力并集内，前置回退`,
+      };
     }
     if (asp && !globalRule.aspect_ratios.map((a) => a.toLowerCase()).includes(asp)) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `画幅比例 ${input.aspectRatio} 不在全局渠道能力并集内，前置回退` };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: `画幅比例 ${input.aspectRatio} 不在全局渠道能力并集内，前置回退`,
+      };
     }
 
     const userGroups = input.userGroupIds || [];
@@ -209,7 +265,12 @@ export class RoutingOracle {
     }
 
     if (!matchedBinding) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '用户所属角色组未绑定任何有效的 NewAPI 路由组，不分流' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: '用户所属角色组未绑定任何有效的 NewAPI 路由组，不分流',
+      };
     }
     if (matchedBinding.status !== 1 || !matchedBinding.apiKey) {
       throw new Error(`RoutingOracleError: 路由组配置异常 (status=${matchedBinding.status}, key缺失)`);
@@ -220,10 +281,20 @@ export class RoutingOracle {
       const groupRule = config.groupRouteRules.video?.[newapiGroup]?.[input.modelId];
       if (groupRule) {
         if (res && !groupRule.resolutions.map((r) => r.toLowerCase()).includes(res)) {
-          return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `当前路由分组 ${newapiGroup} 无承接分辨率 ${input.resolution} 的渠道，回退直连` };
+          return {
+            willDivert: false,
+            decision: 'FALLBACK_DIRECT',
+            line: 0,
+            reason: `当前路由分组 ${newapiGroup} 无承接分辨率 ${input.resolution} 的渠道，回退直连`,
+          };
         }
         if (asp && !groupRule.aspect_ratios.map((a) => a.toLowerCase()).includes(asp)) {
-          return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `当前路由分组 ${newapiGroup} 无承接画幅 ${input.aspectRatio} 的渠道，回退直连` };
+          return {
+            willDivert: false,
+            decision: 'FALLBACK_DIRECT',
+            line: 0,
+            reason: `当前路由分组 ${newapiGroup} 无承接画幅 ${input.aspectRatio} 的渠道，回退直连`,
+          };
         }
       }
     }
@@ -234,7 +305,12 @@ export class RoutingOracle {
       decision: 'NEWAPI_ORG_GROUP',
       line: 10,
       reason: `匹配组织 ${matchedOrgId} 与路由组 ${matchedBinding.routeGroupId}（分组 ${newapiGroup}），命中 NewAPI 分流`,
-      expectedSnapshot: { orgId: matchedOrgId, routeGroupId: matchedBinding.routeGroupId, newapiGroup, newapiModel: alias },
+      expectedSnapshot: {
+        orgId: matchedOrgId,
+        routeGroupId: matchedBinding.routeGroupId,
+        newapiGroup,
+        newapiModel: alias,
+      },
     };
   }
 
@@ -256,10 +332,20 @@ export class RoutingOracle {
       return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '模型别名留空，任务静默走原渠道' };
     }
     if ((input.serviceline || '').toLowerCase().trim() !== 'r') {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `服务线路为 ${input.serviceline} (非 r)，任务走原渠道` };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: `服务线路为 ${input.serviceline} (非 r)，任务走原渠道`,
+      };
     }
     if ((input.sizeType || 'resolution').toLowerCase().trim() === 'pixels') {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '自定义像素尺寸 (pixels) 不支持 NewAPI 图片分流' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: '自定义像素尺寸 (pixels) 不支持 NewAPI 图片分流',
+      };
     }
 
     let refCount = 0;
@@ -270,7 +356,12 @@ export class RoutingOracle {
       refCount = items.filter((item) => typeof item === 'string' && item.trim() !== '').length;
     }
     if (refCount > 10) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: `参考图数量 (${refCount}) 超过上限 10 张` };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: `参考图数量 (${refCount}) 超过上限 10 张`,
+      };
     }
 
     const userGroups = input.userGroupIds || [];
@@ -285,7 +376,12 @@ export class RoutingOracle {
     }
 
     if (!matchedBinding || matchedBinding.status !== 1 || !matchedBinding.apiKey) {
-      return { willDivert: false, decision: 'FALLBACK_DIRECT', line: 0, reason: '企业路由组未绑定、未启用或缺少 API Key，任务静默走原渠道' };
+      return {
+        willDivert: false,
+        decision: 'FALLBACK_DIRECT',
+        line: 0,
+        reason: '企业路由组未绑定、未启用或缺少 API Key，任务静默走原渠道',
+      };
     }
 
     return {
@@ -388,10 +484,19 @@ export class RoutingOracle {
       reason = `实际分布最大偏差 (${(maxDeviation * 100).toFixed(1)}%) 超过允许容差 (${(tolerance * 100).toFixed(1)}%)`;
     }
 
-    return { passed, sampleCount, sufficientSamples, expectedDistribution, observedDistribution, maxDeviation, tolerance, reason };
+    return {
+      passed,
+      sampleCount,
+      sufficientSamples,
+      expectedDistribution,
+      observedDistribution,
+      maxDeviation,
+      tolerance,
+      reason,
+    };
   }
 
-  public static evaluateFallback(modelId: number, failureCode?: string | number): FallbackRoutingVerdict {
+  public static evaluateFallback(modelId: number, _failureCode?: string | number): FallbackRoutingVerdict {
     const isSeedance = [15, 78].includes(modelId);
     if (isSeedance) {
       return {
@@ -414,13 +519,12 @@ export class RoutingOracle {
     customChannels?: GatewayChannelConfig[],
   ): TargetDisambiguationResult {
     const hasRealSnapshot = Boolean(
-      customChannels &&
-      customChannels.length > 0 &&
-      customChannels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY')
+      customChannels && customChannels.length > 0 && customChannels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY'),
     );
     const channels = customChannels && customChannels.length > 0 ? customChannels : DEFAULT_KNOWN_GATEWAY_CHANNELS;
-    const channelSource: 'SOURCE_STATIC_CONTRACT' | 'SOURCE_REAL_GATEWAY' | 'UNVERIFIED' =
-      hasRealSnapshot ? 'SOURCE_REAL_GATEWAY' : 'SOURCE_STATIC_CONTRACT';
+    const channelSource: 'SOURCE_STATIC_CONTRACT' | 'SOURCE_REAL_GATEWAY' | 'UNVERIFIED' = hasRealSnapshot
+      ? 'SOURCE_REAL_GATEWAY'
+      : 'SOURCE_STATIC_CONTRACT';
 
     const modelMap: Record<number, string> = {
       15: 'seedance-2.0',
@@ -452,7 +556,12 @@ export class RoutingOracle {
       const numMatch = rawStr.match(/\d+/);
       const parsedNum = numMatch ? Number(numMatch[0]) : undefined;
 
-      if (rawStr.toLowerCase().startsWith('channel') || rawStr.includes('渠道') || parsedNum === 54 || rawStr === 'TD_国际') {
+      if (
+        rawStr.toLowerCase().startsWith('channel') ||
+        rawStr.includes('渠道') ||
+        parsedNum === 54 ||
+        rawStr === 'TD_国际'
+      ) {
         targetKind = 'channel';
         if (parsedNum) channelId = parsedNum;
         if (rawStr.includes('TD_国际')) channelName = 'TD_国际';
@@ -514,7 +623,9 @@ export class RoutingOracle {
 
     // 若指定了 channelId 或 channelName，判定为渠道测试
     if (channelId !== undefined || channelName !== undefined || targetKind === 'channel') {
-      const ch = channels.find((c) => (channelId !== undefined && c.id === channelId) || (channelName && c.name === channelName));
+      const ch = channels.find(
+        (c) => (channelId !== undefined && c.id === channelId) || (channelName && c.name === channelName),
+      );
       if (!ch) {
         return {
           ok: false,
@@ -565,7 +676,9 @@ export class RoutingOracle {
 
       const resolvedAlias = modelAlias || '';
       const resolvedModelId = modelId || 0;
-      const isModelSupported = (resolvedAlias ? ch.models.includes(resolvedAlias) : false) || (resolvedModelId > 0 && supportedModels.some((m) => m.id === resolvedModelId));
+      const isModelSupported =
+        (resolvedAlias ? ch.models.includes(resolvedAlias) : false) ||
+        (resolvedModelId > 0 && supportedModels.some((m) => m.id === resolvedModelId));
       if (!isModelSupported) {
         return {
           ok: false,
@@ -593,15 +706,17 @@ export class RoutingOracle {
         isDisambiguated: true,
         channelSource,
         supportedModels,
-        warning: channelSource === 'SOURCE_STATIC_CONTRACT'
-          ? `渠道 #${ch.id} ('${ch.name}') 当前仅具备静态契约信息 (SOURCE_STATIC_CONTRACT)，非线上实时快照`
-          : undefined,
+        warning:
+          channelSource === 'SOURCE_STATIC_CONTRACT'
+            ? `渠道 #${ch.id} ('${ch.name}') 当前仅具备静态契约信息 (SOURCE_STATIC_CONTRACT)，非线上实时快照`
+            : undefined,
       };
     }
 
     // 默认模型模式
     const resolvedModelId = modelId || 0;
-    const resolvedAlias = modelAlias || modelMap[resolvedModelId] || (resolvedModelId > 0 ? `model-${resolvedModelId}` : '');
+    const resolvedAlias =
+      modelAlias || modelMap[resolvedModelId] || (resolvedModelId > 0 ? `model-${resolvedModelId}` : '');
     return {
       ok: resolvedModelId > 0,
       targetKind: 'model',
@@ -621,13 +736,83 @@ export class RoutingOracle {
  * 线上 status / weight / quota 随时可能发生动态变更，REAL 模式核验必须使用只读动态快照；无法获取时判定为 UNVERIFIED / BLOCKED。
  */
 export const DEFAULT_KNOWN_GATEWAY_CHANNELS: GatewayChannelConfig[] = [
-  { id: 2, name: 'RH-国际', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 54, name: 'TD_国际', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 36, name: '万相', group: 'panqu_test', models: ['wan3.0-video', 'wan3.0-video-prime'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 39, name: 'RH视频', group: 'panqu_test', models: ['seedance-2.0', 'seedance-2.5'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 40, name: 'RH图片', group: 'panqu_test', models: ['pan-banana-pro', 'runninghub-nano-banana-2'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 41, name: '菲玲', group: 'panqu_test', models: ['feiling-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
-  { id: 42, name: 'MiniMax', group: 'panqu_test', models: ['minimax-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_STATIC_CONTRACT' },
+  {
+    id: 2,
+    name: 'RH-国际',
+    group: 'panqu_test',
+    models: ['seedance-2.0', 'seedance-2.5'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 54,
+    name: 'TD_国际',
+    group: 'panqu_test',
+    models: ['seedance-2.0', 'seedance-2.5'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 36,
+    name: '万相',
+    group: 'panqu_test',
+    models: ['wan3.0-video', 'wan3.0-video-prime'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 39,
+    name: 'RH视频',
+    group: 'panqu_test',
+    models: ['seedance-2.0', 'seedance-2.5'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 40,
+    name: 'RH图片',
+    group: 'panqu_test',
+    models: ['pan-banana-pro', 'runninghub-nano-banana-2'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 41,
+    name: '菲玲',
+    group: 'panqu_test',
+    models: ['feiling-video'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
+  {
+    id: 42,
+    name: 'MiniMax',
+    group: 'panqu_test',
+    models: ['minimax-video'],
+    status: 1,
+    weight: 10,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_STATIC_CONTRACT',
+  },
 ];
 
 export interface TrustedGatewaySnapshot {
@@ -654,7 +839,7 @@ export interface GatewaySnapshotValidationResult {
  */
 export function validateTrustedGatewaySnapshot(
   snapshot?: TrustedGatewaySnapshot,
-  options?: { maxAgeMs?: number; expectedEnv?: string }
+  options?: { maxAgeMs?: number; expectedEnv?: string },
 ): GatewaySnapshotValidationResult {
   if (!snapshot) {
     return { valid: false, reason: 'MISSING_SNAPSHOT: 未提供网关渠道快照 [BLOCKED_MISSING_TRUSTED_COLLECTOR]' };
@@ -672,9 +857,12 @@ export function validateTrustedGatewaySnapshot(
     return { valid: false, reason: `INVALID_TIMESTAMP: 快照捕获时间无效 (${snapshot.capturedAt})` };
   }
   const ageMs = Date.now() - Date.parse(snapshot.capturedAt);
-  const maxAge = snapshot.ttlMs ?? options?.maxAgeMs ?? (60 * 60 * 1000);
+  const maxAge = snapshot.ttlMs ?? options?.maxAgeMs ?? 60 * 60 * 1000;
   if (ageMs < 0 || ageMs > maxAge) {
-    return { valid: false, reason: `SNAPSHOT_EXPIRED: 快照已过期 (age: ${Math.round(ageMs / 1000)}s, max: ${Math.round(maxAge / 1000)}s)` };
+    return {
+      valid: false,
+      reason: `SNAPSHOT_EXPIRED: 快照已过期 (age: ${Math.round(ageMs / 1000)}s, max: ${Math.round(maxAge / 1000)}s)`,
+    };
   }
   if (!Array.isArray(snapshot.channels) || snapshot.channels.length === 0) {
     return { valid: false, reason: 'EMPTY_CHANNELS: 快照中不包含任何渠道数据' };

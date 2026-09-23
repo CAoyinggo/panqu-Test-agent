@@ -4,10 +4,6 @@ import {
   PANQU_API_KNOWLEDGE,
   PANQU_ORACLE_KNOWLEDGE,
   PANQU_TASK_KNOWLEDGE,
-  PANQU_FAILURE_PATTERNS,
-  resolveDomainContext,
-  generateDomainExecutionPlan,
-  evaluateBusinessVerification,
   createConfirmedFact,
   createObservedFact,
   createInferredFact,
@@ -152,7 +148,7 @@ describe('DevTest 企业领域认知层 (Company Domain Knowledge)', () => {
 
   describe('7. verify 阶段真正的业务级验证 (Technical Success ≠ Business Success)', () => {
     it('[真实问题 1] API 返回成功 (code=1)，但 Task 实际失败 (status=3) → 判定业务 FAIL 并匹配 FP-001', async () => {
-      const validBuffer = createSyntheticValidMp4({ durationSeconds: 2 });
+      const _validBuffer = createSyntheticValidMp4({ durationSeconds: 2 });
       const res = await verify({
         taskId: 88001,
         modelId: 84,
@@ -183,9 +179,7 @@ describe('DevTest 企业领域认知层 (Company Domain Knowledge)', () => {
         mediaType: 'video',
         terminalStatus: 'SUCCESS',
         artifactBuffer: corruptedBuffer,
-        scoreLogs: [
-          { id: 1, task_id: 88002, type: 2, score: 70 },
-        ],
+        scoreLogs: [{ id: 1, task_id: 88002, type: 2, score: 70 }],
         expectedPoints: 70,
       });
 
@@ -203,9 +197,7 @@ describe('DevTest 企业领域认知层 (Company Domain Knowledge)', () => {
         mediaType: 'video',
         terminalStatus: 'SUCCESS',
         artifactBuffer: validBuffer,
-        scoreLogs: [
-          { id: 1, task_id: 88003, type: 2, score: 70 },
-        ],
+        scoreLogs: [{ id: 1, task_id: 88003, type: 2, score: 70 }],
         expectedPoints: 70,
         projectId: 10,
         folderId: 999,
@@ -226,9 +218,7 @@ describe('DevTest 企业领域认知层 (Company Domain Knowledge)', () => {
         mediaType: 'video',
         terminalStatus: 'SUCCESS',
         artifactBuffer: validBuffer,
-        scoreLogs: [
-          { id: 1, task_id: 88004, type: 2, score: 70 },
-        ],
+        scoreLogs: [{ id: 1, task_id: 88004, type: 2, score: 70 }],
         expectedPoints: 70,
         apiResult: { ok: true, code: 1, message: '提交成功' },
         projectId: 10,

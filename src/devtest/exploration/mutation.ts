@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 有目标的状态跃迁变异器 (Targeted Mutation Engine)
- * 
+ *
  * 核心设计哲学：
  * 1. 业务目标驱动（每个变异必须回答：为什么变异？针对什么风险？期望观察什么？）；
  * 2. 严格受限于 Constraint（不产生盲目垃圾 Fuzz）；
@@ -8,11 +8,7 @@
  * 4. 落地 5 类高价值变异：Boundary, Temporal, Race, Retry, Timing。
  */
 
-import {
-  type PanquActionType,
-  type EntityCompositeState,
-  type MutationExecutionReadiness,
-} from './contracts.js';
+import { type PanquActionType, type EntityCompositeState, type MutationExecutionReadiness } from './contracts.js';
 import { type UnverifiedFrontier } from './state-graph.js';
 import { type ScoredFrontier } from './exploration-policy.js';
 import { PanquConstraintEvaluator, type ConstraintEvaluationResult } from './constraint.js';
@@ -24,8 +20,8 @@ export interface MutationStep {
   action: PanquActionType;
   description: string;
   payload: Record<string, any>;
-  delayMs?: number;          // Timing 变异中的显式时间窗口 (毫秒)
-  concurrentGroup?: string;  // Race 变异中的并发竞争分组标记
+  delayMs?: number; // Timing 变异中的显式时间窗口 (毫秒)
+  concurrentGroup?: string; // Race 变异中的并发竞争分组标记
 }
 
 export interface MutationCandidate {
@@ -47,10 +43,7 @@ export class PanquMutationEngine {
   private constraintEvaluator: PanquConstraintEvaluator;
   private actionSpace: PanquActionSpace;
 
-  constructor(
-    constraintEvaluator = new PanquConstraintEvaluator(),
-    actionSpace = new PanquActionSpace()
-  ) {
+  constructor(constraintEvaluator = new PanquConstraintEvaluator(), actionSpace = new PanquActionSpace()) {
     this.constraintEvaluator = constraintEvaluator;
     this.actionSpace = actionSpace;
   }
@@ -58,9 +51,7 @@ export class PanquMutationEngine {
   /**
    * 针对 Policy 选出的高价值 Frontier 生成全套有针对性的变异候选
    */
-  public generateMutations(
-    target: UnverifiedFrontier | ScoredFrontier
-  ): MutationCandidate[] {
+  public generateMutations(target: UnverifiedFrontier | ScoredFrontier): MutationCandidate[] {
     const frontier: UnverifiedFrontier = 'frontier' in target ? target.frontier : target;
     const candidates: MutationCandidate[] = [];
 
@@ -112,16 +103,11 @@ export class PanquMutationEngine {
         resolution: '720p',
       };
 
-      const evalResult = this.constraintEvaluator.evaluate(
-        submitAction,
-        submitBaseState,
-        payload
-      );
+      const evalResult = this.constraintEvaluator.evaluate(submitAction, submitBaseState, payload);
 
-      const readiness: MutationExecutionReadiness =
-        evalResult.satisfied
-          ? 'EXECUTABLE'
-          : evalResult.stateFeasible && !evalResult.payloadValid
+      const readiness: MutationExecutionReadiness = evalResult.satisfied
+        ? 'EXECUTABLE'
+        : evalResult.stateFeasible && !evalResult.payloadValid
           ? 'NEGATIVE_PROBE'
           : 'BLOCKED_BY_UNSUPPORTED_ACTION';
 
@@ -131,12 +117,14 @@ export class PanquMutationEngine {
         mutationType: 'BOUNDARY',
         name: `参数边界变异: 视频时长 ${b.val}s (${b.desc})`,
         intent: `验证极限参数 [duration=${b.val}] 是否导致预扣分计算溢出、网关拦截失败或产生异常账务状态`,
-        expectedRisk: b.validity === 'VALID_BOUNDARY'
-          ? 'CRITICAL_FINANCIAL: 刊例计费基准计算精度与预扣款正确性'
-          : 'INPUT_VALIDATION: 业务网关是否具备 Fail-closed 参数防御拦截能力',
-        expectedObservation: b.validity === 'VALID_BOUNDARY'
-          ? `SUBMIT 成功扣费 ${b.val * 14} 点 (Wan 3.0 720p=14/s)，任务正常进入 DISPATCHED`
-          : '网关直接返回 PARAM_OUT_OF_BOUNDS 400，严禁创建任务且预扣款必须为 0',
+        expectedRisk:
+          b.validity === 'VALID_BOUNDARY'
+            ? 'CRITICAL_FINANCIAL: 刊例计费基准计算精度与预扣款正确性'
+            : 'INPUT_VALIDATION: 业务网关是否具备 Fail-closed 参数防御拦截能力',
+        expectedObservation:
+          b.validity === 'VALID_BOUNDARY'
+            ? `SUBMIT 成功扣费 ${b.val * 14} 点 (Wan 3.0 720p=14/s)，任务正常进入 DISPATCHED`
+            : '网关直接返回 PARAM_OUT_OF_BOUNDS 400，严禁创建任务且预扣款必须为 0',
         steps: [
           {
             action: 'SUBMIT_TASK',
@@ -170,7 +158,11 @@ export class PanquMutationEngine {
     // 变异 A: SUBMIT -> CANCEL -> POLL (刚提交即取消，甚至在轮询之前)
     const stepsA: MutationStep[] = [
       { action: 'SUBMIT_TASK', description: '提交任务锁定预扣款', payload: { modelId: 84, duration: 4 } },
-      { action: 'CANCEL_TASK', description: '【时序变异】立即取消正在排队/生成的任务', payload: { reason: 'immediate_cancel' } },
+      {
+        action: 'CANCEL_TASK',
+        description: '【时序变异】立即取消正在排队/生成的任务',
+        payload: { reason: 'immediate_cancel' },
+      },
       { action: 'POLL_STATUS', description: '取消后轮询任务状态', payload: {} },
       { action: 'AUDIT_BILLING', description: '全量流水核销净扣零与退款幂等', payload: {} },
     ];
@@ -194,7 +186,11 @@ export class PanquMutationEngine {
       { action: 'SUBMIT_TASK', description: '提交任务', payload: { modelId: 84, duration: 4 } },
       { action: 'POLL_STATUS', description: '正常轮询至进行中', payload: {} },
       { action: 'CANCEL_TASK', description: '执行取消', payload: {} },
-      { action: 'POLL_STATUS', description: '【时序变异】取消后二次轮询状态，验证状态锁死与生命周期一致性', payload: {} },
+      {
+        action: 'POLL_STATUS',
+        description: '【时序变异】取消后二次轮询状态，验证状态锁死与生命周期一致性',
+        payload: {},
+      },
       { action: 'AUDIT_BILLING', description: '审计流水不变量', payload: {} },
       { action: 'INSPECT_MEDIA', description: '验证取消任务绝对不生成合法产物', payload: {} },
     ];
@@ -308,7 +304,11 @@ export class PanquMutationEngine {
         { action: 'INJECT_TIMEOUT', description: '注入网关 504 超时', payload: { timeoutMs: 5000 } },
         { action: 'RETRY_TASK', description: '根据策略触发重试机制', payload: {} },
         { action: 'CANCEL_TASK', description: '重试任务处理中主动取消', payload: { reason: 'user_abort_retry' } },
-        { action: 'AUDIT_BILLING', description: '深度核销全量流水记录 (核查 antiDoubleBilling 与 netChargeZero)', payload: {} },
+        {
+          action: 'AUDIT_BILLING',
+          description: '深度核销全量流水记录 (核查 antiDoubleBilling 与 netChargeZero)',
+          payload: {},
+        },
       ],
       isRaceCandidate: false,
       constraintEvaluation: { satisfied: true, stateFeasible: true, payloadValid: true, violations: [] },

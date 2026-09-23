@@ -411,10 +411,11 @@ export function discoverModelContract(
 
   // 3. Supported resolutions
   let supportedResolutions: DiscoveredFact<string[]>;
-  const inputResolutions = options.supportedResolutions
-    || (mediaType === 'video'
-        ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.resolutions
-        : options.mainConfig?.globalRouteRules?.image?.[modelId]?.resolutions);
+  const inputResolutions =
+    options.supportedResolutions ||
+    (mediaType === 'video'
+      ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.resolutions
+      : options.mainConfig?.globalRouteRules?.image?.[modelId]?.resolutions);
   if (inputResolutions && inputResolutions.length > 0) {
     supportedResolutions = createDiscoveredFact(inputResolutions, 'SOURCE_INPUT');
   } else if (staticInfo) {
@@ -435,10 +436,11 @@ export function discoverModelContract(
 
   // 4. Supported aspect ratios
   let supportedAspectRatios: DiscoveredFact<string[]>;
-  const inputAspectRatios = options.supportedAspectRatios
-    || (mediaType === 'video'
-        ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.aspect_ratios
-        : options.mainConfig?.globalRouteRules?.image?.[modelId]?.aspect_ratios);
+  const inputAspectRatios =
+    options.supportedAspectRatios ||
+    (mediaType === 'video'
+      ? options.mainConfig?.globalRouteRules?.video?.[modelId]?.aspect_ratios
+      : options.mainConfig?.globalRouteRules?.image?.[modelId]?.aspect_ratios);
   if (inputAspectRatios && inputAspectRatios.length > 0) {
     supportedAspectRatios = createDiscoveredFact(inputAspectRatios, 'SOURCE_INPUT');
   } else if (staticInfo) {
@@ -454,12 +456,18 @@ export function discoverModelContract(
 
   // 5. Pricing
   const intentPrice = options.requirement ? parseChangeIntent(options.requirement) : undefined;
-  const explicitCustomPoints = options.customPoints !== undefined
-    ? options.customPoints
-    : (mediaType === 'image' && options.price !== undefined ? options.price : intentPrice?.customPoints);
-  const explicitPointsPerSecond = options.pointsPerSecond !== undefined
-    ? options.pointsPerSecond
-    : (mediaType === 'video' && options.price !== undefined ? options.price : intentPrice?.pointsPerSecond);
+  const explicitCustomPoints =
+    options.customPoints !== undefined
+      ? options.customPoints
+      : mediaType === 'image' && options.price !== undefined
+        ? options.price
+        : intentPrice?.customPoints;
+  const explicitPointsPerSecond =
+    options.pointsPerSecond !== undefined
+      ? options.pointsPerSecond
+      : mediaType === 'video' && options.price !== undefined
+        ? options.price
+        : intentPrice?.pointsPerSecond;
 
   let pricing: DiscoveredModelContract['pricing'];
   if (explicitCustomPoints !== undefined) {
@@ -522,7 +530,8 @@ export function discoverModelContract(
   }
 
   // 6. Org bindings
-  let orgBindings: DiscoveredFact<Record<number, { routeGroupId: number; newapiGroup: string; status: number }>> | undefined;
+  let orgBindings:
+    DiscoveredFact<Record<number, { routeGroupId: number; newapiGroup: string; status: number }>> | undefined;
   if (options.mainConfig?.orgBindings) {
     const raw = options.mainConfig.orgBindings;
     const mapped: Record<number, { routeGroupId: number; newapiGroup: string; status: number }> = {};
@@ -575,9 +584,10 @@ export function discoverModelContract(
       staticInfo?.serviceline ?? 'r',
       staticInfo ? 'SOURCE_STATIC_CONTRACT' : 'SOURCE_DEFAULT_FALLBACK',
     );
-    const inputMaxRef = options.maxRefImages !== undefined
-      ? options.maxRefImages
-      : options.mainConfig?.globalRouteRules?.image?.[modelId]?.max_ref_images;
+    const inputMaxRef =
+      options.maxRefImages !== undefined
+        ? options.maxRefImages
+        : options.mainConfig?.globalRouteRules?.image?.[modelId]?.max_ref_images;
     if (inputMaxRef !== undefined) {
       maxRefImages = createDiscoveredFact(inputMaxRef, 'SOURCE_INPUT');
     } else {
@@ -638,11 +648,9 @@ export function discoverModelContract(
       { details: '非 Seedance 模型分流失败直接报错中断' },
     );
   } else {
-    fallback = createDiscoveredFact(
-      { hasPolicy: false, action: 'NONE' as const },
-      'SOURCE_DEFAULT_FALLBACK',
-      { details: '未知模型无特殊容灾策略' },
-    );
+    fallback = createDiscoveredFact({ hasPolicy: false, action: 'NONE' as const }, 'SOURCE_DEFAULT_FALLBACK', {
+      details: '未知模型无特殊容灾策略',
+    });
   }
 
   return {
@@ -672,8 +680,8 @@ export class EnvironmentProbe {
   public static async probe(options: EnvProbeOptions = {}): Promise<EnvProbeReport> {
     const env = options.env || 'test';
     const baseUrl = options.baseUrl || (env === 'preonline' ? 'https://preonline.panqu.com' : 'https://test.panqu.com');
-    const gatewayUrl = options.gatewayUrl
-      || (env === 'test' ? 'https://apitest.panqu.com' : 'https://aiapis.panqu.com');
+    const gatewayUrl =
+      options.gatewayUrl || (env === 'test' ? 'https://apitest.panqu.com' : 'https://aiapis.panqu.com');
     const timeoutMs = options.timeoutMs ?? 5000;
     const isMock = options.mock ?? true;
 
@@ -686,7 +694,16 @@ export class EnvironmentProbe {
         this.assertAllowedRealUrl(gatewayUrl, new Set([...localHosts, 'aiapis.panqu.com']), true);
       } else {
         this.assertAllowedRealUrl(baseUrl, new Set(['test.panqu.com', 'preonline.panqu.com', 'sandbox.panqu.com']));
-        this.assertAllowedRealUrl(gatewayUrl, new Set(['aiapis.panqu.com', 'apitest.panqu.com', 'test-aiapis.panqu.com', 'preonline-aiapis.panqu.com', 'sandbox-aiapis.panqu.com']));
+        this.assertAllowedRealUrl(
+          gatewayUrl,
+          new Set([
+            'aiapis.panqu.com',
+            'apitest.panqu.com',
+            'test-aiapis.panqu.com',
+            'preonline-aiapis.panqu.com',
+            'sandbox-aiapis.panqu.com',
+          ]),
+        );
       }
     }
 
@@ -699,8 +716,7 @@ export class EnvironmentProbe {
         else if (Array.isArray(parsed.sessions)) {
           const session = parsed.sessions.find((item: { env?: string }) => item.env === env);
           if (typeof session?.cookie_string === 'string') cookie = session.cookie_string;
-        }
-        else if (Array.isArray(parsed.cookies)) {
+        } else if (Array.isArray(parsed.cookies)) {
           cookie = parsed.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`).join('; ');
         }
       } catch {
@@ -717,10 +733,21 @@ export class EnvironmentProbe {
 
   private static assertAllowedRealUrl(value: string, allowedHosts: Set<string>, allowHttp = false): void {
     let parsed: URL;
-    try { parsed = new URL(value); }
-    catch { throw new Error(`REAL_URL_NOT_ALLOWED: ${value}`); }
-    const validProtocol = allowHttp ? (parsed.protocol === 'https:' || parsed.protocol === 'http:') : parsed.protocol === 'https:';
-    if (!validProtocol || parsed.username || parsed.password || (!allowHttp && parsed.port) || !allowedHosts.has(parsed.hostname)) {
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error(`REAL_URL_NOT_ALLOWED: ${value}`);
+    }
+    const validProtocol = allowHttp
+      ? parsed.protocol === 'https:' || parsed.protocol === 'http:'
+      : parsed.protocol === 'https:';
+    if (
+      !validProtocol ||
+      parsed.username ||
+      parsed.password ||
+      (!allowHttp && parsed.port) ||
+      !allowedHosts.has(parsed.hostname)
+    ) {
       throw new Error(`REAL_URL_NOT_ALLOWED: ${value}`);
     }
   }
@@ -777,8 +804,14 @@ export class EnvironmentProbe {
         globalApiKey: 'test-global',
         globalRouteRules: {
           video: {
-            84: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
-            88: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
+            84: {
+              resolutions: ['480p', '720p', '1080p'],
+              aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+            },
+            88: {
+              resolutions: ['480p', '720p', '1080p'],
+              aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+            },
           },
         },
         groupRouteRules: {
@@ -793,23 +826,32 @@ export class EnvironmentProbe {
         },
       };
 
-      const mainVerdict = mediaType === 'video'
-        ? RoutingOracle.evaluateVideoMainSite({
-            videoType: 6,
-            modelId,
-            taskType: 28,
-            cueword: 'probe_test',
-            resolution: '720p',
-            aspectRatio: '16:9',
-            userGroupIds,
-          }, config)
-        : RoutingOracle.evaluateImageMainSite({
-            selmodelsId: modelId,
-            serviceline: 'r',
-            userGroupIds,
-          }, config);
+      const mainVerdict =
+        mediaType === 'video'
+          ? RoutingOracle.evaluateVideoMainSite(
+              {
+                videoType: 6,
+                modelId,
+                taskType: 28,
+                cueword: 'probe_test',
+                resolution: '720p',
+                aspectRatio: '16:9',
+                userGroupIds,
+              },
+              config,
+            )
+          : RoutingOracle.evaluateImageMainSite(
+              {
+                selmodelsId: modelId,
+                serviceline: 'r',
+                userGroupIds,
+              },
+              config,
+            );
 
-      const targetModel = mainVerdict.expectedSnapshot?.newapiModel || (mediaType === 'video' ? 'wan3.0-video' : 'runninghub-nano-banana-2');
+      const targetModel =
+        mainVerdict.expectedSnapshot?.newapiModel ||
+        (mediaType === 'video' ? 'wan3.0-video' : 'runninghub-nano-banana-2');
       const channels: GatewayChannelConfig[] = [
         {
           id: 36,
@@ -869,7 +911,9 @@ export class EnvironmentProbe {
     }
 
     if (!hasSession) {
-      recommendations.push('[会话凭据] 未提供 Session Cookie，真实接口提交与轮询将受限。可通过 --session-file 传入已登录会话。');
+      recommendations.push(
+        '[会话凭据] 未提供 Session Cookie，真实接口提交与轮询将受限。可通过 --session-file 传入已登录会话。',
+      );
     }
 
     const isAllOk = endpoints.every((e) => e.reachable) && (!modelReadiness || modelReadiness.issues.length === 0);

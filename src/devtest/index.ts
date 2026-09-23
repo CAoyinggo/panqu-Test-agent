@@ -75,12 +75,7 @@ export {
   type MediaInspectionResult,
 } from './media-inspector.js';
 
-export {
-  EnvironmentProbe,
-  type EnvProbeOptions,
-  type EnvProbeReport,
-  type EndpointProbeResult,
-} from './env-probe.js';
+export { EnvironmentProbe, type EnvProbeOptions, type EnvProbeReport, type EndpointProbeResult } from './env-probe.js';
 
 export {
   type FlowMediaType,
@@ -103,11 +98,7 @@ export {
   type TargetDisambiguationResult,
 } from './types.js';
 
-export {
-  DevTestMcpService,
-  DEVTEST_MCP_TOOL,
-  DEVTEST_RECORD_CANDIDATE_TOOL,
-} from './mcp-service.js';
+export { DevTestMcpService, DEVTEST_MCP_TOOL, DEVTEST_RECORD_CANDIDATE_TOOL } from './mcp-service.js';
 
 export {
   PANQU_BUSINESS_ENTITIES,
@@ -234,6 +225,13 @@ export {
   type AssertionEvaluationResult,
 } from './canonical-verdict-engine.js';
 
+/**
+ * Tier 2 · 可选可插拔适配器 · UI 浏览器/视觉 AI 证据采集
+ * 实现 execution-ports.ts 的 EvidenceProducer 接口。
+ * 前提：需要外部 Playwright/Midscene 浏览器运行时环境。
+ * 成熟度：DEFERRED_EXTERNAL_RUNTIME（不属于零依赖交付范围）
+ * @see docs/ARCHITECTURE_FREEZE.md §1.3 Tier 2
+ */
 export {
   UIBrowserEvidenceProducer,
   UIVisualAiEvidenceProducer,
@@ -243,6 +241,12 @@ export {
   type DeterministicProducerContext,
 } from './ui-adapters.js';
 
+/**
+ * Tier 2 · 可选 SDK 纯函数 · Agent 行为离线评测
+ * 前提：需要提供 isRealSample=true 的真实 Agent 输出样本。
+ * 成熟度：BLOCKED_DATA_MISSING（缺少生产级真实样本）
+ * @see docs/ARCHITECTURE_FREEZE.md §1.3 Tier 2
+ */
 export {
   evaluateAgentOutput,
   type AgentStructuredDecision,

@@ -29,10 +29,7 @@ export class TestOfflineExecutionAdapter implements ExecutionAdapter {
     this.options = options || {};
   }
 
-  async execute(
-    spec: Readonly<CanonicalTestSpec>,
-    context?: Record<string, unknown>
-  ): Promise<ExecutionResult> {
+  async execute(spec: Readonly<CanonicalTestSpec>, context?: Record<string, unknown>): Promise<ExecutionResult> {
     if (this.options.shouldThrow) {
       throw new Error('TestOfflineExecutionAdapter simulated throw error');
     }
@@ -67,26 +64,33 @@ export class TestOfflineExecutionAdapter implements ExecutionAdapter {
 
     const normalizedFields: Record<string, unknown> = isSubmitted
       ? { taskId, lifecycleStatus: 'SUBMITTED', points, message }
-      : { taskId, observedStatus: status === 'COMPLETED' ? 'SUCCESS' : (status === 'FAILED' ? 'FAILED' : 'BLOCKED'), points, message };
+      : {
+          taskId,
+          observedStatus: status === 'COMPLETED' ? 'SUCCESS' : status === 'FAILED' ? 'FAILED' : 'BLOCKED',
+          points,
+          message,
+        };
 
-    const evidence: CanonicalEvidenceEnvelope[] = [{
-      evidenceId: `${spec.testId}-test-receipt`,
-      testId: spec.testId,
-      sourceTool: this.adapterName,
-      sourceType: 'FIXTURE',
-      evidenceKey,
-      observationStatus,
-      capturedAt: completedAt,
-      environment: spec.environment,
-      subjectType: 'task',
-      subjectId: taskId,
-      normalizedFields,
-      provenance: `${this.adapterName}:SIMULATED_FIXTURE`,
-      confidence: 1.0,
-      immutable: true,
-      redacted: true,
-      collectionStatus: 'SUCCESS',
-    }];
+    const evidence: CanonicalEvidenceEnvelope[] = [
+      {
+        evidenceId: `${spec.testId}-test-receipt`,
+        testId: spec.testId,
+        sourceTool: this.adapterName,
+        sourceType: 'FIXTURE',
+        evidenceKey,
+        observationStatus,
+        capturedAt: completedAt,
+        environment: spec.environment,
+        subjectType: 'task',
+        subjectId: taskId,
+        normalizedFields,
+        provenance: `${this.adapterName}:SIMULATED_FIXTURE`,
+        confidence: 1.0,
+        immutable: true,
+        redacted: true,
+        collectionStatus: 'SUCCESS',
+      },
+    ];
 
     return validateExecutionResult({
       executionId,

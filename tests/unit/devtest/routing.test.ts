@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  RoutingOracle,
-  type MainSiteConfigSnapshot,
-  type MainSiteRoutingVerdict,
-  type GatewayChannelConfig,
-} from '../../../src/devtest/routing.js';
+import { RoutingOracle, type MainSiteConfigSnapshot, type GatewayChannelConfig } from '../../../src/devtest/routing.js';
 
 describe('Routing - 独立分流真理判定与证据采集', () => {
   const baseConfig: MainSiteConfigSnapshot = {
@@ -15,7 +10,10 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
       video: {
         84: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
         88: { resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
-        15: { resolutions: ['480p', '720p', '1080p', '4k'], aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'] },
+        15: {
+          resolutions: ['480p', '720p', '1080p', '4k'],
+          aspect_ratios: ['auto', '16:9', '9:16', '1:1', '4:3', '3:4'],
+        },
       },
     },
     groupRouteRules: {
@@ -59,10 +57,7 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
     });
 
     it('全量开放模型 (is_newapi_global=1) 绕过组织直接使用全局Key分流 (orgId=0, line=10)', () => {
-      const verdict = RoutingOracle.evaluateVideoMainSite(
-        { videoType: 105, modelId: 84 },
-        baseConfig,
-      );
+      const verdict = RoutingOracle.evaluateVideoMainSite({ videoType: 105, modelId: 84 }, baseConfig);
       expect(verdict.willDivert).toBe(true);
       expect(verdict.decision).toBe('NEWAPI_GLOBAL');
       expect(verdict.line).toBe(10);
@@ -206,9 +201,36 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
 
   describe('3. 网关层渠道筛选与加权推导', () => {
     const channels: GatewayChannelConfig[] = [
-      { id: 36, name: '万相—yhuo', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 8, dailyQuotaLimit: 1000, usedQuota: 200 },
-      { id: 37, name: '万相-备用', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 2, dailyQuotaLimit: 1000, usedQuota: 100 },
-      { id: 38, name: '停用渠道', group: 'panqu_test', models: ['wan3.0-video'], status: 0, weight: 10, dailyQuotaLimit: 1000, usedQuota: 0 },
+      {
+        id: 36,
+        name: '万相—yhuo',
+        group: 'panqu_test',
+        models: ['wan3.0-video'],
+        status: 1,
+        weight: 8,
+        dailyQuotaLimit: 1000,
+        usedQuota: 200,
+      },
+      {
+        id: 37,
+        name: '万相-备用',
+        group: 'panqu_test',
+        models: ['wan3.0-video'],
+        status: 1,
+        weight: 2,
+        dailyQuotaLimit: 1000,
+        usedQuota: 100,
+      },
+      {
+        id: 38,
+        name: '停用渠道',
+        group: 'panqu_test',
+        models: ['wan3.0-video'],
+        status: 0,
+        weight: 10,
+        dailyQuotaLimit: 1000,
+        usedQuota: 0,
+      },
     ];
 
     it('正确过滤停用渠道并计算加权概率', () => {
@@ -221,8 +243,26 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
 
     it('配额耗尽与模型不匹配熔断：渠道额度超限或模型未覆盖时触发拒绝并标记 isBlockedByQuota', () => {
       const quotaLimitedChannels: GatewayChannelConfig[] = [
-        { id: 41, name: '限额渠道', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 100, usedQuota: 95 },
-        { id: 42, name: '异构模型渠道', group: 'panqu_test', models: ['seedance-2.0'], status: 1, weight: 10, dailyQuotaLimit: 1000, usedQuota: 0 },
+        {
+          id: 41,
+          name: '限额渠道',
+          group: 'panqu_test',
+          models: ['wan3.0-video'],
+          status: 1,
+          weight: 10,
+          dailyQuotaLimit: 100,
+          usedQuota: 95,
+        },
+        {
+          id: 42,
+          name: '异构模型渠道',
+          group: 'panqu_test',
+          models: ['seedance-2.0'],
+          status: 1,
+          weight: 10,
+          dailyQuotaLimit: 1000,
+          usedQuota: 0,
+        },
       ];
 
       // 请求 10 积分，渠道 41 额度不足 (95+10 > 100)，渠道 42 模型不匹配
@@ -239,4 +279,3 @@ describe('Routing - 独立分流真理判定与证据采集', () => {
     });
   });
 });
-

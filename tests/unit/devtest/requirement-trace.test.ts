@@ -132,10 +132,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
 
     expect(result.changedPaths).toEqual(['src/devtest/billing.ts']);
     expect(result.affectedRequirements).toEqual(['REQ-BILLING-001']);
-    expect(result.affectedTests).toEqual([
-      'test-billing-anti-double-002',
-      'test-billing-idempotent-001',
-    ]);
+    expect(result.affectedTests).toEqual(['test-billing-anti-double-002', 'test-billing-idempotent-001']);
     expect(result.coverageGaps).toHaveLength(0);
   });
 
@@ -191,16 +188,12 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
     expect(riskTypes).toContain('UNSAFE_EXECUTION_MODE');
 
     // 验证特定用例的具体风险
-    const billingAntiDoubleRisks = result.riskInputs.filter(
-      (r) => r.testId === 'test-billing-anti-double-002'
-    );
+    const billingAntiDoubleRisks = result.riskInputs.filter((r) => r.testId === 'test-billing-anti-double-002');
     expect(billingAntiDoubleRisks.some((r) => r.riskType === 'PAID_OR_SUBMIT_SIDE_EFFECT')).toBe(true);
     expect(billingAntiDoubleRisks.some((r) => r.riskType === 'POSITIVE_COST_LIMIT')).toBe(true);
     expect(billingAntiDoubleRisks.some((r) => r.riskType === 'UNSAFE_EXECUTION_MODE')).toBe(true);
 
-    const routingRisks = result.riskInputs.filter(
-      (r) => r.testId === 'test-routing-disambiguation-001'
-    );
+    const routingRisks = result.riskInputs.filter((r) => r.testId === 'test-routing-disambiguation-001');
     expect(routingRisks.some((r) => r.riskType === 'MISSING_CRITICAL_ASSERTIONS')).toBe(true);
   });
 
@@ -255,11 +248,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
       expect(res.ok).toBe(true);
       expect(res.error).toBeUndefined();
       // 必须精确包含全部三种真实变更，去重并排序
-      expect(res.changedPaths).toEqual([
-        'staged-feature.ts',
-        'tracked-clean.txt',
-        'untracked-doc.md',
-      ]);
+      expect(res.changedPaths).toEqual(['staged-feature.ts', 'tracked-clean.txt', 'untracked-doc.md']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -307,7 +296,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
       fs.writeFileSync(
         path.join(tempDir, 'devtest-requirements.json'),
         JSON.stringify(authoritativeTraces, null, 2),
-        'utf-8'
+        'utf-8',
       );
 
       const result = await analyzeGitImpact({ cwd: tempDir });
@@ -317,10 +306,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
       expect(result.changedPaths).toContain('devtest-requirements.json');
       expect(result.changedPaths).toContain('media-service.ts');
       expect(result.impactResult?.affectedRequirements).toContain('REQ-MEDIA-001');
-      expect(result.impactResult?.affectedTests).toEqual([
-        'test-media-spec-01',
-        'test-media-spec-02',
-      ]);
+      expect(result.impactResult?.affectedTests).toEqual(['test-media-spec-01', 'test-media-spec-02']);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -468,7 +454,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
       fs.writeFileSync(
         path.join(tempDir, 'devtest-requirements.json'),
         JSON.stringify(invalidTraces, null, 2),
-        'utf-8'
+        'utf-8',
       );
 
       const result = await analyzeGitImpact({ cwd: tempDir });
@@ -501,11 +487,7 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
           testIds: ['test-valid-spec-01'],
         },
       ];
-      fs.writeFileSync(
-        path.join(tempDir, 'devtest-requirements.json'),
-        JSON.stringify(validTraces, null, 2),
-        'utf-8'
-      );
+      fs.writeFileSync(path.join(tempDir, 'devtest-requirements.json'), JSON.stringify(validTraces, null, 2), 'utf-8');
 
       const result = await analyzeGitImpact({ cwd: tempDir });
 
@@ -522,16 +504,14 @@ describe('Requirement Trace & Impact Analysis 测试套件 (wardenIQ 原生吸�
   // 15. 成熟度解析器严格测试
   // --------------------------------------------------------------------------
   it('15. resolveWardenMaturity 严格根据收集器与映射状态解析成熟度', () => {
-    expect(
-      resolveWardenMaturity({ gitCollectorAvailable: true, hasAuthoritativeMapping: true })
-    ).toBe('IMPLEMENTED');
+    expect(resolveWardenMaturity({ gitCollectorAvailable: true, hasAuthoritativeMapping: true })).toBe('IMPLEMENTED');
 
-    expect(
-      resolveWardenMaturity({ gitCollectorAvailable: true, hasAuthoritativeMapping: false })
-    ).toBe('BLOCKED_DATA_MISSING');
+    expect(resolveWardenMaturity({ gitCollectorAvailable: true, hasAuthoritativeMapping: false })).toBe(
+      'BLOCKED_DATA_MISSING',
+    );
 
-    expect(
-      resolveWardenMaturity({ gitCollectorAvailable: false, hasAuthoritativeMapping: false })
-    ).toBe('CONTRACT_ONLY');
+    expect(resolveWardenMaturity({ gitCollectorAvailable: false, hasAuthoritativeMapping: false })).toBe(
+      'CONTRACT_ONLY',
+    );
   });
 });

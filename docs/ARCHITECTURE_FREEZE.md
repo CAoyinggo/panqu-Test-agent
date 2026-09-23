@@ -106,6 +106,39 @@ src/devtest/
   - 禁止将“吸收设计思想”夸大为“已完成真实集成”；
   - `package.json` 保持 100% 干净，零新增依赖。
 
+### 1.4 评审矩阵与能力边界澄清：未默认启用与死代码的判定标准 (Review Assessment Matrix & Capability Boundaries)
+
+为杜绝后续架构评审中对“可选适配器未默认启用”与“死代码”的混淆，以及防止将“Fail-Closed 缺失事实阻断”误判为“系统缺陷”，在此建立全景评审矩阵并确立三项不可动摇的判定标准：
+
+#### 全景组件评审矩阵 (Comprehensive Component Assessment Matrix)
+
+| 组件 / 模块 | 架构层级 | 成熟度定级 | 交付范围 | 生产默认状态 | Canonical & 裁决关联 | 评审客观判定与代码状态说明 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **RequirementTrace** (`requirement-trace.ts`) | Tier 1 生产核心 | `BLOCKED_DATA_MISSING` / `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (随入参按需激活) | 规约前置输入 (提供 trace 关联) | **有效生产代码**：真实 Git 变更收集与纯函数影响分析就绪，缺权威映射时 Fail-Closed 返回 `BLOCKED_DATA_MISSING`。 |
+| **CanonicalTestSpec** (`canonical-protocol.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (全链路标准规约) | 核心不可变规约定义 | **有效生产代码**：声明式断言、预算、副作用策略不可变契约载体，全链路强类型自检。 |
+| **core-kernel.executeCanonical** (`core-kernel.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (执行中枢入口) | 适配器调度与安全门禁拦截 | **有效生产代码**：内部唯一标准执行中枢，严格隔离适配器并阻断越权操作，所有失败分支输出统一结构。 |
+| **PanquMediaExecutionAdapter** (`execution-ports.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (生产默认适配器) | 真实任务派发 (零业务裁决字段) | **有效生产代码**：内聚会话加载、project_id 校验与真实网络提交，零裁决权。 |
+| **Canonical Evidence Envelope** (`canonical-protocol.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (统一证据载体) | 证据信封标准结构 | **有效生产代码**：强类型校验、不可变防伪防冒充凭证标准。 |
+| **Canonical Verdict Engine** (`canonical-verdict-engine.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (唯一最终裁决源) | 全系统唯一业务裁决求值中心 | **有效生产代码**：纯三态 (`PASS` \| `FAIL` \| `UNVERIFIED`)，verify() 结果无条件穿透。 |
+| **CLI / MCP 生产接入层** (`devtest-cli.ts`, `mcp-service.ts`) | Tier 1 生产核心 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `DEFAULT_ENABLED` (双模同源呈现) | 注入生产适配器，投影兼容展示 | **有效生产代码**：生命周期状态投影，绝不自行计算业务 PASS/FAIL。 |
+| **ResultSink & NdjsonResultSink** (`result-sink.ts`) | Tier 2 可选适配器 | `IMPLEMENTED` (本地) / `CONTRACT_ONLY` (远程) | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需配置开启) | 只写不读单向持久化导出 | **有效扩展代码（绝非死代码）**：遵守四可隔离原则，递归深冻结结果，单向输出脱敏，绝不回写状态；默认不写磁盘以防文件污染。 |
+| **UI Evidence Producers** (`ui-adapters.ts`) | Tier 2 可选适配器 | `DEFERRED_EXTERNAL_RUNTIME` | `NOT_IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (按需注入 extraEnvelopes) | 外部可选凭证收集，零裁决权 | **有效扩展代码（绝非死代码）**：纯协议与信封抽象，依赖外部 Playwright/Midscene 运行时，不自制 CDP 框架，零依赖交付范围外，严禁误判为已接入或死代码。 |
+| **Agent Evaluation** (`agent-evaluation.ts`) | Tier 2 库级纯函数 | `BLOCKED_DATA_MISSING` / `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `OPTIONAL_INJECTABLE` (SDK 纯函数调用) | 评测信封输入 | **有效扩展代码（绝非死代码）**：纯函数评测引擎与八类漏洞检测，缺真实样本时严格返回 `BLOCKED_DATA_MISSING`，零假 PASS。 |
+| **测试专用 Fixtures & Adapters** (`tests/helpers/`) | Tier 3 测试专用 | `IMPLEMENTED` | `IN_ZERO_DEPENDENCY_SCOPE` | `TEST_ONLY` (仅 tests/ 加载) | 离线仿真与契约验证 | **有效测试资产**：严禁导出到 `src/devtest/index.ts`，严禁生产运行时默认加载。 |
+| **五大思想吸收规范** (`Playwright / Midscene / Promptfoo / ReportPortal / wardenIQ`) | Tier 4 思想吸收 | 见 1.2 四级审计 | 见 1.2 交付范围 | `CONCEPT_ONLY` (原生轻量吸纳) | 原生轻量设计思想 | **架构设计理念**：零外部依赖，100% 干净 package.json，严禁夸大为已完成外部框架集成。 |
+
+#### 三大评审判定标准与核心原则 (Core Review Assessment Criteria)
+
+1. **判定标准一：未默认启用 ≠ 死代码 (Not Enabled by Default != Dead Code)**
+   - **架构设计依据**：Tier 2 模块（`NdjsonResultSink`、`UIBrowserEvidenceProducer`、`UIVisualAiEvidenceProducer`、`evaluateAgentOutput`）是基于“四可隔离原则”（**可开关、可替换、可单测、可删除**）与“**零外部依赖**”交付范围设计的标准适配器与库级能力。
+   - **判定红线**：它们通过标准端口注入或由调用方按需传入（如 `extraEnvelopes` 或可选 `resultSink` 注入），默认不在无参 CLI/MCP 中强行激活是为了保证生产链路的确定性、轻量与零写副作用。**严禁以“默认命令未直接调用”为由将其轻率判定为死代码**。
+2. **判定标准二：缺数据阻断 / 缺运行时延迟 ≠ 功能缺陷 (Blocked / Deferred != Defect)**
+   - **安全门禁依据**：`Promptfoo` / `wardenIQ` 在缺真实样本或权威需求映射时，代码逻辑严格返回 `BLOCKED_DATA_MISSING` 或 `UNRESOLVED_REQUIREMENT`；`Playwright` / `Midscene` 标记为 `DEFERRED_EXTERNAL_RUNTIME`，明确不自制浏览器驱动。
+   - **判定红线**：这些阻断与延迟是系统坚守 Fail-Closed 原则和“零假 PASS”的物理门禁，属于符合预期的安全护栏，**严禁将正常的门禁拦截误判为未完成的半成品或功能缺陷**。
+3. **判定标准三：不重复接入 Canonical，不强行激活可选模块 (No Redundant Canonical, No Forced Activation)**
+   - **规约与裁决边界**：四大核心动作中，`probe()`、`plan()` 已通过 mappers 产出不可变 `CanonicalTestSpec`，`execute()` 已通过 `executeCanonical` 消费规约并调度 `ExecutionAdapter`，`verify()` 专职负责证据汇聚与裁决求值；全链路规约已完整闭环。**严禁为了“形式上的绝对统一”而在 probe/plan/execute 中重复接入裁决引擎或凭空捏造虚假证据**。
+   - **运行时激活边界**：**严禁为了“提升代码覆盖率”或“向评审展示功能”而在默认 CLI/MCP 命令中强行加载外部无依赖支撑的模块**（如强行启动无运行时的浏览器采集器、伪造被测智能体输出、或强行向磁盘写入本地 NDJSON 文件）。
+
 ---
 
 # 2. 核心语义冻结与受控扩展规则
@@ -177,6 +210,10 @@ src/devtest/
    - **Promptfoo (`BLOCKED_DATA_MISSING` / `CONTRACT_ONLY`)**：实现工具无关 Agent Evaluation 纯函数 (`agent-evaluation.ts`)，定义真实样本导入契约 (`AgentSampleImportContract`)；isRealSample 严格为 true 门禁，缺少真实样本或黄金基线时严格阻断为 `BLOCKED_DATA_MISSING`，严禁从输出反推黄金预期；
    - **ReportPortal (`IMPLEMENTED` 本地 NDJSON / `CONTRACT_ONLY` 远程)**：实现最小只写不读 `ResultSink` 端口、递归深冻结纯映射及本地 `NdjsonResultSink` 单向结果追加导出器 (`result-sink.ts`)，严格无回写能力，不冻结入参；
    - **wardenIQ (`BLOCKED_DATA_MISSING` / 缺真实映射)**：实现真实 Git 变更收集器 (`collectGitChangedPaths`) 与纯函数影响分析 (`requirement-trace.ts`)；在仓库未提供权威映射文件时严格标记 `BLOCKED_DATA_MISSING`，禁止创建虚假映射；只有分析纯函数时为 `CONTRACT_ONLY`，两者闭环后才为 `IMPLEMENTED`。
+4. **Phase 4 core-kernel 物理分解授权（2026-09-23 人工明确授权）**：
+   - 授权将 `core-kernel.ts` 按其**既有内聚函数边界**做纯物理文件分解，把 `generateDynamicTestPlan` 与 verify 证据流水线（`resolveVerifyContext` / `collectTaskEvidence` / `collectMediaEvidence` / `collectBillingEvidence` / `computeRegressionDiff` / `buildDiffItems` / `computeFinalVerdict`）抽取到由 `core-kernel` 单向 `import` 的新内部模块（`plan-generator.ts`、`verify-pipeline.ts`）；
+   - **硬约束（不可违背）**：① 不新增核心动作（仍为 probe/plan/execute/verify）；② 严禁新增 Manager/Orchestrator/Service/Repository 等包装层或无价值“中间层”，仅做行为等价的代码搬迁；③ `core-kernel.ts` 仍为四大动作及其出入参类型的**唯一公共导出面**，`src/devtest/index.ts` 公共契约零变化；④ 单一裁决引擎、五维证据、Fail-closed、verify 永久只读等所有核心不变量零改动；⑤ 新模块只能单向向下依赖，严禁反向 `import` core-kernel，依赖无环护栏必须全绿；⑥ 全程行为等价，`npm test`（37 套件 / 668 用例）、`npm run build`、`dependency-cycle` 与 `architecture-convergence` 套件必须持续全绿；
+   - 本授权**仅限此次物理分解**，不构成后续无限重构授权，不改变 §2「永久禁止项」的其余任何条款。
 
 ### 实际能力边界与接入状态声明：
 * **边界界定**：上述能力按成熟度客观划分，严禁把 `CONTRACT_ONLY` 或 `DEFERRED_EXTERNAL_RUNTIME` 宣传为“已完成端到端接入”。成熟度与零依赖交付范围是两个正交维度。
@@ -208,14 +245,18 @@ src/devtest/
 
 > [!IMPORTANT]
 > **当前接入状态与无最终裁决权声明 (Access Status & No Verdict Authority)**：
-> 1. **当前接入范围边界**：四大核心动作中，**当前仅有 `verify()` 完整接入了 Canonical Evidence 与 CanonicalVerdictEngine 唯一最终裁决引擎**；`probe()`、`plan()`、`execute()` 当前仍走原生领域调用链，**尚未全部迁移至 Canonical TestSpec / Evidence Envelopes**，严禁声称它们已全部迁移。`legacy-protocol-mappers.ts` 中虽包含 `mapPlanToCanonicalTestSpec` 等兼容映射函数，但这些函数目前未接入 probe/plan/execute 生产链路。
-> 2. **领域模块事实边界与 verify 真实链路**：所有核心领域支撑模块均输出各自原生领域数据结构（如 `EnvProbeReport`、`GatewayRoutingVerdict`、`TaskStatusSnapshot`、`MediaInspectionResult`、`BillingAuditReport`），**当前并不直接输出 Canonical Evidence Envelope**。当前 `verify()` 的真实链路为：
+> 1. **四大核心动作真实接入分工与边界**：
+>    - `probe()`：负责环境连通与画像发现，产出原生 `EnvProbeReport`，并通过 `mapProbeToCanonicalTestSpec` 单向输出不可变 `canonicalSpec` 挂载于结果，保证下游规约一致性（探活动作本身不具备业务裁决权，不执行裁决求值）；
+>    - `plan()`：负责路由决策与测试规划，产出原生 `PlanKernelResult`，并通过 `mapPlanToCanonicalTestSpec` 单向输出不可变 `canonicalSpec` 挂载于结果，明确预期与所需证据（规划动作本身不具备业务裁决权，不执行裁决求值）；
+>    - `execute()`：负责任务派发，通过 `mapExecuteToCanonicalTestSpec` 将输入规约为 `CanonicalTestSpec`，通过内部唯一标准中枢 `executeCanonical` 调度 `ExecutionAdapter`（生产默认 `PanquMediaExecutionAdapter`，零裁决权，执行成功绝不等于验证通过）；
+>    - `verify()`：**全系统唯一调用 `CanonicalVerdictEngine` 执行裁决求值的核心动作**。负责将各领域事实通过 `buildCanonicalEvidenceFromVerifyFacts` 映射为统一 `CanonicalEvidenceEnvelope[]`，根据规约提交裁决引擎终审，并通过 `projectCanonicalVerdictToLegacy` 兼容投影。
+> 2. **领域模块事实边界与 verify 真实链路**：所有核心领域支撑模块均输出各自原生领域数据结构（如 `EnvProbeReport`、`GatewayRoutingVerdict`、`TaskStatusSnapshot`、`MediaInspectionResult`、`BillingAuditReport`），**不直接输出 Canonical Evidence Envelope**。当前 `verify()` 的真实链路为：
 >    1. `core-kernel.verify()` 负责收集领域事实；
 >    2. `buildCanonicalEvidenceFromVerifyFacts()` 只负责将 verify 事实转换为 `CanonicalEvidenceEnvelope[]`（Evidence Envelope 由 mapper 转换生成，绝不负责构建 TestSpec）；
 >    3. `core-kernel.verify()` 负责根据当前验收场景直接构建不可变 `CanonicalTestSpec`（明确由 core-kernel.verify() 构建，不得声称 `legacy-protocol-mappers` 或该函数负责构建 TestSpec）；
->    4. `Canonical Verdict Engine` 统一裁决；
+>    4. `CanonicalVerdictEngine` 统一裁决；
 >    5. `projectCanonicalVerdictToLegacy()` 只做兼容投影。
-> 3. **无最终裁决权声明**：四大核心动作调度器和所有领域支撑模块**均不拥有最终裁决权**。全系统**唯一的最终裁决权威必须且仅能由 `CanonicalVerdictEngine` (Single Verdict Engine)** 统一裁定。
+> 3. **无最终裁决权声明与不重复接入原则**：四大核心动作调度器（probe/plan/execute）和所有领域支撑模块**均不拥有最终裁决权**。全系统**唯一的最终裁决权威必须且仅能由 `CanonicalVerdictEngine` (Single Verdict Engine)** 在 `verify()` 中统一裁定。严禁在 probe/plan/execute 中重复接入裁决逻辑，严禁强行激活可选模块。
 
 系统核心调度动作只允许：
 
@@ -233,7 +274,7 @@ verify()
 * 环境探活与画像发现
 * Session / Cookie 有效性感知
 * 主站连通性与网关可用性探测
-* 产出原生探活分析报告 (`EnvProbeReport`)（当前尚未迁移至 Canonical 体系）
+* 产出原生探活分析报告 (`EnvProbeReport`)，并通过 `mapProbeToCanonicalTestSpec` 单向输出 `canonicalSpec`（仅规约映射，探活不执行裁决）
 
 **裁决权边界**：无裁决权。探活成功仅代表探测时刻的环境网络与凭据状态连通，不能直接代表测试通过或发布裁决。
 
@@ -255,7 +296,7 @@ verify()
 * NewAPI / 直连决策
 * 网关候选渠道与分流标记
 * 预期刊例计算
-* 产出原生测试规划结果 (`PlanKernelResult` / `TestCasePlan`)（当前尚未直接生成 CanonicalTestSpec）
+* 产出原生测试规划结果 (`PlanKernelResult` / `TestCasePlan`)，并通过 `mapPlanToCanonicalTestSpec` 单向输出 `canonicalSpec`（仅规约映射，规划不执行裁决）
 
 **裁决权边界**：无裁决权。路由推导与预期计算仅定义测试契约和期望基准（Expectations），绝非最终裁决事实。
 
@@ -281,7 +322,7 @@ DEVTEST_EXPECTATION
 * REAL 真实任务提交
 * OFFLINE 离线仿真
 * FIXTURE 测试夹具
-* 捕获任务提交后的原生事实快照 (`ExecuteKernelResult` / `TaskStatusSnapshot`)（当前尚未迁移至 ExecutionAdapter 端口）
+* 捕获任务提交后的原生事实快照 (`ExecuteKernelResult` / `TaskStatusSnapshot`)，通过 `mapExecuteToCanonicalTestSpec` 转换并由 `executeCanonical` 调度 `ExecutionAdapter`（生产默认 `PanquMediaExecutionAdapter`，零裁决权）
 
 **裁决权边界**：无裁决权。任务提交成功（例如 HTTP 200 或后端分配 task_id）绝不等于业务验证 PASS。执行动作绝不能给自身或调用方直接签发通过裁决。
 

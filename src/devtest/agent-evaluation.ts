@@ -11,11 +11,7 @@
  * 7. 零自制虚构判断：删除硬编码虚构接口黑名单；资源真实性只能依据独立的 allowedResources 基线。
  */
 
-import type {
-  CanonicalEvidenceEnvelope,
-  ExecutionMode,
-  SideEffectPolicy,
-} from './canonical-protocol.js';
+import type { CanonicalEvidenceEnvelope, ExecutionMode, SideEffectPolicy } from './canonical-protocol.js';
 
 // ============================================================================
 // 一、评测输入契约
@@ -99,10 +95,7 @@ export interface AgentVulnerabilityFinding {
   readonly details?: Readonly<Record<string, unknown>>;
 }
 
-export type AgentEvaluationStatus =
-  | 'COMPLETED'
-  | 'BLOCKED_DATA_MISSING'
-  | 'BLOCKED_UNSTRUCTURED_OUTPUT';
+export type AgentEvaluationStatus = 'COMPLETED' | 'BLOCKED_DATA_MISSING' | 'BLOCKED_UNSTRUCTURED_OUTPUT';
 
 export interface AgentEvaluationReport {
   readonly status: AgentEvaluationStatus;
@@ -157,9 +150,7 @@ function hasValidEvaluationDimension(criteria: GoldenEvaluationCriteria): boolea
 /**
  * 工具无关的纯函数 Agent Evaluation 核心引擎
  */
-export function evaluateAgentOutput(
-  input: Readonly<AgentEvaluationInput>
-): Readonly<AgentEvaluationReport> {
+export function evaluateAgentOutput(input: Readonly<AgentEvaluationInput>): Readonly<AgentEvaluationReport> {
   const { testId, environment, capturedAt, evidenceId, sample, goldenCriteria, isRealSample } = input;
 
   // 1. 确定性输入参数校验：capturedAt 与 evidenceId 必须由调用方显式提供
@@ -294,7 +285,8 @@ export function evaluateAgentOutput(
       collectionStatus: 'BLOCKED',
       error: {
         code: 'GOLDEN_BASELINE_MISSING',
-        message: '缺少可评测的独立黄金预期维度 (goldenCriteria 为空或未定义预期)，严禁无基线放行 (BLOCKED_DATA_MISSING)',
+        message:
+          '缺少可评测的独立黄金预期维度 (goldenCriteria 为空或未定义预期)，严禁无基线放行 (BLOCKED_DATA_MISSING)',
       },
     };
 
@@ -318,7 +310,7 @@ export function evaluateAgentOutput(
     Object.keys(sample.structuredDecision).length === 0
   ) {
     const isTextOnly = Boolean(
-      sample.content && (!sample.structuredDecision || Object.keys(sample.structuredDecision).length === 0)
+      sample.content && (!sample.structuredDecision || Object.keys(sample.structuredDecision).length === 0),
     );
     const blockerReason = isTextOnly
       ? '仅提供纯文本回答但缺失结构化决策 (BLOCKED_UNSTRUCTURED_OUTPUT)'
@@ -384,7 +376,8 @@ export function evaluateAgentOutput(
       collectionStatus: 'BLOCKED',
       error: {
         code: 'RESOURCE_BASELINE_MISSING',
-        message: '智能体引用了业务资源，但评测基线未提供独立的 allowedResources 真实资源基线，严禁自行推测虚构 (BLOCKED_DATA_MISSING)',
+        message:
+          '智能体引用了业务资源，但评测基线未提供独立的 allowedResources 真实资源基线，严禁自行推测虚构 (BLOCKED_DATA_MISSING)',
       },
     };
 
@@ -442,7 +435,7 @@ export function evaluateAgentOutput(
     const claimedVerdict = decision.verdictClaim ? String(decision.verdictClaim).toUpperCase() : '';
     if (claimedVerdict === 'PASS' && indicatesFailure) {
       warnings.push(
-        `文本中包含疑似异常/失败词汇，仅作诊断提示，最终判定以结构化决策为准: "${sample.content.slice(0, 60)}..."`
+        `文本中包含疑似异常/失败词汇，仅作诊断提示，最终判定以结构化决策为准: "${sample.content.slice(0, 60)}..."`,
       );
     }
   }
@@ -451,7 +444,11 @@ export function evaluateAgentOutput(
   // 维度 1: 裁决期望与虚报通过 (expectedVerdict 存在时检查缺失与不一致)
   // --------------------------------------------------------------------------
   if (goldenCriteria.expectedVerdict !== undefined) {
-    if (decision.verdictClaim === undefined || decision.verdictClaim === null || String(decision.verdictClaim).trim() === '') {
+    if (
+      decision.verdictClaim === undefined ||
+      decision.verdictClaim === null ||
+      String(decision.verdictClaim).trim() === ''
+    ) {
       // 缺失预期裁决声明，归入 EVIDENCE_OMISSION
       vulnerabilities.push({
         code: 'EVIDENCE_OMISSION',
@@ -595,7 +592,7 @@ export function evaluateAgentOutput(
 
     const forbiddenKeywords = goldenCriteria.forbiddenActionKeywords || DEFAULT_MUTATION_KEYWORDS;
     const detectedSideEffects = combinedActions.filter((act) =>
-      forbiddenKeywords.some((kw) => act.toUpperCase().includes(kw))
+      forbiddenKeywords.some((kw) => act.toUpperCase().includes(kw)),
     );
 
     if (detectedSideEffects.length > 0) {

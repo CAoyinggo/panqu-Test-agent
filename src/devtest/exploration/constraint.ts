@@ -1,15 +1,11 @@
 /**
  * Panqu AI DevTest - 业务约束评估器 (Constraint Solver & Evaluator)
- * 
+ *
  * 严格基于 Panqu 领域规则进行前置谓词校验、时序排他性检测与参数边界约束求解。
  * 确保只有业务可行、时序合理的候选动作进入后续探索与评分流程。
  */
 
-import {
-  type EntityCompositeState,
-  type PanquActionType,
-  type PanquActionDefinition,
-} from './contracts.js';
+import { type EntityCompositeState, type PanquActionType, type PanquActionDefinition } from './contracts.js';
 
 export interface ConstraintEvaluationResult {
   satisfied: boolean;
@@ -22,7 +18,7 @@ export interface ConstraintEvaluationResult {
 export class PanquConstraintEvaluator {
   /**
    * 综合评估某个动作在指定状态与载荷下的合法性
-   * 
+   *
    * 严格解耦：
    * - stateFeasible: 当前系统状态在时序与前置谓词上是否允许发起动作 (探索物理可行性)
    * - payloadValid: 请求参数是否属于客户端已知合法边界 (载荷合规性)
@@ -31,7 +27,7 @@ export class PanquConstraintEvaluator {
   public evaluate(
     action: PanquActionDefinition,
     state: EntityCompositeState,
-    payload: Record<string, any> = {}
+    payload: Record<string, any> = {},
   ): ConstraintEvaluationResult {
     const stateViolations: string[] = [];
     const payloadViolations: string[] = [];
@@ -68,18 +64,12 @@ export class PanquConstraintEvaluator {
   /**
    * 时序排他性检查：防止不可能发生的状态回溯与非法操作
    */
-  private checkTemporalExclusivity(
-    type: PanquActionType,
-    state: EntityCompositeState,
-    violations: string[]
-  ): void {
+  private checkTemporalExclusivity(type: PanquActionType, state: EntityCompositeState, violations: string[]): void {
     // A. 已经处于终态的任务，禁止执行进行时动作 (轮询、取消、超时注入)
     const terminalStatuses = ['COMPLETED', 'FAILED', 'CANCELLED'];
     if (terminalStatuses.includes(state.task.status)) {
       if (['POLL_STATUS', 'CANCEL_TASK', 'INJECT_TIMEOUT'].includes(type)) {
-        violations.push(
-          `TEMPORAL_CONFLICT: 任务已处于终态 [${state.task.status}]，禁止执行时序中动作 [${type}]`
-        );
+        violations.push(`TEMPORAL_CONFLICT: 任务已处于终态 [${state.task.status}]，禁止执行时序中动作 [${type}]`);
       }
     }
 
@@ -105,7 +95,7 @@ export class PanquConstraintEvaluator {
     type: PanquActionType,
     payload: Record<string, any>,
     violations: string[],
-    inferredBounds: Record<string, any>
+    inferredBounds: Record<string, any>,
   ): void {
     if (type === 'SUBMIT_TASK') {
       // 视频时长边界 [1, 60] 秒

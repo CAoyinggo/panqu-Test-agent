@@ -7,7 +7,6 @@ import {
   verify,
   DevTestMcpService,
   loadConfirmedExperiences,
-  recordCandidateToSharedMemory,
   promoteConfirmedExperiences,
 } from '../../../src/devtest/index.js';
 
@@ -236,7 +235,12 @@ describe('Promotion Pipeline: Confirmed Experience -> Persistent Knowledge', () 
         sharedMemoryDir: env.sharedMemoryDir,
       });
 
-      const matchedExp = experiences.find((e) => e.sourceCandidateId === 'CAND-20260917-0006' || e.title.includes('CAND-20260917-0006') || e.title.includes('失败任务漏退款净扣未归零'));
+      const matchedExp = experiences.find(
+        (e) =>
+          e.sourceCandidateId === 'CAND-20260917-0006' ||
+          e.title.includes('CAND-20260917-0006') ||
+          e.title.includes('失败任务漏退款净扣未归零'),
+      );
       expect(matchedExp).toBeDefined();
       expect(matchedExp?.confidence).toBe('CONFIRMED');
       expect(matchedExp?.status).toBe('ACCEPTED');
@@ -361,22 +365,25 @@ describe('Promotion Pipeline: Confirmed Experience -> Persistent Knowledge', () 
       expect(planRes.ok).toBe(true);
 
       // 验证 domainPlan 包含了历史经验核验步骤
-      const historySteps = planRes.domainPlan?.steps.filter(
-        (s) => s.description.includes('[历史经验核验]') && s.description.includes('FP-005')
-      ) || [];
+      const historySteps =
+        planRes.domainPlan?.steps.filter(
+          (s) => s.description.includes('[历史经验核验]') && s.description.includes('FP-005'),
+        ) || [];
       expect(historySteps.length).toBeGreaterThanOrEqual(1);
       expect(historySteps[0].targetObject).toBe('BillingLedger');
 
       // 验证 testPlan.tests 动态注入了对应的历史防范测试用例
       const historyTests = planRes.testPlan.tests.filter(
-        (t) => t.id.toLowerCase().includes('history-') || t.purpose.includes('FP-005')
+        (t) => t.id.toLowerCase().includes('history-') || t.purpose.includes('FP-005'),
       );
       expect(historyTests.length).toBeGreaterThanOrEqual(1);
       expect(historyTests[0].purpose).toContain('[历史经验核验]');
       expect(historyTests[0].requiredEvidence).toContain('billing_reconciliation');
 
       // 验证契约目标同步更新
-      expect(planRes.changeContract?.testObjectives.some((o) => o.includes('FP-005') || o.includes('history-'))).toBe(true);
+      expect(planRes.changeContract?.testObjectives.some((o) => o.includes('FP-005') || o.includes('history-'))).toBe(
+        true,
+      );
     } finally {
       env.cleanup();
     }

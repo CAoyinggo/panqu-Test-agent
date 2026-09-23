@@ -1,9 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import path from 'node:path';
 import { DevTestMcpService, DEVTEST_MCP_TOOL } from '../../../src/devtest/mcp-service.js';
 import { processMcpRequest } from '../../../bin/devtest-mcp.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
   const service = new DevTestMcpService({
@@ -370,10 +376,7 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
     });
 
     it('probe BLOCKED 时，isError 为 false，passed 为 false，status/verdict/acceptance 均为 BLOCKED', async () => {
-      const probeSpy = vi.spyOn(
-        await import('../../../src/devtest/core-kernel.js'),
-        'probe'
-      ).mockResolvedValueOnce({
+      const probeSpy = vi.spyOn(await import('../../../src/devtest/core-kernel.js'), 'probe').mockResolvedValueOnce({
         ok: false,
         status: 'BLOCKED',
         env: 'test',
@@ -412,10 +415,7 @@ describe('DevTest MCP Service - 纯净双模 MCP 服务', () => {
     });
 
     it('缺少 action 时不得默认 probe，必须返回协议/参数错误且 isError=true', async () => {
-      const probeSpy = vi.spyOn(
-        await import('../../../src/devtest/core-kernel.js'),
-        'probe'
-      );
+      const probeSpy = vi.spyOn(await import('../../../src/devtest/core-kernel.js'), 'probe');
 
       // 1. Direct service.call without action
       const directRes = await service.call({});

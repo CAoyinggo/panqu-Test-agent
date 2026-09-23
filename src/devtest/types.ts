@@ -4,45 +4,68 @@
  */
 
 export type {
-  ProbeKernelOptions, ProbeKernelResult,
-  PlanKernelOptions, PlanKernelResult,
-  ExecuteKernelOptions, ExecuteKernelResult,
-  VerifyKernelOptions, VerifyKernelResult,
-  TaskEvidence, MediaEvidence, BillingEvidence, InvariantsEvidence, VerificationEvidence,
-} from "./core-kernel.js";
+  ProbeKernelOptions,
+  ProbeKernelResult,
+  PlanKernelOptions,
+  PlanKernelResult,
+  ExecuteKernelOptions,
+  ExecuteKernelResult,
+  VerifyKernelOptions,
+  VerifyKernelResult,
+  TaskEvidence,
+  MediaEvidence,
+  BillingEvidence,
+  InvariantsEvidence,
+  VerificationEvidence,
+} from './core-kernel.js';
 
 export type {
-  KnowledgeCredibility, CredibleFact, BusinessEntity,
-  ApiKnowledge, ApiParameterKnowledge,
-  OracleKnowledge, OracleFieldKnowledge,
-  TaskKnowledge, TaskLifecycleStep,
-  Experience, FailurePattern,
-  DomainProbeAnalysis, DomainExecutionStep, DomainExecutionPlan,
-  BusinessVerificationInput, BusinessVerificationResult,
-} from "./domain-knowledge.js";
+  KnowledgeCredibility,
+  CredibleFact,
+  BusinessEntity,
+  ApiKnowledge,
+  ApiParameterKnowledge,
+  OracleKnowledge,
+  OracleFieldKnowledge,
+  TaskKnowledge,
+  TaskLifecycleStep,
+  Experience,
+  FailurePattern,
+  DomainProbeAnalysis,
+  DomainExecutionStep,
+  DomainExecutionPlan,
+  BusinessVerificationInput,
+  BusinessVerificationResult,
+} from './domain-knowledge.js';
 
 export type {
-  PanquSession, SubmitMediaTaskOptions, SubmitMediaTaskResult,
-  TaskStatusSnapshot, PollTaskStatusOptions,
-  TaskRuntimeDetails, EndpointQueryRecord,
-} from "./media-flow.js";
+  PanquSession,
+  SubmitMediaTaskOptions,
+  SubmitMediaTaskResult,
+  TaskStatusSnapshot,
+  PollTaskStatusOptions,
+  TaskRuntimeDetails,
+  EndpointQueryRecord,
+} from './media-flow.js';
 
 export type {
-  DiversionRouteMode, VideoRoutingInput, ImageRoutingInput,
-  MainSiteRoutingVerdict, GatewayRoutingVerdict, FallbackRoutingVerdict,
-} from "./routing.js";
+  DiversionRouteMode,
+  VideoRoutingInput,
+  ImageRoutingInput,
+  MainSiteRoutingVerdict,
+  GatewayRoutingVerdict,
+  FallbackRoutingVerdict,
+} from './routing.js';
 
-export type {
-  ScoreLogEntry, BillingAuditReport,
-} from "./billing.js";
+export type { ScoreLogEntry, BillingAuditReport } from './billing.js';
 
-export type { MediaInspectionResult } from "./media-inspector.js";
-export type { EnvProbeOptions, EnvProbeReport, EndpointProbeResult } from "./env-probe.js";
+export type { MediaInspectionResult } from './media-inspector.js';
+export type { EnvProbeOptions, EnvProbeReport, EndpointProbeResult } from './env-probe.js';
 
-export type FlowMediaType = "VIDEO" | "IMAGE";
-export type FlowExecutionMode = "REAL" | "MOCK";
-export type FlowStepStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED";
-export type TaskTerminalStatus = "SUCCEEDED" | "SUCCESS" | "FAILED" | "TIMEOUT" | "UNKNOWN";
+export type FlowMediaType = 'VIDEO' | 'IMAGE';
+export type FlowExecutionMode = 'REAL' | 'MOCK';
+export type FlowStepStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+export type TaskTerminalStatus = 'SUCCEEDED' | 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN';
 
 export interface MemoryCandidatePayload {
   agent: 'trae' | 'antigravity' | 'codex';
@@ -125,10 +148,7 @@ export type FactSource =
   | 'MANUAL_REQUIRED';
 
 export type ChangeScenario =
-  | 'IMAGE_NEW_MODEL'
-  | 'VIDEO_NEW_MODEL'
-  | 'IMAGE_DIVERSION_CHANGE'
-  | 'VIDEO_DIVERSION_CHANGE';
+  'IMAGE_NEW_MODEL' | 'VIDEO_NEW_MODEL' | 'IMAGE_DIVERSION_CHANGE' | 'VIDEO_DIVERSION_CHANGE';
 
 export interface DiscoveredFact<T> {
   value: T;
@@ -178,7 +198,9 @@ export interface DiscoveredModelContract {
     hasPolicy: boolean;
     action: 'VOLCENGINE_RETRY_QUEUE' | 'DIRECT_FAIL_NO_RETRY' | 'NONE';
   }>;
-  orgBindings?: DiscoveredFact<Record<number, { routeGroupId: number; newapiGroup: string; status: number; apiKey?: string }>>;
+  orgBindings?: DiscoveredFact<
+    Record<number, { routeGroupId: number; newapiGroup: string; status: number; apiKey?: string }>
+  >;
   candidateChannels?: DiscoveredFact<string[]>;
   conflicts: Array<{ field: string; message: string; apiValue?: unknown; staticValue?: unknown }>;
   manualRequiredItems: Array<{ field: string; reason: string; requiredAction: string }>;

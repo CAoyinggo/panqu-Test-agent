@@ -41,10 +41,7 @@ export interface CoverageGap {
 }
 
 export type RiskInputType =
-  | 'PAID_OR_SUBMIT_SIDE_EFFECT'
-  | 'POSITIVE_COST_LIMIT'
-  | 'MISSING_CRITICAL_ASSERTIONS'
-  | 'UNSAFE_EXECUTION_MODE';
+  'PAID_OR_SUBMIT_SIDE_EFFECT' | 'POSITIVE_COST_LIMIT' | 'MISSING_CRITICAL_ASSERTIONS' | 'UNSAFE_EXECUTION_MODE';
 
 export interface RiskInputItem {
   readonly testId: string;
@@ -74,7 +71,10 @@ export interface ImpactAnalysisResult {
 // ============================================================================
 
 function normalizePath(p: string): string {
-  return p.trim().replace(/^(\.\/)+/, '').replace(/\\/g, '/');
+  return p
+    .trim()
+    .replace(/^(\.\/)+/, '')
+    .replace(/\\/g, '/');
 }
 
 function isPathMatch(candidatePath: string, refPath: string): boolean {
@@ -102,9 +102,7 @@ function isPathMatch(candidatePath: string, refPath: string): boolean {
  * 纯函数影响分析核心引擎
  * 接收变更路径与追踪关系，输出受影响测试、覆盖缺口与风险输入
  */
-export function analyzeImpact(
-  options: Readonly<ImpactAnalysisOptions>
-): Readonly<ImpactAnalysisResult> {
+export function analyzeImpact(options: Readonly<ImpactAnalysisOptions>): Readonly<ImpactAnalysisResult> {
   const changedPaths = (options.changedPaths || []).map(normalizePath);
   const traces = options.traces || [];
   const testSpecs = options.testSpecs || [];
@@ -215,9 +213,7 @@ export function analyzeImpact(
 /**
  * 校验并构建 RequirementTrace 索引表 (纯函数)
  */
-export function buildRequirementTraceIndex(
-  traces: readonly RequirementTrace[]
-): ReadonlyMap<string, RequirementTrace> {
+export function buildRequirementTraceIndex(traces: readonly RequirementTrace[]): ReadonlyMap<string, RequirementTrace> {
   const map = new Map<string, RequirementTrace>();
   for (const t of traces) {
     if (!t.requirementId) {
@@ -279,7 +275,7 @@ export function isStableRequirementId(val: unknown): val is string {
  * - 纯函数无副作用，深冻结输出。
  */
 export function resolveRequirementTraceForSpec(
-  options: Readonly<ResolveRequirementTraceOptions>
+  options: Readonly<ResolveRequirementTraceOptions>,
 ): Readonly<ResolvedRequirementTrace> {
   const traces = options.traces || [];
   const changedPaths = options.changedPaths || [];
@@ -348,7 +344,7 @@ export function resolveRequirementTraceForSpec(
 
   const analysis = analyzeImpact({
     changedPaths,
-    traces: traces.length > 0 ? traces : (matchedTrace ? [matchedTrace] : []),
+    traces: traces.length > 0 ? traces : matchedTrace ? [matchedTrace] : [],
     testSpecs: options.testSpecs,
   });
 
@@ -386,7 +382,7 @@ export interface CollectGitChangedPathsResult {
  * 4. Git 失败或非仓库时 fail-closed，不返回空成功。
  */
 export async function collectGitChangedPaths(
-  options?: CollectGitChangedPathsOptions
+  options?: CollectGitChangedPathsOptions,
 ): Promise<CollectGitChangedPathsResult> {
   const cwd = options?.cwd || process.cwd();
   const maxBuffer = options?.maxBuffer || 10 * 1024 * 1024;
@@ -396,11 +392,7 @@ export async function collectGitChangedPaths(
     await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, maxBuffer });
 
     // 2. 收集工作区变更：使用 porcelain=v1 -z -u
-    const { stdout } = await execFileAsync(
-      'git',
-      ['status', '--porcelain=v1', '-z', '-u'],
-      { cwd, maxBuffer }
-    );
+    const { stdout } = await execFileAsync('git', ['status', '--porcelain=v1', '-z', '-u'], { cwd, maxBuffer });
 
     const changedPathsSet = new Set<string>();
     const parts = stdout.split('\0');
@@ -446,10 +438,7 @@ export interface FindRequirementTracesOptions {
   readonly searchPaths?: readonly string[];
 }
 
-export type FindRequirementTracesStatus =
-  | 'LOADED'
-  | 'BLOCKED_DATA_MISSING'
-  | 'INVALID_REQUIREMENT_TRACE';
+export type FindRequirementTracesStatus = 'LOADED' | 'BLOCKED_DATA_MISSING' | 'INVALID_REQUIREMENT_TRACE';
 
 export interface FindRequirementTracesResult {
   readonly status: FindRequirementTracesStatus;
@@ -472,7 +461,7 @@ export const DEFAULT_REQUIREMENT_TRACE_SEARCH_PATHS = [
  * 3. 找不到权威映射时严格返回 BLOCKED_DATA_MISSING，禁止创建虚假映射。
  */
 export function findAuthoritativeRequirementTraces(
-  options?: FindRequirementTracesOptions
+  options?: FindRequirementTracesOptions,
 ): FindRequirementTracesResult {
   const cwd = options?.cwd || process.cwd();
   const candidatePaths = options?.filePath
@@ -536,7 +525,10 @@ export function findAuthoritativeRequirementTraces(
           error: `需求映射项 [索引 ${idx}] 的 requirementId ("${item.requirementId}") 不是合法的 stable requirementId`,
         };
       }
-      if (!Array.isArray(item.sourceRefs) || !item.sourceRefs.every((r: unknown) => typeof r === 'string' && r.trim() !== '')) {
+      if (
+        !Array.isArray(item.sourceRefs) ||
+        !item.sourceRefs.every((r: unknown) => typeof r === 'string' && r.trim() !== '')
+      ) {
         return {
           status: 'INVALID_REQUIREMENT_TRACE',
           traces: Object.freeze([]),
@@ -544,7 +536,10 @@ export function findAuthoritativeRequirementTraces(
           error: `需求映射项 [${item.requirementId}] 的 sourceRefs 必须为非空字符串数组`,
         };
       }
-      if (!Array.isArray(item.testIds) || !item.testIds.every((t: unknown) => typeof t === 'string' && t.trim() !== '')) {
+      if (
+        !Array.isArray(item.testIds) ||
+        !item.testIds.every((t: unknown) => typeof t === 'string' && t.trim() !== '')
+      ) {
         return {
           status: 'INVALID_REQUIREMENT_TRACE',
           traces: Object.freeze([]),
@@ -553,12 +548,14 @@ export function findAuthoritativeRequirementTraces(
         };
       }
 
-      validatedTraces.push(Object.freeze({
-        requirementId: item.requirementId,
-        sourceRefs: Object.freeze([...item.sourceRefs]),
-        testIds: Object.freeze([...item.testIds]),
-        description: typeof item.description === 'string' ? item.description : undefined,
-      }));
+      validatedTraces.push(
+        Object.freeze({
+          requirementId: item.requirementId,
+          sourceRefs: Object.freeze([...item.sourceRefs]),
+          testIds: Object.freeze([...item.testIds]),
+          description: typeof item.description === 'string' ? item.description : undefined,
+        }),
+      );
     }
 
     if (validatedTraces.length === 0) {
@@ -613,10 +610,7 @@ export interface AnalyzeGitImpactOptions {
 }
 
 export type AnalyzeGitImpactStatus =
-  | 'COMPLETED'
-  | 'BLOCKED_DATA_MISSING'
-  | 'GIT_COLLECTION_FAILED'
-  | 'INVALID_REQUIREMENT_TRACE';
+  'COMPLETED' | 'BLOCKED_DATA_MISSING' | 'GIT_COLLECTION_FAILED' | 'INVALID_REQUIREMENT_TRACE';
 
 export interface AnalyzeGitImpactResult {
   readonly status: AnalyzeGitImpactStatus;
@@ -630,9 +624,7 @@ export interface AnalyzeGitImpactResult {
 /**
  * 端到端基于真实 Git 变更与权威需求映射执行影响分析
  */
-export async function analyzeGitImpact(
-  options?: AnalyzeGitImpactOptions
-): Promise<AnalyzeGitImpactResult> {
+export async function analyzeGitImpact(options?: AnalyzeGitImpactOptions): Promise<AnalyzeGitImpactResult> {
   const cwd = options?.cwd || process.cwd();
 
   // 1. 收集真实 Git 变更
@@ -655,18 +647,20 @@ export async function analyzeGitImpact(
 
   // 独立防御门禁：traces 长度为 0 时必须阻断，不得依赖上游假设
   if (tracesRes.status !== 'LOADED' || tracesRes.traces.length === 0) {
-    const finalStatus = tracesRes.status === 'LOADED' || tracesRes.status === 'BLOCKED_DATA_MISSING'
-      ? 'BLOCKED_DATA_MISSING'
-      : tracesRes.status;
+    const finalStatus =
+      tracesRes.status === 'LOADED' || tracesRes.status === 'BLOCKED_DATA_MISSING'
+        ? 'BLOCKED_DATA_MISSING'
+        : tracesRes.status;
 
     return {
       status: finalStatus,
       maturity: 'BLOCKED_DATA_MISSING',
       changedPaths: gitRes.changedPaths,
       traces: Object.freeze([]),
-      error: tracesRes.traces.length === 0 && tracesRes.status === 'LOADED'
-        ? `权威映射文件为空，有效条目为 0 (BLOCKED_DATA_MISSING)`
-        : tracesRes.error,
+      error:
+        tracesRes.traces.length === 0 && tracesRes.status === 'LOADED'
+          ? `权威映射文件为空，有效条目为 0 (BLOCKED_DATA_MISSING)`
+          : tracesRes.error,
     };
   }
 

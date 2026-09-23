@@ -43,15 +43,9 @@ export interface ExecutionResult {
 }
 
 // 严禁存在于适配器输出中的第二套裁决字段黑名单
-export const FORBIDDEN_VERDICT_FIELDS = [
-  'verdict',
-  'acceptance',
-  'passed',
-  'businessPass',
-  'finalStatus',
-] as const;
+export const FORBIDDEN_VERDICT_FIELDS = ['verdict', 'acceptance', 'passed', 'businessPass', 'finalStatus'] as const;
 
-export type ForbiddenVerdictField = typeof FORBIDDEN_VERDICT_FIELDS[number];
+export type ForbiddenVerdictField = (typeof FORBIDDEN_VERDICT_FIELDS)[number];
 
 /**
  * ExecutionAdapter 最小标准端口
@@ -82,7 +76,7 @@ export interface EvidenceProducer {
   readonly sourceType: EvidenceSourceType;
   produce(
     rawCollection: unknown,
-    context: EvidenceProducerContext
+    context: EvidenceProducerContext,
   ): CanonicalEvidenceEnvelope[] | Promise<CanonicalEvidenceEnvelope[]>;
 }
 
@@ -105,7 +99,7 @@ export function validateExecutionResult(result: unknown): ExecutionResult {
   for (const field of FORBIDDEN_VERDICT_FIELDS) {
     if (field in res && res[field] !== undefined) {
       throw new Error(
-        `ADAPTER_ILLEGAL_VERDICT_FIELD: 适配器输出禁止包含业务裁决字段 "${field}"，唯一裁决权威归属于 CanonicalVerdictEngine`
+        `ADAPTER_ILLEGAL_VERDICT_FIELD: 适配器输出禁止包含业务裁决字段 "${field}"，唯一裁决权威归属于 CanonicalVerdictEngine`,
       );
     }
   }
@@ -136,7 +130,7 @@ export function validateExecutionResult(result: unknown): ExecutionResult {
 export interface PanquMediaExecutionAdapterOptions {
   readonly submitHandler?: (
     spec: Readonly<CanonicalTestSpec>,
-    context?: Record<string, unknown>
+    context?: Record<string, unknown>,
   ) => Promise<{ taskId?: number; points?: number; rawResponse?: Record<string, unknown>; message?: string }>;
   readonly sessionFile?: string;
   readonly env?: 'test' | 'preonline';
@@ -192,10 +186,7 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
     this.enableLiveSubmit = options?.enableLiveSubmit ?? false;
   }
 
-  async execute(
-    spec: Readonly<CanonicalTestSpec>,
-    context?: Record<string, unknown>
-  ): Promise<ExecutionResult> {
+  async execute(spec: Readonly<CanonicalTestSpec>, context?: Record<string, unknown>): Promise<ExecutionResult> {
     const startedAt = (context?.startedAt as string) || new Date().toISOString();
     const executionId = (context?.executionId as string) || `exec-${spec.testId}-${Date.now()}`;
 
@@ -237,9 +228,10 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
 
     // 2.5. 环境枚举门禁 (Fail-Closed)
     // 执行环境、网络目标必须完全来自 spec.environment，禁止默认指向 test/preonline/production
-    const isKnownEnv = spec.executionMode === 'REAL'
-      ? (spec.environment === 'test' || spec.environment === 'preonline')
-      : (spec.environment === 'test' || spec.environment === 'preonline' || spec.environment === 'offline');
+    const isKnownEnv =
+      spec.executionMode === 'REAL'
+        ? spec.environment === 'test' || spec.environment === 'preonline'
+        : spec.environment === 'test' || spec.environment === 'preonline' || spec.environment === 'offline';
     if (!isKnownEnv) {
       const completedAt = (context?.completedAt as string) || new Date().toISOString();
       return validateExecutionResult({
@@ -295,10 +287,12 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
           evidence,
           startedAt,
           completedAt,
-          error: isSubmitted ? undefined : {
-            code: 'FAILED_SUBMIT',
-            message: submitRes.message || '任务提交未成功',
-          },
+          error: isSubmitted
+            ? undefined
+            : {
+                code: 'FAILED_SUBMIT',
+                message: submitRes.message || '任务提交未成功',
+              },
           metadata: {
             taskId: submitRes.taskId,
             points: submitRes.points,
@@ -325,9 +319,17 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
 
     // 4. 真实服务端网络提交能力 (迁移自 core-kernel，严格内聚在 Adapter)
     if (this.enableLiveSubmit && spec.executionMode === 'REAL') {
-      const sessionFilePath = (context?.sessionFile as string)
-        || this.sessionFile
-        || (!process.env.VITEST ? (process.env.PANQU_SESSION_COOKIES_FILE || (existsSync('session.json') ? 'session.json' : existsSync('.panqu/session.json') ? '.panqu/session.json' : undefined)) : undefined);
+      const sessionFilePath =
+        (context?.sessionFile as string) ||
+        this.sessionFile ||
+        (!process.env.VITEST
+          ? process.env.PANQU_SESSION_COOKIES_FILE ||
+            (existsSync('session.json')
+              ? 'session.json'
+              : existsSync('.panqu/session.json')
+                ? '.panqu/session.json'
+                : undefined)
+          : undefined);
 
       if (!sessionFilePath) {
         const completedAt = (context?.completedAt as string) || new Date().toISOString();
@@ -340,7 +342,8 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
           completedAt,
           error: {
             code: 'SESSION_NOT_FOUND',
-            message: '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
+            message:
+              '真实执行必须提供有效的 sessionFile 会话凭据文件（或在项目根目录放置 session.json / .panqu/session.json）',
           },
         });
       }
@@ -363,7 +366,12 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
           });
         }
         const session = await loadPanquSession(sessionFilePath, envResolution.env);
-        if (!session.project_id || typeof session.project_id !== 'number' || !Number.isInteger(session.project_id) || session.project_id <= 0) {
+        if (
+          !session.project_id ||
+          typeof session.project_id !== 'number' ||
+          !Number.isInteger(session.project_id) ||
+          session.project_id <= 0
+        ) {
           const completedAt = (context?.completedAt as string) || new Date().toISOString();
           return validateExecutionResult({
             executionId,
@@ -426,28 +434,30 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
           });
         }
 
-        const evidence: CanonicalEvidenceEnvelope[] = [{
-          evidenceId: `${spec.testId}-live-receipt`,
-          testId: spec.testId,
-          sourceTool: this.adapterName,
-          sourceType: 'SERVER_API',
-          evidenceKey: 'SERVER_API:TASK_SUBMISSION_RECEIPT',
-          observationStatus: 'UNVERIFIED',
-          capturedAt: completedAt,
-          environment: spec.environment,
-          subjectType: 'task',
-          subjectId: res.taskId,
-          normalizedFields: {
-            taskId: res.taskId,
-            lifecycleStatus: 'SUBMITTED',
-            message: res.message,
+        const evidence: CanonicalEvidenceEnvelope[] = [
+          {
+            evidenceId: `${spec.testId}-live-receipt`,
+            testId: spec.testId,
+            sourceTool: this.adapterName,
+            sourceType: 'SERVER_API',
+            evidenceKey: 'SERVER_API:TASK_SUBMISSION_RECEIPT',
+            observationStatus: 'UNVERIFIED',
+            capturedAt: completedAt,
+            environment: spec.environment,
+            subjectType: 'task',
+            subjectId: res.taskId,
+            normalizedFields: {
+              taskId: res.taskId,
+              lifecycleStatus: 'SUBMITTED',
+              message: res.message,
+            },
+            provenance: `${this.adapterName}:LIVE_SUBMIT_RECEIPT`,
+            confidence: 1.0,
+            immutable: true,
+            redacted: true,
+            collectionStatus: 'SUCCESS',
           },
-          provenance: `${this.adapterName}:LIVE_SUBMIT_RECEIPT`,
-          confidence: 1.0,
-          immutable: true,
-          redacted: true,
-          collectionStatus: 'SUCCESS',
-        }];
+        ];
 
         return validateExecutionResult({
           executionId,

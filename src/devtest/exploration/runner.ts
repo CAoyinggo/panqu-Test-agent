@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 探索执行接入器 (Exploration Runner Adapter)
- * 
+ *
  * 职责：
  * 作为探索层（Exploration Layer）与冻结核心内核（core-kernel.ts）之间的纯受控适配器：
  * 1. 严格按 executionReadiness 分流（EXECUTABLE vs NEGATIVE_PROBE）；
@@ -26,8 +26,9 @@ import {
   type LearningExperience,
 } from './contracts.js';
 import { type MutationCandidate } from './mutation.js';
-import { PanquStateGraph } from './state-graph.js';
-import { PanquLearningStore, feedResultIntoLearning } from './learning.js';
+import type { PanquStateGraph } from './state-graph.js';
+import type { PanquLearningStore } from './learning.js';
+import { feedResultIntoLearning } from './learning.js';
 
 export type MutationRunStatus =
   | 'EXECUTABLE_VERIFIED'
@@ -133,11 +134,12 @@ export class PanquExplorationRunner {
     const mediaType = (payload.mediaType || 'video') as 'video' | 'image';
     const duration = payload.duration !== undefined ? Number(payload.duration) : undefined;
     const resolution = typeof payload.resolution === 'string' ? payload.resolution : undefined;
-    const prompt = typeof payload.promptText === 'string'
-      ? payload.promptText
-      : typeof payload.prompt === 'string'
-      ? payload.prompt
-      : undefined;
+    const prompt =
+      typeof payload.promptText === 'string'
+        ? payload.promptText
+        : typeof payload.prompt === 'string'
+          ? payload.prompt
+          : undefined;
 
     const fromState: EntityCompositeState = options.fromState || {
       session: { status: 'AUTHENTICATED' },
@@ -191,14 +193,14 @@ export class PanquExplorationRunner {
         verifyRes.evidence.billing.status === 'PASS'
           ? 'CHARGED'
           : verifyRes.evidence.billing.status === 'FAIL'
-          ? 'INCONSISTENT'
-          : 'RESERVED';
+            ? 'INCONSISTENT'
+            : 'RESERVED';
       const artifactStatus =
         verifyRes.evidence.media.status === 'PASS'
           ? 'VERIFIED'
           : verifyRes.evidence.media.status === 'FAIL'
-          ? 'INVALID'
-          : 'PARTIAL';
+            ? 'INVALID'
+            : 'PARTIAL';
 
       const toState: EntityCompositeState = {
         session: { status: 'AUTHENTICATED' },
@@ -230,7 +232,7 @@ export class PanquExplorationRunner {
           'SUBMIT_TASK',
           { duration, resolution, modelId },
           toState,
-          verifyRes.passed ? [] : verifyRes.reasons
+          verifyRes.passed ? [] : verifyRes.reasons,
         );
       }
 
@@ -323,7 +325,7 @@ export class PanquExplorationRunner {
           'SUBMIT_TASK',
           { duration, resolution, modelId },
           toState,
-          anomalies
+          anomalies,
         );
       }
 
@@ -358,8 +360,6 @@ export class PanquExplorationRunner {
 
 export const defaultRunner = new PanquExplorationRunner();
 
-export async function runMutationCandidate(
-  options: MutationRunOptions
-): Promise<MutationRunResult> {
+export async function runMutationCandidate(options: MutationRunOptions): Promise<MutationRunResult> {
   return defaultRunner.run(options);
 }

@@ -2,20 +2,14 @@
  * Panqu AI DevTest 纯净 MCP 服务 (TRAE MCP Control Surface)
  * 单工具 devtest，4 项核心 Action: probe, plan, execute, verify，直接路由到 core-kernel。
  */
-import {
-  probe,
-  plan,
-  execute,
-  verify,
-  type ProbeKernelOptions,
-  type PlanKernelOptions,
-  type ExecuteKernelOptions,
-  type VerifyKernelOptions,
-  type VerifyKernelResult,
-} from './core-kernel.js';
+import { probe, plan, execute, verify, type VerifyKernelResult } from './core-kernel.js';
 import { parseChangeIntent } from './env-probe.js';
 import type { DiversionBaseline, MemoryCandidatePayload, RecordCandidateResult } from './types.js';
-import { recordCandidateToSharedMemory, promoteConfirmedExperiences, type PromotionReport } from './domain-knowledge.js';
+import {
+  recordCandidateToSharedMemory,
+  promoteConfirmedExperiences,
+  type PromotionReport,
+} from './domain-knowledge.js';
 import { PanquMediaExecutionAdapter, type ExecutionAdapter } from './execution-ports.js';
 
 /**
@@ -29,7 +23,7 @@ import { PanquMediaExecutionAdapter, type ExecutionAdapter } from './execution-p
  */
 export function projectOperationToCompatibility(
   action: 'probe' | 'plan' | 'execute',
-  status: string
+  status: string,
 ): {
   readonly operationStatus: string;
   readonly lifecycleStatus: string;
@@ -71,7 +65,8 @@ export function projectOperationToCompatibility(
 
 export const DEVTEST_MCP_TOOL = {
   name: 'devtest',
-  description: 'Panqu AI 研发测试副驾（双模支持：TRAE MCP 智能调用 + 本地终端 CLI 独立执行）。提供环境探活 (probe)、分流推导与规划 (plan)、任务执行 (execute)、物理验真与防资损对账 (verify)。',
+  description:
+    'Panqu AI 研发测试副驾（双模支持：TRAE MCP 智能调用 + 本地终端 CLI 独立执行）。提供环境探活 (probe)、分流推导与规划 (plan)、任务执行 (execute)、物理验真与防资损对账 (verify)。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -94,10 +89,18 @@ export const DEVTEST_MCP_TOOL = {
       duration: { type: 'number', description: '生成时长秒数' },
       prompt: { type: 'string', description: '测试提示词' },
       task_id: { type: 'number', description: '任务 ID' },
-      terminal_status: { type: 'string', enum: ['SUCCESS', 'FAILED', 'TIMEOUT', 'PROCESSING'], description: '任务终态' },
+      terminal_status: {
+        type: 'string',
+        enum: ['SUCCESS', 'FAILED', 'TIMEOUT', 'PROCESSING'],
+        description: '任务终态',
+      },
       score_logs: { type: 'array', description: '积分流水明细' },
       expected_points: { type: 'number', description: '预期扣除积分' },
-      change_type: { type: 'string', enum: ['new_model', 'diversion_change'], description: '变更类型 (默认自适应识别)' },
+      change_type: {
+        type: 'string',
+        enum: ['new_model', 'diversion_change'],
+        description: '变更类型 (默认自适应识别)',
+      },
       custom_points: { type: 'number', description: '自定义固定扣费积分刊例价' },
       points_per_second: { type: 'number', description: '按秒计费刊例价' },
       price: { type: 'number', description: '刊例价 (图片固定单价或视频每秒单价)' },
@@ -110,11 +113,19 @@ export const DEVTEST_MCP_TOOL = {
       db_extra_confirmed: { type: 'boolean', description: '是否已核实底层数据库 ai_tasks extra 分流字段' },
       gateway_channel_confirmed: { type: 'boolean', description: '是否已核实验证网关渠道分流' },
       unconfirmed_static: { type: 'boolean', description: '是否包含未确认的静态规则' },
-      wait: { type: 'boolean', description: '是否在 execute 提交成功后自动等待轮询并串联进入 verify 终态闭环验真 (Agent 自主执行建议设置为 true，默认 false)' },
+      wait: {
+        type: 'boolean',
+        description:
+          '是否在 execute 提交成功后自动等待轮询并串联进入 verify 终态闭环验真 (Agent 自主执行建议设置为 true，默认 false)',
+      },
       poll_timeout_sec: { type: 'number', description: '轮询超时秒数 (默认: 视频 180s, 图片 60s)' },
       channel_id: { type: 'number', description: '网关渠道 ID (如 54 为 TD_国际)' },
       channel_name: { type: 'string', description: '网关渠道名称 (如 TD_国际)' },
-      target_kind: { type: 'string', enum: ['channel', 'model'], description: '测试目标类型 (channel: 渠道级测试; model: 模型级测试)' },
+      target_kind: {
+        type: 'string',
+        enum: ['channel', 'model'],
+        description: '测试目标类型 (channel: 渠道级测试; model: 模型级测试)',
+      },
       project_id: { type: 'number', description: '项目 ID (如 365)' },
       raw_target: { type: 'string', description: '原始测试目标字符串 (如 #54, 54, TD_国际)' },
     },
@@ -131,10 +142,7 @@ export const DEVTEST_MCP_TOOL = {
       {
         if: { properties: { action: { const: 'plan' } } },
         then: {
-          anyOf: [
-            { required: ['model_id', 'media_type'] },
-            { required: ['requirement'] },
-          ],
+          anyOf: [{ required: ['model_id', 'media_type'] }, { required: ['requirement'] }],
         },
       },
     ],
@@ -143,7 +151,8 @@ export const DEVTEST_MCP_TOOL = {
 
 export const DEVTEST_RECORD_CANDIDATE_TOOL = {
   name: 'devtest_record_candidate',
-  description: '受控的知识候选记录辅助入口。用于将分析代码库（如 GitHub Repository）或测试执行中提炼出的可复用认知存入 shared-memory 待审缓冲池 (inbox.md)。严禁绕过人工审核与 Promotion 直接写入长期知识库。',
+  description:
+    '受控的知识候选记录辅助入口。用于将分析代码库（如 GitHub Repository）或测试执行中提炼出的可复用认知存入 shared-memory 待审缓冲池 (inbox.md)。严禁绕过人工审核与 Promotion 直接写入长期知识库。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -242,7 +251,7 @@ export class DevTestMcpService {
   private readonly defaultExecutionAdapter?: ExecutionAdapter;
 
   constructor(
-    projectRootOrOptions: string | { projectRoot?: string; executionAdapter?: ExecutionAdapter } = process.cwd()
+    projectRootOrOptions: string | { projectRoot?: string; executionAdapter?: ExecutionAdapter } = process.cwd(),
   ) {
     if (typeof projectRootOrOptions === 'string') {
       this.projectRoot = projectRootOrOptions;
@@ -257,31 +266,80 @@ export class DevTestMcpService {
       return {
         ok: false,
         isError: true,
-        summary: '### ⚠️ 工具调用错误：缺少必填参数 action\n- **说明**: devtest 工具必须指定 action 参数 ("probe" | "plan" | "execute" | "verify")。禁止缺少 action 时静默执行。',
+        summary:
+          '### ⚠️ 工具调用错误：缺少必填参数 action\n- **说明**: devtest 工具必须指定 action 参数 ("probe" | "plan" | "execute" | "verify")。禁止缺少 action 时静默执行。',
         error: 'Missing required argument "action". Allowed values: "probe", "plan", "execute", "verify".',
       };
     }
     const action = args.action.trim().toLowerCase();
-    const channelId = typeof args.channel_id === 'number' ? args.channel_id : (typeof args.channelId === 'number' ? args.channelId : undefined);
-    const channelName = typeof args.channel_name === 'string' ? args.channel_name : (typeof args.channelName === 'string' ? args.channelName : undefined);
+    const channelId =
+      typeof args.channel_id === 'number'
+        ? args.channel_id
+        : typeof args.channelId === 'number'
+          ? args.channelId
+          : undefined;
+    const channelName =
+      typeof args.channel_name === 'string'
+        ? args.channel_name
+        : typeof args.channelName === 'string'
+          ? args.channelName
+          : undefined;
     const targetKind = (args.target_kind || args.targetKind) as 'channel' | 'model' | undefined;
-    const projectId = typeof args.project_id === 'number' ? args.project_id : (typeof args.projectId === 'number' ? args.projectId : undefined);
+    const projectId =
+      typeof args.project_id === 'number'
+        ? args.project_id
+        : typeof args.projectId === 'number'
+          ? args.projectId
+          : undefined;
     const rawTarget = (args.raw_target || args.rawTarget) as string | undefined;
 
     switch (action) {
       case 'probe': {
         const res = await probe({
           env: typeof args.env === 'string' ? args.env : undefined,
-          baseUrl: typeof args.base_url === 'string' ? args.base_url : typeof args.baseUrl === 'string' ? args.baseUrl : undefined,
-          gatewayUrl: typeof args.gateway_url === 'string' ? args.gateway_url : typeof args.gatewayUrl === 'string' ? args.gatewayUrl : undefined,
-          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
+          baseUrl:
+            typeof args.base_url === 'string'
+              ? args.base_url
+              : typeof args.baseUrl === 'string'
+                ? args.baseUrl
+                : undefined,
+          gatewayUrl:
+            typeof args.gateway_url === 'string'
+              ? args.gateway_url
+              : typeof args.gatewayUrl === 'string'
+                ? args.gatewayUrl
+                : undefined,
+          sessionFile:
+            typeof args.session_file === 'string'
+              ? args.session_file
+              : typeof args.sessionFile === 'string'
+                ? args.sessionFile
+                : undefined,
           mock: typeof args.mock === 'boolean' ? args.mock : false,
-          timeoutMs: typeof args.timeout_ms === 'number' ? args.timeout_ms : typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+          timeoutMs:
+            typeof args.timeout_ms === 'number'
+              ? args.timeout_ms
+              : typeof args.timeoutMs === 'number'
+                ? args.timeoutMs
+                : undefined,
           requirement: typeof args.requirement === 'string' ? args.requirement : undefined,
-          modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
-          mediaType: args.media_type || args.mediaType ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined,
+          modelId:
+            args.model_id !== undefined
+              ? Number(args.model_id)
+              : args.modelId !== undefined
+                ? Number(args.modelId)
+                : undefined,
+          mediaType:
+            args.media_type || args.mediaType
+              ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image')
+              : undefined,
           extraExperiences: (args.extra_experiences || args.extraExperiences) as any,
-          projectRoot: typeof args.project_root === 'string' ? args.project_root : typeof args.projectRoot === 'string' ? args.projectRoot : this.projectRoot,
+          projectRoot:
+            typeof args.project_root === 'string'
+              ? args.project_root
+              : typeof args.projectRoot === 'string'
+                ? args.projectRoot
+                : this.projectRoot,
         });
         const domainStr = res.domainAnalysis?.identifiedObjects
           ? `\n- **领域对象**: ${res.domainAnalysis.identifiedObjects.map((o) => o.name).join(', ')}`
@@ -303,8 +361,16 @@ export class DevTestMcpService {
         };
       }
       case 'plan': {
-        let modelId = args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined;
-        let mediaType = args.media_type || args.mediaType ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image') : undefined;
+        let modelId =
+          args.model_id !== undefined
+            ? Number(args.model_id)
+            : args.modelId !== undefined
+              ? Number(args.modelId)
+              : undefined;
+        let mediaType =
+          args.media_type || args.mediaType
+            ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image')
+            : undefined;
         const requirement = typeof args.requirement === 'string' ? args.requirement : undefined;
 
         if (modelId === undefined || isNaN(modelId) || !mediaType) {
@@ -320,7 +386,8 @@ export class DevTestMcpService {
         }
 
         const missingInputs: string[] = [];
-        if ((modelId === undefined || isNaN(modelId)) && channelId === undefined && !rawTarget) missingInputs.push('model_id');
+        if ((modelId === undefined || isNaN(modelId)) && channelId === undefined && !rawTarget)
+          missingInputs.push('model_id');
         if (!mediaType && channelId === undefined && !rawTarget) missingInputs.push('media_type');
 
         if (missingInputs.length > 0) {
@@ -344,16 +411,41 @@ export class DevTestMcpService {
         const res = await plan({
           modelId,
           mediaType,
-          flowType: typeof args.flow_type === 'string' ? args.flow_type : typeof args.flowType === 'string' ? args.flowType : undefined,
+          flowType:
+            typeof args.flow_type === 'string'
+              ? args.flow_type
+              : typeof args.flowType === 'string'
+                ? args.flowType
+                : undefined,
           changeType: (args.change_type || args.changeType) as any,
           requirement,
           resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
           duration: typeof args.duration === 'number' ? args.duration : undefined,
-          aspectRatio: typeof args.aspect_ratio === 'string' ? args.aspect_ratio : typeof args.aspectRatio === 'string' ? args.aspectRatio : undefined,
-          customPoints: typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined,
-          pointsPerSecond: typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined,
+          aspectRatio:
+            typeof args.aspect_ratio === 'string'
+              ? args.aspect_ratio
+              : typeof args.aspectRatio === 'string'
+                ? args.aspectRatio
+                : undefined,
+          customPoints:
+            typeof args.custom_points === 'number'
+              ? args.custom_points
+              : typeof args.customPoints === 'number'
+                ? args.customPoints
+                : undefined,
+          pointsPerSecond:
+            typeof args.points_per_second === 'number'
+              ? args.points_per_second
+              : typeof args.pointsPerSecond === 'number'
+                ? args.pointsPerSecond
+                : undefined,
           price: typeof args.price === 'number' ? args.price : undefined,
-          isGlobal: typeof args.is_global === 'boolean' ? args.is_global : typeof args.isGlobal === 'boolean' ? args.isGlobal : undefined,
+          isGlobal:
+            typeof args.is_global === 'boolean'
+              ? args.is_global
+              : typeof args.isGlobal === 'boolean'
+                ? args.isGlobal
+                : undefined,
           alias: typeof args.alias === 'string' ? args.alias : undefined,
           channelId,
           channelName,
@@ -361,14 +453,30 @@ export class DevTestMcpService {
           projectId,
           rawTarget,
           extraExperiences: (args.extra_experiences || args.extraExperiences) as any,
-          projectRoot: typeof args.project_root === 'string' ? args.project_root : typeof args.projectRoot === 'string' ? args.projectRoot : this.projectRoot,
+          projectRoot:
+            typeof args.project_root === 'string'
+              ? args.project_root
+              : typeof args.projectRoot === 'string'
+                ? args.projectRoot
+                : this.projectRoot,
         });
-        const divertStr = res.willDivert ? `NEWAPI 切流 (线路 ${res.routeLine})` : `DIRECT 直连 (线路 ${res.routeLine})`;
+        const divertStr = res.willDivert
+          ? `NEWAPI 切流 (线路 ${res.routeLine})`
+          : `DIRECT 直连 (线路 ${res.routeLine})`;
         const forecastStr = res.acceptanceForecast ? `\n- **验收预判**: [${res.acceptanceForecast}]` : '';
-        const missingInputsStr = res.missingInputs && res.missingInputs.length > 0 ? ` (缺失必填项: ${res.missingInputs.join(', ')})` : '';
-        const blockedStr = res.blocked && res.blocked.length > 0 ? `\n⚠️ 阻断待补事实 (${res.blocked.length}项): ${res.blocked.map((b) => b.missingField || b.field).join(', ')}` : '';
-        const skippedStr = res.testPlan?.skippedTests && res.testPlan.skippedTests.length > 0 ? `\n🛡️ 安全裁剪跳过: 共 ${res.testPlan.skippedTests.length} 项无关测试已排除` : '';
-        const nextStepStr = res.testerActionSummary?.nextStep ? `\n🚀 下一步行动: ${res.testerActionSummary.nextStep}` : '';
+        const missingInputsStr =
+          res.missingInputs && res.missingInputs.length > 0 ? ` (缺失必填项: ${res.missingInputs.join(', ')})` : '';
+        const blockedStr =
+          res.blocked && res.blocked.length > 0
+            ? `\n⚠️ 阻断待补事实 (${res.blocked.length}项): ${res.blocked.map((b) => b.missingField || b.field).join(', ')}`
+            : '';
+        const skippedStr =
+          res.testPlan?.skippedTests && res.testPlan.skippedTests.length > 0
+            ? `\n🛡️ 安全裁剪跳过: 共 ${res.testPlan.skippedTests.length} 项无关测试已排除`
+            : '';
+        const nextStepStr = res.testerActionSummary?.nextStep
+          ? `\n🚀 下一步行动: ${res.testerActionSummary.nextStep}`
+          : '';
         const domainPlanStr = res.domainPlan
           ? `\n- **业务闭环计划**: 共 ${res.domainPlan.steps.length} 步 (${res.domainPlan.steps.map((s) => s.stage).join(' → ')})`
           : '';
@@ -380,7 +488,7 @@ export class DevTestMcpService {
 - **测试计划**: 共 ${res.testPlan?.tests.length || 0} 项测试 (就绪 ${res.testPlan?.tests.filter((t) => t.status === 'READY').length || 0} 项)${skippedStr}${forecastStr}${missingInputsStr}${blockedStr}${domainPlanStr}${nextStepStr}
 - **候选渠道**: ${res.candidateChannels.join(', ') || '无可用渠道'}
 - **推导依据**: ${res.reason}`;
-        const planStatus = res.blocked && res.blocked.length > 0 ? 'BLOCKED' : (res.ok ? 'READY' : 'BLOCKED');
+        const planStatus = res.blocked && res.blocked.length > 0 ? 'BLOCKED' : res.ok ? 'READY' : 'BLOCKED';
         const proj = projectOperationToCompatibility('plan', planStatus);
         return {
           ok: res.ok,
@@ -397,8 +505,14 @@ export class DevTestMcpService {
         };
       }
       case 'execute': {
-        const rawModelId = args.model_id !== undefined ? Number(args.model_id) : (args.modelId !== undefined ? Number(args.modelId) : undefined);
-        const rawMediaType = (args.media_type || args.mediaType) ? String(args.media_type || args.mediaType).toLowerCase() : undefined;
+        const rawModelId =
+          args.model_id !== undefined
+            ? Number(args.model_id)
+            : args.modelId !== undefined
+              ? Number(args.modelId)
+              : undefined;
+        const rawMediaType =
+          args.media_type || args.mediaType ? String(args.media_type || args.mediaType).toLowerCase() : undefined;
         const rawMode = args.mode !== undefined ? String(args.mode).toLowerCase() : undefined;
 
         const missingInputs: string[] = [];
@@ -430,33 +544,50 @@ export class DevTestMcpService {
         const resolution = typeof args.resolution === 'string' ? args.resolution : undefined;
         const duration = typeof args.duration === 'number' ? args.duration : undefined;
         const prompt = typeof args.prompt === 'string' ? args.prompt : undefined;
-        const sessionFile = typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined;
+        const sessionFile =
+          typeof args.session_file === 'string'
+            ? args.session_file
+            : typeof args.sessionFile === 'string'
+              ? args.sessionFile
+              : undefined;
         const env = (args.env as 'test' | 'preonline') || undefined;
         const price = typeof args.price === 'number' ? args.price : undefined;
-        const customPoints = typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined;
-        const pointsPerSecond = typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined;
+        const customPoints =
+          typeof args.custom_points === 'number'
+            ? args.custom_points
+            : typeof args.customPoints === 'number'
+              ? args.customPoints
+              : undefined;
+        const pointsPerSecond =
+          typeof args.points_per_second === 'number'
+            ? args.points_per_second
+            : typeof args.pointsPerSecond === 'number'
+              ? args.pointsPerSecond
+              : undefined;
         const alias = typeof args.alias === 'string' ? args.alias : undefined;
         const requirement = typeof args.requirement === 'string' ? args.requirement : undefined;
         const wait = Boolean(args.wait);
-        const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
-          ? args.poll_timeout_sec
-          : typeof args.pollTimeoutSec === 'number'
-          ? args.pollTimeoutSec
-          : undefined;
-        const terminalStatus = typeof args.terminal_status === 'string'
-          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
-          : typeof args.terminalStatus === 'string'
-          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
-          : undefined;
+        const pollTimeoutSec =
+          typeof args.poll_timeout_sec === 'number'
+            ? args.poll_timeout_sec
+            : typeof args.pollTimeoutSec === 'number'
+              ? args.pollTimeoutSec
+              : undefined;
+        const terminalStatus =
+          typeof args.terminal_status === 'string'
+            ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+            : typeof args.terminalStatus === 'string'
+              ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+              : undefined;
         const rawDbExtra = args.db_extra_confirmed ?? args.dbExtraConfirmed;
         const dbExtraConfirmed = rawDbExtra !== undefined ? Boolean(rawDbExtra) : undefined;
         const rawGwChannel = args.gateway_channel_confirmed ?? args.gatewayChannelConfirmed;
         const gatewayChannelConfirmed = rawGwChannel !== undefined ? Boolean(rawGwChannel) : undefined;
 
-
-        const executionAdapter = (args.execution_adapter || args.executionAdapter) as any
-          || this.defaultExecutionAdapter
-          || new PanquMediaExecutionAdapter({
+        const executionAdapter =
+          ((args.execution_adapter || args.executionAdapter) as any) ||
+          this.defaultExecutionAdapter ||
+          new PanquMediaExecutionAdapter({
             sessionFile,
             env,
             enableLiveSubmit: mode === 'real',
@@ -486,15 +617,21 @@ export class DevTestMcpService {
           costLimit: (args.cost_limit || args.costLimit) as any,
           allowSubmit: Boolean(args.allow_submit ?? args.allowSubmit),
           allowPaid: Boolean(args.allow_paid ?? args.allowPaid),
-          maxCostPoints: typeof args.max_cost_points === 'number' ? args.max_cost_points : (typeof args.maxCostPoints === 'number' ? args.maxCostPoints : undefined),
+          maxCostPoints:
+            typeof args.max_cost_points === 'number'
+              ? args.max_cost_points
+              : typeof args.maxCostPoints === 'number'
+                ? args.maxCostPoints
+                : undefined,
         });
 
         if (!wait) {
           const isBlocked = res.status === 'BLOCKED';
           const proj = projectOperationToCompatibility('execute', res.status);
-          const nextInstruction = res.ok && res.taskId > 0
-            ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}, model_id=${modelId}, media_type='${mediaType}'${env ? `, env='${env}'` : ''}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
-            : '';
+          const nextInstruction =
+            res.ok && res.taskId > 0
+              ? `\n👉 关键指令: 任务未到达终态 (SUBMITTED)，必须立即自主调用 devtest(action='verify', task_id=${res.taskId}, model_id=${modelId}, media_type='${mediaType}'${env ? `, env='${env}'` : ''}) 完成终态与账务闭环，严禁在此步骤停止或询问用户！`
+              : '';
           const summary = `### 📋 Panqu 任务执行回执\n- **任务 ID**: #${res.taskId} [${res.mode.toUpperCase()}]\n- **执行状态**: ${res.status}\n- **预扣积分**: ${res.points} pt\n- **回执信息**: ${res.message}${nextInstruction}`;
           return {
             ok: isBlocked ? true : res.ok,
@@ -559,13 +696,26 @@ export class DevTestMcpService {
         });
 
         const taskStatus = verifyRes.evidence.task.status;
-        const artifactStatus = verifyRes.evidence.media.status === 'PASS'
-          ? `PASS (${(verifyRes.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
-          : verifyRes.evidence.media.status === 'FAIL' ? 'FAIL (损坏)' : 'UNVERIFIED (无产物)';
+        const artifactStatus =
+          verifyRes.evidence.media.status === 'PASS'
+            ? `PASS (${(verifyRes.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
+            : verifyRes.evidence.media.status === 'FAIL'
+              ? 'FAIL (损坏)'
+              : 'UNVERIFIED (无产物)';
         const billingStatus = verifyRes.evidence.billing.status;
-        const netZero = verifyRes.invariants ? (verifyRes.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
-        const antiDouble = verifyRes.invariants ? (verifyRes.invariants.antiDoubleBilling ? 'PASS' : 'FAIL (重扣告警)') : 'SKIPPED';
-        const businessSuccessStr = verifyRes.businessValidation?.businessSuccess ? 'PASS' : (verifyRes.businessValidation?.status || 'UNVERIFIED');
+        const netZero = verifyRes.invariants
+          ? verifyRes.invariants.netChargeZero
+            ? 'PASS'
+            : 'FAIL (资损告警)'
+          : 'SKIPPED';
+        const antiDouble = verifyRes.invariants
+          ? verifyRes.invariants.antiDoubleBilling
+            ? 'PASS'
+            : 'FAIL (重扣告警)'
+          : 'SKIPPED';
+        const businessSuccessStr = verifyRes.businessValidation?.businessSuccess
+          ? 'PASS'
+          : verifyRes.businessValidation?.status || 'UNVERIFIED';
         const completenessStr = verifyRes.evidenceCompleteness
           ? ` · 证据完整度 <${verifyRes.evidenceCompleteness.availableEvidence.length}/${verifyRes.evidenceCompleteness.requiredEvidence.length}${verifyRes.evidenceCompleteness.isComplete ? ' COMPLETE' : ' INCOMPLETE'}>`
           : '';
@@ -608,7 +758,12 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
         };
       }
       case 'verify': {
-        const rawTaskId = args.task_id !== undefined ? Number(args.task_id) : (args.taskId !== undefined ? Number(args.taskId) : undefined);
+        const rawTaskId =
+          args.task_id !== undefined
+            ? Number(args.task_id)
+            : args.taskId !== undefined
+              ? Number(args.taskId)
+              : undefined;
         if (rawTaskId === undefined || isNaN(rawTaskId) || rawTaskId <= 0) {
           const missingInputs = ['task_id'];
           return {
@@ -623,50 +778,134 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
           };
         }
         const taskId = rawTaskId;
-        const terminalStatus = typeof args.terminal_status === 'string'
-          ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
-          : typeof args.terminalStatus === 'string'
-          ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
-          : undefined;
-        const pollTimeoutSec = typeof args.poll_timeout_sec === 'number'
-          ? args.poll_timeout_sec
-          : typeof args.pollTimeoutSec === 'number'
-          ? args.pollTimeoutSec
-          : undefined;
+        const terminalStatus =
+          typeof args.terminal_status === 'string'
+            ? (args.terminal_status as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+            : typeof args.terminalStatus === 'string'
+              ? (args.terminalStatus as 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'PROCESSING')
+              : undefined;
+        const pollTimeoutSec =
+          typeof args.poll_timeout_sec === 'number'
+            ? args.poll_timeout_sec
+            : typeof args.pollTimeoutSec === 'number'
+              ? args.pollTimeoutSec
+              : undefined;
 
         const res = await verify({
           taskId,
-          modelId: args.model_id !== undefined ? Number(args.model_id) : args.modelId !== undefined ? Number(args.modelId) : undefined,
-          mediaType: (args.media_type || args.mediaType) ? ((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image' : undefined,
+          modelId:
+            args.model_id !== undefined
+              ? Number(args.model_id)
+              : args.modelId !== undefined
+                ? Number(args.modelId)
+                : undefined,
+          mediaType:
+            args.media_type || args.mediaType
+              ? (((args.media_type || args.mediaType) as string).toLowerCase() as 'video' | 'image')
+              : undefined,
           resolution: typeof args.resolution === 'string' ? args.resolution : undefined,
           duration: typeof args.duration === 'number' ? args.duration : undefined,
-          scoreLogs: Array.isArray(args.score_logs) ? args.score_logs : (Array.isArray(args.scoreLogs) ? args.scoreLogs : undefined),
-          expectedPoints: typeof args.expected_points === 'number' ? args.expected_points : typeof args.expectedPoints === 'number' ? args.expectedPoints : undefined,
+          scoreLogs: Array.isArray(args.score_logs)
+            ? args.score_logs
+            : Array.isArray(args.scoreLogs)
+              ? args.scoreLogs
+              : undefined,
+          expectedPoints:
+            typeof args.expected_points === 'number'
+              ? args.expected_points
+              : typeof args.expectedPoints === 'number'
+                ? args.expectedPoints
+                : undefined,
           price: typeof args.price === 'number' ? args.price : undefined,
-          customPoints: typeof args.custom_points === 'number' ? args.custom_points : typeof args.customPoints === 'number' ? args.customPoints : undefined,
-          pointsPerSecond: typeof args.points_per_second === 'number' ? args.points_per_second : typeof args.pointsPerSecond === 'number' ? args.pointsPerSecond : undefined,
+          customPoints:
+            typeof args.custom_points === 'number'
+              ? args.custom_points
+              : typeof args.customPoints === 'number'
+                ? args.customPoints
+                : undefined,
+          pointsPerSecond:
+            typeof args.points_per_second === 'number'
+              ? args.points_per_second
+              : typeof args.pointsPerSecond === 'number'
+                ? args.pointsPerSecond
+                : undefined,
           alias: typeof args.alias === 'string' ? args.alias : undefined,
           channelId,
           channelName,
           targetKind,
           projectId,
-          actualChannelId: typeof args.actual_channel_id === 'number' ? args.actual_channel_id : (typeof args.actualChannelId === 'number' ? args.actualChannelId : (typeof args.actual_channel === 'number' ? args.actual_channel : undefined)),
-          actualChannelName: typeof args.actual_channel_name === 'string' ? args.actual_channel_name : (typeof args.actualChannelName === 'string' ? args.actualChannelName : undefined),
-          fallbackChannel: typeof args.fallback_channel === 'string' ? args.fallback_channel : (typeof args.fallbackChannel === 'string' ? args.fallbackChannel : undefined),
-          retryProvider: typeof args.retry_provider === 'string' ? args.retry_provider : (typeof args.retryProvider === 'string' ? args.retryProvider : undefined),
+          actualChannelId:
+            typeof args.actual_channel_id === 'number'
+              ? args.actual_channel_id
+              : typeof args.actualChannelId === 'number'
+                ? args.actualChannelId
+                : typeof args.actual_channel === 'number'
+                  ? args.actual_channel
+                  : undefined,
+          actualChannelName:
+            typeof args.actual_channel_name === 'string'
+              ? args.actual_channel_name
+              : typeof args.actualChannelName === 'string'
+                ? args.actualChannelName
+                : undefined,
+          fallbackChannel:
+            typeof args.fallback_channel === 'string'
+              ? args.fallback_channel
+              : typeof args.fallbackChannel === 'string'
+                ? args.fallbackChannel
+                : undefined,
+          retryProvider:
+            typeof args.retry_provider === 'string'
+              ? args.retry_provider
+              : typeof args.retryProvider === 'string'
+                ? args.retryProvider
+                : undefined,
           extra: (args.extra as Record<string, unknown>) || undefined,
           retryLog: (args.retry_log || args.retryLog) as Record<string, unknown> | undefined,
           exceptionalTask: (args.exceptional_task || args.exceptionalTask) as Record<string, unknown> | undefined,
           terminalStatus,
           pollTimeoutSec,
-          sessionFile: typeof args.session_file === 'string' ? args.session_file : typeof args.sessionFile === 'string' ? args.sessionFile : undefined,
+          sessionFile:
+            typeof args.session_file === 'string'
+              ? args.session_file
+              : typeof args.sessionFile === 'string'
+                ? args.sessionFile
+                : undefined,
           env: (args.env as 'test' | 'preonline') || undefined,
-          videoUrl: typeof args.video_url === 'string' ? args.video_url : typeof args.videoUrl === 'string' ? args.videoUrl : undefined,
-          imageUrl: typeof args.image_url === 'string' ? args.image_url : typeof args.imageUrl === 'string' ? args.imageUrl : undefined,
-          assetBuffer: Buffer.isBuffer(args.asset_buffer) ? args.asset_buffer : Buffer.isBuffer(args.assetBuffer) ? args.assetBuffer : undefined,
-          artifactBuffer: Buffer.isBuffer(args.artifact_buffer) ? args.artifact_buffer : Buffer.isBuffer(args.artifactBuffer) ? args.artifactBuffer : undefined,
-          dbExtraConfirmed: args.db_extra_confirmed !== undefined ? Boolean(args.db_extra_confirmed) : (args.dbExtraConfirmed !== undefined ? Boolean(args.dbExtraConfirmed) : undefined),
-          gatewayChannelConfirmed: args.gateway_channel_confirmed !== undefined ? Boolean(args.gateway_channel_confirmed) : (args.gatewayChannelConfirmed !== undefined ? Boolean(args.gatewayChannelConfirmed) : undefined),
+          videoUrl:
+            typeof args.video_url === 'string'
+              ? args.video_url
+              : typeof args.videoUrl === 'string'
+                ? args.videoUrl
+                : undefined,
+          imageUrl:
+            typeof args.image_url === 'string'
+              ? args.image_url
+              : typeof args.imageUrl === 'string'
+                ? args.imageUrl
+                : undefined,
+          assetBuffer: Buffer.isBuffer(args.asset_buffer)
+            ? args.asset_buffer
+            : Buffer.isBuffer(args.assetBuffer)
+              ? args.assetBuffer
+              : undefined,
+          artifactBuffer: Buffer.isBuffer(args.artifact_buffer)
+            ? args.artifact_buffer
+            : Buffer.isBuffer(args.artifactBuffer)
+              ? args.artifactBuffer
+              : undefined,
+          dbExtraConfirmed:
+            args.db_extra_confirmed !== undefined
+              ? Boolean(args.db_extra_confirmed)
+              : args.dbExtraConfirmed !== undefined
+                ? Boolean(args.dbExtraConfirmed)
+                : undefined,
+          gatewayChannelConfirmed:
+            args.gateway_channel_confirmed !== undefined
+              ? Boolean(args.gateway_channel_confirmed)
+              : args.gatewayChannelConfirmed !== undefined
+                ? Boolean(args.gatewayChannelConfirmed)
+                : undefined,
           baseline: args.baseline as DiversionBaseline | undefined,
           unconfirmedStatic: Boolean(args.unconfirmed_static ?? args.unconfirmedStatic),
           apiResult: (args.api_result || args.apiResult) as any,
@@ -675,23 +914,34 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
         });
 
         const taskStatus = res.evidence.task.status;
-        const artifactStatus = res.evidence.media.status === 'PASS'
-          ? `PASS (${(res.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
-          : res.evidence.media.status === 'FAIL' ? 'FAIL (损坏)' : 'UNVERIFIED (无产物)';
+        const artifactStatus =
+          res.evidence.media.status === 'PASS'
+            ? `PASS (${(res.evidence.media.format || 'mp4').toUpperCase()} container structure PASS)`
+            : res.evidence.media.status === 'FAIL'
+              ? 'FAIL (损坏)'
+              : 'UNVERIFIED (无产物)';
         const billingStatus = res.evidence.billing.status;
         const netZero = res.invariants ? (res.invariants.netChargeZero ? 'PASS' : 'FAIL (资损告警)') : 'SKIPPED';
         const antiDouble = res.invariants ? (res.invariants.antiDoubleBilling ? 'PASS' : 'FAIL (重扣告警)') : 'SKIPPED';
-        const businessSuccessStr = res.businessValidation?.businessSuccess ? 'PASS' : (res.businessValidation?.status || 'UNVERIFIED');
-        const extraNotice = res.expectedVsActual?.evidenceStatus.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED'
-          ? '\n📌 关键分流落库证据: [MANUAL_DB_EVIDENCE_REQUIRED] (HTTP接口不返回extra，需只读查询DB ai_tasks)'
-          : '';
+        const businessSuccessStr = res.businessValidation?.businessSuccess
+          ? 'PASS'
+          : res.businessValidation?.status || 'UNVERIFIED';
+        const extraNotice =
+          res.expectedVsActual?.evidenceStatus.extraSnapshot === 'MANUAL_DB_EVIDENCE_REQUIRED'
+            ? '\n📌 关键分流落库证据: [MANUAL_DB_EVIDENCE_REQUIRED] (HTTP接口不返回extra，需只读查询DB ai_tasks)'
+            : '';
         const completenessStr = res.evidenceCompleteness
           ? ` · 证据完整度 <${res.evidenceCompleteness.availableEvidence.length}/${res.evidenceCompleteness.requiredEvidence.length}${res.evidenceCompleteness.isComplete ? ' COMPLETE' : ' INCOMPLETE'}>`
           : '';
 
         let candidateNote = '';
         if (res.memoryCandidate) {
-          const sharedMemoryDir = typeof args.shared_memory_dir === 'string' ? args.shared_memory_dir : typeof args.sharedMemoryDir === 'string' ? args.sharedMemoryDir : undefined;
+          const sharedMemoryDir =
+            typeof args.shared_memory_dir === 'string'
+              ? args.shared_memory_dir
+              : typeof args.sharedMemoryDir === 'string'
+                ? args.sharedMemoryDir
+                : undefined;
           const recordRes = recordCandidateToSharedMemory(res.memoryCandidate, sharedMemoryDir);
           if (recordRes.recorded) {
             candidateNote = `\n💡 知识自学习: 自动沉淀失败模式提案 [${recordRes.candidateId}] 至 shared-memory 待审缓冲池`;
@@ -718,7 +968,11 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
         };
       }
       default:
-        return { ok: false, isError: true, error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.` };
+        return {
+          ok: false,
+          isError: true,
+          error: `Unsupported action "${action}". Allowed: probe, plan, execute, verify.`,
+        };
     }
   }
 
@@ -759,12 +1013,26 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
       };
     }
 
-    const agent = (args.agent === 'antigravity' || args.agent === 'codex' ? args.agent : 'trae') as 'trae' | 'antigravity' | 'codex';
+    const agent = (args.agent === 'antigravity' || args.agent === 'codex' ? args.agent : 'trae') as
+      'trae' | 'antigravity' | 'codex';
     const dest = typeof args.dest === 'string' && args.dest.trim() ? args.dest.trim() : 'L2-state/active-projects.md';
-    const patternId = typeof args.pattern_id === 'string' ? args.pattern_id : typeof args.patternId === 'string' ? args.patternId : undefined;
-    const modelId = args.model_id !== undefined ? Number(args.model_id) : (args.modelId !== undefined ? Number(args.modelId) : undefined);
-    const taskId = args.task_id !== undefined ? Number(args.task_id) : (args.taskId !== undefined ? Number(args.taskId) : undefined);
-    const confidence = (args.confidence === 'OBSERVED' || args.confidence === 'INFERRED' ? args.confidence : 'CONFIRMED') as 'CONFIRMED' | 'OBSERVED' | 'INFERRED';
+    const patternId =
+      typeof args.pattern_id === 'string'
+        ? args.pattern_id
+        : typeof args.patternId === 'string'
+          ? args.patternId
+          : undefined;
+    const modelId =
+      args.model_id !== undefined
+        ? Number(args.model_id)
+        : args.modelId !== undefined
+          ? Number(args.modelId)
+          : undefined;
+    const taskId =
+      args.task_id !== undefined ? Number(args.task_id) : args.taskId !== undefined ? Number(args.taskId) : undefined;
+    const confidence = (
+      args.confidence === 'OBSERVED' || args.confidence === 'INFERRED' ? args.confidence : 'CONFIRMED'
+    ) as 'CONFIRMED' | 'OBSERVED' | 'INFERRED';
     const reasons = Array.isArray(args.reasons) ? args.reasons.map(String) : [];
     const source = typeof args.source === 'string' ? args.source : 'github';
     const repository = typeof args.repository === 'string' ? args.repository : undefined;
@@ -783,11 +1051,12 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
       repository,
     };
 
-    const sharedMemoryDir = typeof args.shared_memory_dir === 'string'
-      ? args.shared_memory_dir
-      : typeof args.sharedMemoryDir === 'string'
-      ? args.sharedMemoryDir
-      : '/Users/mac/agents/shared-memory';
+    const sharedMemoryDir =
+      typeof args.shared_memory_dir === 'string'
+        ? args.shared_memory_dir
+        : typeof args.sharedMemoryDir === 'string'
+          ? args.sharedMemoryDir
+          : '/Users/mac/agents/shared-memory';
 
     const res = recordCandidateToSharedMemory(payload, sharedMemoryDir);
 
@@ -802,7 +1071,8 @@ ${verifyRes.reasons.length > 0 ? `- **核验明细**: ${verifyRes.reasons.join('
           recorded: true,
           inboxPath: `${sharedMemoryDir}/candidates/inbox.md`,
           status: 'PENDING_CONFIRMATION',
-          nextStep: 'Review entry in shared-memory/candidates/inbox.md, mark [x], then run promoteConfirmedExperiences()',
+          nextStep:
+            'Review entry in shared-memory/candidates/inbox.md, mark [x], then run promoteConfirmedExperiences()',
           source,
           repository,
         },
@@ -850,9 +1120,15 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
   const ownershipText = result.evidence.media.ownership;
   const mediaStatusText = result.evidence.media.status;
   const billingStatusText = result.evidence.billing.status;
-  const antiDoubleText = result.evidence.invariants.details?.antiDoubleBilling.status ?? (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
-  const netZeroText = result.evidence.invariants.details?.netChargeZero.status ?? (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
-  const refundIdemText = result.evidence.invariants.details?.refundIdempotency.status ?? (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
+  const antiDoubleText =
+    result.evidence.invariants.details?.antiDoubleBilling.status ??
+    (result.invariants?.antiDoubleBilling ? 'PASS' : 'UNVERIFIED');
+  const netZeroText =
+    result.evidence.invariants.details?.netChargeZero.status ??
+    (result.invariants?.netChargeZero ? 'PASS' : 'UNVERIFIED');
+  const refundIdemText =
+    result.evidence.invariants.details?.refundIdempotency.status ??
+    (result.invariants?.refundIdempotency ? 'PASS' : 'UNVERIFIED');
   const finalVerdictText = result.verdict;
 
   const lines: string[] = [];
@@ -893,14 +1169,17 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
   } else if (result.acceptance === 'REJECTED') {
     acceptanceLabel = '● REJECTED (验收驳回: 存在缺陷或非预期回归)';
   } else if (result.acceptance === 'BLOCKED') {
-    acceptanceLabel = result.status === 'PROCESSING'
-      ? '● BLOCKED / IN_FLIGHT (轮询窗口耗尽: 任务仍在排队处理中)'
-      : '● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)';
+    acceptanceLabel =
+      result.status === 'PROCESSING'
+        ? '● BLOCKED / IN_FLIGHT (轮询窗口耗尽: 任务仍在排队处理中)'
+        : '● BLOCKED (验收阻断: 缺失核心凭据或刊例单价)';
   } else {
     acceptanceLabel = '● UNVERIFIED (验收待确认: 测试通过但关键证据未闭环)';
   }
   lines.push(`生产验收裁决: ${acceptanceLabel}`);
-  lines.push(`证据完整度: ${result.evidenceCompleteness.isComplete ? '✔ COMPLETE' : '○ INCOMPLETE'} (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})`);
+  lines.push(
+    `证据完整度: ${result.evidenceCompleteness.isComplete ? '✔ COMPLETE' : '○ INCOMPLETE'} (${result.evidenceCompleteness.availableEvidence.length}/${result.evidenceCompleteness.requiredEvidence.length})`,
+  );
   if (result.evidenceCompleteness.missingEvidence.length > 0) {
     lines.push(`  待补证据: ${result.evidenceCompleteness.missingEvidence.join(', ')}`);
   }
@@ -918,18 +1197,24 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
   lines.push(`技术裁决: ${verdictLabel}`);
 
   lines.push('');
-  lines.push(`1. 任务状态与执行 (Task Execution): ${result.evidence.task.status === 'PASS' ? '✔ PASS' : result.evidence.task.status === 'PROCESSING' ? '● PROCESSING' : result.evidence.task.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.task.source}]`);
+  lines.push(
+    `1. 任务状态与执行 (Task Execution): ${result.evidence.task.status === 'PASS' ? '✔ PASS' : result.evidence.task.status === 'PROCESSING' ? '● PROCESSING' : result.evidence.task.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.task.source}]`,
+  );
   if (result.evidence.task.error) {
     lines.push(`   错误信息: ${result.evidence.task.error}`);
   }
 
   lines.push('');
-  lines.push(`2. 产物物理结构验真 (Media Inspection): ${result.evidence.media.status === 'PASS' ? '✔ PASS' : result.evidence.media.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.media.source}]`);
+  lines.push(
+    `2. 产物物理结构验真 (Media Inspection): ${result.evidence.media.status === 'PASS' ? '✔ PASS' : result.evidence.media.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.media.source}]`,
+  );
   if (result.artifact) {
     if (result.probeDurationMs !== undefined) {
       lines.push(`   流式探测耗时: ${result.probeDurationMs} ms (Range: bytes=0-65535)`);
     }
-    lines.push(`   容器标识: ${result.artifact.containerIdentified ? `✔ 规范合法 (${(result.artifact.format || 'mp4').toUpperCase()} container structure PASS)` : '✖ 缺失'} | 格式: ${result.artifact.format || 'unknown'} | 结构有效: ${result.artifact.decodable ? `✔ YES` : '✖ NO'} | 归属确认: ${result.evidence.media.ownership === 'VERIFIED' ? `✔ 绑定成功` : '○ 未绑定'}`);
+    lines.push(
+      `   容器标识: ${result.artifact.containerIdentified ? `✔ 规范合法 (${(result.artifact.format || 'mp4').toUpperCase()} container structure PASS)` : '✖ 缺失'} | 格式: ${result.artifact.format || 'unknown'} | 结构有效: ${result.artifact.decodable ? `✔ YES` : '✖ NO'} | 归属确认: ${result.evidence.media.ownership === 'VERIFIED' ? `✔ 绑定成功` : '○ 未绑定'}`,
+    );
     if (result.artifact.dimensions) {
       lines.push(`   分辨率: ${result.artifact.dimensions.width}x${result.artifact.dimensions.height}`);
     }
@@ -947,15 +1232,25 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
   }
 
   lines.push('');
-  lines.push(`3. 防资损账务对账 (Billing & Invariants): ${result.evidence.billing.status === 'PASS' ? '✔ PASS' : result.evidence.billing.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.billing.source}]`);
+  lines.push(
+    `3. 防资损账务对账 (Billing & Invariants): ${result.evidence.billing.status === 'PASS' ? '✔ PASS' : result.evidence.billing.status === 'UNVERIFIED' ? '● UNVERIFIED' : '✖ FAIL'} [${result.evidence.billing.source}]`,
+  );
   if (result.billing) {
     lines.push(`   对账结果: ${result.billing.passed ? '✔ PASS' : '✖ MISMATCH'}`);
-    lines.push(`   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`);
+    lines.push(
+      `   基准扣费: 预扣 ${result.billing.preDeductedPoints} pt | 实扣 ${result.billing.netDeductedPoints} pt | 结算 ${result.billing.settledPoints} pt | 退款 ${result.billing.refundedPoints} pt`,
+    );
     if (result.invariants) {
       lines.push(`   核心不变量核验 (Invariants: ${result.evidence.invariants.status}):`);
-      lines.push(`     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? '✔ 符合' : '✖ 存在多重扣费'}`);
-      lines.push(`     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? '✔ 符合' : '✖ 失败未完全退款'}`);
-      lines.push(`     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? '✔ 符合' : '✖ 重复退款'}`);
+      lines.push(
+        `     - [防重复扣费] antiDoubleBilling:   ${result.invariants.antiDoubleBilling ? '✔ 符合' : '✖ 存在多重扣费'}`,
+      );
+      lines.push(
+        `     - [失败净扣归零] netChargeZero:       ${result.invariants.netChargeZero ? '✔ 符合' : '✖ 失败未完全退款'}`,
+      );
+      lines.push(
+        `     - [退款幂等核销] refundIdempotency:   ${result.invariants.refundIdempotency ? '✔ 符合' : '✖ 重复退款'}`,
+      );
     }
   } else {
     lines.push('   未提供账单流水 (scoreLogs 缺失)，跳过账务对账 [SKIPPED_NO_LOGS]');
@@ -968,7 +1263,9 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
     for (const item of diffItems) {
       const statusTag = `[${item.status}]`;
       const matchIcon = item.matched ? '✔ MATCH' : '✖ DIFF';
-      lines.push(`   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`);
+      lines.push(
+        `   - [${item.layer.padEnd(10)}] ${item.field}: ${statusTag} ${matchIcon} (预期: ${JSON.stringify(item.expected)} | 实际: ${JSON.stringify(item.actual)}) [证据: ${item.evidence || 'N/A'}]`,
+      );
       if (item.diff && item.diff !== 'MATCH') {
         lines.push(`     差异说明: ${item.diff}`);
       }
@@ -993,7 +1290,9 @@ export function formatVerifyReport(result: VerifyKernelResult): string {
     lines.push('  ✔ 验收全部通过！测试证据闭环，可合流上线 / 交付生产。');
   } else if (result.acceptance === 'BLOCKED') {
     if (result.status === 'PROCESSING') {
-      lines.push(`  ⏳ 任务仍处于 PROCESSING/QUEUED 状态，本次 polling window 已耗尽。这并非业务失败，请继续执行 npm run devtest -- verify --task ${result.taskId} --model ${result.modelId} --media ${result.mediaType} 追踪终态闭环。`);
+      lines.push(
+        `  ⏳ 任务仍处于 PROCESSING/QUEUED 状态，本次 polling window 已耗尽。这并非业务失败，请继续执行 npm run devtest -- verify --task ${result.taskId} --model ${result.modelId} --media ${result.mediaType} 追踪终态闭环。`,
+      );
     } else {
       lines.push('  ⚠️ 验收阻断：请先补充缺失的刊例定价或环境会话凭据。');
     }

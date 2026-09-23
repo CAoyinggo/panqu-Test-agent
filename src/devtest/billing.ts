@@ -5,7 +5,8 @@
  */
 
 export type FlowMediaType = 'video' | 'image' | 'canvas';
-export type FlowStepStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED' | 'NOT_APPLICABLE' | 'UNVERIFIED' | 'PASS' | 'FAIL';
+export type FlowStepStatus =
+  'SUCCESS' | 'FAILED' | 'SKIPPED' | 'BLOCKED' | 'NOT_APPLICABLE' | 'UNVERIFIED' | 'PASS' | 'FAIL';
 export type TaskTerminalStatus = 'SUCCESS' | 'FAILED' | 'TIMEOUT' | 'UNKNOWN' | 'NOT_SUBMITTED';
 
 export const FALLBACK_POINTS_PER_CNY = 30;
@@ -159,9 +160,17 @@ export class BillingOracle {
       const rawPoints = entryObj.points !== undefined ? entryObj.points : entry.score;
       const absScore = Math.abs(Number(rawPoints || 0));
 
-      const hasNegation = entry.memo && (entry.memo.includes('未扣') || entry.memo.includes('免扣') || entry.memo.includes('无需扣') || entry.memo.includes('未扣费'));
+      const hasNegation =
+        entry.memo &&
+        (entry.memo.includes('未扣') ||
+          entry.memo.includes('免扣') ||
+          entry.memo.includes('无需扣') ||
+          entry.memo.includes('未扣费'));
       const isRefundMemo = entry.memo && (entry.memo.includes('退') || entry.memo.includes('返还'));
-      const isDeductMemo = !hasNegation && entry.memo && (entry.memo.includes('扣除') || entry.memo.includes('扣费') || entry.memo.includes('预扣'));
+      const isDeductMemo =
+        !hasNegation &&
+        entry.memo &&
+        (entry.memo.includes('扣除') || entry.memo.includes('扣费') || entry.memo.includes('预扣'));
       const isRefundType = typeNum === 1 || typeStr === 'REFUND';
       const isDeductType = typeNum === 2 || typeStr === 'PRE_DEDUCT';
 
@@ -195,7 +204,9 @@ export class BillingOracle {
           memo: entry.memo,
         });
       } else {
-        reasons.push(`流水条目 (ID: ${entry.id ?? '未知'}) 业务动作类型 (${entry.type}) 无法由真实后端字段确认 [UNVERIFIED]`);
+        reasons.push(
+          `流水条目 (ID: ${entry.id ?? '未知'}) 业务动作类型 (${entry.type}) 无法由真实后端字段确认 [UNVERIFIED]`,
+        );
       }
     }
 
@@ -221,7 +232,9 @@ export class BillingOracle {
       if (preDeductCount > 1) {
         duplicateCharged = true;
         antiDoubleBilling = false;
-        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水`);
+        reasons.push(
+          `[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到重复预扣费: 任务 ID ${taskId} 存在 ${preDeductCount} 次预扣流水`,
+        );
       } else if (preDeductCount === 1) {
         antiDoubleBilling = true;
       } else {
@@ -230,7 +243,9 @@ export class BillingOracle {
           antiDoubleBilling = true;
         } else {
           antiDoubleBilling = undefined;
-          reasons.push(`[BILLING_UNVERIFIED] 任务缺失有效预扣流水记录 (preDeductCount=0)，防重复扣费不变量未核验 [UNVERIFIED]`);
+          reasons.push(
+            `[BILLING_UNVERIFIED] 任务缺失有效预扣流水记录 (preDeductCount=0)，防重复扣费不变量未核验 [UNVERIFIED]`,
+          );
         }
       }
 
@@ -239,7 +254,9 @@ export class BillingOracle {
         .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
       if (clientTokens.length > 1 && preDeductCount > 1) {
         antiDoubleBilling = false;
-        reasons.push(`[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`);
+        reasons.push(
+          `[INVARIANT_VIOLATED: ANTI_DOUBLE_BILLING] 检测到并发/重试未去重: 同一 clientToken (${clientTokens[0]}) 触发了多次扣费`,
+        );
       }
 
       // 2. 根据终态审计 netChargeZero 与 refundIdempotency
@@ -274,7 +291,9 @@ export class BillingOracle {
         } else if (netDeducted > expectedPoints) {
           overCharged = true;
           netChargeZero = false;
-          reasons.push(`多扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`);
+          reasons.push(
+            `多扣费: 应扣 ${expectedPoints} 积分，实际净扣 ${netDeducted} 积分 (超扣 ${netDeducted - expectedPoints})`,
+          );
         } else {
           netChargeZero = true;
         }
@@ -282,7 +301,9 @@ export class BillingOracle {
         if (refundCount > 1) {
           duplicateRefunded = true;
           refundIdempotency = false;
-          reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`);
+          reasons.push(
+            `[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 检测到重复退款: 任务 ID ${taskId} 存在 ${refundCount} 次退款记录`,
+          );
         } else if (preDeductCount === 1) {
           if (refundCount === 1) {
             refundIdempotency = true;
@@ -290,9 +311,12 @@ export class BillingOracle {
             if (netDeducted > 0) {
               missingRefund = true;
               refundIdempotency = false;
-              reasons.push(`[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务未执行退款 (存在净扣 ${netDeducted} 积分)`);
+              reasons.push(
+                `[INVARIANT_VIOLATED: REFUND_IDEMPOTENCY] 失败任务未执行退款 (存在净扣 ${netDeducted} 积分)`,
+              );
             } else {
-              refundIdempotency = expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0 ? true : undefined;
+              refundIdempotency =
+                expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0 ? true : undefined;
             }
           }
         } else if (preDeductCount === 0) {
@@ -321,7 +345,9 @@ export class BillingOracle {
             reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败漏退款: 失败仍净扣 ${netDeducted} 积分未退回`);
           } else {
             netChargeZero = false;
-            reasons.push(`[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`);
+            reasons.push(
+              `[INVARIANT_VIOLATED: NET_CHARGE_ZERO] 任务失败超额退款: 退款总额 (${refunded}) 超过预扣 (${preDeduct})`,
+            );
           }
         } else if (preDeductCount === 0) {
           if (expectedChargeSource === 'REAL_BILLING_FACT' && expectedPoints === 0 && netDeducted === 0) {
@@ -354,8 +380,14 @@ export class BillingOracle {
     }
 
     const hasViolations = Boolean(
-      duplicateCharged || duplicateRefunded || missingRefund || underCharged || overCharged
-      || antiDoubleBilling === false || netChargeZero === false || refundIdempotency === false
+      duplicateCharged ||
+      duplicateRefunded ||
+      missingRefund ||
+      underCharged ||
+      overCharged ||
+      antiDoubleBilling === false ||
+      netChargeZero === false ||
+      refundIdempotency === false,
     );
     const allInvariantsPassed = antiDoubleBilling === true && netChargeZero === true && refundIdempotency === true;
     const passed = reasons.length === 0 && allInvariantsPassed && !hasViolations;
@@ -382,7 +414,12 @@ export class BillingOracle {
       antiDoubleBilling,
       refundIdempotency,
       ledgerEntries: structuredEntries,
-      balanceAuxiliary: { balanceBefore: params.balanceBefore, balanceAfter: params.balanceAfter, balanceDelta, note: balanceNote },
+      balanceAuxiliary: {
+        balanceBefore: params.balanceBefore,
+        balanceAfter: params.balanceAfter,
+        balanceDelta,
+        note: balanceNote,
+      },
       reasons,
     };
   }

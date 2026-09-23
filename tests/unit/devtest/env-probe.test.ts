@@ -41,7 +41,10 @@ describe('EnvironmentProbe - 真实测试环境只读探针与巡检', () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'devtest-env-probe-'));
     const sessionFile = path.join(directory, 'session.json');
     try {
-      await writeFile(sessionFile, JSON.stringify({ sessions: [{ env: 'test', cookie_string: 'PHPSESSID=session_test_token_123' }] }));
+      await writeFile(
+        sessionFile,
+        JSON.stringify({ sessions: [{ env: 'test', cookie_string: 'PHPSESSID=session_test_token_123' }] }),
+      );
       const report = await EnvironmentProbe.probe({ env: 'test', sessionFile, mock: true });
       expect(report.auth.hasSession).toBe(true);
       expect(report.auth.status).toBe('VALID');
@@ -52,7 +55,8 @@ describe('EnvironmentProbe - 真实测试环境只读探针与巡检', () => {
 
   it('默认使用受控仿真，并拒绝真实模式的非测试地址', async () => {
     expect((await EnvironmentProbe.probe({ env: 'test' })).endpoints).toHaveLength(3);
-    await expect(EnvironmentProbe.probe({ env: 'test', baseUrl: 'https://example.com', mock: false }))
-      .rejects.toThrow('REAL_URL_NOT_ALLOWED');
+    await expect(EnvironmentProbe.probe({ env: 'test', baseUrl: 'https://example.com', mock: false })).rejects.toThrow(
+      'REAL_URL_NOT_ALLOWED',
+    );
   });
 });

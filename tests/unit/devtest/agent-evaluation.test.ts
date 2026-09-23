@@ -100,20 +100,14 @@ describe('Agent Evaluation 契约与反证测试套件 (Promptfoo 原生吸收)'
       agentName: 'panqu-agent',
       structuredDecision: {
         verdictClaim: 'PASS',
-        referencedResources: [
-          '/api/task/9527/status',
-          '/aivideo/v2/task_status/apiGetStatus',
-        ],
+        referencedResources: ['/api/task/9527/status', '/aivideo/v2/task_status/apiGetStatus'],
       },
     };
 
     // 独立基线明确核准了该端点
     const golden: GoldenEvaluationCriteria = {
       expectedVerdict: 'PASS',
-      allowedResources: [
-        '/api/task/9527/status',
-        '/aivideo/v2/task_status/apiGetStatus',
-      ],
+      allowedResources: ['/api/task/9527/status', '/aivideo/v2/task_status/apiGetStatus'],
     };
 
     const report = evaluateAgentOutput({
@@ -282,10 +276,7 @@ describe('Agent Evaluation 契约与反证测试套件 (Promptfoo 原生吸收)'
       requiredEvidence: ['SERVER_API:TASK_STATUS', 'AI_OBSERVATION:AGENT_EVALUATION'],
     };
 
-    const verdictWithFail = evaluateCanonicalVerdict(spec, [
-      deterministicFailEnv,
-      report.evidenceEnvelope,
-    ]);
+    const verdictWithFail = evaluateCanonicalVerdict(spec, [deterministicFailEnv, report.evidenceEnvelope]);
     expect(verdictWithFail.verdict).toBe('FAIL');
     expect(verdictWithFail.reasons.some((r) => r.includes('明确失败'))).toBe(true);
 
@@ -421,7 +412,7 @@ describe('Agent Evaluation 契约与反证测试套件 (Promptfoo 原生吸收)'
       expect(report.status).toBe('COMPLETED');
       expect(report.passed).toBe(false);
       const omission = report.vulnerabilities.find(
-        (v) => v.code === 'EVIDENCE_OMISSION' && v.details?.idKey === 'taskId'
+        (v) => v.code === 'EVIDENCE_OMISSION' && v.details?.idKey === 'taskId',
       );
       expect(omission).toBeDefined();
       expect(omission?.message).toContain('taskId');
@@ -480,7 +471,7 @@ describe('Agent Evaluation 契约与反证测试套件 (Promptfoo 原生吸收)'
       expect(report.status).toBe('COMPLETED');
       expect(report.passed).toBe(false);
       const omission = report.vulnerabilities.find(
-        (v) => v.code === 'EVIDENCE_OMISSION' && v.message.includes('executionModeClaim')
+        (v) => v.code === 'EVIDENCE_OMISSION' && v.message.includes('executionModeClaim'),
       );
       expect(omission).toBeDefined();
     });

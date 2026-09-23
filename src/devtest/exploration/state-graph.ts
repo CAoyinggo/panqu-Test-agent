@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 运行时事实状态图 (StateGraph)
- * 
+ *
  * 动态记录执行事实，发现未经验证的高危状态跃迁与异常复合状态。
  * 绝非死板的手工字典，而是随真实执行不断扩展的事实拓扑。
  */
@@ -12,7 +12,7 @@ import {
   getCompositeStateKey,
   type PanquActionDefinition,
 } from './contracts.js';
-import { PanquActionSpace } from './action-space.js';
+import type { PanquActionSpace } from './action-space.js';
 
 export interface UnverifiedFrontier {
   frontierId: string;
@@ -62,7 +62,7 @@ export class PanquStateGraph {
     actionType: PanquActionType,
     actionPayload: Record<string, any>,
     toState: EntityCompositeState,
-    invariantsChecked: string[] = []
+    invariantsChecked: string[] = [],
   ): StateTransitionRecord {
     const fromKey = this.registerState(fromState);
     const toKey = this.registerState(toState);
@@ -77,12 +77,8 @@ export class PanquStateGraph {
       existing.historyCount += 1;
       existing.lastObserved = Date.now();
       existing.actionPayload = { ...existing.actionPayload, ...actionPayload };
-      existing.invariantsChecked = Array.from(
-        new Set([...existing.invariantsChecked, ...invariantsChecked])
-      );
-      existing.anomaliesDetected = Array.from(
-        new Set([...existing.anomaliesDetected, ...anomalies])
-      );
+      existing.invariantsChecked = Array.from(new Set([...existing.invariantsChecked, ...invariantsChecked]));
+      existing.anomaliesDetected = Array.from(new Set([...existing.anomaliesDetected, ...anomalies]));
       return existing;
     }
 
@@ -132,10 +128,7 @@ export class PanquStateGraph {
     }
 
     // 4. 失败任务却发生了实扣 (未清零)
-    if (
-      state.task.status === 'FAILED' &&
-      (state.billing.status === 'CHARGED' || state.billing.netPointsDeducted > 0)
-    ) {
+    if (state.task.status === 'FAILED' && (state.billing.status === 'CHARGED' || state.billing.netPointsDeducted > 0)) {
       anomalies.push('FAILED_TASK_CHARGED_WITHOUT_REFUND');
     }
 
@@ -149,7 +142,7 @@ export class PanquStateGraph {
 
   /**
    * 核心发现机制：探寻未经验证的边界前沿 (Unverified Frontiers)
-   * 
+   *
    * 算法逻辑：
    * 遍历当前已知的所有节点，对每个节点计算 ActionSpace 中的可行操作。
    * 如果该操作在历史中从未从该状态执行过，或者虽执行过但属于高危未知跃迁，
@@ -166,13 +159,11 @@ export class PanquStateGraph {
       for (const action of feasibleActions) {
         // 查找历史上是否已经存在以该状态为起点、执行该动作的跃迁
         const observedMatchingTransitions = this.getAllTransitions().filter(
-          (t) => t.fromKey === fromKey && t.actionType === action.type
+          (t) => t.fromKey === fromKey && t.actionType === action.type,
         );
 
         const neverExplored = observedMatchingTransitions.length === 0;
-        const hasAnomaly = observedMatchingTransitions.some(
-          (t) => t.anomaliesDetected.length > 0
-        );
+        const hasAnomaly = observedMatchingTransitions.some((t) => t.anomaliesDetected.length > 0);
 
         if (neverExplored || hasAnomaly) {
           // 计算风险分：结合动作本身的 baseRisk 与当前状态业务权重
@@ -181,7 +172,7 @@ export class PanquStateGraph {
             riskScore = Math.min(1.0, riskScore + 0.15); // 异步进行中的操作风险高
           }
           if (state.billing.status === 'RESERVED') {
-            riskScore = Math.min(1.0, riskScore + 0.2);  // 处于预扣状态，涉及资金安全性
+            riskScore = Math.min(1.0, riskScore + 0.2); // 处于预扣状态，涉及资金安全性
           }
 
           const rationale = neverExplored
@@ -212,25 +203,14 @@ export class PanquStateGraph {
   /**
    * 推导可能的后置状态特征
    */
-  private inferPossibleTargetStates(
-    currentState: EntityCompositeState,
-    action: PanquActionType
-  ): string[] {
+  private inferPossibleTargetStates(currentState: EntityCompositeState, action: PanquActionType): string[] {
     switch (action) {
       case 'CANCEL_TASK':
-        return [
-          'task:CANCELLED|billing:REFUNDED',
-          'task:CANCELLED|billing:CHARGED (High Risk Defect)',
-        ];
+        return ['task:CANCELLED|billing:REFUNDED', 'task:CANCELLED|billing:CHARGED (High Risk Defect)'];
       case 'INJECT_TIMEOUT':
-        return [
-          'task:FAILED|billing:REFUNDED',
-          'task:GENERATING|billing:RESERVED (Orphan State)',
-        ];
+        return ['task:FAILED|billing:REFUNDED', 'task:GENERATING|billing:RESERVED (Orphan State)'];
       case 'RETRY_TASK':
-        return [
-          'task:SUBMITTED|billing:RESERVED (Verify Single Charge)',
-        ];
+        return ['task:SUBMITTED|billing:RESERVED (Verify Single Charge)'];
       default:
         return ['state:UNKNOWN_AWAITING_EXPLORATION'];
     }
@@ -241,7 +221,7 @@ export class PanquStateGraph {
    */
   private buildScenarioForFrontier(
     targetState: EntityCompositeState,
-    candidateAction: PanquActionDefinition
+    candidateAction: PanquActionDefinition,
   ): Array<{ action: PanquActionType; description: string; payload: Record<string, any> }> {
     const steps: Array<{ action: PanquActionType; description: string; payload: Record<string, any> }> = [];
 

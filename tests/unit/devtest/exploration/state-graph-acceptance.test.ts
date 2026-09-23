@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type EntityCompositeState,
-  getCompositeStateKey,
-} from '../../../../src/devtest/exploration/contracts.js';
+import { type EntityCompositeState } from '../../../../src/devtest/exploration/contracts.js';
 import { PanquActionSpace } from '../../../../src/devtest/exploration/action-space.js';
 import { PanquStateGraph } from '../../../../src/devtest/exploration/state-graph.js';
 
@@ -45,9 +42,7 @@ describe('Step 1 硬性业务验收：运行时事实图与高危未知跃迁发
     };
 
     // 记录正常主链路跃迁
-    const trans1 = graph.observeTransition(state0, 'SUBMIT_TASK', { duration: 4 }, state1, [
-      'prechargeSuccess',
-    ]);
+    const trans1 = graph.observeTransition(state0, 'SUBMIT_TASK', { duration: 4 }, state1, ['prechargeSuccess']);
     const trans2 = graph.observeTransition(state1, 'POLL_STATUS', { taskId: 9001 }, state2, [
       'taskStatusSuccess',
       'mediaVerified',
@@ -129,9 +124,7 @@ describe('Step 1 硬性业务验收：运行时事实图与高危未知跃迁发
 
     // 验证是否准确抓取到了在 GENERATING 状态下的取消操作 CANCEL_TASK
     const cancelFrontier = frontiers.find(
-      (f) =>
-        f.fromState.task.status === 'GENERATING' &&
-        f.candidateAction.type === 'CANCEL_TASK'
+      (f) => f.fromState.task.status === 'GENERATING' && f.candidateAction.type === 'CANCEL_TASK',
     );
 
     expect(cancelFrontier).toBeDefined();
@@ -139,19 +132,11 @@ describe('Step 1 硬性业务验收：运行时事实图与高危未知跃迁发
     expect(cancelFrontier!.reason).toContain('从未在测试中被验证');
 
     // 验证推导出的潜在目标状态与风险提示
-    expect(cancelFrontier!.inferredTargetStates).toContain(
-      'task:CANCELLED|billing:CHARGED (High Risk Defect)'
-    );
+    expect(cancelFrontier!.inferredTargetStates).toContain('task:CANCELLED|billing:CHARGED (High Risk Defect)');
 
     // 验证自动生成的可执行端到端探索场景链条
     const scenarioActions = cancelFrontier!.proposedScenario.map((s) => s.action);
-    expect(scenarioActions).toEqual([
-      'SUBMIT_TASK',
-      'POLL_STATUS',
-      'CANCEL_TASK',
-      'AUDIT_BILLING',
-      'INSPECT_MEDIA',
-    ]);
+    expect(scenarioActions).toEqual(['SUBMIT_TASK', 'POLL_STATUS', 'CANCEL_TASK', 'AUDIT_BILLING', 'INSPECT_MEDIA']);
 
     // 打印场景说明以供调试与审查
     const cancelStep = cancelFrontier!.proposedScenario.find((s) => s.action === 'CANCEL_TASK');

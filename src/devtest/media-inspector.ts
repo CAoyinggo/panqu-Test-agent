@@ -201,7 +201,10 @@ export function inspectMp4Buffer(buffer: Buffer, tailBuffer?: Buffer): MediaInsp
     };
   }
 
-  const majorBrand = buffer.slice(ftypBox.dataOffset, ftypBox.dataOffset + 4).toString('ascii').trim();
+  const majorBrand = buffer
+    .slice(ftypBox.dataOffset, ftypBox.dataOffset + 4)
+    .toString('ascii')
+    .trim();
 
   // 2. 检查 moov 与 mdat
   let moovBox = boxes.find((b) => b.type === 'moov');
@@ -209,7 +212,8 @@ export function inspectMp4Buffer(buffer: Buffer, tailBuffer?: Buffer): MediaInsp
   let moovBuffer = buffer;
 
   if (!moovBox) {
-    const effectiveTail = tailBuffer || (buffer.length > 65536 ? buffer.subarray(Math.max(0, buffer.length - 65536)) : null);
+    const effectiveTail =
+      tailBuffer || (buffer.length > 65536 ? buffer.subarray(Math.max(0, buffer.length - 65536)) : null);
     if (effectiveTail) {
       const tailMoov = findMoovBoxInTail(effectiveTail);
       if (tailMoov) {
@@ -342,7 +346,6 @@ export function inspectMp4Buffer(buffer: Buffer, tailBuffer?: Buffer): MediaInsp
  * 深度解析图片媒体元数据 (PNG, JPEG, WebP)
  */
 export function inspectImageBuffer(buffer: Buffer): MediaInspectionResult {
-  const reasons: string[] = [];
   if (!buffer || buffer.length < 8) {
     return {
       fileAccessible: false,
@@ -481,10 +484,7 @@ export function inspectImageBuffer(buffer: Buffer): MediaInspectionResult {
 /**
  * 统一多媒体 Buffer 物理检查入口
  */
-export function inspectBufferMedia(
-  buffer: Buffer,
-  mediaType: 'video' | 'image'
-): MediaInspectionResult {
+export function inspectBufferMedia(buffer: Buffer, mediaType: 'video' | 'image'): MediaInspectionResult {
   if (mediaType === 'video') {
     return inspectMp4Buffer(buffer);
   }
@@ -494,12 +494,14 @@ export function inspectBufferMedia(
 /**
  * 生成合法的最小标准 MP4 Buffer（供受控单测与 Mock 仿真使用，包含 ftyp, moov(mvhd+trak/tkhd), mdat）
  */
-export function createSyntheticValidMp4(params: {
-  width?: number;
-  height?: number;
-  durationSeconds?: number;
-  brand?: string;
-} = {}): Buffer {
+export function createSyntheticValidMp4(
+  params: {
+    width?: number;
+    height?: number;
+    durationSeconds?: number;
+    brand?: string;
+  } = {},
+): Buffer {
   const width = params.width ?? 1280;
   const height = params.height ?? 720;
   const durationSec = params.durationSeconds ?? 4;

@@ -4,10 +4,7 @@ import {
   evaluateOperator,
   type CanonicalVerdictResult,
 } from '../../../src/devtest/canonical-verdict-engine.js';
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec, CanonicalEvidenceEnvelope } from '../../../src/devtest/canonical-protocol.js';
 
 describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () => {
   const FIXED_TIME = '2026-09-21T10:00:00.000Z';
@@ -40,16 +37,10 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
     ],
     costLimit: { maxCostPoints: 50 },
     sideEffectPolicy: 'ALLOW_PAID',
-    requiredEvidence: [
-      'SERVER_API:TASK_STATUS',
-      'SERVER_API:ROUTING_CHANNEL',
-      'BILLING_LEDGER:TASK_RECORDS',
-    ],
+    requiredEvidence: ['SERVER_API:TASK_STATUS', 'SERVER_API:ROUTING_CHANNEL', 'BILLING_LEDGER:TASK_RECORDS'],
   };
 
-  const createServerTaskEnv = (
-    overrides?: Partial<CanonicalEvidenceEnvelope>
-  ): CanonicalEvidenceEnvelope => ({
+  const createServerTaskEnv = (overrides?: Partial<CanonicalEvidenceEnvelope>): CanonicalEvidenceEnvelope => ({
     evidenceId: 'ev-task-1',
     testId: 'test-verdict-001',
     sourceTool: 'fetcher',
@@ -69,9 +60,7 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
     ...overrides,
   });
 
-  const createServerChannelEnv = (
-    overrides?: Partial<CanonicalEvidenceEnvelope>
-  ): CanonicalEvidenceEnvelope => ({
+  const createServerChannelEnv = (overrides?: Partial<CanonicalEvidenceEnvelope>): CanonicalEvidenceEnvelope => ({
     evidenceId: 'ev-channel-1',
     testId: 'test-verdict-001',
     sourceTool: 'runtime',
@@ -91,9 +80,7 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
     ...overrides,
   });
 
-  const createBillingEnv = (
-    overrides?: Partial<CanonicalEvidenceEnvelope>
-  ): CanonicalEvidenceEnvelope => ({
+  const createBillingEnv = (overrides?: Partial<CanonicalEvidenceEnvelope>): CanonicalEvidenceEnvelope => ({
     evidenceId: 'ev-billing-1',
     testId: 'test-verdict-001',
     sourceTool: 'billing-oracle',

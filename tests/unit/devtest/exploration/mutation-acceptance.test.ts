@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type EntityCompositeState,
-} from '../../../../src/devtest/exploration/contracts.js';
+import { type EntityCompositeState } from '../../../../src/devtest/exploration/contracts.js';
 import { PanquActionSpace } from '../../../../src/devtest/exploration/action-space.js';
 import { PanquStateGraph, type UnverifiedFrontier } from '../../../../src/devtest/exploration/state-graph.js';
 import { PanquConstraintEvaluator } from '../../../../src/devtest/exploration/constraint.js';
@@ -46,15 +44,23 @@ describe('Step 3 硬性业务验收：有目标的状态跃迁变异器 (Targete
     expect(temporalMutations.length).toBeGreaterThanOrEqual(2);
 
     // 变异 A: SUBMIT -> CANCEL -> POLL (立即取消)
-    const immCancel = temporalMutations.find((m) =>
-      m.steps.map((s) => s.action).slice(0, 3).join('->') === 'SUBMIT_TASK->CANCEL_TASK->POLL_STATUS'
+    const immCancel = temporalMutations.find(
+      (m) =>
+        m.steps
+          .map((s) => s.action)
+          .slice(0, 3)
+          .join('->') === 'SUBMIT_TASK->CANCEL_TASK->POLL_STATUS',
     );
     expect(immCancel).toBeDefined();
     expect(immCancel!.constraintEvaluation.satisfied).toBe(true);
 
     // 变异 B: SUBMIT -> POLL -> CANCEL -> POLL (取消后再轮询，验证终态不可变性)
-    const pollAfterCancel = temporalMutations.find((m) =>
-      m.steps.map((s) => s.action).slice(0, 4).join('->') === 'SUBMIT_TASK->POLL_STATUS->CANCEL_TASK->POLL_STATUS'
+    const pollAfterCancel = temporalMutations.find(
+      (m) =>
+        m.steps
+          .map((s) => s.action)
+          .slice(0, 4)
+          .join('->') === 'SUBMIT_TASK->POLL_STATUS->CANCEL_TASK->POLL_STATUS',
     );
     expect(pollAfterCancel).toBeDefined();
     expect(pollAfterCancel!.constraintEvaluation.satisfied).toBe(true);
@@ -215,16 +221,12 @@ describe('Step 3 硬性业务验收：有目标的状态跃迁变异器 (Targete
 
     // 验证针对该 Frontier 的代表性生成链路：
     // 1) 取消后生命周期锁死：SUBMIT -> POLL -> CANCEL -> POLL
-    const temporalCase = mutations.find(
-      (m) => m.name.includes('取消后继续轮询')
-    );
+    const temporalCase = mutations.find((m) => m.name.includes('取消后继续轮询'));
     expect(temporalCase).toBeDefined();
     expect(temporalCase?.intent).toContain('生命周期一致性');
 
     // 2) 超时与重试取消复合账务：SUBMIT -> TIMEOUT -> RETRY -> CANCEL -> AUDIT_BILLING
-    const retryCase = mutations.find(
-      (m) => m.name.includes('超时-重试-取消复合链路')
-    );
+    const retryCase = mutations.find((m) => m.name.includes('超时-重试-取消复合链路'));
     expect(retryCase).toBeDefined();
     expect(retryCase?.steps.map((s) => s.action)).toEqual([
       'SUBMIT_TASK',

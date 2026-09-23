@@ -1,21 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  type EntityCompositeState,
-} from '../../../../src/devtest/exploration/contracts.js';
+import { type EntityCompositeState } from '../../../../src/devtest/exploration/contracts.js';
 import { PanquActionSpace } from '../../../../src/devtest/exploration/action-space.js';
-import {
-  PanquStateGraph,
-  type UnverifiedFrontier,
-} from '../../../../src/devtest/exploration/state-graph.js';
+import { PanquStateGraph, type UnverifiedFrontier } from '../../../../src/devtest/exploration/state-graph.js';
 import { PanquConstraintEvaluator } from '../../../../src/devtest/exploration/constraint.js';
 import { PanquExplorationPolicy } from '../../../../src/devtest/exploration/exploration-policy.js';
-import {
-  PanquExplorationRunner,
-} from '../../../../src/devtest/exploration/runner.js';
-import {
-  PanquLearningStore,
-  buildActionHistoryCounts,
-} from '../../../../src/devtest/exploration/learning.js';
+import { PanquExplorationRunner } from '../../../../src/devtest/exploration/runner.js';
+import { PanquLearningStore } from '../../../../src/devtest/exploration/learning.js';
 import { type MutationCandidate } from '../../../../src/devtest/exploration/mutation.js';
 
 describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化稳定性验证', () => {
@@ -26,7 +16,7 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
   function createFrontier(
     fromState: EntityCompositeState,
     actionType: any,
-    baseRiskOverride?: number
+    baseRiskOverride?: number,
   ): UnverifiedFrontier {
     const action = actionSpace.getAction(actionType)!;
     return {
@@ -173,7 +163,7 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
     const rankedRound1 = policy.evaluateAndRank(
       [frontierSubmit, frontierPoll],
       historyCounts,
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
     expect(rankedRound1[0].frontier.candidateAction.type).toBe('POLL_STATUS');
     expect(rankedRound1[1].frontier.candidateAction.type).toBe('SUBMIT_TASK');
@@ -193,14 +183,14 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
         confidence: 0.98,
         createdAt: Date.now(),
       },
-      'real'
+      'real',
     );
 
     // Round 2: 重新评估
     const rankedRound2 = policy.evaluateAndRank(
       [frontierSubmit, frontierPoll],
       historyCounts,
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
 
     // 核心断言：Top Pick 发生真实倒置！SUBMIT_TASK 因缺陷强化跃升至第 1 名！
@@ -333,7 +323,7 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
         confidence: 0.98,
         createdAt: Date.now(),
       },
-      'real'
+      'real',
     );
 
     const frontierSubmit = createFrontier(unsubmittedState, 'SUBMIT_TASK');
@@ -347,7 +337,7 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
     const rankedRound1 = policy.evaluateAndRank(
       [frontierSubmit, frontierPoll],
       historyRound1,
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
     expect(rankedRound1[0].frontier.candidateAction.type).toBe('SUBMIT_TASK');
 
@@ -359,7 +349,7 @@ describe('Step 5 生产级收口审计：真实主链接通、隔离与自进化
     const rankedRound2 = policy.evaluateAndRank(
       [frontierSubmit, frontierPoll],
       historyRound2,
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
 
     // 核心断言：由于执行了 15 次，AlreadyCovered 罚分达到 0.55 * log2(16) = 2.20 分，

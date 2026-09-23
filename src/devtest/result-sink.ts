@@ -11,11 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type {
-  CanonicalVerdict,
-  CanonicalVerdictResult,
-  CanonicalBlocker,
-} from './canonical-verdict-engine.js';
+import type { CanonicalVerdict, CanonicalVerdictResult, CanonicalBlocker } from './canonical-verdict-engine.js';
 import type { CanonicalTestSpec } from './canonical-protocol.js';
 
 // ============================================================================
@@ -100,7 +96,7 @@ export interface MapVerdictExportOptions {
  */
 export function mapVerdictToExportRecord(
   verdictResult: Readonly<CanonicalVerdictResult>,
-  options?: Readonly<MapVerdictExportOptions>
+  options?: Readonly<MapVerdictExportOptions>,
 ): Readonly<ExportableVerdictRecord> {
   if (!verdictResult || typeof verdictResult !== 'object') {
     throw new Error('mapVerdictToExportRecord: verdictResult 必须为有效的 CanonicalVerdictResult 对象');

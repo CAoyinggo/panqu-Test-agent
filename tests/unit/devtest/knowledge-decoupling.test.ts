@@ -6,7 +6,6 @@ import {
   plan,
   verify,
   loadConfirmedExperiences,
-  matchRelevantExperiences,
   promoteConfirmedExperiences,
   type Experience,
 } from '../../../src/devtest/index.js';
@@ -97,7 +96,9 @@ describe('DevTest Self-Evolving Tester Step 2.5: 知识架构收敛与 Strategy 
       });
 
       // Assert: 未经 promotion 绝不加载
-      expect(loaded.some((e) => e.id === 'CAND-20260917-UNPROMOTED' || e.sourceCandidateId === 'CAND-20260917-UNPROMOTED')).toBe(false);
+      expect(
+        loaded.some((e) => e.id === 'CAND-20260917-UNPROMOTED' || e.sourceCandidateId === 'CAND-20260917-UNPROMOTED'),
+      ).toBe(false);
     } finally {
       env.cleanup();
     }

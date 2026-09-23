@@ -1,20 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  type EntityCompositeState,
-  type LearningExperience,
-} from '../../../../src/devtest/exploration/contracts.js';
+import { type EntityCompositeState, type LearningExperience } from '../../../../src/devtest/exploration/contracts.js';
 import { PanquActionSpace } from '../../../../src/devtest/exploration/action-space.js';
-import {
-  PanquStateGraph,
-  type UnverifiedFrontier,
-} from '../../../../src/devtest/exploration/state-graph.js';
+import { PanquStateGraph, type UnverifiedFrontier } from '../../../../src/devtest/exploration/state-graph.js';
 import { PanquConstraintEvaluator } from '../../../../src/devtest/exploration/constraint.js';
 import { PanquExplorationPolicy } from '../../../../src/devtest/exploration/exploration-policy.js';
 import { PanquMutationEngine } from '../../../../src/devtest/exploration/mutation.js';
-import {
-  PanquExplorationRunner,
-  type MutationRunResult,
-} from '../../../../src/devtest/exploration/runner.js';
+import { PanquExplorationRunner, type MutationRunResult } from '../../../../src/devtest/exploration/runner.js';
 import {
   PanquLearningStore,
   extractLearningExperiences,
@@ -26,14 +17,14 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
   const actionSpace = new PanquActionSpace();
   const constraintEvaluator = new PanquConstraintEvaluator();
   const policy = new PanquExplorationPolicy(constraintEvaluator);
-  const mutationEngine = new PanquMutationEngine();
+  const _mutationEngine = new PanquMutationEngine();
   const runner = new PanquExplorationRunner();
 
   // 辅助构造测试 Frontier
   function createFrontier(
     fromState: EntityCompositeState,
     actionType: any,
-    inferredTargetStates: string[] = ['state:NORMAL']
+    inferredTargetStates: string[] = ['state:NORMAL'],
   ): UnverifiedFrontier {
     const action = actionSpace.getAction(actionType)!;
     return {
@@ -58,7 +49,7 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
   };
 
   // 生成中复合状态
-  const generatingState: EntityCompositeState = {
+  const _generatingState: EntityCompositeState = {
     session: { status: 'AUTHENTICATED' },
     task: { status: 'GENERATING', taskId: 9020, durationSeconds: 5 },
     billing: { status: 'RESERVED', netPointsDeducted: 28, recordCount: 1 },
@@ -256,12 +247,10 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
     const initialRanked = policy.evaluateAndRank(
       [frontierSubmit, frontierAuth],
       new Map(),
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
 
-    const initialSubmitScore = initialRanked.find(
-      (s) => s.frontier.candidateAction.type === 'SUBMIT_TASK'
-    )!;
+    const initialSubmitScore = initialRanked.find((s) => s.frontier.candidateAction.type === 'SUBMIT_TASK')!;
     expect(initialSubmitScore.breakdown.historicalFailure).toBe(0.0);
     expect(initialSubmitScore.rationale).not.toContain('[历史经验强化]');
 
@@ -287,12 +276,10 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
     const updatedRanked = policy.evaluateAndRank(
       [frontierSubmit, frontierAuth],
       new Map(),
-      store.getExperiences('real')
+      store.getExperiences('real'),
     );
 
-    const updatedSubmitScore = updatedRanked.find(
-      (s) => s.frontier.candidateAction.type === 'SUBMIT_TASK'
-    )!;
+    const updatedSubmitScore = updatedRanked.find((s) => s.frontier.candidateAction.type === 'SUBMIT_TASK')!;
 
     // 核心断言：SUBMIT_TASK 获得了历史经验加成，总分上涨，依据中出现强化标识
     expect(updatedSubmitScore.breakdown.historicalFailure).toBeGreaterThan(1.0);
@@ -321,13 +308,9 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
       artifacts: { status: 'VERIFIED', atomsFound: ['mdat'], ownershipVerified: true },
       observedAt: Date.now(),
     };
-    graph.observeTransition(
-      unsubmittedState,
-      'SUBMIT_TASK',
-      { duration: 5, modelId: 84 },
-      toCompletedState,
-      ['allInvariantsPassed']
-    );
+    graph.observeTransition(unsubmittedState, 'SUBMIT_TASK', { duration: 5, modelId: 84 }, toCompletedState, [
+      'allInvariantsPassed',
+    ]);
 
     // 第二轮：从 StateGraph 读取累加历史频次
     const history2 = buildActionHistoryCounts(graph);
@@ -376,10 +359,7 @@ describe('Step 5 硬性验收：真实结果 → Learning → Exploration Policy
         toState: unsubmittedState,
         historyCount: 1,
         lastObserved: Date.now(),
-        invariantsChecked: [
-          'NEGATIVE_PROBE_REJECTED_AT_GATEWAY',
-          'BILLING_ZERO_CHARGE_UNPROVEN_BY_LEDGER',
-        ],
+        invariantsChecked: ['NEGATIVE_PROBE_REJECTED_AT_GATEWAY', 'BILLING_ZERO_CHARGE_UNPROVEN_BY_LEDGER'],
         anomaliesDetected: [],
       },
       message: '负向非法参数探测通过：网关成功拦截',

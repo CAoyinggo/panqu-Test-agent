@@ -5,16 +5,9 @@
  * 绝对不属于生产模块，不导出至 src/devtest/index.ts
  */
 
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec, CanonicalEvidenceEnvelope } from '../../src/devtest/canonical-protocol.js';
 import { validateCanonicalTestSpec } from '../../src/devtest/canonical-protocol.js';
-import type {
-  ExecutionAdapter,
-  ExecutionResult,
-  EvidenceProducer,
-} from '../../src/devtest/execution-ports.js';
+import type { ExecutionAdapter, ExecutionResult, EvidenceProducer } from '../../src/devtest/execution-ports.js';
 import { FORBIDDEN_VERDICT_FIELDS } from '../../src/devtest/execution-ports.js';
 import {
   UIBrowserEvidenceProducer,
@@ -69,19 +62,13 @@ export class UIFixtureExecutionAdapter implements ExecutionAdapter {
     this.extraProducers = options?.extraProducers || [];
   }
 
-  async execute(
-    spec: Readonly<CanonicalTestSpec>,
-    context?: Record<string, unknown>
-  ): Promise<ExecutionResult> {
+  async execute(spec: Readonly<CanonicalTestSpec>, context?: Record<string, unknown>): Promise<ExecutionResult> {
     const ctx = (context || {}) as UIFixtureAdapterContext;
 
     const capturedAt =
-      ctx.capturedAt ||
-      (typeof spec?.metadata?.capturedAt === 'string' ? spec.metadata.capturedAt : undefined);
+      ctx.capturedAt || (typeof spec?.metadata?.capturedAt === 'string' ? spec.metadata.capturedAt : undefined);
 
-    const executionId =
-      ctx.executionId ||
-      `exec-${spec?.testId || 'unknown'}`;
+    const executionId = ctx.executionId || `exec-${spec?.testId || 'unknown'}`;
 
     const startedAt = capturedAt || '1970-01-01T00:00:00.000Z';
     const completedAt = capturedAt || '1970-01-01T00:00:00.000Z';

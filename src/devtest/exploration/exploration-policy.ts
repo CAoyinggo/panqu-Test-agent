@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 探索调度策略器 (Exploration Policy)
- * 
+ *
  * 核心调度哲学：
  * 1. Unknown > Known（未知优先铁律：严禁已知高频路径压制未知高危跃迁）；
  * 2. 多维综合评分：
@@ -8,9 +8,7 @@
  * 3. 具备完全可解释的决策依据生成。
  */
 
-import {
-  type LearningExperience,
-} from './contracts.js';
+import { type LearningExperience } from './contracts.js';
 import { type UnverifiedFrontier } from './state-graph.js';
 import { PanquConstraintEvaluator } from './constraint.js';
 
@@ -40,7 +38,7 @@ export class PanquExplorationPolicy {
 
   /**
    * 针对候选 Frontier 列表进行约束过滤、多维评分与排序
-   * 
+   *
    * @param frontiers 候选探索前沿列表
    * @param historyCounts 历史执行频次映射 (key: transitionId 或 `${fromKey}->${actionType}`)
    * @param experiences 沉淀的因果经验列表
@@ -48,7 +46,7 @@ export class PanquExplorationPolicy {
   public evaluateAndRank(
     frontiers: UnverifiedFrontier[],
     historyCounts: Map<string, number> = new Map(),
-    experiences: LearningExperience[] = []
+    experiences: LearningExperience[] = [],
   ): ScoredFrontier[] {
     const scoredList: ScoredFrontier[] = [];
 
@@ -61,7 +59,7 @@ export class PanquExplorationPolicy {
       const constraintResult = this.constraintEvaluator.evaluate(
         frontier.candidateAction,
         frontier.fromState,
-        samplePayload
+        samplePayload,
       );
 
       if (!constraintResult.satisfied) {
@@ -85,7 +83,7 @@ export class PanquExplorationPolicy {
           breakdown.constraintBoundary +
           breakdown.businessImpact -
           breakdown.alreadyCoveredPenalty
-        ).toFixed(3)
+        ).toFixed(3),
       );
 
       // 4. 生成高度可解释的选择依据
@@ -109,16 +107,14 @@ export class PanquExplorationPolicy {
   private computeBreakdown(
     frontier: UnverifiedFrontier,
     historyRuns: number,
-    experiences: LearningExperience[]
+    experiences: LearningExperience[],
   ): ScoreBreakdown {
     // A. 基础风险 (Risk: 0.0 ~ 1.0)
     const risk = frontier.candidateAction.baseRisk;
 
     // B. 新颖度 (Novelty: 0.0 ~ 1.0)
     // 0 次运行即为 1.0；随着历史运行次数增加迅速衰减
-    const novelty = historyRuns === 0
-      ? 1.0
-      : Number((1.0 / (1.0 + Math.log2(1 + historyRuns))).toFixed(3));
+    const novelty = historyRuns === 0 ? 1.0 : Number((1.0 / (1.0 + Math.log2(1 + historyRuns))).toFixed(3));
 
     // 提取匹配的因果经验 (供历史缺陷与不确定性推导复用)
     const matchingExperiences = experiences.filter((exp) => {
@@ -140,9 +136,7 @@ export class PanquExplorationPolicy {
     if (
       matchingExperiences.some(
         (e) =>
-          e.confidence < 0.9 ||
-          e.discoveredAnomaly.includes('UNPROVEN') ||
-          e.discoveredAnomaly.includes('UNVERIFIED')
+          e.confidence < 0.9 || e.discoveredAnomaly.includes('UNPROVEN') || e.discoveredAnomaly.includes('UNVERIFIED'),
       )
     ) {
       uncertainty = Math.max(uncertainty, 0.85);
@@ -152,9 +146,7 @@ export class PanquExplorationPolicy {
     // 如果相关状态在历史经验中记录过 Bug，享受显著权重加成
     let historicalFailure = 0.0;
     if (matchingExperiences.length > 0) {
-      const maxBoost = Math.max(
-        ...matchingExperiences.map((e) => e.policyDirectives.boostMultiplier || 1.0)
-      );
+      const maxBoost = Math.max(...matchingExperiences.map((e) => e.policyDirectives.boostMultiplier || 1.0));
       historicalFailure = Math.min(1.5, Number(((maxBoost - 1.0) * 0.5 + 0.3).toFixed(3)));
     }
 
@@ -182,9 +174,7 @@ export class PanquExplorationPolicy {
     // G. 既有覆盖惩罚 (AlreadyCoveredPenalty: 0.0 ~ 5.0+)
     // 【核心机制：Unknown > Known】
     // 已经验证过 100 次的正常路径扣除重度覆盖惩罚，严禁持续重复测试
-    const alreadyCoveredPenalty = historyRuns === 0
-      ? 0.0
-      : Number((0.55 * Math.log2(1 + historyRuns)).toFixed(3));
+    const alreadyCoveredPenalty = historyRuns === 0 ? 0.0 : Number((0.55 * Math.log2(1 + historyRuns)).toFixed(3));
 
     return {
       risk,
@@ -204,7 +194,7 @@ export class PanquExplorationPolicy {
     frontier: UnverifiedFrontier,
     historyRuns: number,
     b: ScoreBreakdown,
-    total: number
+    total: number,
   ): string {
     const reasons: string[] = [];
 

@@ -36,7 +36,8 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
     const validBoundary = mutations.find(
-      (m) => m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY' && m.steps[0].payload.duration === 1
+      (m) =>
+        m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY' && m.steps[0].payload.duration === 1,
     );
     expect(validBoundary).toBeDefined();
     expect(validBoundary!.executionReadiness).toBe('EXECUTABLE');
@@ -66,7 +67,13 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
       billingAudit: 'AUDITED',
       evidence: {
         task: { status: 'PASS', source: 'live_polling', terminalStatus: 'SUCCESS', taskStatus: 2 },
-        media: { status: 'PASS', source: 'TASK_SNAPSHOT', ownership: 'VERIFIED', format: 'mp4', atomsFound: ['ftyp', 'moov', 'mdat'] },
+        media: {
+          status: 'PASS',
+          source: 'TASK_SNAPSHOT',
+          ownership: 'VERIFIED',
+          format: 'mp4',
+          atomsFound: ['ftyp', 'moov', 'mdat'],
+        },
         billing: { status: 'PASS', source: 'auth_adminscore', netDeductedPoints: 14 },
         invariants: { status: 'PASS' },
       },
@@ -87,20 +94,24 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     expect(result.ok).toBe(true);
     expect(result.status).toBe('EXECUTABLE_VERIFIED');
     expect(executeSpy).toHaveBeenCalledTimes(1);
-    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      modelId: 84,
-      duration: 1,
-      mediaType: 'video',
-      mode: 'real',
-    }));
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: 84,
+        duration: 1,
+        mediaType: 'video',
+        mode: 'real',
+      }),
+    );
 
     // 验证调用了 verify 并传入真实的 taskId
     expect(verifySpy).toHaveBeenCalledTimes(1);
-    expect(verifySpy).toHaveBeenCalledWith(expect.objectContaining({
-      taskId: 9801,
-      modelId: 84,
-      duration: 1,
-    }));
+    expect(verifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 9801,
+        modelId: 84,
+        duration: 1,
+      }),
+    );
 
     // 验证 StateGraph 真实回写
     expect(result.observedTransition).toBeDefined();
@@ -116,9 +127,7 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
   it('2. 负向探测 duration=0：确保真实参数直达 execute()，不调用 verify(0)，不伪造 UNBILLED 证明', async () => {
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
-    const zeroBoundary = mutations.find(
-      (m) => m.mutationType === 'BOUNDARY' && m.steps[0].payload.duration === 0
-    );
+    const zeroBoundary = mutations.find((m) => m.mutationType === 'BOUNDARY' && m.steps[0].payload.duration === 0);
     expect(zeroBoundary).toBeDefined();
     expect(zeroBoundary!.executionReadiness).toBe('NEGATIVE_PROBE');
 
@@ -146,10 +155,12 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     });
 
     // 核心断言 1：duration=0 绝对没有被默认值覆盖为 4
-    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      duration: 0,
-      mode: 'real',
-    }));
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        duration: 0,
+        mode: 'real',
+      }),
+    );
 
     // 核心断言 2：绝对禁止调用 verify(0)
     expect(verifySpy).not.toHaveBeenCalled();
@@ -174,9 +185,7 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
   it('3. 负向探测 duration=61：验证超限非法参数直达 execute() 且被网关拦截', async () => {
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
-    const overflowBoundary = mutations.find(
-      (m) => m.mutationType === 'BOUNDARY' && m.steps[0].payload.duration === 61
-    );
+    const overflowBoundary = mutations.find((m) => m.mutationType === 'BOUNDARY' && m.steps[0].payload.duration === 61);
     expect(overflowBoundary).toBeDefined();
     expect(overflowBoundary!.executionReadiness).toBe('NEGATIVE_PROBE');
 
@@ -201,9 +210,11 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     });
 
     // 核心断言：61 秒直达 execute
-    expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      duration: 61,
-    }));
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        duration: 61,
+      }),
+    );
     expect(verifySpy).not.toHaveBeenCalled();
     expect(result.status).toBe('NEGATIVE_PROBE_REJECTION_VERIFIED');
     expect(result.rejectionEvidence?.taskIdZero).toBe(true);
@@ -212,9 +223,7 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
   it('4. 未证实动作候选 (CANCEL_TASK / INJECT_TIMEOUT)：绝对禁止发送请求，禁止写入 StateGraph', async () => {
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
-    const unsupportedTemporal = mutations.find(
-      (m) => m.mutationType === 'TEMPORAL'
-    );
+    const unsupportedTemporal = mutations.find((m) => m.mutationType === 'TEMPORAL');
     expect(unsupportedTemporal).toBeDefined();
     expect(unsupportedTemporal!.executionReadiness).toBe('BLOCKED_BY_UNSUPPORTED_ACTION');
 
@@ -245,7 +254,7 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
     const validBoundary = mutations.find(
-      (m) => m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY'
+      (m) => m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY',
     )!;
 
     // 恶意构造一个与物理世界完全矛盾的 expectedObservation
@@ -307,7 +316,7 @@ describe('Step 4 硬性验收：探索执行接入器与最小执行闭环 (Expl
     const frontier = getBaseGeneratingFrontier();
     const mutations = mutationEngine.generateMutations(frontier);
     const validBoundary = mutations.find(
-      (m) => m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY'
+      (m) => m.mutationType === 'BOUNDARY' && m.boundaryValidity === 'VALID_BOUNDARY',
     )!;
 
     const realGraph = new PanquStateGraph();

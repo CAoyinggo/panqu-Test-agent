@@ -10,13 +10,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
-import {
-  validateEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec, CanonicalEvidenceEnvelope } from '../../../src/devtest/canonical-protocol.js';
+import { validateEvidenceEnvelope } from '../../../src/devtest/canonical-protocol.js';
 import {
   FORBIDDEN_VERDICT_FIELDS,
   type EvidenceProducer,
@@ -29,10 +24,7 @@ import {
   readPngDimensions,
   type DeterministicProducerContext,
 } from '../../../src/devtest/ui-adapters.js';
-import {
-  UIFixtureExecutionAdapter,
-  type UIFixtureAdapterContext,
-} from '../../helpers/ui-fixture-adapter.js';
+import { UIFixtureExecutionAdapter, type UIFixtureAdapterContext } from '../../helpers/ui-fixture-adapter.js';
 
 // ============================================================================
 // 测试辅助常量与工厂
@@ -116,11 +108,7 @@ function createHistoryAuditSpec(overrides?: Partial<CanonicalTestSpec>): Canonic
       allowZeroCostOnly: true,
     },
     sideEffectPolicy: 'READ_ONLY',
-    requiredEvidence: [
-      'BROWSER:TASK_STATUS_DOM',
-      'BROWSER:NETWORK_RESPONSE',
-      'BROWSER:SCREENSHOT_REF',
-    ],
+    requiredEvidence: ['BROWSER:TASK_STATUS_DOM', 'BROWSER:NETWORK_RESPONSE', 'BROWSER:SCREENSHOT_REF'],
     metadata: {
       capturedAt: DETERMINISTIC_CAPTURED_AT,
     },
@@ -159,7 +147,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     expect(result.status).toBe('COMPLETED');
@@ -192,7 +180,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     const verdictResult = evaluateCanonicalVerdict(spec, result.evidence);
@@ -207,11 +195,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
   // --------------------------------------------------------------------------
   it('3. 终态必须由服务端确认：当场景要求 SERVER_API 证据时，离线 UI 绝不伪造，严格阻断为 UNVERIFIED 并附带 TASK_NOT_TERMINAL', async () => {
     const specWithServerApi = createHistoryAuditSpec({
-      requiredEvidence: [
-        'BROWSER:TASK_STATUS_DOM',
-        'BROWSER:NETWORK_RESPONSE',
-        'SERVER_API:TASK_STATUS',
-      ],
+      requiredEvidence: ['BROWSER:TASK_STATUS_DOM', 'BROWSER:NETWORK_RESPONSE', 'SERVER_API:TASK_STATUS'],
       deterministicAssertions: [
         {
           field: 'domTaskStatus',
@@ -236,7 +220,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     const verdictResult = evaluateCanonicalVerdict(specWithServerApi, uiResult.evidence);
@@ -255,21 +239,20 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
     });
 
     const visualProducer = new UIVisualAiEvidenceProducer();
-    const aiEnvs = await visualProducer.produce(
-      { visualInference: 'CONFIRMED' },
-      {
-        testId: visualOnlySpec.testId,
-        environment: visualOnlySpec.environment,
-        subjectType: 'task',
-        subjectId: 9527,
-        capturedAt: DETERMINISTIC_CAPTURED_AT,
-        evidenceIds: DETERMINISTIC_EVIDENCE_IDS,
-      } as DeterministicProducerContext
-    );
+    const aiEnvs = await visualProducer.produce({ visualInference: 'CONFIRMED' }, {
+      testId: visualOnlySpec.testId,
+      environment: visualOnlySpec.environment,
+      subjectType: 'task',
+      subjectId: 9527,
+      capturedAt: DETERMINISTIC_CAPTURED_AT,
+      evidenceIds: DETERMINISTIC_EVIDENCE_IDS,
+    } as DeterministicProducerContext);
 
     const verdictResult = evaluateCanonicalVerdict(visualOnlySpec, aiEnvs);
     expect(verdictResult.verdict).toBe('UNVERIFIED');
-    expect(verdictResult.reasons.some((r) => r.includes('AI_OBSERVATION') && r.includes('不能单独产生 PASS'))).toBe(true);
+    expect(verdictResult.reasons.some((r) => r.includes('AI_OBSERVATION') && r.includes('不能单独产生 PASS'))).toBe(
+      true,
+    );
   });
 
   // --------------------------------------------------------------------------
@@ -289,7 +272,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED', // 视觉假阳性
         },
-      })
+      }),
     );
 
     const verdictResult = evaluateCanonicalVerdict(spec, result.evidence);
@@ -314,7 +297,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     const verdictResult = evaluateCanonicalVerdict(spec, result.evidence);
@@ -421,7 +404,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
           networkTaskStatus: 'SUCCESS',
           screenshotPath: 'tests/fixtures/screenshots/task-9527.png',
         },
-      })
+      }),
     );
 
     const aiEnv = result.evidence.find((e) => e.evidenceKey === 'AI_OBSERVATION:TASK_STATUS_VISUAL');
@@ -444,7 +427,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
           networkTaskStatus: 'SUCCESS',
           screenshotPath: 'tests/fixtures/screenshots/ghost-image-not-exist.png',
         },
-      })
+      }),
     );
 
     const screenEnv = result.evidence.find((e) => e.evidenceKey === 'BROWSER:SCREENSHOT_REF');
@@ -467,7 +450,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
           networkTaskStatus: 'SUCCESS',
           screenshotPath: 'tests/fixtures/screenshots/task-9527.png',
         },
-      })
+      }),
     );
 
     const screenEnv = result.evidence.find((e) => e.evidenceKey === 'BROWSER:SCREENSHOT_REF');
@@ -496,7 +479,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
           networkTaskStatus: 'SUCCESS',
           screenshotPath: 'tests/fixtures/screenshots/task-9527.png',
         },
-      })
+      }),
     );
 
     const domEnv = result.evidence.find((e) => e.evidenceKey === 'BROWSER:TASK_STATUS_DOM');
@@ -521,7 +504,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
           networkHttpStatus: 500,
           screenshotPath: 'tests/fixtures/screenshots/task-9527.png',
         },
-      })
+      }),
     );
 
     const netEnv = result.evidence.find((e) => e.evidenceKey === 'BROWSER:NETWORK_RESPONSE');
@@ -588,10 +571,10 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
   // 18. 非法 TestSpec 防护：缺少必填字段时，适配器 fail-closed 返回 BLOCKED (INVALID_TEST_SPEC)
   // --------------------------------------------------------------------------
   it('18. 非法 TestSpec 防护：缺少必填字段时，适配器 fail-closed 返回 BLOCKED (INVALID_TEST_SPEC)', async () => {
-    const invalidSpec = ({
+    const invalidSpec = {
       scenario: 'UI_HISTORY_TASK_STATUS_AUDIT',
       executionMode: 'FIXTURE',
-    } as unknown) as CanonicalTestSpec;
+    } as unknown as CanonicalTestSpec;
 
     const result = await adapter.execute(invalidSpec, createUiContext());
     expect(result.status).toBe('BLOCKED');
@@ -650,7 +633,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     expect(execResult.status).toBe('COMPLETED');
@@ -677,7 +660,7 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     const verdictResult = evaluateCanonicalVerdict(spec, uiResult.evidence);
@@ -711,12 +694,12 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
         rawVisualAi: {
           visualInference: 'CONFIRMED',
         },
-      })
+      }),
     );
 
     for (const field of FORBIDDEN_VERDICT_FIELDS) {
       expect(field in execResult).toBe(false);
-      expect(((execResult as unknown) as Record<string, unknown>)[field]).toBeUndefined();
+      expect((execResult as unknown as Record<string, unknown>)[field]).toBeUndefined();
     }
 
     const validExecutionStatuses = ['SUBMITTED', 'COMPLETED', 'FAILED', 'BLOCKED'];
@@ -745,17 +728,14 @@ describe('Phase 3 无依赖 UI Adapter 契约测试套件 (Playwright & Midscene
   // --------------------------------------------------------------------------
   it('23. 确定性纪律测试：调用方未显式提供 evidenceId 时，Producer 拒绝伪造并返回 EVIDENCE_ID_REQUIRED', async () => {
     const producer = new UIBrowserEvidenceProducer();
-    const envelopes = await producer.produce(
-      { domTaskStatus: 'SUCCESS' },
-      {
-        testId: 'test-no-ev-id',
-        environment: 'offline',
-        subjectType: 'task',
-        subjectId: 100,
-        capturedAt: DETERMINISTIC_CAPTURED_AT,
-        // 故意不传 evidenceId 或 evidenceIds
-      } as DeterministicProducerContext
-    );
+    const envelopes = await producer.produce({ domTaskStatus: 'SUCCESS' }, {
+      testId: 'test-no-ev-id',
+      environment: 'offline',
+      subjectType: 'task',
+      subjectId: 100,
+      capturedAt: DETERMINISTIC_CAPTURED_AT,
+      // 故意不传 evidenceId 或 evidenceIds
+    } as DeterministicProducerContext);
 
     const domEnv = envelopes.find((e) => e.evidenceKey === 'BROWSER:TASK_STATUS_DOM');
     expect(domEnv?.collectionStatus).toBe('COLLECTION_FAILED');

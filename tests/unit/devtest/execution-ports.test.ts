@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec, CanonicalEvidenceEnvelope } from '../../../src/devtest/canonical-protocol.js';
 import {
   FORBIDDEN_VERDICT_FIELDS,
   type ExecutionAdapter,
@@ -19,13 +16,8 @@ class FixtureEvidenceProducer implements EvidenceProducer {
   readonly producerName = 'fixture-evidence-producer';
   readonly sourceType = 'FIXTURE' as const;
 
-  produce(
-    rawCollection: unknown,
-    context: EvidenceProducerContext
-  ): CanonicalEvidenceEnvelope[] {
-    const raw = (rawCollection && typeof rawCollection === 'object')
-      ? (rawCollection as Record<string, unknown>)
-      : {};
+  produce(rawCollection: unknown, context: EvidenceProducerContext): CanonicalEvidenceEnvelope[] {
+    const raw = rawCollection && typeof rawCollection === 'object' ? (rawCollection as Record<string, unknown>) : {};
 
     // 核心安全约束：provenance 必须由 producer 确定性生成，绝不接受调用者指定的覆盖值
     const fixedProvenance = `FIXTURE (${this.producerName}:${context.environment || 'offline'})`;
@@ -64,10 +56,7 @@ class FixtureExecutionAdapter implements ExecutionAdapter {
 
   private producer = new FixtureEvidenceProducer();
 
-  async execute(
-    spec: Readonly<CanonicalTestSpec>,
-    context?: Record<string, unknown>
-  ): Promise<ExecutionResult> {
+  async execute(spec: Readonly<CanonicalTestSpec>, context?: Record<string, unknown>): Promise<ExecutionResult> {
     const startedAt = new Date().toISOString();
 
     // 1. 模式门禁：仅允许 FIXTURE 模式，REAL 或 OFFLINE 必须严格 BLOCKED
@@ -129,7 +118,7 @@ class FixtureExecutionAdapter implements ExecutionAdapter {
         environment: spec.environment,
         subjectType: spec.target.targetType || 'scenario',
         subjectId: spec.target.taskId || spec.target.modelId || 'fixture-subject',
-      }
+      },
     );
 
     return {
@@ -160,9 +149,7 @@ describe('Phase 1.2 ExecutionAdapter & EvidenceProducer 最小标准端口契约
     executionMode: 'FIXTURE',
     target: { targetType: 'scenario', modelId: 78 },
     inputs: { duration: 4 },
-    deterministicAssertions: [
-      { field: 'status', operator: 'EQUALS', expectedValue: 'MOCK_OK' },
-    ],
+    deterministicAssertions: [{ field: 'status', operator: 'EQUALS', expectedValue: 'MOCK_OK' }],
     costLimit: { maxCostPoints: 0, allowZeroCostOnly: true },
     sideEffectPolicy: 'READ_ONLY',
     requiredEvidence: ['FIXTURE:TASK_SNAPSHOT'],
@@ -225,7 +212,7 @@ describe('Phase 1.2 ExecutionAdapter & EvidenceProducer 最小标准端口契约
         environment: 'offline',
         subjectType: 'task',
         subjectId: 12345,
-      }
+      },
     );
 
     expect(envelopes).toHaveLength(1);
@@ -247,7 +234,7 @@ describe('Phase 1.2 ExecutionAdapter & EvidenceProducer 最小标准端口契约
         environment: 'offline',
         subjectType: 'task',
         subjectId: 12345,
-      }
+      },
     );
 
     expect(envelopes[0].provenance).toBe('FIXTURE (fixture-evidence-producer:offline)');
@@ -261,7 +248,7 @@ describe('Phase 1.2 ExecutionAdapter & EvidenceProducer 最小标准端口契约
     // 检查黑名单字段
     for (const forbiddenField of FORBIDDEN_VERDICT_FIELDS) {
       expect(forbiddenField in result).toBe(false);
-      expect(((result as unknown) as Record<string, unknown>)[forbiddenField]).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>)[forbiddenField]).toBeUndefined();
     }
 
     // 严禁在 status 中返回 PASS / FAIL / UNVERIFIED 最终裁决值

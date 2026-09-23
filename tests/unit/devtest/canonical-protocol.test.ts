@@ -36,11 +36,7 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
           allowZeroCostOnly: false,
         },
         sideEffectPolicy: 'ALLOW_PAID',
-        requiredEvidence: [
-          'SERVER_API:TASK_STATUS',
-          'MEDIA_BINARY:MP4_CONTAINER',
-          'BILLING_LEDGER:RECORD',
-        ],
+        requiredEvidence: ['SERVER_API:TASK_STATUS', 'MEDIA_BINARY:MP4_CONTAINER', 'BILLING_LEDGER:RECORD'],
       };
 
       const res = validateCanonicalTestSpec(realSpec);
@@ -59,9 +55,7 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
         executionMode: 'OFFLINE',
         target: { targetType: 'channel', channelId: 54 },
         inputs: { duration: 4 },
-        deterministicAssertions: [
-          { field: 'simulated', operator: 'EQUALS', expectedValue: true },
-        ],
+        deterministicAssertions: [{ field: 'simulated', operator: 'EQUALS', expectedValue: true }],
         costLimit: { maxCostPoints: 0, allowZeroCostOnly: true },
         sideEffectPolicy: 'READ_ONLY',
         requiredEvidence: ['FIXTURE:TASK_SNAPSHOT'],
@@ -75,9 +69,7 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
         executionMode: 'FIXTURE',
         target: { targetType: 'scenario' },
         inputs: {},
-        deterministicAssertions: [
-          { field: 'codec', operator: 'EQUALS', expectedValue: 'h264' },
-        ],
+        deterministicAssertions: [{ field: 'codec', operator: 'EQUALS', expectedValue: 'h264' }],
         costLimit: { maxCostPoints: 0, allowZeroCostOnly: true },
         sideEffectPolicy: 'READ_ONLY',
         requiredEvidence: ['FIXTURE:BINARY_BUFFER'],
@@ -215,9 +207,7 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
         executionMode: 'REAL',
         target: { targetType: 'model' },
         inputs: {},
-        deterministicAssertions: [
-          { field: 'foo', operator: 'UNKNOWN_CUSTOM_OP', expectedValue: 123 },
-        ],
+        deterministicAssertions: [{ field: 'foo', operator: 'UNKNOWN_CUSTOM_OP', expectedValue: 123 }],
         costLimit: { maxCostPoints: 0 },
         sideEffectPolicy: 'READ_ONLY',
         requiredEvidence: ['TEST'],
@@ -417,9 +407,17 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
       };
 
       expect(validateEvidenceEnvelope(leakEnvelopeWithPassword).valid).toBe(false);
-      expect(validateEvidenceEnvelope(leakEnvelopeWithPassword).errors.some((e) => e.code === 'UNREDACTED_CREDENTIALS_FORBIDDEN')).toBe(true);
+      expect(
+        validateEvidenceEnvelope(leakEnvelopeWithPassword).errors.some(
+          (e) => e.code === 'UNREDACTED_CREDENTIALS_FORBIDDEN',
+        ),
+      ).toBe(true);
       expect(validateEvidenceEnvelope(leakEnvelopeWithSessid).valid).toBe(false);
-      expect(validateEvidenceEnvelope(leakEnvelopeWithSessid).errors.some((e) => e.code === 'UNREDACTED_CREDENTIALS_FORBIDDEN')).toBe(true);
+      expect(
+        validateEvidenceEnvelope(leakEnvelopeWithSessid).errors.some(
+          (e) => e.code === 'UNREDACTED_CREDENTIALS_FORBIDDEN',
+        ),
+      ).toBe(true);
     });
 
     it('13. sourceType 与 collectionStatus 非法枚举值拒绝', () => {
@@ -488,9 +486,17 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
       };
 
       expect(validateEvidenceEnvelope(fakeServerEnvelope).valid).toBe(false);
-      expect(validateEvidenceEnvelope(fakeServerEnvelope).errors.some((e) => e.code === 'UNTRUSTED_PROVENANCE_FOR_SERVER_API')).toBe(true);
+      expect(
+        validateEvidenceEnvelope(fakeServerEnvelope).errors.some(
+          (e) => e.code === 'UNTRUSTED_PROVENANCE_FOR_SERVER_API',
+        ),
+      ).toBe(true);
       expect(validateEvidenceEnvelope(expectationDerivedEnvelope).valid).toBe(false);
-      expect(validateEvidenceEnvelope(expectationDerivedEnvelope).errors.some((e) => e.code === 'PROVENANCE_DERIVED_FROM_EXPECTATION')).toBe(true);
+      expect(
+        validateEvidenceEnvelope(expectationDerivedEnvelope).errors.some(
+          (e) => e.code === 'PROVENANCE_DERIVED_FROM_EXPECTATION',
+        ),
+      ).toBe(true);
     });
 
     it('15. evidenceKey 缺失或格式不合法拒绝 (Phase 1.3C)', () => {
@@ -703,7 +709,7 @@ describe('Canonical TestSpec & Evidence Envelope 协议契约测试 (Phase 1.1)'
       expect(spoofEval.satisfied).toBe(false);
       expect(spoofEval.missingEvidenceKeys).toContain('SERVER_API:ROUTING_CHANNEL');
       expect(spoofEval.details.find((d) => d.key === 'SERVER_API:ROUTING_CHANNEL')?.reason).toContain(
-        'REAL 模式下 FIXTURE 来源不能满足'
+        'REAL 模式下 FIXTURE 来源不能满足',
       );
     });
 

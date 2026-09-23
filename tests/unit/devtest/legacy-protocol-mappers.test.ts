@@ -6,10 +6,6 @@ import {
   mapVerifyToCanonicalEvidence,
   redactSensitiveData,
 } from '../../../src/devtest/legacy-protocol-mappers.js';
-import {
-  validateCanonicalTestSpec,
-  validateEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
 import type {
   PlanKernelResult,
   ProbeKernelResult,
@@ -269,7 +265,12 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         probedAt: FIXED_TIME,
         auth: { status: 'MISSING', hasSession: false, details: '未找到会话凭据' },
         endpoints: [
-          { name: 'unreachable_ep', url: 'https://invalid-domain.example/probe', reachable: false, message: 'ECONNREFUSED' },
+          {
+            name: 'unreachable_ep',
+            url: 'https://invalid-domain.example/probe',
+            reachable: false,
+            message: 'ECONNREFUSED',
+          },
         ],
       } as any;
 
@@ -326,16 +327,25 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
   describe('4. 确定性映射与 ID/时间显式化', () => {
     it('4.1 缺少必要 ID 或时间时返回结构化 mapping issue', () => {
       // 缺少 testId
-      const planRes = mapPlanToCanonicalTestSpec({ modelId: 84, expectedPoints: 0, scenario: 'VIDEO_NEW_MODEL' } as any, {} as any);
+      const planRes = mapPlanToCanonicalTestSpec(
+        { modelId: 84, expectedPoints: 0, scenario: 'VIDEO_NEW_MODEL' } as any,
+        {} as any,
+      );
       expect(planRes.success).toBe(false);
       expect(planRes.issues.some((i) => i.code === 'MISSING_TEST_ID')).toBe(true);
 
       // 缺少 capturedAt
-      const execRes = mapExecuteToExecutionResult({ mode: 'mock', status: 'SUCCESS', ok: true } as any, { testId: 'exec-1' } as any);
+      const execRes = mapExecuteToExecutionResult(
+        { mode: 'mock', status: 'SUCCESS', ok: true } as any,
+        { testId: 'exec-1' } as any,
+      );
       expect(execRes.success).toBe(false);
       expect(execRes.issues.some((i) => i.code === 'MISSING_CAPTURED_AT')).toBe(true);
 
-      const verifyRes = mapVerifyToCanonicalEvidence({ taskId: 123, executionMode: 'real' } as any, { testId: 'v-1' } as any);
+      const verifyRes = mapVerifyToCanonicalEvidence(
+        { taskId: 123, executionMode: 'real' } as any,
+        { testId: 'v-1' } as any,
+      );
       expect(verifyRes.success).toBe(false);
       expect(verifyRes.issues.some((i) => i.code === 'MISSING_CAPTURED_AT')).toBe(true);
     });
@@ -484,14 +494,22 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         channelDetail: { actualChannelId: 239458, isGatewayChannelVerified: false } as any,
       };
 
-      const resAsserted = mapVerifyToCanonicalEvidence(verifyAsserted, { testId: 'v-asserted', capturedAt: FIXED_TIME });
+      const resAsserted = mapVerifyToCanonicalEvidence(verifyAsserted, {
+        testId: 'v-asserted',
+        capturedAt: FIXED_TIME,
+      });
       expect(resAsserted.value![0].sourceType).toBe('USER_ASSERTION');
 
       // 静态渠道
       const verifyStatic: VerifyKernelResult = {
         ...verifyAsserted,
         isActualChannelAssertedOnly: false,
-        provenance: { actualChannelId: 'SOURCE_STATIC_CONTRACT:domain-knowledge:239458', fallbackChannel: '', retryProvider: '', extra: '' },
+        provenance: {
+          actualChannelId: 'SOURCE_STATIC_CONTRACT:domain-knowledge:239458',
+          fallbackChannel: '',
+          retryProvider: '',
+          extra: '',
+        },
       };
       const resStatic = mapVerifyToCanonicalEvidence(verifyStatic, { testId: 'v-static', capturedAt: FIXED_TIME });
       expect(resStatic.value![0].sourceType).toBe('FIXTURE');
@@ -548,7 +566,12 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         acceptanceReport: {} as any,
         reasons: ['来源异常'],
         evidence: {} as any,
-        provenance: { actualChannelId: 'MYSTERIOUS_UNKNOWN_CHANNEL_ORIGIN', fallbackChannel: '', retryProvider: '', extra: '' },
+        provenance: {
+          actualChannelId: 'MYSTERIOUS_UNKNOWN_CHANNEL_ORIGIN',
+          fallbackChannel: '',
+          retryProvider: '',
+          extra: '',
+        },
       };
 
       const result = mapVerifyToCanonicalEvidence(legacyVerify, { testId: 'v-unk-source', capturedAt: FIXED_TIME });
@@ -626,7 +649,9 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         env: 'test',
         probedAt: FIXED_TIME,
         auth: { status: 'VALID', hasSession: true, details: 'OK' },
-        endpoints: [{ name: 'ep1', url: 'https://test.panqu.com/ep1', reachable: true, statusCode: 200, latencyMs: 50 }],
+        endpoints: [
+          { name: 'ep1', url: 'https://test.panqu.com/ep1', reachable: true, statusCode: 200, latencyMs: 50 },
+        ],
       } as any);
 
       const frozenExecute = deepFreeze<ExecuteKernelResult>({
@@ -659,13 +684,25 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         evidence: { task: { status: 'PASS', source: 'SERVER_API' } } as any,
         provenance: { actualChannelId: 'SERVER_RUN_FACT:retrylog', fallbackChannel: '', retryProvider: '', extra: '' },
         artifact: { decodable: true, durationSeconds: 4, dimensions: { width: 1280, height: 720 } } as any,
-        billing: { passed: true, preDeductedPoints: 50, settledPoints: 50, netDeductedPoints: 50, reasons: ['ok'] } as any,
+        billing: {
+          passed: true,
+          preDeductedPoints: 50,
+          settledPoints: 50,
+          netDeductedPoints: 50,
+          reasons: ['ok'],
+        } as any,
       });
 
       expect(() => mapPlanToCanonicalTestSpec(frozenPlan, { testId: 'freeze-plan' })).not.toThrow();
-      expect(() => mapProbeToCanonicalEvidence(frozenProbe, { testId: 'freeze-probe', capturedAt: FIXED_TIME })).not.toThrow();
-      expect(() => mapExecuteToExecutionResult(frozenExecute, { testId: 'freeze-exec', capturedAt: FIXED_TIME })).not.toThrow();
-      expect(() => mapVerifyToCanonicalEvidence(frozenVerify, { testId: 'freeze-verify', capturedAt: FIXED_TIME })).not.toThrow();
+      expect(() =>
+        mapProbeToCanonicalEvidence(frozenProbe, { testId: 'freeze-probe', capturedAt: FIXED_TIME }),
+      ).not.toThrow();
+      expect(() =>
+        mapExecuteToExecutionResult(frozenExecute, { testId: 'freeze-exec', capturedAt: FIXED_TIME }),
+      ).not.toThrow();
+      expect(() =>
+        mapVerifyToCanonicalEvidence(frozenVerify, { testId: 'freeze-verify', capturedAt: FIXED_TIME }),
+      ).not.toThrow();
     });
   });
 
@@ -753,7 +790,10 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         } as any,
       };
 
-      const resAsserted = mapVerifyToCanonicalEvidence(verifyAsserted, { testId: 'v-ch-asserted', capturedAt: FIXED_TIME });
+      const resAsserted = mapVerifyToCanonicalEvidence(verifyAsserted, {
+        testId: 'v-ch-asserted',
+        capturedAt: FIXED_TIME,
+      });
       expect(resAsserted.success).toBe(true);
       const assertedEnv = resAsserted.value!.find((e) => e.evidenceKey === 'USER_ASSERTION:ROUTING_CHANNEL');
       expect(assertedEnv).toBeDefined();
@@ -765,7 +805,12 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
       // 2. 静态渠道配置
       const verifyStatic: VerifyKernelResult = {
         ...baseVerify,
-        provenance: { actualChannelId: 'SOURCE_STATIC_CONTRACT:domain-knowledge', fallbackChannel: '', retryProvider: '', extra: '' },
+        provenance: {
+          actualChannelId: 'SOURCE_STATIC_CONTRACT:domain-knowledge',
+          fallbackChannel: '',
+          retryProvider: '',
+          extra: '',
+        },
         channelDetail: {
           actualChannelId: 2,
           targetChannelId: 2,
@@ -804,7 +849,10 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
         } as any,
       };
 
-      const res = mapVerifyToCanonicalEvidence(verifyWithArtifactAndBilling, { testId: 'v-art-bill', capturedAt: FIXED_TIME });
+      const res = mapVerifyToCanonicalEvidence(verifyWithArtifactAndBilling, {
+        testId: 'v-art-bill',
+        capturedAt: FIXED_TIME,
+      });
       expect(res.success).toBe(true);
 
       const mediaEnv = res.value!.find((e) => e.evidenceKey === 'MEDIA_BINARY:CONTAINER_CHECK');

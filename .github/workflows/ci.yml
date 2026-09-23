@@ -32,8 +32,11 @@ jobs:
       - name: Build TypeScript Kernel
         run: npm run build
 
-      - name: Run Full Unit Test Suite (21 Suites, 275 Tests)
-        run: npm test
+      - name: Run Full Unit Test Suite & Coverage Gate
+        run: npx vitest run --coverage
+
+      - name: Run ESLint Code Style Gate
+        run: npm run lint
 
       - name: CLI Smoke Test (probe & plan)
         run: |

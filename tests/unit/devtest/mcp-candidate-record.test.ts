@@ -24,11 +24,7 @@ describe('DevTest MCP 受控 Knowledge Candidate 记录入口测试', () => {
     const candidatesDir = path.join(fakeSharedMemoryDir, 'candidates');
     fs.mkdirSync(candidatesDir, { recursive: true });
     inboxPath = path.join(candidatesDir, 'inbox.md');
-    fs.writeFileSync(
-      inboxPath,
-      '# 候选记忆池\n\n## 待审候选列表\n\n',
-      'utf8'
-    );
+    fs.writeFileSync(inboxPath, '# 候选记忆池\n\n## 待审候选列表\n\n', 'utf8');
 
     const refDir = path.join(tmpDir, '.agents/skills/self-evolving-tester/references');
     fs.mkdirSync(refDir, { recursive: true });
@@ -214,7 +210,9 @@ describe('DevTest MCP 受控 Knowledge Candidate 记录入口测试', () => {
       expect(entry.related_model_id).toBe(88);
       expect(entry.requiredPlanCheck).toBeDefined();
       expect(entry.requiredPlanCheck.stage).toBe('ORACLE_VERIFY');
-      expect(entry.requiredPlanCheck.verificationMethod).toContain('BillingOracle.reconcileTaskLedger netChargeZero 校验');
+      expect(entry.requiredPlanCheck.verificationMethod).toContain(
+        'BillingOracle.reconcileTaskLedger netChargeZero 校验',
+      );
 
       // 步骤 5: 验证 loadConfirmedExperiences 读取
       const loaded = loadConfirmedExperiences({ projectRoot: tmpDir });
@@ -254,7 +252,9 @@ describe('DevTest MCP 受控 Knowledge Candidate 记录入口测试', () => {
       });
       expect(otherPlan.domainPlan).toBeDefined();
       expect(otherPlan.domainPlan!.steps.length).toBe(6);
-      expect(otherPlan.testPlan.tests.some((t) => t.id === `history-${promotedKnowledgeId?.toLowerCase()}`)).toBe(false);
+      expect(otherPlan.testPlan.tests.some((t) => t.id === `history-${promotedKnowledgeId?.toLowerCase()}`)).toBe(
+        false,
+      );
     });
   });
 

@@ -1,14 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import {
-  probe,
-  plan,
-  execute,
-  verify,
-  type ProbeKernelOptions,
-  type PlanKernelOptions,
-  type ExecuteKernelOptions,
-  type VerifyKernelOptions,
-} from '../../../src/devtest/core-kernel.js';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { probe, plan, execute, verify, type VerifyKernelOptions } from '../../../src/devtest/core-kernel.js';
 import { runDevTestCli } from '../../../bin/devtest-cli.js';
 import { DEVTEST_VERSION } from '../../../src/devtest/version.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
@@ -17,6 +8,14 @@ import { DevTestMcpService } from '../../../src/devtest/mcp-service.js';
 import { discoverModelContract } from '../../../src/devtest/env-probe.js';
 import { PanquMediaExecutionAdapter } from '../../../src/devtest/execution-ports.js';
 import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
+
+const originalFetch = global.fetch;
+afterEach(() => {
+  global.fetch = originalFetch;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('DevTest 纯净内核层 (Core Kernel)', () => {
   describe('1. probe (环境探活)', () => {
@@ -274,10 +273,12 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
 
       expect(res.ok).toBe(true);
       expect(res.taskId).toBe(54321);
-      expect(submitSpy).toHaveBeenCalledWith(expect.objectContaining({
-        projectId: 365,
-        alias: 'td',
-      }));
+      expect(submitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 365,
+          alias: 'td',
+        }),
+      );
       loadSpy.mockRestore();
       submitSpy.mockRestore();
     });
@@ -293,9 +294,7 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         artifactBuffer: mp4Buffer,
         terminalStatus: 'SUCCESS',
         expectedPoints: 70,
-        scoreLogs: [
-          { task_id: 98765, type: 2, score: -70, memo: '任务预扣' },
-        ],
+        scoreLogs: [{ task_id: 98765, type: 2, score: -70, memo: '任务预扣' }],
       });
 
       expect(res.ok).toBe(true);
@@ -478,7 +477,8 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
             ok: true,
             status: 206,
             statusText: 'Partial Content',
-            arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+            arrayBuffer: async () =>
+              validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
           } as unknown as Response;
         }
         return originalFetch(url, init);
@@ -491,9 +491,7 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
         baseUrl: 'https://test-main.example.com',
         cookies: 'PHPSESSID=mock_session_123',
         expectedPoints: 28,
-        scoreLogs: [
-          { task_id: 88803, type: 2, score: -28, memo: '预扣' },
-        ],
+        scoreLogs: [{ task_id: 88803, type: 2, score: -28, memo: '预扣' }],
         gatewaySnapshot: {
           environment: 'test',
           capturedAt: new Date().toISOString(),
@@ -501,7 +499,17 @@ describe('DevTest 纯净内核层 (Core Kernel)', () => {
           collectionStatus: 'SUCCESS',
           provenance: 'API_READONLY_COLLECTOR',
           channels: [
-            { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+            {
+              id: 1,
+              name: 'Default',
+              group: 'panqu_test',
+              models: ['wan3.0-video'],
+              status: 1,
+              weight: 10,
+              dailyQuotaLimit: 0,
+              usedQuota: 0,
+              sourceMode: 'SOURCE_REAL_GATEWAY' as const,
+            },
           ],
         },
       });
@@ -654,15 +662,23 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
       logs.push(args.join(' '));
     });
 
-    const code = await runDevTestCli([
-      'execute',
-      '--model', '54',
-      '--media', 'video',
-      '--mode', 'mock',
-      '--alias', 'td',
-      '--custom-points', '60',
-      '--json',
-    ], { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) });
+    const code = await runDevTestCli(
+      [
+        'execute',
+        '--model',
+        '54',
+        '--media',
+        'video',
+        '--mode',
+        'mock',
+        '--alias',
+        'td',
+        '--custom-points',
+        '60',
+        '--json',
+      ],
+      { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) },
+    );
     spy.mockRestore();
 
     expect(code).toBe(0);
@@ -681,10 +697,14 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
 
     const code = await runDevTestCli([
       'execute',
-      '--model', '54',
-      '--media', 'video',
-      '--mode', 'mock',
-      '--custom-points', '60',
+      '--model',
+      '54',
+      '--media',
+      'video',
+      '--mode',
+      'mock',
+      '--custom-points',
+      '60',
       '--json',
     ]);
     spy.mockRestore();
@@ -704,11 +724,16 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
 
     const code = await runDevTestCli([
       'verify',
-      '--task', '54001',
-      '--model', '54',
-      '--media', 'video',
-      '--alias', 'td',
-      '--custom-points', '60',
+      '--task',
+      '54001',
+      '--model',
+      '54',
+      '--media',
+      'video',
+      '--alias',
+      'td',
+      '--custom-points',
+      '60',
       '--json',
     ]);
     spy.mockRestore();
@@ -726,16 +751,24 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
       logs.push(args.join(' '));
     });
 
-    const code = await runDevTestCli([
-      'execute',
-      '--model', '54',
-      '--media', 'video',
-      '--mode', 'mock',
-      '--alias', 'td',
-      '--custom-points', '60',
-      '--wait',
-      '--json',
-    ], { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) });
+    const code = await runDevTestCli(
+      [
+        'execute',
+        '--model',
+        '54',
+        '--media',
+        'video',
+        '--mode',
+        'mock',
+        '--alias',
+        'td',
+        '--custom-points',
+        '60',
+        '--wait',
+        '--json',
+      ],
+      { executionAdapter: new TestOfflineExecutionAdapter({ points: 60 }) },
+    );
     spy.mockRestore();
 
     // 脱机 mock 下 verify 凭据缺失返回 1 (UNVERIFIED)，不降低证据要求
@@ -929,7 +962,18 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
       logs.push(args.join(' '));
     });
-    const code = await runDevTestCli(['verify', '--task', '77708', '--model', '84', '--media', 'video', '--terminal-status', 'SUCCESS', '--json']);
+    const code = await runDevTestCli([
+      'verify',
+      '--task',
+      '77708',
+      '--model',
+      '84',
+      '--media',
+      'video',
+      '--terminal-status',
+      'SUCCESS',
+      '--json',
+    ]);
     spy.mockRestore();
 
     expect(code).toBe(1); // unverified returns 1
@@ -992,7 +1036,8 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
           ok: true,
           status: 206,
           statusText: 'Partial Content',
-          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+          arrayBuffer: async () =>
+            validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
         } as unknown as Response;
       }
       return originalFetch(url, init);
@@ -1240,7 +1285,17 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
         collectionStatus: 'SUCCESS',
         provenance: 'API_READONLY_COLLECTOR',
         channels: [
-          { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+          {
+            id: 1,
+            name: 'Default',
+            group: 'panqu_test',
+            models: ['wan3.0-video'],
+            status: 1,
+            weight: 10,
+            dailyQuotaLimit: 0,
+            usedQuota: 0,
+            sourceMode: 'SOURCE_REAL_GATEWAY' as const,
+          },
         ],
       },
     });
@@ -1272,12 +1327,20 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({
-            total: 1,
-            rows: [
-              { id: 991, task_id: 77719, type: 2, score: -28, remark: '预扣 28 分', createtime: '2026-09-15 12:00:00' },
-            ],
-          }),
+          text: async () =>
+            JSON.stringify({
+              total: 1,
+              rows: [
+                {
+                  id: 991,
+                  task_id: 77719,
+                  type: 2,
+                  score: -28,
+                  remark: '预扣 28 分',
+                  createtime: '2026-09-15 12:00:00',
+                },
+              ],
+            }),
         } as unknown as Response;
       }
       return originalFetch(url);
@@ -1308,22 +1371,28 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     };
 
     // Case A: AUTH_FAILED (401)
-    global.fetch = vi.fn().mockImplementation(async () => ({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-      text: async () => 'Unauthorized',
-    } as unknown as Response));
+    global.fetch = vi.fn().mockImplementation(
+      async () =>
+        ({
+          ok: false,
+          status: 401,
+          statusText: 'Unauthorized',
+          text: async () => 'Unauthorized',
+        }) as unknown as Response,
+    );
     const authRes = await mediaFlow.queryTaskBillingLogs(77720, session);
     expect(authRes.status).toBe('AUTH_FAILED');
     expect(authRes.error).toContain('AUTH_FAILED');
 
     // Case B: PARSE_ERROR
-    global.fetch = vi.fn().mockImplementation(async () => ({
-      ok: true,
-      status: 200,
-      text: async () => '<html><body>Gateway Error</body></html>',
-    } as unknown as Response));
+    global.fetch = vi.fn().mockImplementation(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '<html><body>Gateway Error</body></html>',
+        }) as unknown as Response,
+    );
     const parseRes = await mediaFlow.queryTaskBillingLogs(77720, session);
     expect(parseRes.status).toBe('PARSE_ERROR');
     expect(parseRes.error).toContain('PARSE_ERROR');
@@ -1339,11 +1408,14 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
     expect(timeoutRes.error).toContain('QUERY_TIMEOUT');
 
     // Case D: QUERY_SUCCESS + 0 records
-    global.fetch = vi.fn().mockImplementation(async () => ({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ code: 1, data: { total: 0, rows: [] } }),
-    } as unknown as Response));
+    global.fetch = vi.fn().mockImplementation(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, data: { total: 0, rows: [] } }),
+        }) as unknown as Response,
+    );
     const zeroRes = await mediaFlow.queryTaskBillingLogs(77720, session);
     expect(zeroRes.status).toBe('QUERY_SUCCESS');
     expect(zeroRes.scoreLogs.length).toBe(0);
@@ -1381,10 +1453,13 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({
-            total: 1,
-            rows: [{ id: 1, task_id: 77721, type: 2, score: -28, remark: '预扣 28', createtime: '2026-09-15 12:00:00' }],
-          }),
+          text: async () =>
+            JSON.stringify({
+              total: 1,
+              rows: [
+                { id: 1, task_id: 77721, type: 2, score: -28, remark: '预扣 28', createtime: '2026-09-15 12:00:00' },
+              ],
+            }),
         } as unknown as Response;
       }
       return { ok: false, status: 404, text: async () => 'not found' } as unknown as Response;
@@ -1706,12 +1781,20 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
         collectionStatus: 'SUCCESS',
         provenance: 'API_READONLY_COLLECTOR',
         channels: [
-          { id: 1, name: 'Default', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 0, usedQuota: 0, sourceMode: 'SOURCE_REAL_GATEWAY' as const },
+          {
+            id: 1,
+            name: 'Default',
+            group: 'panqu_test',
+            models: ['wan3.0-video'],
+            status: 1,
+            weight: 10,
+            dailyQuotaLimit: 0,
+            usedQuota: 0,
+            sourceMode: 'SOURCE_REAL_GATEWAY' as const,
+          },
         ],
       },
-      scoreLogs: [
-        { task_id: 91001, type: 2, score: -56, memo: 'Wan 3.0 4s 扣除' },
-      ],
+      scoreLogs: [{ task_id: 91001, type: 2, score: -56, memo: 'Wan 3.0 4s 扣除' }],
     });
 
     pollSpy.mockRestore();
@@ -1916,15 +1999,22 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
 
-    const exitCode1 = await runDevTestCli([
-      'execute',
-      '--model', '84',
-      '--media', 'video',
-      '--mode', 'mock',
-      '--session-file', '/dummy/session.json',
-      '--wait',
-      '--json',
-    ], { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 91008 }) });
+    const exitCode1 = await runDevTestCli(
+      [
+        'execute',
+        '--model',
+        '84',
+        '--media',
+        'video',
+        '--mode',
+        'mock',
+        '--session-file',
+        '/dummy/session.json',
+        '--wait',
+        '--json',
+      ],
+      { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 91008 }) },
+    );
     pollSpy.mockRestore();
     sessionSpy.mockRestore();
     spy.mockRestore();
@@ -1944,7 +2034,8 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
           ok: true,
           status: 206,
           statusText: 'Partial Content',
-          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+          arrayBuffer: async () =>
+            validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
         } as unknown as Response;
       }
       return originalFetch(url, init);
@@ -1978,17 +2069,24 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
 
-    const exitCode0 = await runDevTestCli([
-      'execute',
-      '--model', '84',
-      '--media', 'video',
-      '--mode', 'mock',
-      '--session-file', '/dummy/session.json',
-      '--wait',
-      '--db-extra-confirmed',
-      '--gateway-channel-confirmed',
-      '--json',
-    ], { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 84001 }) });
+    const exitCode0 = await runDevTestCli(
+      [
+        'execute',
+        '--model',
+        '84',
+        '--media',
+        'video',
+        '--mode',
+        'mock',
+        '--session-file',
+        '/dummy/session.json',
+        '--wait',
+        '--db-extra-confirmed',
+        '--gateway-channel-confirmed',
+        '--json',
+      ],
+      { executionAdapter: new TestOfflineExecutionAdapter({ taskId: 84001 }) },
+    );
 
     pollSpy.mockRestore();
     querySpy.mockRestore();
@@ -2004,7 +2102,6 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
   });
 });
 
-
 // ─── MCP execute + wait:true E2E 闭环回归测试 ─────────────────────────────────
 describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
   it('MCP wait:true — 任务成功时 ok=true，summary 包含 E2E 闭环关键词', async () => {
@@ -2016,7 +2113,8 @@ describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
           ok: true,
           status: 206,
           statusText: 'Partial Content',
-          arrayBuffer: async () => validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
+          arrayBuffer: async () =>
+            validMp4.buffer.slice(validMp4.byteOffset, validMp4.byteOffset + validMp4.byteLength),
         } as unknown as Response;
       }
       return originalFetch(url, init);
@@ -2079,10 +2177,7 @@ describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
   it('MCP wait:true — 提交失败时 ok=false，summary 包含 FAILED，不进入 verify', async () => {
     // 用无效的 mode/session 让 execute 返回失败（mock 模式下强制 ok=false 场景：
     // 我们直接 spy execute 本身）
-    const execSpy = vi.spyOn(
-      await import('../../../src/devtest/core-kernel.js'),
-      'execute',
-    ).mockResolvedValue({
+    const execSpy = vi.spyOn(await import('../../../src/devtest/core-kernel.js'), 'execute').mockResolvedValue({
       ok: false,
       taskId: 0,
       status: 'FAILED',
@@ -2093,10 +2188,7 @@ describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
       modelId: 84,
       mediaType: 'video',
     });
-    const verifySpy = vi.spyOn(
-      await import('../../../src/devtest/core-kernel.js'),
-      'verify',
-    );
+    const verifySpy = vi.spyOn(await import('../../../src/devtest/core-kernel.js'), 'verify');
 
     const mcpService = new DevTestMcpService();
     const result = await mcpService.call({

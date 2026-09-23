@@ -28,12 +28,12 @@ import {
 // ============================================================================
 
 export type KnowledgeCredibility =
-  | 'CONFIRMED'    // 官方定义 / 线上已验证事实（直接信任并作为强断言基准）
-  | 'OBSERVED'     // 真实执行中观察到的现象（作为经验参考，不可作为排他硬断言）
-  | 'INFERRED'     // Agent 根据现有事实逻辑推断（必须注明不确定性与推断依据）
-  | 'UNKNOWN'      // 当前未知（严禁自行编造，必须明确缺口并要求人工/环境确认）
-  | 'PROVISIONAL'  // 仅来自调用者入参断言/临时假设（未获服务端只读背书）
-  | 'SUSPICIOUS';  // 存在冲突或存疑（严禁作为确认事实）
+  | 'CONFIRMED' // 官方定义 / 线上已验证事实（直接信任并作为强断言基准）
+  | 'OBSERVED' // 真实执行中观察到的现象（作为经验参考，不可作为排他硬断言）
+  | 'INFERRED' // Agent 根据现有事实逻辑推断（必须注明不确定性与推断依据）
+  | 'UNKNOWN' // 当前未知（严禁自行编造，必须明确缺口并要求人工/环境确认）
+  | 'PROVISIONAL' // 仅来自调用者入参断言/临时假设（未获服务端只读背书）
+  | 'SUSPICIOUS'; // 存在冲突或存疑（严禁作为确认事实）
 
 export interface CredibleFact<T> {
   value: T;
@@ -55,7 +55,10 @@ export function createInferredFact<T>(value: T, rationale: string, source = 'age
   return { value, credibility: 'INFERRED', source, rationale };
 }
 
-export function createUnknownFact<T = unknown>(itemDescription: string, unknownReason: string): CredibleFact<T | undefined> {
+export function createUnknownFact<T = unknown>(
+  itemDescription: string,
+  unknownReason: string,
+): CredibleFact<T | undefined> {
   return {
     value: undefined,
     credibility: 'UNKNOWN',
@@ -106,9 +109,7 @@ export const PANQU_BUSINESS_ENTITIES: Record<string, BusinessEntity> = {
     credibility: 'CONFIRMED',
     knownFields: ['id', 'project_id', 'name', 'parent_id'],
     unknownFields: ['文件夹最大嵌套深度限制目前 UNKNOWN'],
-    businessConstraints: [
-      'folder_id 必须归属于当前 task 相同的 project_id，严禁跨项目挂载',
-    ],
+    businessConstraints: ['folder_id 必须归属于当前 task 相同的 project_id，严禁跨项目挂载'],
   },
   Task: {
     name: '异步生成任务 (Task)',
@@ -198,14 +199,54 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
     method: 'POST',
     parameters: [
       { name: '__token__', type: 'string', meaning: 'CSRF 防护令牌', required: true, credibility: 'CONFIRMED' },
-      { name: 'project_id', type: 'number', meaning: '关联的业务项目 ID', required: true, businessEntity: 'Project', credibility: 'CONFIRMED' },
+      {
+        name: 'project_id',
+        type: 'number',
+        meaning: '关联的业务项目 ID',
+        required: true,
+        businessEntity: 'Project',
+        credibility: 'CONFIRMED',
+      },
       { name: 'row[name]', type: 'string', meaning: '任务业务名称', required: true, credibility: 'CONFIRMED' },
-      { name: 'row[type]', type: 'number', meaning: '视频处理类型 (如 6=通用视频, 105=分流新版)', required: true, credibility: 'CONFIRMED' },
-      { name: 'row[selmodelsId]', type: 'number', meaning: '主站模型配置 ID (如 84, 88, 15, 78)', required: true, credibility: 'CONFIRMED' },
+      {
+        name: 'row[type]',
+        type: 'number',
+        meaning: '视频处理类型 (如 6=通用视频, 105=分流新版)',
+        required: true,
+        credibility: 'CONFIRMED',
+      },
+      {
+        name: 'row[selmodelsId]',
+        type: 'number',
+        meaning: '主站模型配置 ID (如 84, 88, 15, 78)',
+        required: true,
+        credibility: 'CONFIRMED',
+      },
       { name: 'row[extra][cueword]', type: 'string', meaning: '生成提示词', required: true, credibility: 'CONFIRMED' },
-      { name: 'row[extra][duration]', type: 'number', meaning: '生成时长(秒)', required: true, constraints: '支持 3~5 秒枚举', credibility: 'CONFIRMED' },
-      { name: 'row[extra][video_resolution]', type: 'string', meaning: '分辨率规格', required: true, constraints: '480p, 720p, 1080p', credibility: 'CONFIRMED' },
-      { name: 'row[extra][video_aspect_ratio]', type: 'string', meaning: '画面比例', required: true, constraints: '16:9, 9:16, 1:1', credibility: 'CONFIRMED' },
+      {
+        name: 'row[extra][duration]',
+        type: 'number',
+        meaning: '生成时长(秒)',
+        required: true,
+        constraints: '支持 3~5 秒枚举',
+        credibility: 'CONFIRMED',
+      },
+      {
+        name: 'row[extra][video_resolution]',
+        type: 'string',
+        meaning: '分辨率规格',
+        required: true,
+        constraints: '480p, 720p, 1080p',
+        credibility: 'CONFIRMED',
+      },
+      {
+        name: 'row[extra][video_aspect_ratio]',
+        type: 'string',
+        meaning: '画面比例',
+        required: true,
+        constraints: '16:9, 9:16, 1:1',
+        credibility: 'CONFIRMED',
+      },
     ],
     preconditions: [
       '必须具备有效的 Session Cookie 与 CSRF 令牌',
@@ -234,16 +275,38 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
     method: 'POST',
     parameters: [
       { name: '__token__', type: 'string', meaning: 'CSRF 防护令牌', required: true, credibility: 'CONFIRMED' },
-      { name: 'project_id', type: 'number', meaning: '关联的业务项目 ID', required: true, businessEntity: 'Project', credibility: 'CONFIRMED' },
-      { name: 'row[selmodelsId]', type: 'number', meaning: '模型配置 ID (如 201, 205, 12)', required: true, credibility: 'CONFIRMED' },
+      {
+        name: 'project_id',
+        type: 'number',
+        meaning: '关联的业务项目 ID',
+        required: true,
+        businessEntity: 'Project',
+        credibility: 'CONFIRMED',
+      },
+      {
+        name: 'row[selmodelsId]',
+        type: 'number',
+        meaning: '模型配置 ID (如 201, 205, 12)',
+        required: true,
+        credibility: 'CONFIRMED',
+      },
       { name: 'row[extra][prompt]', type: 'string', meaning: '生图提示词', required: true, credibility: 'CONFIRMED' },
-      { name: 'row[extra][resolution]', type: 'string', meaning: '生图分辨率规格 (如 1k, 2k, 4k)', required: true, credibility: 'CONFIRMED' },
-      { name: 'row[extra][serviceline]', type: 'string', meaning: '业务线标识', required: false, credibility: 'CONFIRMED' },
+      {
+        name: 'row[extra][resolution]',
+        type: 'string',
+        meaning: '生图分辨率规格 (如 1k, 2k, 4k)',
+        required: true,
+        credibility: 'CONFIRMED',
+      },
+      {
+        name: 'row[extra][serviceline]',
+        type: 'string',
+        meaning: '业务线标识',
+        required: false,
+        credibility: 'CONFIRMED',
+      },
     ],
-    preconditions: [
-      '有效登录 Session 与 CSRF',
-      '账户积分余额充足',
-    ],
+    preconditions: ['有效登录 Session 与 CSRF', '账户积分余额充足'],
     returnStructure: {
       successCode: 1,
       codeField: 'code',
@@ -252,9 +315,7 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
       credibility: 'CONFIRMED',
     },
     associatedObjects: ['Project', 'Task', 'BillingLedger'],
-    testCaveats: [
-      'code=1 仅代表入队，必须轮询终态并校验 PNG/JPG 图像物理格式与尺寸',
-    ],
+    testCaveats: ['code=1 仅代表入队，必须轮询终态并校验 PNG/JPG 图像物理格式与尺寸'],
     credibility: 'CONFIRMED',
   },
   TASK_STATUS_POLL: {
@@ -264,7 +325,14 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
     method: 'POST',
     parameters: [
       { name: 'type', type: 'string', meaning: '媒体大类 (video 或 scene)', required: true, credibility: 'CONFIRMED' },
-      { name: 'ids', type: 'string', meaning: '任务 ID (单值或逗号分隔)', required: true, businessEntity: 'Task', credibility: 'CONFIRMED' },
+      {
+        name: 'ids',
+        type: 'string',
+        meaning: '任务 ID (单值或逗号分隔)',
+        required: true,
+        businessEntity: 'Task',
+        credibility: 'CONFIRMED',
+      },
     ],
     preconditions: ['用户已登录，对目标 task 拥有只读查看权限'],
     returnStructure: {
@@ -288,7 +356,13 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
     endpoint: '/auth/adminscore/index',
     method: 'GET',
     parameters: [
-      { name: 'filter', type: 'string', meaning: 'JSON 过滤条件 {"task_id": ...}', required: true, credibility: 'CONFIRMED' },
+      {
+        name: 'filter',
+        type: 'string',
+        meaning: 'JSON 过滤条件 {"task_id": ...}',
+        required: true,
+        credibility: 'CONFIRMED',
+      },
       { name: 'op', type: 'string', meaning: 'JSON 操作符 {"task_id": "="}', required: true, credibility: 'CONFIRMED' },
     ],
     preconditions: ['管理员权限或拥有 FastAdmin score 查询凭据'],
@@ -314,7 +388,13 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
     parameters: [
       { name: 'page', type: 'number', meaning: '页码', required: false, credibility: 'CONFIRMED' },
       { name: 'limit', type: 'number', meaning: '分页限制', required: false, credibility: 'CONFIRMED' },
-      { name: 'keyword', type: 'string', meaning: '搜索关键字 (通常为 taskId)', required: false, credibility: 'CONFIRMED' },
+      {
+        name: 'keyword',
+        type: 'string',
+        meaning: '搜索关键字 (通常为 taskId)',
+        required: false,
+        credibility: 'CONFIRMED',
+      },
     ],
     preconditions: ['普通用户已登录 Session'],
     returnStructure: {
@@ -325,9 +405,7 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
       credibility: 'CONFIRMED',
     },
     associatedObjects: ['Task', 'BillingLedger'],
-    testCaveats: [
-      '个人端点仅在 task_id 明细或 memo/type_text 包含 taskId 时才建立关联',
-    ],
+    testCaveats: ['个人端点仅在 task_id 明细或 memo/type_text 包含 taskId 时才建立关联'],
     credibility: 'CONFIRMED',
   },
 };
@@ -371,11 +449,22 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       id: { name: 'id', type: 'int', meaning: '自增主键，对应业务 task_id', credibility: 'CONFIRMED' },
       project_id: { name: 'project_id', type: 'int', meaning: '归属项目 ID', credibility: 'CONFIRMED' },
       type: { name: 'type', type: 'int', meaning: '任务类型 (如 6=视频, 105=新视频模型)', credibility: 'CONFIRMED' },
-      task_status: { name: 'task_status', type: 'tinyint', meaning: '任务生命周期状态', isStatusField: true, credibility: 'CONFIRMED' },
+      task_status: {
+        name: 'task_status',
+        type: 'tinyint',
+        meaning: '任务生命周期状态',
+        isStatusField: true,
+        credibility: 'CONFIRMED',
+      },
       progress: { name: 'progress', type: 'int', meaning: '执行百分比进度 (0~100)', credibility: 'CONFIRMED' },
       video_url: { name: 'video_url', type: 'varchar', meaning: '视频产物直链', credibility: 'CONFIRMED' },
       pic_url: { name: 'pic_url', type: 'varchar', meaning: '图片产物直链', credibility: 'CONFIRMED' },
-      extra: { name: 'extra', type: 'text', meaning: '任务参数扩展 JSON，包含分流标记 diversion 等', credibility: 'OBSERVED' },
+      extra: {
+        name: 'extra',
+        type: 'text',
+        meaning: '任务参数扩展 JSON，包含分流标记 diversion 等',
+        credibility: 'OBSERVED',
+      },
       err: { name: 'err', type: 'text', meaning: '失败错误描述', credibility: 'CONFIRMED' },
       createtime: { name: 'createtime', type: 'int', meaning: '创建时间戳', credibility: 'CONFIRMED' },
     },
@@ -393,9 +482,9 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       'row[name]': 'name',
       'row[selmodelsId]': 'selmodels_id',
       'row[type]': 'type',
-      'project_id': 'project_id',
-      'videoUrl': 'video_url',
-      'imageUrl': 'pic_url',
+      project_id: 'project_id',
+      videoUrl: 'video_url',
+      imageUrl: 'pic_url',
     },
     commonVerificationRules: [
       'task_status=2 时，video_url 或 pic_url 字段必须为非空有效链接',
@@ -403,13 +492,14 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       '分流场景下 extra 字段中必须包含明确的 diversion 线路信息',
     ],
     untrustedFields: [
-      { field: 'extra', reason: '主站 HTTP 查询 API 不直接暴露 extra 字段，若未获授权执行只读 DB 查询，必须标记为 MANUAL_DB_EVIDENCE_REQUIRED' },
+      {
+        field: 'extra',
+        reason:
+          '主站 HTTP 查询 API 不直接暴露 extra 字段，若未获授权执行只读 DB 查询，必须标记为 MANUAL_DB_EVIDENCE_REQUIRED',
+      },
     ],
     credibility: 'CONFIRMED',
-    unknownDetails: [
-      'ai_tasks 分库分表规则目前 UNKNOWN',
-      '底层 Go Consumer 内部心跳更新字段目前 UNKNOWN',
-    ],
+    unknownDetails: ['ai_tasks 分库分表规则目前 UNKNOWN', '底层 Go Consumer 内部心跳更新字段目前 UNKNOWN'],
   },
   PQ_SCORE_LOG: {
     businessObject: 'BillingLedger',
@@ -419,7 +509,13 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       id: { name: 'id', type: 'int', meaning: '流水记录唯一自增 ID', credibility: 'CONFIRMED' },
       user_id: { name: 'user_id', type: 'int', meaning: '发生扣费的用户 ID', credibility: 'CONFIRMED' },
       task_id: { name: 'task_id', type: 'int', meaning: '关联的任务 ID', credibility: 'CONFIRMED' },
-      type: { name: 'type', type: 'tinyint', meaning: '变动类型: 2=扣费/预扣, 1=充值/退款', isStatusField: true, credibility: 'CONFIRMED' },
+      type: {
+        name: 'type',
+        type: 'tinyint',
+        meaning: '变动类型: 2=扣费/预扣, 1=充值/退款',
+        isStatusField: true,
+        credibility: 'CONFIRMED',
+      },
       score: { name: 'score', type: 'int', meaning: '积分变动量', credibility: 'CONFIRMED' },
       memo: { name: 'memo', type: 'varchar', meaning: '流水备注 (包含模型名、任务ID等)', credibility: 'CONFIRMED' },
       createtime: { name: 'createtime', type: 'int', meaning: '记录生成时间戳', credibility: 'CONFIRMED' },
@@ -433,8 +529,8 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       credibility: 'CONFIRMED',
     },
     apiToDbMapping: {
-      'taskId': 'task_id',
-      'points': 'score',
+      taskId: 'task_id',
+      points: 'score',
     },
     commonVerificationRules: [
       '同一 task_id 对应的 type=2 记录必须只有 1 笔 (防重复扣费)',
@@ -445,9 +541,7 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       { field: 'memo', reason: 'memo 仅作为 task_id 缺失时的辅助字符串比对依据，不可单凭模糊包含确认真实归属' },
     ],
     credibility: 'CONFIRMED',
-    unknownDetails: [
-      'pq_score_log_archive 分表物理归档的具体时间与迁移规则目前 UNKNOWN',
-    ],
+    unknownDetails: ['pq_score_log_archive 分表物理归档的具体时间与迁移规则目前 UNKNOWN'],
   },
   PQ_MEDIA_ASSET: {
     businessObject: 'MediaAsset',
@@ -462,9 +556,9 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
       file_size: { name: 'file_size', type: 'bigint', meaning: '文件字节大小', credibility: 'CONFIRMED' },
     },
     apiToDbMapping: {
-      'taskId': 'task_id',
-      'projectId': 'project_id',
-      'folderId': 'folder_id',
+      taskId: 'task_id',
+      projectId: 'project_id',
+      folderId: 'folder_id',
     },
     commonVerificationRules: [
       '成功任务生成的素材记录，其 project_id 必须与任务 project_id 严格一致',
@@ -472,10 +566,7 @@ export const PANQU_ORACLE_KNOWLEDGE: Record<string, OracleKnowledge> = {
     ],
     untrustedFields: [],
     credibility: 'CONFIRMED',
-    unknownDetails: [
-      '素材软删除与回收站机制目前 UNKNOWN',
-      '底层对象存储 Bucket 跨区同步延迟目前 UNKNOWN',
-    ],
+    unknownDetails: ['素材软删除与回收站机制目前 UNKNOWN', '底层对象存储 Bucket 跨区同步延迟目前 UNKNOWN'],
   },
 };
 
@@ -520,9 +611,22 @@ export const PANQU_TASK_KNOWLEDGE: Record<string, TaskKnowledge> = {
     taskType: 'VIDEO_GEN',
     numericType: 6,
     creationApi: '/aivideo/v2/generate/video',
-    parameters: ['project_id', 'row[name]', 'row[selmodelsId]', 'row[extra][cueword]', 'row[extra][duration]', 'row[extra][video_resolution]'],
+    parameters: [
+      'project_id',
+      'row[name]',
+      'row[selmodelsId]',
+      'row[extra][cueword]',
+      'row[extra][duration]',
+      'row[extra][video_resolution]',
+    ],
     lifecycle: [
-      { status: 1, name: 'QUEUED_OR_PROCESSING', isTerminal: false, isSuccess: false, description: '任务排队中或正在渲染中' },
+      {
+        status: 1,
+        name: 'QUEUED_OR_PROCESSING',
+        isTerminal: false,
+        isSuccess: false,
+        description: '任务排队中或正在渲染中',
+      },
       { status: 2, name: 'SUCCESS', isTerminal: true, isSuccess: true, description: '任务渲染完成且产物就绪' },
       { status: 3, name: 'FAILED', isTerminal: true, isSuccess: false, description: '上游模型调用失败或生成异常' },
       { status: 4, name: 'ERROR', isTerminal: true, isSuccess: false, description: '底层服务故障或超时' },
@@ -530,7 +634,11 @@ export const PANQU_TASK_KNOWLEDGE: Record<string, TaskKnowledge> = {
     relations: {
       project: { required: true, field: 'project_id', meaning: '必须关联现有项目，决定产物归属' },
       media: { outputField: 'video_url', format: 'mp4' },
-      folder: { field: 'folder_id', meaning: '可选归档目录', dependencyNote: '若指定 folder_id，必须确认其属于该 project_id' },
+      folder: {
+        field: 'folder_id',
+        meaning: '可选归档目录',
+        dependencyNote: '若指定 folder_id，必须确认其属于该 project_id',
+      },
     },
     finalResultExpectation: {
       requiredFields: ['video_url', 'progress'],
@@ -570,8 +678,7 @@ export const PANQU_TASK_KNOWLEDGE: Record<string, TaskKnowledge> = {
       requiredFields: ['pic_url', 'progress'],
       credibility: 'CONFIRMED',
     },
-    differenceFromApiResponse:
-      'API 成功仅代表入库排队；若模型服务下线或尺寸不支持，Task 终态会变为 3/4。',
+    differenceFromApiResponse: 'API 成功仅代表入库排队；若模型服务下线或尺寸不支持，Task 终态会变为 3/4。',
     businessSuccessCriteria: [
       '1. 提交 API 返回 code=1',
       '2. Task 终态为 2 (SUCCESS)',
@@ -637,7 +744,8 @@ export const PANQU_FAILURE_PATTERNS: Record<string, FailurePattern> = {
     name: 'Task成功但最终业务产物不存在或不可用',
     trigger: '转码上传 OSS 失败、CDN 链接损坏、或回写数据库产物字段丢失',
     symptom: 'Task 状态为 2 (SUCCESS)，但 video_url / pic_url 为空、返回 404 或内容为 0 字节损坏文件',
-    verification: '必须物理拉取媒体产物前 64KB，执行 MP4 Box (ftyp/moov/mdat) 或 PNG IHDR 完整性验真，缺失产物标记 FAIL/UNVERIFIED',
+    verification:
+      '必须物理拉取媒体产物前 64KB，执行 MP4 Box (ftyp/moov/mdat) 或 PNG IHDR 完整性验真，缺失产物标记 FAIL/UNVERIFIED',
     related_domain: ['Task', 'MediaAsset', 'MEDIA_INSPECTOR'],
     confidence: 'CONFIRMED',
   },
@@ -682,7 +790,8 @@ export const PANQU_FAILURE_PATTERNS: Record<string, FailurePattern> = {
     name: '兜底成片冒充目标渠道合格',
     trigger: '目标渠道生成失败后触发后端重试/兜底补偿链路 (如 volc_new)',
     symptom: '前端任务最终状态为成功，产物有效，但实际是由兜底供应商生成，目标渠道本身失败',
-    verification: '检查 retrylog.fallback_channel 及 exceptionaltask.extra.retry_provider，兜底生成的产物不得计入目标渠道合格',
+    verification:
+      '检查 retrylog.fallback_channel 及 exceptionaltask.extra.retry_provider，兜底生成的产物不得计入目标渠道合格',
     related_domain: ['Channel', 'Fallback', 'Artifact'],
     confidence: 'CONFIRMED',
   },
@@ -702,7 +811,10 @@ export const PANQU_FAILURE_PATTERNS: Record<string, FailurePattern> = {
  * 仅用于确保存量/未显式声明 requiredPlanCheck 的条目具备标准核验动作，
  * 核心规划器 core-kernel.ts 统一由 exp.requiredPlanCheck 驱动，不再硬编码特判。
  */
-export function resolveDefaultPlanCheck(patternId?: string, topic?: string): Experience['requiredPlanCheck'] | undefined {
+export function resolveDefaultPlanCheck(
+  patternId?: string,
+  topic?: string,
+): Experience['requiredPlanCheck'] | undefined {
   if (patternId === 'FP-004') {
     return {
       stage: 'ORACLE_VERIFY',
@@ -729,17 +841,22 @@ export function resolveDefaultPlanCheck(patternId?: string, topic?: string): Exp
  * 仅从项目唯一长期知识主源 references/knowledge_candidates.json 读取 ACCEPTED/CONFIRMED 事实，
  * 绝不在运行时直接读取 shared-memory/candidates/inbox.md，避免未审核或未经晋升的候选污染运行时。
  */
-export function loadConfirmedExperiences(options: {
-  projectRoot?: string;
-  sharedMemoryDir?: string;
-  extraExperiences?: Experience[];
-} = {}): Experience[] {
+export function loadConfirmedExperiences(
+  options: {
+    projectRoot?: string;
+    sharedMemoryDir?: string;
+    extraExperiences?: Experience[];
+  } = {},
+): Experience[] {
   const experiences: Experience[] = [];
   const seenIds = new Set<string>();
 
   // 1. 读取本地技能库的唯一长期知识主源 (仅取 ACCEPTED/CONFIRMED，跳过 PENDING)
   const root = options.projectRoot || process.cwd();
-  const candidatesJsonPath = path.resolve(root, '.agents/skills/self-evolving-tester/references/knowledge_candidates.json');
+  const candidatesJsonPath = path.resolve(
+    root,
+    '.agents/skills/self-evolving-tester/references/knowledge_candidates.json',
+  );
   if (fs.existsSync(candidatesJsonPath)) {
     try {
       const raw = fs.readFileSync(candidatesJsonPath, 'utf8');
@@ -754,7 +871,10 @@ export function loadConfirmedExperiences(options: {
               }
               const patternMatch = (item.claim || '').match(/\[(FP-\d{3})\]/);
               const modelMatch = (item.claim || '').match(/模型\s*#(\d+)/);
-              const patternId = item.related_pattern_id || item.relatedPatternId || (patternMatch ? patternMatch[1] : (item.id.startsWith('KC-') ? undefined : item.id));
+              const patternId =
+                item.related_pattern_id ||
+                item.relatedPatternId ||
+                (patternMatch ? patternMatch[1] : item.id.startsWith('KC-') ? undefined : item.id);
               const title = item.title || item.claim || item.id;
 
               experiences.push({
@@ -769,7 +889,14 @@ export function loadConfirmedExperiences(options: {
                 related_oracle: item.related_oracle || item.relatedOracle,
                 related_resolution: item.related_resolution || item.relatedResolution,
                 related_pattern_id: patternId,
-                related_model_id: item.related_model_id !== undefined ? Number(item.related_model_id) : (item.relatedModelId !== undefined ? Number(item.relatedModelId) : (modelMatch ? Number(modelMatch[1]) : undefined)),
+                related_model_id:
+                  item.related_model_id !== undefined
+                    ? Number(item.related_model_id)
+                    : item.relatedModelId !== undefined
+                      ? Number(item.relatedModelId)
+                      : modelMatch
+                        ? Number(modelMatch[1])
+                        : undefined,
                 confidence: 'CONFIRMED',
                 status: 'ACCEPTED',
                 sourceCandidateId: item.sourceCandidateId,
@@ -812,7 +939,7 @@ export function matchRelevantExperiences(
     requirement?: string;
     apiEndpoint?: string;
     patternId?: string;
-  }
+  },
 ): Experience[] {
   return experiences.filter((exp) => {
     // 状态安全阀：未确认的 candidate 绝不能匹配
@@ -951,7 +1078,8 @@ export function resolveDomainContext(input: {
     {
       area: 'Oracle - ai_tasks',
       item: 'extra 字段在 HTTP API 的可见性',
-      reason: 'HTTP API 不返回 extra 内部字段，属于已知可见性缺口，必须由只读 DB 验真或标记 MANUAL_DB_EVIDENCE_REQUIRED',
+      reason:
+        'HTTP API 不返回 extra 内部字段，属于已知可见性缺口，必须由只读 DB 验真或标记 MANUAL_DB_EVIDENCE_REQUIRED',
     },
     {
       area: 'Infrastructure',
@@ -1132,7 +1260,10 @@ export function formatMemoryCandidate(input: {
   }
   // 严重级优先级排序：资损 (FP-004, FP-005) > 产物损坏 (FP-002) > 关系违背 (FP-003) > 状态不一致 (FP-001)
   const priorityOrder = ['FP-004', 'FP-005', 'FP-002', 'FP-003', 'FP-001'];
-  const patternId = priorityOrder.find((p) => input.matchedFailurePatterns.includes(p)) || input.matchedFailurePatterns[0] || 'FP-UNKNOWN';
+  const patternId =
+    priorityOrder.find((p) => input.matchedFailurePatterns.includes(p)) ||
+    input.matchedFailurePatterns[0] ||
+    'FP-UNKNOWN';
   const patternObj = Object.values(PANQU_FAILURE_PATTERNS).find((p) => p.id === patternId);
   const patternName = patternObj ? patternObj.name : patternId;
 
@@ -1155,7 +1286,7 @@ export function formatMemoryCandidate(input: {
  */
 export function recordCandidateToSharedMemory(
   candidate: MemoryCandidatePayload,
-  sharedMemoryDir: string = '/Users/mac/agents/shared-memory'
+  sharedMemoryDir: string = '/Users/mac/agents/shared-memory',
 ): { recorded: boolean; reason: string; candidateId?: string } {
   try {
     const inboxPath = path.resolve(sharedMemoryDir, 'candidates', 'inbox.md');
@@ -1168,7 +1299,10 @@ export function recordCandidateToSharedMemory(
     // 内容去重 (Deduplication): 检查是否已包含相同模式与模型
     if (
       currentContent.includes(candidate.topic) ||
-      (candidate.patternId && candidate.modelId && currentContent.includes(`[${candidate.patternId}]`) && currentContent.includes(`模型 #${candidate.modelId}`))
+      (candidate.patternId &&
+        candidate.modelId &&
+        currentContent.includes(`[${candidate.patternId}]`) &&
+        currentContent.includes(`模型 #${candidate.modelId}`))
     ) {
       return { recorded: false, reason: 'DUPLICATE_CANDIDATE_SKIPPED' };
     }
@@ -1305,7 +1439,7 @@ export function buildKnowledgeSyncPayload(options: BuildSyncPayloadOptions): Bui
  */
 export function mergeKnowledgeIntoRemoteJson(
   remoteJsonContent: string,
-  incomingKnowledge: Experience[]
+  incomingKnowledge: Experience[],
 ): MergeKnowledgeResult {
   if (!incomingKnowledge || incomingKnowledge.length === 0) {
     return {
@@ -1358,8 +1492,7 @@ export function mergeKnowledgeIntoRemoteJson(
       const incomingSource = inc.sourceCandidateId;
 
       const isSameContent =
-        existingClaim === incomingClaim &&
-        (!existingSource || !incomingSource || existingSource === incomingSource);
+        existingClaim === incomingClaim && (!existingSource || !incomingSource || existingSource === incomingSource);
 
       if (isSameContent) {
         // 幂等：内容一致，安全跳过重复追加
@@ -1397,10 +1530,7 @@ export function mergeKnowledgeIntoRemoteJson(
       confidence: inc.confidence,
       domain,
       status: inc.status || 'ACCEPTED',
-      derived_from: [
-        `shared-memory/candidates/inbox.md: ${inc.sourceCandidateId}`,
-        `agent: trae`,
-      ],
+      derived_from: [`shared-memory/candidates/inbox.md: ${inc.sourceCandidateId}`, `agent: trae`],
       notes: inc.context,
       sourceCandidateId: inc.sourceCandidateId,
       promotedAt: inc.promotedAt,
@@ -1462,7 +1592,8 @@ export function promoteConfirmedExperiences(options: PromoteOptions = {}): Promo
 
   // 1. 读取并解析 inbox.md
   const inboxContent = fs.readFileSync(inboxPath, 'utf8');
-  const candBlockRegex = /-\s*\[([ xX])\]\s*\*\*\[(CAND-[^\]]+)\]\*\*\s*来源:\s*`?([^`\n]+)`?[^\n]*\n([\s\S]*?)(?=(?:-\s*\[[ xX]\]|$))/g;
+  const candBlockRegex =
+    /-\s*\[([ xX])\]\s*\*\*\[(CAND-[^\]]+)\]\*\*\s*来源:\s*`?([^`\n]+)`?[^\n]*\n([\s\S]*?)(?=(?:-\s*\[[ xX]\]|$))/g;
 
   // 2. 读取现有 knowledge_candidates.json
   let knowledgeList: any[] = [];
@@ -1574,10 +1705,7 @@ export function promoteConfirmedExperiences(options: PromoteOptions = {}): Promo
       confidence: 'CONFIRMED',
       domain,
       status: 'ACCEPTED',
-      derived_from: [
-        `shared-memory/candidates/inbox.md: ${candId}`,
-        `agent: ${agent}`,
-      ],
+      derived_from: [`shared-memory/candidates/inbox.md: ${candId}`, `agent: ${agent}`],
       notes: content,
       sourceCandidateId: candId,
       promotedAt: now.toISOString(),
@@ -1731,16 +1859,18 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
   const reasons: string[] = [];
   const matchedPatterns: string[] = [];
 
-  const apiOk = input.apiResult ? input.apiResult.ok && (input.apiResult.code === 1 || input.apiResult.code === 200) : true;
+  const apiOk = input.apiResult
+    ? input.apiResult.ok && (input.apiResult.code === 1 || input.apiResult.code === 200)
+    : true;
   const taskSuccess = input.taskTerminalStatus === 'SUCCESS';
   const taskFailed = input.taskTerminalStatus === 'FAILED';
-  const taskUnknown = input.taskTerminalStatus === 'UNKNOWN' || input.taskTerminalStatus === 'TIMEOUT';
+  const _taskUnknown = input.taskTerminalStatus === 'UNKNOWN' || input.taskTerminalStatus === 'TIMEOUT';
 
   // 1. 问题 1 识别：API 返回成功，但 Task 实际失败 (Technical Success ≠ Business Success)
   if (apiOk && taskFailed) {
     matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_API_SUCCESS_TASK_FAILED.id);
     reasons.push(
-      `[业务失败 FP-001] API 提交返回成功，但异步 Task #${input.taskId} 终态为 FAILED (Technical Success ≠ Business Success)`
+      `[业务失败 FP-001] API 提交返回成功，但异步 Task #${input.taskId} 终态为 FAILED (Technical Success ≠ Business Success)`,
     );
   }
 
@@ -1749,12 +1879,10 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     if (input.mediaEvidence.status === 'FAIL') {
       matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_TASK_SUCCESS_NO_ASSET.id);
       reasons.push(
-        `[业务失败 FP-002] Task #${input.taskId} 状态标记为成功，但业务媒体产物损坏无法解码: ${input.mediaEvidence.reason || '文件损坏'}`
+        `[业务失败 FP-002] Task #${input.taskId} 状态标记为成功，但业务媒体产物损坏无法解码: ${input.mediaEvidence.reason || '文件损坏'}`,
       );
     } else if (input.mediaEvidence.status === 'UNVERIFIED') {
-      reasons.push(
-        `[产物未验真] Task #${input.taskId} 产物缺少有效物理证据或未证明归属绑定 [UNVERIFIED]`
-      );
+      reasons.push(`[产物未验真] Task #${input.taskId} 产物缺少有效物理证据或未证明归属绑定 [UNVERIFIED]`);
     }
   }
 
@@ -1765,7 +1893,7 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
       relationsValid = false;
       matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_PROJECT_OWNERSHIP_MISMATCH.id);
       reasons.push(
-        `[业务关系违背 FP-003] folderId (${input.paramRelations.folderId}) 不属于当前 projectId (${input.paramRelations.projectId})`
+        `[业务关系违背 FP-003] folderId (${input.paramRelations.folderId}) 不属于当前 projectId (${input.paramRelations.projectId})`,
       );
     }
   }
@@ -1799,13 +1927,13 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     if (input.channelAssertion.hasEvidenceConflict) {
       matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_EVIDENCE_CONFLICT.id);
       reasons.push(
-        `[证据冲突 FP-008] 调用者入参与服务端只读事实存在严重冲突: ${(input.channelAssertion.conflictReasons || []).join('; ')}`
+        `[证据冲突 FP-008] 调用者入参与服务端只读事实存在严重冲突: ${(input.channelAssertion.conflictReasons || []).join('; ')}`,
       );
     }
 
     if (input.channelAssertion.isActualChannelAssertedOnly) {
       reasons.push(
-        `[渠道证据存疑] 实际执行渠道 #${actualId} 仅来自调用者入参断言，无服务端运行时只读证据证实 [PROVISIONAL_EVIDENCE]`
+        `[渠道证据存疑] 实际执行渠道 #${actualId} 仅来自调用者入参断言，无服务端运行时只读证据证实 [PROVISIONAL_EVIDENCE]`,
       );
     }
 
@@ -1823,12 +1951,12 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
         channelMatched = false;
         matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_GATEWAY_CHANNEL_MISMATCH.id);
         reasons.push(
-          `[渠道履约失败 FP-006] 目标渠道 #${targetId} ('${targetName}') 与服务端实际路由渠道 #${actualId} ('${actualName}') 不匹配 [CHANNEL_MISMATCH]`
+          `[渠道履约失败 FP-006] 目标渠道 #${targetId} ('${targetName}') 与服务端实际路由渠道 #${actualId} ('${actualName}') 不匹配 [CHANNEL_MISMATCH]`,
         );
       }
     } else {
       reasons.push(
-        `[渠道未验真] 缺少服务端实际执行渠道证据，无法证明任务由目标渠道 #${targetId} ('${targetName}') 履约 [UNVERIFIED]`
+        `[渠道未验真] 缺少服务端实际执行渠道证据，无法证明任务由目标渠道 #${targetId} ('${targetName}') 履约 [UNVERIFIED]`,
       );
     }
 
@@ -1837,7 +1965,7 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
         fallbackAvoided = false;
         matchedPatterns.push(PANQU_FAILURE_PATTERNS.PATTERN_FALLBACK_ARTIFACT_NOT_ACCEPTED.id);
         reasons.push(
-          `[渠道履约失败 FP-007] 目标渠道未产出成片，成片由兜底通道 (${fallback}) 生成，不得误判为目标渠道合格 [FALLBACK_ARTIFACT_NOT_ACCEPTED]`
+          `[渠道履约失败 FP-007] 目标渠道未产出成片，成片由兜底通道 (${fallback}) 生成，不得误判为目标渠道合格 [FALLBACK_ARTIFACT_NOT_ACCEPTED]`,
         );
       } else if (!input.channelAssertion.isActualChannelAssertedOnly) {
         fallbackAvoided = true;
@@ -1848,8 +1976,8 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
       input.channelAssertion.hasEvidenceConflict || channelMatched === false || fallbackAvoided === false
         ? 'FAIL'
         : channelMatched === true && fallbackAvoided === true
-        ? 'PASS'
-        : 'UNVERIFIED';
+          ? 'PASS'
+          : 'UNVERIFIED';
 
     channelDetail = {
       channelMatched,
@@ -1861,9 +1989,18 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
       fallbackChannel: input.channelAssertion.fallbackChannel,
       retryProvider: input.channelAssertion.retryProvider,
       status: channelStatus,
-      reason: channelStatus === 'FAIL'
-        ? (input.channelAssertion.hasEvidenceConflict ? '证据冲突 (EVIDENCE_CONFLICT)' : (channelMatched === false ? `渠道不匹配 (#${targetId} vs #${actualId})` : `兜底产物 (${fallback})`))
-        : channelStatus === 'UNVERIFIED' ? (input.channelAssertion.isActualChannelAssertedOnly ? '渠道仅来自人工断言' : '缺少执行渠道数据') : '渠道一致且无兜底',
+      reason:
+        channelStatus === 'FAIL'
+          ? input.channelAssertion.hasEvidenceConflict
+            ? '证据冲突 (EVIDENCE_CONFLICT)'
+            : channelMatched === false
+              ? `渠道不匹配 (#${targetId} vs #${actualId})`
+              : `兜底产物 (${fallback})`
+          : channelStatus === 'UNVERIFIED'
+            ? input.channelAssertion.isActualChannelAssertedOnly
+              ? '渠道仅来自人工断言'
+              : '缺少执行渠道数据'
+            : '渠道一致且无兜底',
     };
   }
 
@@ -1927,7 +2064,9 @@ export function evaluateBusinessVerification(input: BusinessVerificationInput): 
     credibility: input.channelAssertion?.hasEvidenceConflict
       ? 'SUSPICIOUS'
       : input.channelAssertion?.isActualChannelAssertedOnly
-      ? 'PROVISIONAL'
-      : (status === 'PASS' || status === 'FAIL' ? 'CONFIRMED' : 'UNKNOWN'),
+        ? 'PROVISIONAL'
+        : status === 'PASS' || status === 'FAIL'
+          ? 'CONFIRMED'
+          : 'UNKNOWN',
   };
 }

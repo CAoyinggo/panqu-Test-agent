@@ -86,19 +86,9 @@ export interface CanonicalTestSpec {
 // ============================================================================
 
 export type EvidenceSourceType =
-  | 'SERVER_API'
-  | 'BROWSER'
-  | 'MEDIA_BINARY'
-  | 'BILLING_LEDGER'
-  | 'AI_OBSERVATION'
-  | 'USER_ASSERTION'
-  | 'FIXTURE';
+  'SERVER_API' | 'BROWSER' | 'MEDIA_BINARY' | 'BILLING_LEDGER' | 'AI_OBSERVATION' | 'USER_ASSERTION' | 'FIXTURE';
 
-export type EvidenceCollectionStatus =
-  | 'SUCCESS'
-  | 'MISSING'
-  | 'BLOCKED'
-  | 'COLLECTION_FAILED';
+export type EvidenceCollectionStatus = 'SUCCESS' | 'MISSING' | 'BLOCKED' | 'COLLECTION_FAILED';
 
 export interface EvidenceError {
   code: string;
@@ -106,12 +96,7 @@ export interface EvidenceError {
   details?: unknown;
 }
 
-export const SUPPORTED_OBSERVATION_STATUSES = [
-  'PASS',
-  'FAIL',
-  'UNVERIFIED',
-  'NOT_APPLICABLE',
-] as const;
+export const SUPPORTED_OBSERVATION_STATUSES = ['PASS', 'FAIL', 'UNVERIFIED', 'NOT_APPLICABLE'] as const;
 
 export type EvidenceObservationStatus = (typeof SUPPORTED_OBSERVATION_STATUSES)[number];
 
@@ -160,7 +145,7 @@ const SENSITIVE_KEY_PATTERNS = [
   /session_secret/i,
   /secret_key/i,
   /access_key/i,
-  /bearer\s+[a-zA-Z0-9_\-\.]+/i,
+  /bearer\s+[a-zA-Z0-9_.-]+/i,
   /private_key/i,
   /credential/i,
 ];
@@ -229,8 +214,15 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
     if (t.modelId !== undefined && (!Number.isInteger(t.modelId) || (t.modelId as number) < 0)) {
       errors.push({ field: 'target.modelId', code: 'INVALID_MODEL_ID', message: 'modelId 必须为非负整数' });
     }
-    if (t.expectedChannelId !== undefined && (!Number.isInteger(t.expectedChannelId) || (t.expectedChannelId as number) < 0)) {
-      errors.push({ field: 'target.expectedChannelId', code: 'INVALID_CHANNEL_ID', message: 'expectedChannelId 必须为非负整数' });
+    if (
+      t.expectedChannelId !== undefined &&
+      (!Number.isInteger(t.expectedChannelId) || (t.expectedChannelId as number) < 0)
+    ) {
+      errors.push({
+        field: 'target.expectedChannelId',
+        code: 'INVALID_CHANNEL_ID',
+        message: 'expectedChannelId 必须为非负整数',
+      });
     }
     if (t.channelId !== undefined && (!Number.isInteger(t.channelId) || (t.channelId as number) < 0)) {
       errors.push({ field: 'target.channelId', code: 'INVALID_CHANNEL_ID', message: 'channelId 必须为非负整数' });
@@ -247,19 +239,35 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
 
   // 5. deterministicAssertions 校验
   if (!Array.isArray(s.deterministicAssertions)) {
-    errors.push({ field: 'deterministicAssertions', code: 'INVALID_ASSERTIONS', message: 'deterministicAssertions 必须为数组' });
+    errors.push({
+      field: 'deterministicAssertions',
+      code: 'INVALID_ASSERTIONS',
+      message: 'deterministicAssertions 必须为数组',
+    });
   } else {
     s.deterministicAssertions.forEach((assertion, idx) => {
       if (!assertion || typeof assertion !== 'object') {
-        errors.push({ field: `deterministicAssertions[${idx}]`, code: 'INVALID_ASSERTION', message: '断言项必须为对象' });
+        errors.push({
+          field: `deterministicAssertions[${idx}]`,
+          code: 'INVALID_ASSERTION',
+          message: '断言项必须为对象',
+        });
         return;
       }
       const a = assertion as Record<string, unknown>;
       if (typeof a.field !== 'string' || a.field.trim() === '') {
-        errors.push({ field: `deterministicAssertions[${idx}].field`, code: 'REQUIRED', message: '断言 field 不能为空' });
+        errors.push({
+          field: `deterministicAssertions[${idx}].field`,
+          code: 'REQUIRED',
+          message: '断言 field 不能为空',
+        });
       }
       if (typeof a.operator !== 'string' || a.operator.trim() === '') {
-        errors.push({ field: `deterministicAssertions[${idx}].operator`, code: 'REQUIRED', message: '断言 operator 不能为空' });
+        errors.push({
+          field: `deterministicAssertions[${idx}].operator`,
+          code: 'REQUIRED',
+          message: '断言 operator 不能为空',
+        });
       } else if (!SUPPORTED_ASSERTION_OPERATORS.includes(a.operator as AssertionOperator)) {
         errors.push({
           field: `deterministicAssertions[${idx}].operator`,
@@ -268,13 +276,25 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
         });
       }
       if (a.critical !== undefined && typeof a.critical !== 'boolean') {
-        errors.push({ field: `deterministicAssertions[${idx}].critical`, code: 'INVALID_CRITICAL', message: 'critical 必须为布尔值' });
+        errors.push({
+          field: `deterministicAssertions[${idx}].critical`,
+          code: 'INVALID_CRITICAL',
+          message: 'critical 必须为布尔值',
+        });
       }
       if (a.evidenceKey !== undefined && (typeof a.evidenceKey !== 'string' || a.evidenceKey.trim() === '')) {
-        errors.push({ field: `deterministicAssertions[${idx}].evidenceKey`, code: 'INVALID_EVIDENCE_KEY', message: 'evidenceKey 必须为非空字符串' });
+        errors.push({
+          field: `deterministicAssertions[${idx}].evidenceKey`,
+          code: 'INVALID_EVIDENCE_KEY',
+          message: 'evidenceKey 必须为非空字符串',
+        });
       }
       if (a.actualField !== undefined && (typeof a.actualField !== 'string' || a.actualField.trim() === '')) {
-        errors.push({ field: `deterministicAssertions[${idx}].actualField`, code: 'INVALID_ACTUAL_FIELD', message: 'actualField 必须为非空字符串' });
+        errors.push({
+          field: `deterministicAssertions[${idx}].actualField`,
+          code: 'INVALID_ACTUAL_FIELD',
+          message: 'actualField 必须为非空字符串',
+        });
       }
     });
   }
@@ -294,10 +314,18 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
           errors.push({ field: `aiAssistedSteps[${idx}].stepId`, code: 'REQUIRED', message: 'stepId 不能为空' });
         }
         if (typeof st.instruction !== 'string' || st.instruction.trim() === '') {
-          errors.push({ field: `aiAssistedSteps[${idx}].instruction`, code: 'REQUIRED', message: 'instruction 不能为空' });
+          errors.push({
+            field: `aiAssistedSteps[${idx}].instruction`,
+            code: 'REQUIRED',
+            message: 'instruction 不能为空',
+          });
         }
         if (typeof st.expectedCriteria !== 'string' || st.expectedCriteria.trim() === '') {
-          errors.push({ field: `aiAssistedSteps[${idx}].expectedCriteria`, code: 'REQUIRED', message: 'expectedCriteria 不能为空' });
+          errors.push({
+            field: `aiAssistedSteps[${idx}].expectedCriteria`,
+            code: 'REQUIRED',
+            message: 'expectedCriteria 不能为空',
+          });
         }
       });
     }
@@ -319,10 +347,21 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
   } else {
     const cl = s.costLimit as Record<string, unknown>;
     if (typeof cl.maxCostPoints !== 'number' || isNaN(cl.maxCostPoints) || cl.maxCostPoints < 0) {
-      errors.push({ field: 'costLimit.maxCostPoints', code: 'INVALID_COST_POINTS', message: 'maxCostPoints 必须为大于等于 0 的有效数字' });
+      errors.push({
+        field: 'costLimit.maxCostPoints',
+        code: 'INVALID_COST_POINTS',
+        message: 'maxCostPoints 必须为大于等于 0 的有效数字',
+      });
     }
-    if (cl.maxCostCny !== undefined && (typeof cl.maxCostCny !== 'number' || isNaN(cl.maxCostCny) || cl.maxCostCny < 0)) {
-      errors.push({ field: 'costLimit.maxCostCny', code: 'INVALID_COST_CNY', message: 'maxCostCny 必须为大于等于 0 的有效数字' });
+    if (
+      cl.maxCostCny !== undefined &&
+      (typeof cl.maxCostCny !== 'number' || isNaN(cl.maxCostCny) || cl.maxCostCny < 0)
+    ) {
+      errors.push({
+        field: 'costLimit.maxCostCny',
+        code: 'INVALID_COST_CNY',
+        message: 'maxCostCny 必须为大于等于 0 的有效数字',
+      });
     }
     // 规则一致性：READ_ONLY 策略下不允许设置大于 0 的费用上限
     if (s.sideEffectPolicy === 'READ_ONLY' && typeof cl.maxCostPoints === 'number' && cl.maxCostPoints > 0) {
@@ -336,9 +375,17 @@ export function validateCanonicalTestSpec(spec: unknown): ProtocolValidationResu
 
   // 9. requiredEvidence 校验
   if (!Array.isArray(s.requiredEvidence)) {
-    errors.push({ field: 'requiredEvidence', code: 'INVALID_REQUIRED_EVIDENCE', message: 'requiredEvidence 必须为字符串数组' });
+    errors.push({
+      field: 'requiredEvidence',
+      code: 'INVALID_REQUIRED_EVIDENCE',
+      message: 'requiredEvidence 必须为字符串数组',
+    });
   } else if (s.requiredEvidence.some((e) => typeof e !== 'string' || e.trim() === '')) {
-    errors.push({ field: 'requiredEvidence', code: 'EMPTY_EVIDENCE_KEY', message: 'requiredEvidence 中不得包含空字符串项' });
+    errors.push({
+      field: 'requiredEvidence',
+      code: 'EMPTY_EVIDENCE_KEY',
+      message: 'requiredEvidence 中不得包含空字符串项',
+    });
   }
 
   // 10. 专有工具字段探测 (确保协议与特定框架解耦)
@@ -447,7 +494,11 @@ export function validateEvidenceEnvelope(envelope: unknown): ProtocolValidationR
 
   // 3. capturedAt ISO-8601 时间校验
   if (typeof e.capturedAt !== 'string' || e.capturedAt.trim() === '' || isNaN(Date.parse(e.capturedAt))) {
-    errors.push({ field: 'capturedAt', code: 'INVALID_TIMESTAMP', message: 'capturedAt 必须为合法的 ISO-8601 时间戳字符串' });
+    errors.push({
+      field: 'capturedAt',
+      code: 'INVALID_TIMESTAMP',
+      message: 'capturedAt 必须为合法的 ISO-8601 时间戳字符串',
+    });
   }
 
   // 4. 环境与主体
@@ -457,13 +508,21 @@ export function validateEvidenceEnvelope(envelope: unknown): ProtocolValidationR
   if (typeof e.subjectType !== 'string' || e.subjectType.trim() === '') {
     errors.push({ field: 'subjectType', code: 'REQUIRED', message: 'subjectType 不能为空' });
   }
-  if (e.subjectId === undefined || e.subjectId === null || (typeof e.subjectId !== 'string' && typeof e.subjectId !== 'number')) {
+  if (
+    e.subjectId === undefined ||
+    e.subjectId === null ||
+    (typeof e.subjectId !== 'string' && typeof e.subjectId !== 'number')
+  ) {
     errors.push({ field: 'subjectId', code: 'REQUIRED', message: 'subjectId 必须为字符串或数字' });
   }
 
   // 5. normalizedFields 校验
   if (!e.normalizedFields || typeof e.normalizedFields !== 'object' || Array.isArray(e.normalizedFields)) {
-    errors.push({ field: 'normalizedFields', code: 'INVALID_NORMALIZED_FIELDS', message: 'normalizedFields 必须为对象' });
+    errors.push({
+      field: 'normalizedFields',
+      code: 'INVALID_NORMALIZED_FIELDS',
+      message: 'normalizedFields 必须为对象',
+    });
   }
 
   // 6. provenance 来源可信度与越权防伪校验
@@ -472,7 +531,11 @@ export function validateEvidenceEnvelope(envelope: unknown): ProtocolValidationR
   } else {
     const provUpper = e.provenance.toUpperCase();
     // 来源不得由预期反推
-    if (provUpper.includes('EXPECTATION') || provUpper.includes('DEVTEST_EXPECTATION') || provUpper.includes('EXPECTED_VALUE')) {
+    if (
+      provUpper.includes('EXPECTATION') ||
+      provUpper.includes('DEVTEST_EXPECTATION') ||
+      provUpper.includes('EXPECTED_VALUE')
+    ) {
       errors.push({
         field: 'provenance',
         code: 'PROVENANCE_DERIVED_FROM_EXPECTATION',
@@ -620,7 +683,7 @@ export interface RequiredEvidenceEvaluationResult {
  */
 export function evaluateRequiredEvidence(
   spec: CanonicalTestSpec,
-  envelopes: CanonicalEvidenceEnvelope[]
+  envelopes: CanonicalEvidenceEnvelope[],
 ): RequiredEvidenceEvaluationResult {
   const missingEvidenceKeys: string[] = [];
   const failedEvidenceKeys: string[] = [];
@@ -648,10 +711,10 @@ export function evaluateRequiredEvidence(
     // 2. REAL 模式来源隔离检查：FIXTURE 或 USER_ASSERTION 来源不能满足 REAL 模式下的必需证据
     if (spec.executionMode === 'REAL') {
       const untrustedEnv = matchingEnvs.find(
-        (env) => env.sourceType === 'FIXTURE' || env.sourceType === 'USER_ASSERTION'
+        (env) => env.sourceType === 'FIXTURE' || env.sourceType === 'USER_ASSERTION',
       );
       const trustedEnvs = matchingEnvs.filter(
-        (env) => env.sourceType !== 'FIXTURE' && env.sourceType !== 'USER_ASSERTION'
+        (env) => env.sourceType !== 'FIXTURE' && env.sourceType !== 'USER_ASSERTION',
       );
       if (trustedEnvs.length === 0) {
         missingEvidenceKeys.push(key);
@@ -714,7 +777,9 @@ export function evaluateRequiredEvidence(
         envelope: primaryEnv,
         reason: '观察结果为 PASS 且采集成功',
       });
-    } else if (successfulEnvs.every((e) => e.observationStatus === 'UNVERIFIED' || e.observationStatus === 'NOT_APPLICABLE')) {
+    } else if (
+      successfulEnvs.every((e) => e.observationStatus === 'UNVERIFIED' || e.observationStatus === 'NOT_APPLICABLE')
+    ) {
       unverifiedEvidenceKeys.push(key);
       details.push({
         key,
@@ -734,9 +799,7 @@ export function evaluateRequiredEvidence(
   }
 
   const satisfied =
-    missingEvidenceKeys.length === 0 &&
-    failedEvidenceKeys.length === 0 &&
-    unverifiedEvidenceKeys.length === 0;
+    missingEvidenceKeys.length === 0 && failedEvidenceKeys.length === 0 && unverifiedEvidenceKeys.length === 0;
 
   return {
     satisfied,

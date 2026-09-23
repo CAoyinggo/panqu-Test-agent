@@ -9,7 +9,7 @@
  * 5. 验证 Playwright / Midscene DEFERRED_EXTERNAL_RUNTIME 声明与无外部运行时阻断。
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -17,13 +17,8 @@ import {
   getCapabilityAudit,
   CAPABILITY_MATURITY_LEVELS,
   type AbsorbedCapabilityAudit,
-  type CapabilityMaturityLevel,
 } from '../../../src/devtest/capability-maturity.js';
-import {
-  NdjsonResultSink,
-  mapVerdictToExportRecord,
-  type ExportableVerdictRecord,
-} from '../../../src/devtest/result-sink.js';
+import { NdjsonResultSink, mapVerdictToExportRecord } from '../../../src/devtest/result-sink.js';
 import {
   analyzeImpact,
   resolveRequirementTraceForSpec,
@@ -41,7 +36,6 @@ import {
   type DeterministicProducerContext,
 } from '../../../src/devtest/ui-adapters.js';
 import type { CanonicalVerdictResult } from '../../../src/devtest/canonical-verdict-engine.js';
-import type { CanonicalTestSpec } from '../../../src/devtest/canonical-protocol.js';
 
 describe('Panqu AI DevTest — 五项能力真实成熟度与能力做实测试', () => {
   // ==========================================================================

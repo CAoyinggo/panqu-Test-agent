@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 自进化测试内核核心数据契约
- * 
+ *
  * 严格基于运行时事实与业务不变量定义，禁止虚构与硬编码假象。
  */
 
@@ -65,19 +65,13 @@ export type PanquActionType =
  * 动作执行能力状态标定
  */
 export type ActionExecutionSupport =
-  | 'REAL_EXECUTABLE'
-  | 'REAL_SETUP'
-  | 'CODEBASE_UNSUPPORTED'
-  | 'UNVERIFIED_UNSUPPORTED';
+  'REAL_EXECUTABLE' | 'REAL_SETUP' | 'CODEBASE_UNSUPPORTED' | 'UNVERIFIED_UNSUPPORTED';
 
 /**
  * 变异候选执行就绪度
  */
 export type MutationExecutionReadiness =
-  | 'EXECUTABLE'
-  | 'NEGATIVE_PROBE'
-  | 'STRUCTURAL_ONLY'
-  | 'BLOCKED_BY_UNSUPPORTED_ACTION';
+  'EXECUTABLE' | 'NEGATIVE_PROBE' | 'STRUCTURAL_ONLY' | 'BLOCKED_BY_UNSUPPORTED_ACTION';
 
 /**
  * 动作空间规范

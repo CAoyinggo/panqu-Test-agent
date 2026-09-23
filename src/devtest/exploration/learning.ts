@@ -1,6 +1,6 @@
 /**
  * Panqu AI DevTest - 探索自进化经验闭环 (Learning & Experience Feedback)
- * 
+ *
  * 核心设计原则：
  * 1. 经验 100% 提取自物理执行与验证证据 (executeResult, verifyResult, rejectionEvidence, StateGraph transition)；
  * 2. 严禁使用 expectedObservation 或 expectedRisk 作为经验输入；
@@ -9,10 +9,7 @@
  * 5. 重点捕获“已确诊缺陷”与“高价值负向探测/凭证缺口 (Evidence Gap)”。
  */
 
-import {
-  type LearningExperience,
-  type StateTransitionRecord,
-} from './contracts.js';
+import { type LearningExperience } from './contracts.js';
 import { type PanquStateGraph } from './state-graph.js';
 import { type MutationRunResult } from './runner.js';
 
@@ -26,7 +23,7 @@ export interface ExtractLearningOptions {
  */
 export function extractLearningExperiences(
   runResult: MutationRunResult,
-  options: ExtractLearningOptions = {}
+  options: ExtractLearningOptions = {},
 ): LearningExperience[] {
   // 1. 阻断未执行或未证实的动作 (绝对禁止从未执行的候选中凭空捏造经验)
   if (
@@ -49,23 +46,16 @@ export function extractLearningExperiences(
 
   // 3. 场景 A: 真实已确诊缺陷 (Confirmed Defect / Anomaly)
   const isFailedVerification =
-    runResult.verifyResult &&
-    (!runResult.verifyResult.passed || runResult.verifyResult.verdict === 'FAIL');
+    runResult.verifyResult && (!runResult.verifyResult.passed || runResult.verifyResult.verdict === 'FAIL');
   const hasStateGraphAnomalies =
-    runResult.observedTransition &&
-    runResult.observedTransition.anomaliesDetected.length > 0;
+    runResult.observedTransition && runResult.observedTransition.anomaliesDetected.length > 0;
   const matchedPatterns =
     runResult.verifyResult?.businessValidation?.matchedFailurePatterns ||
-    (runResult.verifyResult?.memoryCandidate?.patternId
-      ? [runResult.verifyResult.memoryCandidate.patternId]
-      : []);
+    (runResult.verifyResult?.memoryCandidate?.patternId ? [runResult.verifyResult.memoryCandidate.patternId] : []);
   const hasFailurePatterns = matchedPatterns.length > 0;
 
   if (isFailedVerification || hasStateGraphAnomalies || hasFailurePatterns) {
-    const rawAnomaly =
-      runResult.observedTransition?.anomaliesDetected[0] ||
-      matchedPatterns[0] ||
-      'INVARIANT_FAILED';
+    const rawAnomaly = runResult.observedTransition?.anomaliesDetected[0] || matchedPatterns[0] || 'INVARIANT_FAILED';
 
     const reasons = runResult.verifyResult?.reasons || [];
     const invariantsList: string[] = [];
@@ -75,8 +65,7 @@ export function extractLearningExperiences(
       invariantsList.push(...runResult.observedTransition.invariantsChecked);
     }
     // 从 businessValidation.failedInvariants 提取
-    const bvFailedInvariants = (runResult.verifyResult?.businessValidation as any)
-      ?.failedInvariants;
+    const bvFailedInvariants = (runResult.verifyResult?.businessValidation as any)?.failedInvariants;
     if (Array.isArray(bvFailedInvariants)) {
       invariantsList.push(...bvFailedInvariants);
     }
@@ -88,22 +77,14 @@ export function extractLearningExperiences(
       if (inv.refundIdempotency === false) invariantsList.push('refundIdempotency');
     }
     // 语义推导：防重扣 -> antiDoubleBilling, 媒体损坏 -> mediaFormatValid
-    if (
-      reasons.some(
-        (r) => r.includes('防重扣') || r.includes('FP-004') || r.includes('antiDoubleBilling')
-      )
-    ) {
+    if (reasons.some((r) => r.includes('防重扣') || r.includes('FP-004') || r.includes('antiDoubleBilling'))) {
       invariantsList.push('antiDoubleBilling');
     }
-    if (
-      reasons.some((r) => r.includes('媒体') || r.includes('FP-002') || r.includes('media'))
-    ) {
+    if (reasons.some((r) => r.includes('媒体') || r.includes('FP-002') || r.includes('media'))) {
       invariantsList.push('mediaFormatValid');
     }
 
-    const failedInvariants = Array.from(
-      new Set([...invariantsList, ...reasons, rawAnomaly])
-    ).filter(Boolean);
+    const failedInvariants = Array.from(new Set([...invariantsList, ...reasons, rawAnomaly])).filter(Boolean);
 
     // 确保 discoveredAnomaly 包含 actionType 以便 Policy 直接检索
     const discoveredAnomaly = `${actionType}_${rawAnomaly}`;
@@ -112,12 +93,7 @@ export function extractLearningExperiences(
       experienceId: `exp_defect_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       discoveredTransitionId: transitionId,
       discoveredAnomaly,
-      causalChain: [
-        fromKey,
-        actionType,
-        toKey,
-        ...(reasons.length > 0 ? reasons : [rawAnomaly]),
-      ],
+      causalChain: [fromKey, actionType, toKey, ...(reasons.length > 0 ? reasons : [rawAnomaly])],
       policyDirectives: {
         boostMultiplier: 3.0, // 确诊缺陷赋予强加成
         mandatoryInvariants: failedInvariants.length > 0 ? failedInvariants : ['netChargeZero'],
@@ -137,19 +113,13 @@ export function extractLearningExperiences(
       experienceId: `exp_unverified_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       discoveredTransitionId: transitionId,
       discoveredAnomaly: `${actionType}_EVIDENCE_INSUFFICIENT_UNVERIFIED`,
-      causalChain: [
-        fromKey,
-        actionType,
-        toKey,
-        'PHYSICAL_EVIDENCE_INCOMPLETE',
-        ...reasons,
-      ],
+      causalChain: [fromKey, actionType, toKey, 'PHYSICAL_EVIDENCE_INCOMPLETE', ...reasons],
       policyDirectives: {
         boostMultiplier: 2.0,
         mandatoryInvariants: ['physicalEvidenceCompleteness'],
         priorityStatesToExplore: [fromKey],
       },
-      confidence: 0.80, // 凭证不足，信心值 < 0.9
+      confidence: 0.8, // 凭证不足，信心值 < 0.9
       createdAt: Date.now(),
     });
 
@@ -219,8 +189,7 @@ export class PanquLearningStore {
       (e) =>
         e.discoveredAnomaly === experience.discoveredAnomaly &&
         (e.discoveredTransitionId === experience.discoveredTransitionId ||
-          e.policyDirectives.priorityStatesToExplore[0] ===
-            experience.policyDirectives.priorityStatesToExplore[0])
+          e.policyDirectives.priorityStatesToExplore[0] === experience.policyDirectives.priorityStatesToExplore[0]),
     );
     if (existingIndex >= 0) {
       const existing = list[existingIndex];
@@ -228,7 +197,7 @@ export class PanquLearningStore {
       existing.confidence = Math.max(existing.confidence, experience.confidence);
       existing.policyDirectives.boostMultiplier = Math.max(
         existing.policyDirectives.boostMultiplier,
-        experience.policyDirectives.boostMultiplier
+        experience.policyDirectives.boostMultiplier,
       );
       return;
     }
@@ -266,12 +235,11 @@ export class PanquLearningStore {
 export function feedResultIntoLearning(
   runResult: MutationRunResult,
   store: PanquLearningStore,
-  options: ExtractLearningOptions = {}
+  options: ExtractLearningOptions = {},
 ): LearningExperience[] {
   const experiences = extractLearningExperiences(runResult, options);
   if (experiences.length > 0) {
-    const targetMode =
-      options.allowMockLearning && runResult.mode === 'mock' ? 'mock' : runResult.mode;
+    const targetMode = options.allowMockLearning && runResult.mode === 'mock' ? 'mock' : runResult.mode;
     store.recordMany(experiences, targetMode);
   }
   return experiences;

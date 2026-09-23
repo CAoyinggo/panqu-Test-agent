@@ -417,7 +417,13 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
     });
 
     it('回归阻断 1：变更后积分发生非预期漂移，准确报警并阻断 PASS', async () => {
-      const planRes = await plan({ modelId: 84, mediaType: 'video', changeType: 'diversion_change', duration: 5, resolution: '720p' });
+      const planRes = await plan({
+        modelId: 84,
+        mediaType: 'video',
+        changeType: 'diversion_change',
+        duration: 5,
+        resolution: '720p',
+      });
       const mp4Buffer = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 5 });
 
       const verifyDrift = await verify({
@@ -440,7 +446,13 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
     });
 
     it('回归阻断 2：变更后产物损坏不可解码，准确报警并阻断 PASS', async () => {
-      const planRes = await plan({ modelId: 84, mediaType: 'video', changeType: 'diversion_change', duration: 5, resolution: '720p' });
+      const planRes = await plan({
+        modelId: 84,
+        mediaType: 'video',
+        changeType: 'diversion_change',
+        duration: 5,
+        resolution: '720p',
+      });
       const corruptBuffer = Buffer.from('NOT_A_VALID_MP4_HEADER_GARBAGE');
 
       const verifyCorrupt = await verify({
@@ -462,7 +474,13 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
     });
 
     it('回归阻断 3：模型别名发生非预期漂移导致请求未命中既有业务，准确报警并阻断 PASS', async () => {
-      const planRes = await plan({ modelId: 84, mediaType: 'video', changeType: 'diversion_change', duration: 5, resolution: '720p' });
+      const planRes = await plan({
+        modelId: 84,
+        mediaType: 'video',
+        changeType: 'diversion_change',
+        duration: 5,
+        resolution: '720p',
+      });
       const mp4Buffer = createSyntheticValidMp4({ width: 1280, height: 720, durationSeconds: 5 });
       const mutatedContract = discoverModelContract(84, 'video', { alias: 'wan3.0-mutated-alias' });
 
@@ -649,7 +667,7 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
     });
 
     it('验收状态 4: UNVERIFIED - 区分“证据不足”与“没有问题”：未提供 DB extra 证据时不可判定 ACCEPTED', async () => {
-      const planRes = await plan({
+      const _planRes = await plan({
         modelId: 201,
         mediaType: 'image',
         changeType: 'diversion_change',
@@ -676,7 +694,9 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
       expect(verifyRes.passed).toBe(false);
       expect(verifyRes.acceptance).toBe('UNVERIFIED');
       expect(verifyRes.evidenceCompleteness.isComplete).toBe(false);
-      expect(verifyRes.evidenceCompleteness.missingEvidence.some((e) => e.includes('MANUAL_DB_EVIDENCE_REQUIRED'))).toBe(true);
+      expect(
+        verifyRes.evidenceCompleteness.missingEvidence.some((e) => e.includes('MANUAL_DB_EVIDENCE_REQUIRED')),
+      ).toBe(true);
       expect(verifyRes.expectedVsActual?.evidenceStatus.extraSnapshot).toBe('MANUAL_DB_EVIDENCE_REQUIRED');
       expect(verifyRes.acceptanceReport.manualEvidenceRequired.some((m) => m.includes('extra.diversion'))).toBe(true);
       expect(verifyRes.acceptanceReport.summaryText).toContain('UNVERIFIED');
@@ -709,7 +729,9 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
       expect(verifyRes.acceptance).toBe('UNVERIFIED');
       expect(verifyRes.evidenceCompleteness.isComplete).toBe(false);
       expect(verifyRes.evidenceCompleteness.missingEvidence.some((e) => e.includes('gatewayChannel'))).toBe(true);
-      expect(verifyRes.expectedVsActual?.diffs.some((d) => d.field === 'gatewayChannel' && d.status === 'MANUAL_REQUIRED')).toBe(true);
+      expect(
+        verifyRes.expectedVsActual?.diffs.some((d) => d.field === 'gatewayChannel' && d.status === 'MANUAL_REQUIRED'),
+      ).toBe(true);
     });
 
     it('回归比对三态语义：基线比对在证据不全时输出 regressionStatus: UNKNOWN，禁止假定 CLEAN', async () => {
@@ -831,10 +853,16 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         expect(contract.pricing.points).toBe(5);
 
         // 验证测试用例 rationale
-        expect(planRes.testPlan?.tests.every((t) => t.rationale && t.rationale.whyIncluded && t.rationale.riskAddressed)).toBe(true);
+        expect(
+          planRes.testPlan?.tests.every((t) => t.rationale && t.rationale.whyIncluded && t.rationale.riskAddressed),
+        ).toBe(true);
 
         // 验证裁剪测试用例：直接接入模型跳过网关候选调度
-        expect(planRes.testPlan?.skippedTests?.some((s) => s.rule.includes('免网关调度') || s.rule === 'DIRECT_NO_GATEWAY_ROUTING')).toBe(true);
+        expect(
+          planRes.testPlan?.skippedTests?.some(
+            (s) => s.rule.includes('免网关调度') || s.rule === 'DIRECT_NO_GATEWAY_ROUTING',
+          ),
+        ).toBe(true);
 
         // 验证 testerActionSummary
         expect(planRes.testerActionSummary).toBeDefined();
@@ -861,7 +889,11 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         expect(testPurposes.some((p) => p.includes('产物') || p.includes('MP4') || p.includes('媒体'))).toBe(true);
 
         // 人工确认汇总包含 MP4 Box / OSS
-        expect(planRes.testerActionSummary?.manualRequiredSummary.some((m) => m.includes('MP4') || m.includes('moov') || m.includes('OSS'))).toBe(true);
+        expect(
+          planRes.testerActionSummary?.manualRequiredSummary.some(
+            (m) => m.includes('MP4') || m.includes('moov') || m.includes('OSS'),
+          ),
+        ).toBe(true);
       });
 
       it('场景 3: 已有图片模型分流 (#201 NewAPI) — 保留网关候选并对全量模型免组织隔离', async () => {
@@ -881,7 +913,11 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         expect(testPurposes.some((p) => p.includes('网关') || p.includes('上游') || p.includes('渠道候选'))).toBe(true);
 
         // 全量模型 (is_newapi_global) 免组织路由组隔离
-        expect(planRes.testPlan?.skippedTests?.some((s) => s.rule.includes('全量模型免组织隔离') || s.rule === 'GLOBAL_MODEL_NO_GROUP_ISOLATION')).toBe(true);
+        expect(
+          planRes.testPlan?.skippedTests?.some(
+            (s) => s.rule.includes('全量模型免组织隔离') || s.rule === 'GLOBAL_MODEL_NO_GROUP_ISOLATION',
+          ),
+        ).toBe(true);
       });
 
       it('场景 4: 已有视频模型分流 (#84 NewAPI) — 全链路回归、网关候选与两级分流', async () => {
@@ -904,7 +940,11 @@ describe('DevTest 动态计划生成与事实探知 (Dynamic Plan & Fact Discove
         expect(planRes.testPlan?.regressionExpectations?.length).toBeGreaterThan(0);
 
         // 包含查库证据模板
-        expect(planRes.testerActionSummary?.manualRequiredSummary.some((m) => m.includes('SELECT') || m.includes('newapi_diversion_log'))).toBe(true);
+        expect(
+          planRes.testerActionSummary?.manualRequiredSummary.some(
+            (m) => m.includes('SELECT') || m.includes('newapi_diversion_log'),
+          ),
+        ).toBe(true);
       });
     });
 

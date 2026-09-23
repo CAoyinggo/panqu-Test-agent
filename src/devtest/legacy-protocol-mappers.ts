@@ -25,20 +25,11 @@ import type {
   DeterministicAssertion,
 } from './canonical-protocol.js';
 import type { ExecutionResult } from './execution-ports.js';
-import type {
-  PlanKernelResult,
-  ProbeKernelResult,
-  ExecuteKernelResult,
-  VerifyKernelResult,
-} from './core-kernel.js';
+import type { PlanKernelResult, ProbeKernelResult, ExecuteKernelResult, VerifyKernelResult } from './core-kernel.js';
 import type { CanonicalVerdictResult, CanonicalBlocker } from './canonical-verdict-engine.js';
 export type { CanonicalBlocker };
 import type { EvidenceCompleteness } from './types.js';
-import {
-  resolveRequirementTraceForSpec,
-  type RequirementTrace,
-  type ResolvedRequirementTrace,
-} from './requirement-trace.js';
+import { resolveRequirementTraceForSpec, type RequirementTrace } from './requirement-trace.js';
 
 // ============================================================================
 // 一、结构化映射结果契约
@@ -83,10 +74,10 @@ export function redactSensitiveData(data: unknown): unknown {
   }
   if (typeof data === 'string') {
     return data
-      .replace(/PHPSESSID=[a-zA-Z0-9_\-]+/gi, 'PHPSESSID=[REDACTED]')
-      .replace(/Bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer [REDACTED]')
+      .replace(/PHPSESSID=[a-zA-Z0-9_-]+/gi, 'PHPSESSID=[REDACTED]')
+      .replace(/Bearer\s+[a-zA-Z0-9_.-]+/gi, 'Bearer [REDACTED]')
       .replace(/password=[^&;\s]+/gi, 'password=[REDACTED]')
-      .replace(/token=[a-zA-Z0-9_\-\.]+/gi, 'token=[REDACTED]')
+      .replace(/token=[a-zA-Z0-9_.-]+/gi, 'token=[REDACTED]')
       .replace(/cookie:[^\r\n]+/gi, 'cookie: [REDACTED]');
   }
   if (Array.isArray(data)) {
@@ -137,7 +128,7 @@ export interface MapPlanOptions {
  */
 export function mapPlanToCanonicalTestSpec(
   planResult: PlanKernelResult,
-  options: MapPlanOptions
+  options: MapPlanOptions,
 ): MappingResult<CanonicalTestSpec> {
   const issues: MappingIssue[] = [];
   const warnings: string[] = [];
@@ -306,10 +297,10 @@ export function mapPlanToCanonicalTestSpec(
     'domainPlan',
     'contract',
     'changeContract',
-    'testPlan'
+    'testPlan',
   );
   warnings.push(
-    'plan 中的 candidateChannels、expectedPoints 仅表达测试预期或网关候选，绝不能作为实际执行或真实扣费证据'
+    'plan 中的 candidateChannels、expectedPoints 仅表达测试预期或网关候选，绝不能作为实际执行或真实扣费证据',
   );
 
   const hasErrors = issues.some((i) => i.severity === 'ERROR');
@@ -376,7 +367,7 @@ export interface MapProbeSpecOptions {
 export function mapProbeToCanonicalTestSpec(
   probeOptions: Record<string, unknown>,
   probeResult?: Record<string, unknown>,
-  options?: MapProbeSpecOptions
+  options?: MapProbeSpecOptions,
 ): CanonicalTestSpec {
   const env = (probeOptions?.env as string) || options?.environment || 'test';
   const isMock = Boolean(probeOptions?.mock);
@@ -446,17 +437,19 @@ export interface MapExecuteSpecOptions {
 
 export function mapExecuteToCanonicalTestSpec(
   execOptions: Record<string, unknown>,
-  options?: MapExecuteSpecOptions
+  options?: MapExecuteSpecOptions,
 ): CanonicalTestSpec {
   const env = (execOptions?.env as string) || options?.environment || 'test';
   const mode = (execOptions?.mode as string) === 'real' ? 'REAL' : 'OFFLINE';
   const modelId = Number(execOptions?.modelId || 84);
-  const scenario = (execOptions?.scenario as string) || (execOptions?.mediaType === 'image' ? 'IMAGE_NEW_MODEL' : 'VIDEO_NEW_MODEL');
+  const scenario =
+    (execOptions?.scenario as string) || (execOptions?.mediaType === 'image' ? 'IMAGE_NEW_MODEL' : 'VIDEO_NEW_MODEL');
 
   // 纯映射器确定性 testId: 优先显式指定，否则基于稳定业务输入确定性生成，绝对禁止 Date.now() 或 Math.random()
-  const testId = (options?.testId as string)
-    || (execOptions?.testId as string)
-    || `exec-${modelId}-${mode.toLowerCase()}-${scenario.toLowerCase()}`;
+  const testId =
+    (options?.testId as string) ||
+    (execOptions?.testId as string) ||
+    `exec-${modelId}-${mode.toLowerCase()}-${scenario.toLowerCase()}`;
 
   const resolvedReq = resolveRequirementTraceForSpec({
     requirementId: (execOptions?.requirementId as string) || options?.requirementId,
@@ -520,14 +513,16 @@ export function mapExecuteToCanonicalTestSpec(
     inputs: {
       mediaType: execOptions?.mediaType,
       prompt: execOptions?.prompt,
-      resolution: (execOptions?.resolution as string | undefined)
-        || (execOptions?.contract as any)?.defaultResolution
-        || (execOptions?.contract as any)?.supportedResolutions?.value?.[0],
-      duration: typeof execOptions?.duration === 'number'
-        ? execOptions.duration
-        : (typeof (execOptions?.contract as any)?.defaultDuration === 'number'
-          ? (execOptions?.contract as any).defaultDuration
-          : ((execOptions?.contract as any)?.supportedDurations?.value?.[0])),
+      resolution:
+        (execOptions?.resolution as string | undefined) ||
+        (execOptions?.contract as any)?.defaultResolution ||
+        (execOptions?.contract as any)?.supportedResolutions?.value?.[0],
+      duration:
+        typeof execOptions?.duration === 'number'
+          ? execOptions.duration
+          : typeof (execOptions?.contract as any)?.defaultDuration === 'number'
+            ? (execOptions?.contract as any).defaultDuration
+            : (execOptions?.contract as any)?.supportedDurations?.value?.[0],
       aspectRatio: execOptions?.aspectRatio || (execOptions?.contract as any)?.defaultAspectRatio,
       serviceline: execOptions?.serviceline || (execOptions?.contract as any)?.serviceline,
       flow: execOptions?.flow || (execOptions?.contract as any)?.flow,
@@ -542,9 +537,15 @@ export function mapExecuteToCanonicalTestSpec(
     metadata: {
       action: 'execute',
       alias: (execOptions?.alias as string | undefined) || (execOptions?.contract as any)?.alias?.value,
-      price: (execOptions?.price as number | undefined),
-      customPoints: typeof execOptions?.customPoints === 'number' ? execOptions.customPoints : (execOptions?.contract as any)?.pricing?.customPoints?.value,
-      pointsPerSecond: typeof execOptions?.pointsPerSecond === 'number' ? execOptions.pointsPerSecond : (execOptions?.contract as any)?.pricing?.pointsPerSecond?.value,
+      price: execOptions?.price as number | undefined,
+      customPoints:
+        typeof execOptions?.customPoints === 'number'
+          ? execOptions.customPoints
+          : (execOptions?.contract as any)?.pricing?.customPoints?.value,
+      pointsPerSecond:
+        typeof execOptions?.pointsPerSecond === 'number'
+          ? execOptions.pointsPerSecond
+          : (execOptions?.contract as any)?.pricing?.pointsPerSecond?.value,
       contract: execOptions?.contract,
       channelName: execOptions?.channelName,
       rawTarget: execOptions?.rawTarget,
@@ -558,7 +559,6 @@ export function mapExecuteToCanonicalTestSpec(
     },
   };
 }
-
 
 // ============================================================================
 // 四、Mapper 2: probe → CanonicalEvidenceEnvelope[]
@@ -579,7 +579,7 @@ export interface MapProbeOptions {
  */
 export function mapProbeToCanonicalEvidence(
   probeResult: ProbeKernelResult,
-  options: MapProbeOptions
+  options: MapProbeOptions,
 ): MappingResult<CanonicalEvidenceEnvelope[]> {
   const issues: MappingIssue[] = [];
   const warnings: string[] = [];
@@ -690,7 +690,9 @@ export function mapProbeToCanonicalEvidence(
       const isCollectionSuccess = ep.statusCode !== undefined;
       const collectionStatus: EvidenceCollectionStatus = isCollectionSuccess ? 'SUCCESS' : 'COLLECTION_FAILED';
       const observationStatus: EvidenceObservationStatus = isCollectionSuccess
-        ? (isReachable ? 'PASS' : 'FAIL')
+        ? isReachable
+          ? 'PASS'
+          : 'FAIL'
         : 'UNVERIFIED';
 
       envelopes.push({
@@ -733,9 +735,7 @@ export function mapProbeToCanonicalEvidence(
 
   // 3. 记录未映射字段
   unmappedFields.push('candidateChannelCount', 'recommendations', 'domainAnalysis');
-  warnings.push(
-    'probeResult 中的 candidateChannelCount、recommendations 属于离线预估或建议，未被映射为实时证据信封'
-  );
+  warnings.push('probeResult 中的 candidateChannelCount、recommendations 属于离线预估或建议，未被映射为实时证据信封');
 
   return {
     success: true,
@@ -768,7 +768,7 @@ export interface MapExecuteOptions {
  */
 export function mapExecuteToExecutionResult(
   executeResult: ExecuteKernelResult,
-  options: MapExecuteOptions
+  options: MapExecuteOptions,
 ): MappingResult<{ execution: ExecutionResult; evidence: CanonicalEvidenceEnvelope[] }> {
   const issues: MappingIssue[] = [];
   const warnings: string[] = [];
@@ -859,9 +859,8 @@ export function mapExecuteToExecutionResult(
   }
 
   const evidenceKey = isFixtureMode ? 'FIXTURE:TASK_SUBMISSION' : 'SERVER_API:TASK_SUBMISSION';
-  const observationStatus: EvidenceObservationStatus = collectionStatus === 'SUCCESS'
-    ? (executeResult.ok ? 'PASS' : 'FAIL')
-    : 'UNVERIFIED';
+  const observationStatus: EvidenceObservationStatus =
+    collectionStatus === 'SUCCESS' ? (executeResult.ok ? 'PASS' : 'FAIL') : 'UNVERIFIED';
 
   evidence.push({
     evidenceId: `${testId}-task-1`,
@@ -893,9 +892,13 @@ export function mapExecuteToExecutionResult(
     immutable: true,
     redacted: true,
     collectionStatus,
-    error: collectionStatus === 'COLLECTION_FAILED'
-      ? { code: executeResult.blockerCode || 'TASK_SUBMIT_FAILED', message: executeResult.message || '任务提交采集未成功' }
-      : undefined,
+    error:
+      collectionStatus === 'COLLECTION_FAILED'
+        ? {
+            code: executeResult.blockerCode || 'TASK_SUBMIT_FAILED',
+            message: executeResult.message || '任务提交采集未成功',
+          }
+        : undefined,
   });
 
   // 4. 组装 ExecutionResult (禁止包含任何最终 Verdict 字段)
@@ -906,9 +909,10 @@ export function mapExecuteToExecutionResult(
     evidence,
     startedAt: capturedAt,
     completedAt: capturedAt,
-    error: executionStatus === 'FAILED' || executionStatus === 'BLOCKED'
-      ? { code: executeResult.blockerCode || 'EXECUTION_UNSUCCESSFUL', message: executeResult.message }
-      : undefined,
+    error:
+      executionStatus === 'FAILED' || executionStatus === 'BLOCKED'
+        ? { code: executeResult.blockerCode || 'EXECUTION_UNSUCCESSFUL', message: executeResult.message }
+        : undefined,
     metadata: {
       mode: executeResult.mode,
       taskId: executeResult.taskId,
@@ -917,9 +921,7 @@ export function mapExecuteToExecutionResult(
 
   // 5. 记录未映射字段
   unmappedFields.push('points', 'disambiguation', 'credentialsMasked');
-  warnings.push(
-    'executeResult.points 仅表达提交时预期预扣积分，真实扣费必须由 verify 账单流水证实'
-  );
+  warnings.push('executeResult.points 仅表达提交时预期预扣积分，真实扣费必须由 verify 账单流水证实');
 
   return {
     success: true,
@@ -1068,7 +1070,7 @@ export interface CanonicalVerifyFacts {
  * 纯函数，零写副作用，绝不反向读取旧 Verdict，绝不生成最终 Verdict。
  */
 export function buildCanonicalEvidenceFromVerifyFacts(
-  facts: CanonicalVerifyFacts
+  facts: CanonicalVerifyFacts,
 ): MappingResult<CanonicalEvidenceEnvelope[]> {
   const issues: MappingIssue[] = [];
   const warnings: string[] = [];
@@ -1140,14 +1142,12 @@ export function buildCanonicalEvidenceFromVerifyFacts(
   if (taskEvidence) {
     const isTaskPass = taskEvidence.status === 'PASS';
     const isTaskInProgress = taskEvidence.status === 'PROCESSING' || taskEvidence.status === 'UNVERIFIED';
-    const isSessionError = taskEvidence.source === 'session_error' || (Boolean(taskEvidence.error) && taskEvidence.error!.includes('加载凭据失败'));
+    const isSessionError =
+      taskEvidence.source === 'session_error' ||
+      (Boolean(taskEvidence.error) && taskEvidence.error!.includes('加载凭据失败'));
     const collectionStatus: EvidenceCollectionStatus = isSessionError ? 'BLOCKED' : 'SUCCESS';
     const evidenceKey = isReal ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
-    const observationStatus: EvidenceObservationStatus = isTaskPass
-      ? 'PASS'
-      : isTaskInProgress
-      ? 'UNVERIFIED'
-      : 'FAIL';
+    const observationStatus: EvidenceObservationStatus = isTaskPass ? 'PASS' : isTaskInProgress ? 'UNVERIFIED' : 'FAIL';
 
     envelopes.push({
       evidenceId: `${testId}-task-1`,
@@ -1170,28 +1170,35 @@ export function buildCanonicalEvidenceFromVerifyFacts(
         progress: facts.progress,
       },
       provenance: isReal
-        ? (taskEvidence.source || 'SERVER_API (/aivideo/v2/task_status/apiGetStatus)')
+        ? taskEvidence.source || 'SERVER_API (/aivideo/v2/task_status/apiGetStatus)'
         : 'FIXTURE (task_status_fixture)',
       confidence: isSessionError ? 0 : 1.0,
       immutable: true,
       redacted: true,
       collectionStatus,
-      error: isSessionError ? {
-        code: 'SESSION_LOAD_FAILED',
-        message: taskEvidence.error || '加载凭据失败',
-      } : undefined,
+      error: isSessionError
+        ? {
+            code: 'SESSION_LOAD_FAILED',
+            message: taskEvidence.error || '加载凭据失败',
+          }
+        : undefined,
     });
   }
 
   // 2. 媒体二进制验真证据 (Media Binary Evidence)
   if (facts.artifact) {
-    const isOwnershipVerified = facts.artifactOwnership !== 'UNVERIFIED' && (facts.artifact as any).ownership !== 'UNVERIFIED';
+    const isOwnershipVerified =
+      facts.artifactOwnership !== 'UNVERIFIED' && (facts.artifact as any).ownership !== 'UNVERIFIED';
     const isMediaPass = Boolean(facts.artifact.decodable) && isOwnershipVerified;
     const isFileAccessible = facts.artifact.fileAccessible !== false;
     const collectionStatus: EvidenceCollectionStatus = isFileAccessible ? 'SUCCESS' : 'MISSING';
     const evidenceKey = 'MEDIA_BINARY:CONTAINER_CHECK';
     const observationStatus: EvidenceObservationStatus = isFileAccessible
-      ? (!isOwnershipVerified ? 'UNVERIFIED' : (isMediaPass ? 'PASS' : 'FAIL'))
+      ? !isOwnershipVerified
+        ? 'UNVERIFIED'
+        : isMediaPass
+          ? 'PASS'
+          : 'FAIL'
       : 'UNVERIFIED';
 
     envelopes.push({
@@ -1236,16 +1243,18 @@ export function buildCanonicalEvidenceFromVerifyFacts(
     const evidenceKey = 'BILLING_LEDGER:TASK_RECORDS';
     const observationStatus: EvidenceObservationStatus = isSkippedLogs
       ? 'UNVERIFIED'
-      : (!isPricingDetermined
+      : !isPricingDetermined
+        ? 'UNVERIFIED'
+        : isExplicitUnverified
           ? 'UNVERIFIED'
-          : (isExplicitUnverified
-              ? 'UNVERIFIED'
-              : (isExplicitFail
-                  ? 'FAIL'
-                  : (isBillingPass ? 'PASS' : 'FAIL'))));
+          : isExplicitFail
+            ? 'FAIL'
+            : isBillingPass
+              ? 'PASS'
+              : 'FAIL';
 
     const actualCharge =
-      facts.billing && (facts.billing.settledPoints !== undefined && facts.billing.settledPoints > 0)
+      facts.billing && facts.billing.settledPoints !== undefined && facts.billing.settledPoints > 0
         ? facts.billing.settledPoints
         : (facts.billing?.netDeductedPoints ?? 0);
 
@@ -1271,9 +1280,10 @@ export function buildCanonicalEvidenceFromVerifyFacts(
         netChargeZero: facts.invariants?.netChargeZero,
         refundIdempotency: facts.invariants?.refundIdempotency,
       },
-      provenance: facts.expectedChargeSource === 'REAL_BILLING_FACT'
-        ? 'BILLING_LEDGER (GET /auth/adminscore/index)'
-        : 'FIXTURE (billing_fixture)',
+      provenance:
+        facts.expectedChargeSource === 'REAL_BILLING_FACT'
+          ? 'BILLING_LEDGER (GET /auth/adminscore/index)'
+          : 'FIXTURE (billing_fixture)',
       confidence: isSkippedLogs ? 0.0 : 1.0,
       immutable: true,
       redacted: true,
@@ -1446,9 +1456,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
   if (facts.regressionDiff) {
     const isRegression = facts.regressionDiff.isRegression;
     const regStatus = facts.regressionDiff.regressionStatus;
-    const observationStatus: EvidenceObservationStatus = isRegression
-      ? 'FAIL'
-      : 'PASS';
+    const observationStatus: EvidenceObservationStatus = isRegression ? 'FAIL' : 'PASS';
 
     envelopes.push({
       evidenceId: `${testId}-regression-1`,
@@ -1465,7 +1473,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
         isRegression,
         regressionStatus: regStatus,
         observedStatus: observationStatus,
-        actualValue: isRegression ? 'REGRESSION' : (regStatus === 'CLEAN' ? 'CLEAN' : 'UNKNOWN'),
+        actualValue: isRegression ? 'REGRESSION' : regStatus === 'CLEAN' ? 'CLEAN' : 'UNKNOWN',
         expectedValue: 'CLEAN',
         assertionMatched: !isRegression && regStatus === 'CLEAN',
       },
@@ -1563,9 +1571,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
   if (facts.gatewayChannelFact && facts.gatewayChannelFact.required) {
     const isGwPass = facts.gatewayChannelFact.verified === true;
     const isGwFail = Boolean(facts.gatewayChannelFact.failureReason);
-    const observationStatus: EvidenceObservationStatus = isGwPass
-      ? 'PASS'
-      : 'UNVERIFIED';
+    const observationStatus: EvidenceObservationStatus = isGwPass ? 'PASS' : 'UNVERIFIED';
 
     envelopes.push({
       evidenceId: `${testId}-gateway-channel-1`,
@@ -1580,7 +1586,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
       subjectId: facts.taskId,
       normalizedFields: {
         observedStatus: observationStatus,
-        actualValue: isGwPass ? 'CONFIRMED' : (facts.gatewayChannelFact.failureReason || 'MISSING'),
+        actualValue: isGwPass ? 'CONFIRMED' : facts.gatewayChannelFact.failureReason || 'MISSING',
         expectedValue: 'CONFIRMED',
         assertionMatched: isGwPass,
       },
@@ -1609,7 +1615,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
  */
 export function mapVerifyToCanonicalEvidence(
   verifyResult: VerifyKernelResult,
-  options: MapVerifyOptions
+  options: MapVerifyOptions,
 ): MappingResult<CanonicalEvidenceEnvelope[]> {
   if (!verifyResult || typeof verifyResult !== 'object') {
     return {
@@ -1630,15 +1636,19 @@ export function mapVerifyToCanonicalEvidence(
     mediaType: verifyResult.mediaType,
     progress: verifyResult.progress,
     task: verifyResult.evidence?.task,
-    artifact: verifyResult.artifact ? {
-      ...verifyResult.artifact,
-      ownership: verifyResult.evidence?.media?.ownership,
-    } : undefined,
+    artifact: verifyResult.artifact
+      ? {
+          ...verifyResult.artifact,
+          ownership: verifyResult.evidence?.media?.ownership,
+        }
+      : undefined,
     artifactOwnership: verifyResult.evidence?.media?.ownership,
-    billing: verifyResult.billing ? {
-      ...verifyResult.billing,
-      status: verifyResult.evidence?.billing?.status,
-    } : undefined,
+    billing: verifyResult.billing
+      ? {
+          ...verifyResult.billing,
+          status: verifyResult.evidence?.billing?.status,
+        }
+      : undefined,
     billingAudit: verifyResult.billingAudit,
     expectedChargeSource: verifyResult.evidence?.billing?.expectedChargeSource,
     pricingAllowPass: verifyResult.contract?.pricing?.allowPass,
@@ -1661,10 +1671,10 @@ export function mapVerifyToCanonicalEvidence(
     'acceptanceReport',
     'evidenceCompleteness',
     'expectedVsActual',
-    'memoryCandidate'
+    'memoryCandidate',
   );
   result.warnings.push(
-    'verifyResult 的最终裁决字段 (verdict, acceptance, passed, status) 绝不能反推或作为证据进入 EvidenceEnvelope'
+    'verifyResult 的最终裁决字段 (verdict, acceptance, passed, status) 绝不能反推或作为证据进入 EvidenceEnvelope',
   );
 
   return result;
@@ -1702,7 +1712,7 @@ export interface LegacyVerifyPresentation {
  */
 export function projectCanonicalVerdictToLegacy(
   canonicalResult: CanonicalVerdictResult,
-  lifecycleContext?: LegacyLifecycleDisplayContext
+  lifecycleContext?: LegacyLifecycleDisplayContext,
 ): LegacyVerifyPresentation {
   const hasBlockers = Array.isArray(canonicalResult.blockers) && canonicalResult.blockers.length > 0;
 

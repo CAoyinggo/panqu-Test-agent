@@ -14,24 +14,14 @@
  *    - P0 假 PASS 场景通过 tags: ['P0_FALSE_PASS'] 识别，不依赖固定场景编号。
  */
 
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec, CanonicalEvidenceEnvelope } from '../../../../src/devtest/canonical-protocol.js';
 import {
   evaluateCanonicalVerdict,
   type CanonicalVerdictResult,
   type CanonicalVerdict,
 } from '../../../../src/devtest/canonical-verdict-engine.js';
-import {
-  verify,
-  type VerifyKernelOptions,
-  type VerifyKernelResult,
-} from '../../../../src/devtest/core-kernel.js';
-import {
-  mapVerifyToCanonicalEvidence,
-  type MappingResult,
-} from '../../../../src/devtest/legacy-protocol-mappers.js';
+import { verify, type VerifyKernelOptions, type VerifyKernelResult } from '../../../../src/devtest/core-kernel.js';
+import { mapVerifyToCanonicalEvidence } from '../../../../src/devtest/legacy-protocol-mappers.js';
 
 // ============================================================================
 // 一、统一比较状态与差异分类定义
@@ -40,12 +30,7 @@ import {
 export type GoldenExpectationVerdict = 'PASS' | 'FAIL' | 'UNVERIFIED';
 
 export type ShadowComparisonCategory =
-  | 'MATCH'
-  | 'EXPECTED_STRICTER'
-  | 'REGRESSION_RISK'
-  | 'MAPPING_GAP'
-  | 'SEMANTIC_MISMATCH'
-  | 'NEEDS_REVIEW';
+  'MATCH' | 'EXPECTED_STRICTER' | 'REGRESSION_RISK' | 'MAPPING_GAP' | 'SEMANTIC_MISMATCH' | 'NEEDS_REVIEW';
 
 /**
  * 允许的 EXPECTED_STRICTER 原因码白名单
@@ -96,9 +81,7 @@ export function classifyShadowDifference(params: {
   ) {
     const isReasonAllowed =
       Boolean(params.reasonCode) &&
-      ALLOWED_EXPECTED_STRICTER_REASONS.includes(
-        params.reasonCode as AllowedExpectedStricterReason
-      );
+      ALLOWED_EXPECTED_STRICTER_REASONS.includes(params.reasonCode as AllowedExpectedStricterReason);
 
     if (params.isExpectedStricterScenario === true && isReasonAllowed) {
       return 'EXPECTED_STRICTER';
@@ -179,13 +162,11 @@ export interface ShadowComparisonSummary {
 /**
  * 执行单个表驱动 Canonical 回归用例（实际调用 Canonical verify() 并与冻结的黄金预期比对）
  */
-export async function runSingleShadowComparison(
-  testCase: ShadowTestCase
-): Promise<ShadowComparisonRecord> {
+export async function runSingleShadowComparison(testCase: ShadowTestCase): Promise<ShadowComparisonRecord> {
   // 1. 黄金预期必填门禁：缺少黄金预期必须直接失败，严禁从当前 verify 结果或 legacy 推导！
   if (!testCase.goldenExpectation) {
     throw new Error(
-      `ShadowTestCase "${testCase.name}" (${testCase.testId}) 缺少必须的 goldenExpectation 黄金预期！严禁从当前 verify 结果或 legacy 推导！`
+      `ShadowTestCase "${testCase.name}" (${testCase.testId}) 缺少必须的 goldenExpectation 黄金预期！严禁从当前 verify 结果或 legacy 推导！`,
     );
   }
   const goldenExpectation: GoldenExpectationVerdict = testCase.goldenExpectation;
@@ -208,9 +189,7 @@ export async function runSingleShadowComparison(
   if (!mappingRes.success || !mappingRes.value) {
     canonicalVerdict = 'MAPPING_FAILED';
   } else {
-    const envelopes = testCase.extraEnvelopes
-      ? [...mappingRes.value, ...testCase.extraEnvelopes]
-      : mappingRes.value;
+    const envelopes = testCase.extraEnvelopes ? [...mappingRes.value, ...testCase.extraEnvelopes] : mappingRes.value;
 
     for (const env of envelopes) {
       actualEvidenceIds.push(env.evidenceId);
@@ -264,10 +243,7 @@ export function buildShadowSummary(records: ShadowComparisonRecord[]): ShadowCom
   // 门禁检查 1: 已知 P0 假 PASS 场景在新引擎中绝不得 PASS (按 tags: 'P0_FALSE_PASS' 识别，不依赖编号)
   const p0Records = records.filter((r) => r.tags?.includes('P0_FALSE_PASS'));
   const p0FalsePassTightened =
-    p0Records.length > 0 &&
-    p0Records.every(
-      (r) => r.category === 'EXPECTED_STRICTER' && r.canonicalVerdict !== 'PASS'
-    );
+    p0Records.length > 0 && p0Records.every((r) => r.category === 'EXPECTED_STRICTER' && r.canonicalVerdict !== 'PASS');
 
   // 门禁检查 2: REGRESSION_RISK 严格为 0
   const regressionRiskZero = regressionRiskCount === 0;
@@ -284,7 +260,7 @@ export function buildShadowSummary(records: ShadowComparisonRecord[]): ShadowCom
   // 门禁检查 6: 所有非 MATCH 差异均具备具体原因码和实际生成的证据 ID
   const nonMatchRecords = records.filter((r) => r.category !== 'MATCH');
   const allDifferencesHaveReasonAndEvidence = nonMatchRecords.every(
-    (r) => r.reasonCode.trim().length > 0 && r.evidenceIds.length > 0
+    (r) => r.reasonCode.trim().length > 0 && r.evidenceIds.length > 0,
   );
 
   const isSafetyGatePassed =

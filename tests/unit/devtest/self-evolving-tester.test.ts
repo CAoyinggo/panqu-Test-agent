@@ -14,10 +14,7 @@ import {
   type Experience,
 } from '../../../src/devtest/index.js';
 import { RoutingOracle, type GatewayChannelConfig } from '../../../src/devtest/routing.js';
-import {
-  createSyntheticValidMp4,
-  inspectMp4Buffer,
-} from '../../../src/devtest/media-inspector.js';
+import { createSyntheticValidMp4, inspectMp4Buffer } from '../../../src/devtest/media-inspector.js';
 
 describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试套件', () => {
   describe('Card 1: 媒体产物归属与防假 PASS (Artifact Ownership Invariant)', () => {
@@ -74,7 +71,9 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
       expect(res.evidence.invariants.antiDoubleBilling).toBe(false);
       expect(res.businessValidation).toBeDefined();
       expect(res.businessValidation!.matchedFailurePatterns).toContain('FP-004');
-      expect(res.reasons.some((r) => r.includes('FP-004') || r.includes('重复预扣') || r.includes('重复扣费'))).toBe(true);
+      expect(res.reasons.some((r) => r.includes('FP-004') || r.includes('重复预扣') || r.includes('重复扣费'))).toBe(
+        true,
+      );
     });
   });
 
@@ -130,8 +129,26 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
     it('所有启用且同组的候选渠道超出每日限额时，evaluateGatewayRouting 必须置位 isBlockedByQuota 且候选渠道为空', () => {
       // Arrange: 两个候选渠道，均在 taskPoints 下超额
       const channels: GatewayChannelConfig[] = [
-        { id: 41, name: '主通道', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 10, dailyQuotaLimit: 500, usedQuota: 490 },
-        { id: 42, name: '备用通道', group: 'panqu_test', models: ['wan3.0-video'], status: 1, weight: 5, dailyQuotaLimit: 300, usedQuota: 295 },
+        {
+          id: 41,
+          name: '主通道',
+          group: 'panqu_test',
+          models: ['wan3.0-video'],
+          status: 1,
+          weight: 10,
+          dailyQuotaLimit: 500,
+          usedQuota: 490,
+        },
+        {
+          id: 42,
+          name: '备用通道',
+          group: 'panqu_test',
+          models: ['wan3.0-video'],
+          status: 1,
+          weight: 5,
+          dailyQuotaLimit: 300,
+          usedQuota: 295,
+        },
       ];
 
       // Act: 任务需要 20 积分，490+20=510 > 500, 295+20=315 > 300
@@ -210,7 +227,9 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
       expect(res.ok).toBe(true);
       const historySteps = res.domainPlan?.steps.filter((s) => s.description.includes('[历史经验核验]')) || [];
       expect(historySteps.length).toBeGreaterThanOrEqual(1);
-      expect(historySteps.some((s) => s.description.includes('双重扣费') || s.description.includes('FP-004'))).toBe(true);
+      expect(historySteps.some((s) => s.description.includes('双重扣费') || s.description.includes('FP-004'))).toBe(
+        true,
+      );
 
       const historyTests = res.testPlan.tests.filter((t) => t.id === 'history-exp-test-002');
       expect(historyTests).toHaveLength(1);
@@ -279,7 +298,9 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
       });
 
       expect(res.ok).toBe(true);
-      const hasSeedanceStep = res.domainPlan?.steps.some((s) => s.description.includes('Seedance') || s.description.includes('EXP-SEEDANCE-015'));
+      const hasSeedanceStep = res.domainPlan?.steps.some(
+        (s) => s.description.includes('Seedance') || s.description.includes('EXP-SEEDANCE-015'),
+      );
       const hasSeedanceTest = res.testPlan.tests.some((t) => t.id === 'history-exp-seedance-015');
       expect(hasSeedanceStep).toBe(false);
       expect(hasSeedanceTest).toBe(false);
@@ -372,9 +393,7 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
           media_type: 'video',
           terminal_status: 'FAILED',
           expected_points: 70,
-          score_logs: [
-            { id: 5001, task_id: 77007, type: 2, score: -70 },
-          ],
+          score_logs: [{ id: 5001, task_id: 77007, type: 2, score: -70 }],
           shared_memory_dir: tmpDir,
         });
 
@@ -402,11 +421,16 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
 
         // 3.1 验证 Candidate Buffer 隔离性: 未执行 Promotion 前，即使勾选了 [x]，loadConfirmedExperiences 也绝不读取它
         const unpromotedExperiences = loadConfirmedExperiences({ projectRoot: tmpDir });
-        const unpromotedExp = unpromotedExperiences.find((e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84);
+        const unpromotedExp = unpromotedExperiences.find(
+          (e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84,
+        );
         expect(unpromotedExp).toBeUndefined();
 
         // 3.2 运行 Promotion 管道: 将 - [x] 候选经验正式晋升至持久知识库 knowledge_candidates.json
-        const candidatesJsonPath = path.join(tmpDir, '.agents/skills/self-evolving-tester/references/knowledge_candidates.json');
+        const candidatesJsonPath = path.join(
+          tmpDir,
+          '.agents/skills/self-evolving-tester/references/knowledge_candidates.json',
+        );
         promoteConfirmedExperiences({
           projectRoot: tmpDir,
           inboxPath: inboxFile,
@@ -415,7 +439,9 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
 
         // 4. 验证 Promotion 后 loadConfirmedExperiences 能够正确吸纳持久化经验
         const approvedExperiences = loadConfirmedExperiences({ projectRoot: tmpDir });
-        const matchedExp = approvedExperiences.find((e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84);
+        const matchedExp = approvedExperiences.find(
+          (e) => e.related_pattern_id === 'FP-005' && e.related_model_id === 84,
+        );
         expect(matchedExp).toBeDefined();
         expect(matchedExp?.status).toBe('ACCEPTED');
 
@@ -426,11 +452,16 @@ describe('Self-Evolving Tester - 高价值业务风险与领域不变量测试�
           extraExperiences: approvedExperiences,
         });
 
-        const historySteps = planAfterApproval.domainPlan?.steps.filter((s) => s.description.includes('[历史经验核验]') && s.description.includes('FP-005')) || [];
+        const historySteps =
+          planAfterApproval.domainPlan?.steps.filter(
+            (s) => s.description.includes('[历史经验核验]') && s.description.includes('FP-005'),
+          ) || [];
         expect(historySteps.length).toBeGreaterThanOrEqual(1);
         expect(historySteps[0].targetObject).toBe('BillingLedger');
 
-        const historyTests = planAfterApproval.testPlan.tests.filter((t) => t.id.startsWith('history-cand-') || t.purpose.includes('FP-005'));
+        const historyTests = planAfterApproval.testPlan.tests.filter(
+          (t) => t.id.startsWith('history-cand-') || t.purpose.includes('FP-005'),
+        );
         expect(historyTests.length).toBeGreaterThanOrEqual(1);
         expect(historyTests[0].requiredEvidence).toContain('billing_reconciliation');
       } finally {

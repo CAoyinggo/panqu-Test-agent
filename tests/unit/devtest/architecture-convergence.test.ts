@@ -1,14 +1,14 @@
 // Panqu AI DevTest v6.0.0 Architecture Convergence Tests
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import {
-  probe,
-  plan,
-  execute,
-  verify,
-  executeCanonical,
-} from '../../../src/devtest/core-kernel.js';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { probe, plan, execute, verify, executeCanonical } from '../../../src/devtest/core-kernel.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 import {
   validateCanonicalTestSpec,
   validateEvidenceEnvelope,
@@ -16,17 +16,13 @@ import {
   type CanonicalTestSpec,
   type CanonicalEvidenceEnvelope,
 } from '../../../src/devtest/canonical-protocol.js';
-import {
-  evaluateCanonicalVerdict,
-} from '../../../src/devtest/canonical-verdict-engine.js';
+import { evaluateCanonicalVerdict } from '../../../src/devtest/canonical-verdict-engine.js';
 import {
   validateExecutionResult,
   PanquMediaExecutionAdapter,
   mapCanonicalEnvironmentToPanquSessionEnv,
   FORBIDDEN_VERDICT_FIELDS,
   type ExecutionAdapter,
-  type ExecutionResult,
-  type EvidenceProducer,
   type EvidenceProducerContext,
 } from '../../../src/devtest/execution-ports.js';
 import {
@@ -40,14 +36,8 @@ import {
 } from '../../../src/devtest/legacy-protocol-mappers.js';
 import * as mediaFlow from '../../../src/devtest/media-flow.js';
 import { TestOfflineExecutionAdapter } from '../../helpers/test-adapters.js';
-import {
-  mapVerdictToExportRecord,
-  type ResultSink,
-} from '../../../src/devtest/result-sink.js';
-import {
-  DEVTEST_MCP_TOOL,
-  DevTestMcpService,
-} from '../../../src/devtest/mcp-service.js';
+import { type ResultSink } from '../../../src/devtest/result-sink.js';
+import { DevTestMcpService } from '../../../src/devtest/mcp-service.js';
 import { runDevTestCli } from '../../../bin/devtest-cli.js';
 import {
   UIBrowserEvidenceProducer,
@@ -65,7 +55,9 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
 
       expect(trace.requirementId).toBe('UNRESOLVED_REQUIREMENT');
       expect((trace.impactAnalysis as any).executed).toBe(false);
-      expect((trace.impactAnalysis as any).reason).toBe('UNRESOLVED_REQUIREMENT: 缺少有效 stable requirementId 与需求描述，未执行影响分析');
+      expect((trace.impactAnalysis as any).reason).toBe(
+        'UNRESOLVED_REQUIREMENT: 缺少有效 stable requirementId 与需求描述，未执行影响分析',
+      );
     });
 
     it('有明确需求与变更路径输入时，能够正向推导影响范围与关联场景', () => {
@@ -270,7 +262,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
           networkLogs: [{ url: 'https://example.com/api', status: 200, method: 'POST' }],
           screenshotHash: 'a1b2c3d4e5f6',
         },
-        context
+        context,
       );
 
       expect(envelopes.length).toBeGreaterThanOrEqual(2);
@@ -293,7 +285,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         {
           observations: [{ element: 'button', label: 'Submit', visible: true, confidence: 0.95 }],
         },
-        context
+        context,
       );
 
       expect(envelopes.length).toBe(1);
@@ -390,9 +382,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         modelId: 201,
         mediaType: 'image',
         terminalStatus: 'FAILED',
-        scoreLogs: [
-          { task_id: 88802, type: 2, score: -10, memo: 'IMAGE_GEN' },
-        ],
+        scoreLogs: [{ task_id: 88802, type: 2, score: -10, memo: 'IMAGE_GEN' }],
       });
       expect(failRes.verdict).toBe('FAIL');
       expect(failRes.acceptance).toBe('REJECTED');
@@ -406,9 +396,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         artifactBuffer: validMp4,
         terminalStatus: 'SUCCESS',
         expectedPoints: 70,
-        scoreLogs: [
-          { task_id: 88803, type: 2, score: -70, memo: '任务预扣' },
-        ],
+        scoreLogs: [{ task_id: 88803, type: 2, score: -70, memo: '任务预扣' }],
       });
       expect(passRes.verdict).toBe('PASS');
       expect(passRes.acceptance).toBe('ACCEPTED');
@@ -446,9 +434,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         media_type: 'video',
         terminal_status: 'SUCCESS',
         expected_points: 70,
-        score_logs: [
-          { task_id: 88805, type: 2, score: -70, memo: '任务预扣' },
-        ],
+        score_logs: [{ task_id: 88805, type: 2, score: -70, memo: '任务预扣' }],
         artifact_buffer: validMp4,
       });
 
@@ -481,9 +467,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         artifactBuffer: validMp4,
         terminalStatus: 'SUCCESS',
         expectedPoints: 70,
-        scoreLogs: [
-          { task_id: 88806, type: 2, score: -70, memo: '任务预扣' },
-        ],
+        scoreLogs: [{ task_id: 88806, type: 2, score: -70, memo: '任务预扣' }],
         resultSink: testSink,
       });
 
@@ -517,9 +501,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         artifactBuffer: validMp4,
         terminalStatus: 'SUCCESS',
         expectedPoints: 70,
-        scoreLogs: [
-          { task_id: 88807, type: 2, score: -70, memo: '任务预扣' },
-        ],
+        scoreLogs: [{ task_id: 88807, type: 2, score: -70, memo: '任务预扣' }],
         resultSink: brokenSink,
       });
 
@@ -626,17 +608,17 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
       expect(spec.costLimit.maxCostPoints).toBe(0);
       expect(spec.costLimit.allowZeroCostOnly).toBe(true);
 
-      const planSpecRes = mapPlanToCanonicalTestSpec(
-        { modelId: 84, mediaType: 'video', expectedPoints: 56 } as any,
-        { testId: 'test-plan-no-auto-grant', executionMode: 'REAL' }
-      );
+      const planSpecRes = mapPlanToCanonicalTestSpec({ modelId: 84, mediaType: 'video', expectedPoints: 56 } as any, {
+        testId: 'test-plan-no-auto-grant',
+        executionMode: 'REAL',
+      });
       expect(planSpecRes.success).toBe(false);
       expect(planSpecRes.issues.some((i) => i.code === 'UNAUTHORIZED_PAID_EXECUTION')).toBe(true);
 
-      const zeroCostPlan = mapPlanToCanonicalTestSpec(
-        { modelId: 84, mediaType: 'video', expectedPoints: 0 } as any,
-        { testId: 'test-plan-zero-cost', executionMode: 'REAL' }
-      );
+      const zeroCostPlan = mapPlanToCanonicalTestSpec({ modelId: 84, mediaType: 'video', expectedPoints: 0 } as any, {
+        testId: 'test-plan-zero-cost',
+        executionMode: 'REAL',
+      });
       expect(zeroCostPlan.value?.sideEffectPolicy).toBe('READ_ONLY');
       expect(zeroCostPlan.value?.costLimit.maxCostPoints).toBe(0);
     });
@@ -881,7 +863,12 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
 
       // (b) 未授权 REAL 提交阻断分支
       const dummyAdapter = new TestOfflineExecutionAdapter();
-      const resUnauthorized = await execute({ mode: 'real', modelId: 84, mediaType: 'video', executionAdapter: dummyAdapter });
+      const resUnauthorized = await execute({
+        mode: 'real',
+        modelId: 84,
+        mediaType: 'video',
+        executionAdapter: dummyAdapter,
+      });
       expect(resUnauthorized.executionResult).toBeDefined();
       expect(resUnauthorized.executionResult?.status).toBe('BLOCKED');
       expect(resUnauthorized.canonicalSpec).toBeDefined();
@@ -1062,9 +1049,7 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
       };
       const subResult = await submittedAdapter.execute(spec);
       expect(subResult.status).toBe('SUBMITTED');
-      const subReceipt = subResult.evidence.find(
-        (e) => e.evidenceKey === 'FIXTURE:TASK_SUBMISSION_RECEIPT'
-      );
+      const subReceipt = subResult.evidence.find((e) => e.evidenceKey === 'FIXTURE:TASK_SUBMISSION_RECEIPT');
       expect(subReceipt).toBeDefined();
       expect(subReceipt?.sourceType).toBe('FIXTURE');
       expect(subReceipt?.observationStatus).toBe('UNVERIFIED');
@@ -1699,9 +1684,12 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         logs.length = 0;
         const codeUnset = await runDevTestCli([
           'verify',
-          '--task', '12345',
-          '--model', '84',
-          '--media', 'video',
+          '--task',
+          '12345',
+          '--model',
+          '84',
+          '--media',
+          'video',
           '--is-simulated',
           '--json',
         ]);
@@ -1715,9 +1703,12 @@ describe('Architecture Convergence — RequirementTrace → TestSpec → Adapter
         logs.length = 0;
         const codeTrue = await runDevTestCli([
           'verify',
-          '--task', '12345',
-          '--model', '84',
-          '--media', 'video',
+          '--task',
+          '12345',
+          '--model',
+          '84',
+          '--media',
+          'video',
           '--is-simulated',
           '--db-extra-confirmed',
           '--gateway-channel-confirmed',

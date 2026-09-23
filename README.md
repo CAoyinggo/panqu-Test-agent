@@ -5,7 +5,8 @@
 **面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、物理证据验真与自动化验收门禁框架**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-34%20suites%20%7C%20630%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Tests](https://img.shields.io/badge/tests-38%20suites%20%7C%20677%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Coverage](https://img.shields.io/badge/coverage-85.87%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
 [![Architecture](https://img.shields.io/badge/architecture-Single%20Verdict%20Engine-purple.svg)](docs/ARCHITECTURE_FREEZE.md)
@@ -178,15 +179,18 @@ DevTest 原生提供符合 Model Context Protocol 标准的 stdio 接口。在�
 ## 🧪 质量门禁与测试矩阵 (100% PASS)
 
 ```bash
-# 运行全量 34 个套件、630 项单元测试
+# 运行全量 38 个套件、677 项单元测试
 npm test
+
+# 运行覆盖率门禁 (Lines/Statements/Functions >= 80%, Branches >= 70%)
+npx vitest run --coverage
 
 # 生产级 TypeScript 编译与内置技能同步
 npm run build
 ```
 
 <details>
-<summary><b>📊 点击展开查看 34 个测试套件明细 (630 项测试全部通过)</b></summary>
+<summary><b>📊 点击展开查看 38 个测试套件明细 (677 项测试全部通过)</b></summary>
 
 | 测试文件 | 测试用例数 | 状态 | 核心验证范围 |
 |---|---|---|---|
@@ -218,7 +222,11 @@ npm run build
 | `tests/unit/devtest/requirement-trace.test.ts` | 6 tests | ✅ PASS | 需求关联双向索引构建与影响分析矩阵 |
 | 探索与变异专项测试 (6 个套件) | 31 tests | ✅ PASS | 状态转移、学习沉淀、变异算子与生产循环审计 |
 | 其他专项契约测试 (2 个套件) | 7 tests | ✅ PASS | 环境探活与 Trae 技能规约契约 |
-| **全量总计** | **630 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
+| `tests/unit/devtest/verify-input-contract-alignment.test.ts` | 17 tests | ✅ PASS | Verify 入参对齐、参数校验与归一化门禁 |
+| `tests/unit/devtest/dependency-cycle.test.ts` | 16 tests | ✅ PASS | 模块依赖无环检测与分层单向引用门禁 |
+| `tests/unit/devtest/public-api-contract.test.ts` | 5 tests | ✅ PASS | 公共导出 API 契约与版本稳定性校验 |
+| `tests/unit/devtest/test-isolation.test.ts` | 9 tests | ✅ PASS | 全局状态隔离恢复、未捕获断言异常还原与框架级故障恢复 |
+| **全量总计** | **677 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
 
 </details>
 

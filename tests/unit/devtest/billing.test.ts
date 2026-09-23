@@ -1,26 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import {
-  BillingOracle,
-  type ScoreLogEntry,
-} from '../../../src/devtest/billing.js';
+import { BillingOracle, type ScoreLogEntry } from '../../../src/devtest/billing.js';
 
 describe('Billing - 计费预估、流水对账与供应商成本核算', () => {
   describe('1. 刊例扣费基准计算 (calculateExpectedPoints)', () => {
     it('Wan 3.0 (84): 480p=7/s, 720p=14/s, 1080p=27/s', () => {
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 4, resolution: '480p' })).toBe(28);
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 5, resolution: '720p' })).toBe(70);
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 4, resolution: '1080p' })).toBe(108);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 4, resolution: '480p' }),
+      ).toBe(28);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 5, resolution: '720p' }),
+      ).toBe(70);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 84, duration: 4, resolution: '1080p' }),
+      ).toBe(108);
     });
 
     it('Wan 3.0 Prime (88): 480p=11/s, 720p=22/s, 1080p=44/s', () => {
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '480p' })).toBe(44);
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '720p' })).toBe(88);
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '1080p' })).toBe(176);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '480p' }),
+      ).toBe(44);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '720p' }),
+      ).toBe(88);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 88, duration: 4, resolution: '1080p' }),
+      ).toBe(176);
     });
 
     it('Seedance 2.0 (15): 480p=15/s, 720p=30/s', () => {
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 15, duration: 4, resolution: '480p' })).toBe(60);
-      expect(BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 15, duration: 4, resolution: '720p' })).toBe(120);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 15, duration: 4, resolution: '480p' }),
+      ).toBe(60);
+      expect(
+        BillingOracle.calculateExpectedPoints({ mediaType: 'video', modelId: 15, duration: 4, resolution: '720p' }),
+      ).toBe(120);
     });
 
     it('图片模型: Model 201=5分, Model 205 (1k=10分, 2k=15分)', () => {

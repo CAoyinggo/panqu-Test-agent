@@ -17,6 +17,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "test": "vitest run tests/unit/devtest",
+    "lint": "eslint src/ bin/ tests/ && prettier --check src/ bin/ tests/",
+    "format": "prettier --write src/ bin/ tests/",
+    "format:check": "prettier --check src/ bin/ tests/",
     "devtest": "node dist/bin/devtest-cli.js",
     "devtest-mcp": "node dist/bin/devtest-mcp.js"
   },
@@ -24,8 +27,13 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/node": "^20.19.43",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.0.0",
+    "prettier": "^3.5.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.0.0",
     "vitest": "^4.1.10"
   },
   "dependencies": {

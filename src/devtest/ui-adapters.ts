@@ -11,13 +11,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type {
-  CanonicalEvidenceEnvelope,
-} from './canonical-protocol.js';
-import type {
-  EvidenceProducer,
-  EvidenceProducerContext,
-} from './execution-ports.js';
+import type { CanonicalEvidenceEnvelope } from './canonical-protocol.js';
+import type { EvidenceProducer, EvidenceProducerContext } from './execution-ports.js';
 
 // ============================================================================
 // 一、原始采集事实契约 (Raw Collection Contracts)
@@ -70,10 +65,7 @@ export function readPngDimensions(filePath: string): { width: number; height: nu
   return { width: 0, height: 0 };
 }
 
-function resolveEvidenceId(
-  context: DeterministicProducerContext,
-  evidenceKey: string
-): string | undefined {
+function resolveEvidenceId(context: DeterministicProducerContext, evidenceKey: string): string | undefined {
   if (context.evidenceIds && context.evidenceIds[evidenceKey]) {
     return context.evidenceIds[evidenceKey];
   }
@@ -94,10 +86,7 @@ export class UIBrowserEvidenceProducer implements EvidenceProducer {
   readonly maturity = 'DEFERRED_EXTERNAL_RUNTIME' as const;
   readonly scope = 'NOT_IN_ZERO_DEPENDENCY_SCOPE' as const;
 
-  async produce(
-    rawCollection: unknown,
-    context: EvidenceProducerContext
-  ): Promise<CanonicalEvidenceEnvelope[]> {
+  async produce(rawCollection: unknown, context: EvidenceProducerContext): Promise<CanonicalEvidenceEnvelope[]> {
     const ctx = context as DeterministicProducerContext;
     const raw = (rawCollection && typeof rawCollection === 'object' ? rawCollection : {}) as BrowserRawCollection;
     const envelopes: CanonicalEvidenceEnvelope[] = [];
@@ -353,7 +342,8 @@ export class UIBrowserEvidenceProducer implements EvidenceProducer {
     // 3. 截屏引用事实：UI 界面截图 (严格校验文件真实存在并使用真实物理尺寸)
     // ------------------------------------------------------------------------
     const screenEvidenceKey = 'BROWSER:SCREENSHOT_REF';
-    const screenEvidenceId = resolveEvidenceId(ctx, screenEvidenceKey) || `UNASSIGNED:${ctx.testId}:${screenEvidenceKey}`;
+    const screenEvidenceId =
+      resolveEvidenceId(ctx, screenEvidenceKey) || `UNASSIGNED:${ctx.testId}:${screenEvidenceKey}`;
 
     if (!resolveEvidenceId(ctx, screenEvidenceKey) && !ctx.evidenceId) {
       envelopes.push({
@@ -481,10 +471,7 @@ export class UIVisualAiEvidenceProducer implements EvidenceProducer {
   readonly maturity = 'DEFERRED_EXTERNAL_RUNTIME' as const;
   readonly scope = 'NOT_IN_ZERO_DEPENDENCY_SCOPE' as const;
 
-  async produce(
-    rawCollection: unknown,
-    context: EvidenceProducerContext
-  ): Promise<CanonicalEvidenceEnvelope[]> {
+  async produce(rawCollection: unknown, context: EvidenceProducerContext): Promise<CanonicalEvidenceEnvelope[]> {
     const ctx = context as DeterministicProducerContext;
     const raw = (rawCollection && typeof rawCollection === 'object' ? rawCollection : {}) as VisualAiRawCollection;
     const evidenceKey = 'AI_OBSERVATION:TASK_STATUS_VISUAL';
@@ -574,11 +561,7 @@ export class UIVisualAiEvidenceProducer implements EvidenceProducer {
     }
 
     const obsStatus =
-      raw.visualInference === 'CONFIRMED'
-        ? 'PASS'
-        : raw.visualInference === 'MISMATCH'
-        ? 'FAIL'
-        : 'UNVERIFIED';
+      raw.visualInference === 'CONFIRMED' ? 'PASS' : raw.visualInference === 'MISMATCH' ? 'FAIL' : 'UNVERIFIED';
 
     return [
       {

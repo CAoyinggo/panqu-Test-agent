@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type EntityCompositeState,
-  type LearningExperience,
-} from '../../../../src/devtest/exploration/contracts.js';
+import { type EntityCompositeState, type LearningExperience } from '../../../../src/devtest/exploration/contracts.js';
 import { PanquActionSpace } from '../../../../src/devtest/exploration/action-space.js';
 import { type UnverifiedFrontier } from '../../../../src/devtest/exploration/state-graph.js';
 import { PanquConstraintEvaluator } from '../../../../src/devtest/exploration/constraint.js';
@@ -17,7 +14,7 @@ describe('Step 2 硬性业务验收 Gate：探索策略调度器决策力检验 
   function createFrontier(
     fromState: EntityCompositeState,
     actionType: any,
-    inferredTargetStates: string[] = ['state:NORMAL']
+    inferredTargetStates: string[] = ['state:NORMAL'],
   ): UnverifiedFrontier {
     const action = actionSpace.getAction(actionType)!;
     return {
@@ -78,7 +75,7 @@ describe('Step 2 硬性业务验收 Gate：探索策略调度器决策力检验 
     // 历史运行频次记录表
     const historyCounts = new Map<string, number>();
     historyCounts.set(`${knownNormalSubmit.fromKey}->SUBMIT_TASK`, 100); // 跑过 100 次
-    historyCounts.set(`${unknownCancel.fromKey}->CANCEL_TASK`, 0);         // 跑过 0 次 (全新空白)
+    historyCounts.set(`${unknownCancel.fromKey}->CANCEL_TASK`, 0); // 跑过 0 次 (全新空白)
 
     const ranked = policy.evaluateAndRank([knownNormalSubmit, unknownCancel], historyCounts);
 
@@ -121,9 +118,7 @@ describe('Step 2 硬性业务验收 Gate：探索策略调度器决策力检验 
       'task:CANCELLED|billing:CHARGED (High Risk Defect)',
     ]);
     // 2. 生成中超时 (0次，异步不一致性)
-    const frontierTimeout = createFrontier(generatingState, 'INJECT_TIMEOUT', [
-      'task:FAILED|billing:REFUNDED',
-    ]);
+    const frontierTimeout = createFrontier(generatingState, 'INJECT_TIMEOUT', ['task:FAILED|billing:REFUNDED']);
     // 3. 生成中只读轮询 (50次，纯只读)
     const frontierPoll = createFrontier(generatingState, 'POLL_STATUS');
     // 4. 成功后媒体检查 (20次，只读质检)
@@ -138,14 +133,14 @@ describe('Step 2 硬性业务验收 Gate：探索策略调度器决策力检验 
 
     const ranked = policy.evaluateAndRank(
       [frontierInspectMedia, frontierPoll, frontierTimeout, frontierCancel],
-      history
+      history,
     );
 
     // 第一名必须是具备资金影响、高不确定性的 CANCEL_TASK
     const topPick = ranked[0];
     expect(topPick.frontier.candidateAction.type).toBe('CANCEL_TASK');
     expect(topPick.breakdown.businessImpact).toBe(1.2); // 资金不变量最高级别影响
-    expect(topPick.breakdown.uncertainty).toBe(0.95);    // 存在潜在 Defect 推导
+    expect(topPick.breakdown.uncertainty).toBe(0.95); // 存在潜在 Defect 推导
 
     // 第二名必须是具备异步边界效应的 INJECT_TIMEOUT
     expect(ranked[1].frontier.candidateAction.type).toBe('INJECT_TIMEOUT');
@@ -192,16 +187,10 @@ describe('Step 2 硬性业务验收 Gate：探索策略调度器决策力检验 
     };
 
     // 重新评估
-    const afterRanked = policy.evaluateAndRank(
-      [frontierTimeout, frontierCancel],
-      new Map(),
-      [historicalExperience]
-    );
+    const afterRanked = policy.evaluateAndRank([frontierTimeout, frontierCancel], new Map(), [historicalExperience]);
 
     // 此时被历史经验强化的 INJECT_TIMEOUT 获得了历史加成，分数大幅上涨
-    const timeoutScored = afterRanked.find(
-      (s) => s.frontier.candidateAction.type === 'INJECT_TIMEOUT'
-    )!;
+    const timeoutScored = afterRanked.find((s) => s.frontier.candidateAction.type === 'INJECT_TIMEOUT')!;
     expect(timeoutScored.breakdown.historicalFailure).toBeGreaterThan(1.0);
     expect(timeoutScored.rationale).toContain('[历史经验强化]');
   });

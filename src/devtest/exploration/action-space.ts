@@ -1,14 +1,10 @@
 /**
  * Panqu AI DevTest - 动作空间模型
- * 
+ *
  * 建模真实 Panqu 业务动作，包含前置约束与风险评级。
  */
 
-import {
-  type EntityCompositeState,
-  type PanquActionDefinition,
-  type PanquActionType,
-} from './contracts.js';
+import { type EntityCompositeState, type PanquActionDefinition, type PanquActionType } from './contracts.js';
 
 export class PanquActionSpace {
   private actions: Map<PanquActionType, PanquActionDefinition> = new Map();
@@ -26,9 +22,7 @@ export class PanquActionSpace {
       riskCategory: 'READ_ONLY',
       baseRisk: 0.1,
       executionSupport: 'REAL_SETUP',
-      preconditions: [
-        (s) => s.session.status === 'ANONYMOUS' || s.session.status === 'EXPIRED',
-      ],
+      preconditions: [(s) => s.session.status === 'ANONYMOUS' || s.session.status === 'EXPIRED'],
       payloadGenerator: () => ({ refresh: true }),
     });
 
@@ -75,10 +69,7 @@ export class PanquActionSpace {
       riskCategory: 'ASYNC_CONSISTENCY',
       baseRisk: 0.85,
       executionSupport: 'CODEBASE_UNSUPPORTED',
-      preconditions: [
-        (s) => s.task.taskId !== undefined,
-        (s) => ['DISPATCHED', 'GENERATING'].includes(s.task.status),
-      ],
+      preconditions: [(s) => s.task.taskId !== undefined, (s) => ['DISPATCHED', 'GENERATING'].includes(s.task.status)],
       payloadGenerator: (s) => ({ timeoutMs: 5000, taskId: s.task.taskId }),
     });
 
@@ -105,9 +96,7 @@ export class PanquActionSpace {
       riskCategory: 'ASYNC_CONSISTENCY',
       baseRisk: 0.75,
       executionSupport: 'UNVERIFIED_UNSUPPORTED',
-      preconditions: [
-        (s) => ['FAILED', 'CANCELLED'].includes(s.task.status),
-      ],
+      preconditions: [(s) => ['FAILED', 'CANCELLED'].includes(s.task.status)],
       payloadGenerator: (s) => ({ previousTaskId: s.task.taskId }),
     });
 
@@ -119,9 +108,7 @@ export class PanquActionSpace {
       riskCategory: 'CRITICAL_FINANCIAL',
       baseRisk: 0.65,
       executionSupport: 'REAL_EXECUTABLE',
-      preconditions: [
-        (s) => s.task.taskId !== undefined,
-      ],
+      preconditions: [(s) => s.task.taskId !== undefined],
       payloadGenerator: (s) => ({ taskId: s.task.taskId }),
     });
 
@@ -133,9 +120,7 @@ export class PanquActionSpace {
       riskCategory: 'MEDIA_INTEGRITY',
       baseRisk: 0.6,
       executionSupport: 'REAL_EXECUTABLE',
-      preconditions: [
-        (s) => s.task.status === 'COMPLETED' || s.artifacts.mediaUrl !== undefined,
-      ],
+      preconditions: [(s) => s.task.status === 'COMPLETED' || s.artifacts.mediaUrl !== undefined],
       payloadGenerator: (s) => ({ mediaUrl: s.artifacts.mediaUrl }),
     });
   }

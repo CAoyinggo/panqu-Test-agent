@@ -47,7 +47,7 @@ describe('DevTest Knowledge → GitHub 受控回写与 Sync Payload 规范测试
     it('定义了统一的 GitHub 仓库与文件路径常量，杜绝多处硬编码', () => {
       expect(DEFAULT_GITHUB_KNOWLEDGE_CONFIG.repository).toBe('CAoyinggo/panqu-Test-agent');
       expect(DEFAULT_GITHUB_KNOWLEDGE_CONFIG.path).toBe(
-        '.agents/skills/self-evolving-tester/references/knowledge_candidates.json'
+        '.agents/skills/self-evolving-tester/references/knowledge_candidates.json',
       );
     });
   });
@@ -59,7 +59,7 @@ describe('DevTest Knowledge → GitHub 受控回写与 Sync Payload 规范测试
       fs.appendFileSync(
         inboxPath,
         `- [x] **[${candId}]** 来源: \`trae\` | 提交日期: 2026-09-17\n  - **主题**: [FP-005] 业务风险模式: 任务失败未退款资损缺陷 (模型 #88)\n  - **提议内容**: 任务失败必须退款且净扣归零\n  - **建议归宿**: L2-state/active-projects.md\n`,
-        'utf8'
+        'utf8',
       );
 
       const report = await service.promoteConfirmedExperiences({
@@ -270,7 +270,7 @@ describe('DevTest Knowledge → GitHub 受控回写与 Sync Payload 规范测试
       fs.appendFileSync(
         inboxPath,
         `- [x] **[CAND-20260917-SYNCFAIL]** 来源: \`trae\` | 提交日期: 2026-09-17\n  - **主题**: [FP-005] 业务风险模式: 任务失败未退款资损缺陷 (模型 #88)\n  - **提议内容**: 任务失败必须退款\n  - **建议归宿**: L2-state/active-projects.md\n`,
-        'utf8'
+        'utf8',
       );
 
       const promotionReport = await service.promoteConfirmedExperiences({
@@ -285,8 +285,8 @@ describe('DevTest Knowledge → GitHub 受控回写与 Sync Payload 规范测试
       expect(promotionReport.syncPayload).toBeDefined();
 
       // 步骤 2: 模拟 GitHub 同步失败 (例如网络 500 或 SHA 冲突)
-      const githubSyncSimulatedSuccess = false;
-      const syncError = 'GitHub API HTTP 409: SHA mismatch (Simulated Network Error)';
+      const _githubSyncSimulatedSuccess = false;
+      const _syncError = 'GitHub API HTTP 409: SHA mismatch (Simulated Network Error)';
 
       // 验证：即便同步失败，本地持久化文件仍然完好
       const localJson = JSON.parse(fs.readFileSync(candidatesJsonPath, 'utf8'));

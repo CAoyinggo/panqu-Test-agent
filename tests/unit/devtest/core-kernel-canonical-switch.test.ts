@@ -65,7 +65,7 @@ describe('Canonical Verdict Engine 唯一收口与反证安全测试 (10 大反�
       scoreLogs: [{ task_id: 99101, type: 2, score: -70 }],
       dbExtraConfirmed: true,
       executionMode: 'real',
-    } as any);
+    });
 
     pollSpy.mockRestore();
 
@@ -185,7 +185,7 @@ describe('Canonical Verdict Engine 唯一收口与反证安全测试 (10 大反�
       mediaType: 'video',
       terminalStatus: 'FAILED',
       isProcessing: true,
-    } as any);
+    });
     expect(resFailedWithProcessing.passed).toBe(false);
     expect(resFailedWithProcessing.verdict).toBe('FAIL');
     expect(resFailedWithProcessing.canonicalVerdict?.verdict).toBe('FAIL');
@@ -299,13 +299,19 @@ describe('Canonical Verdict Engine 唯一收口与反证安全测试 (10 大反�
     };
 
     // 无论 displayContext 传入什么生命周期状态，业务裁决与 acceptance 绝对不变
-    const p1 = projectCanonicalVerdictToLegacy(fixedCanonicalResult, { terminalStatus: 'PROCESSING', isProcessing: true });
+    const p1 = projectCanonicalVerdictToLegacy(fixedCanonicalResult, {
+      terminalStatus: 'PROCESSING',
+      isProcessing: true,
+    });
     expect(p1.passed).toBe(true);
     expect(p1.acceptance).toBe('ACCEPTED');
     expect(p1.status).toBe('PROCESSING'); // 仅展示状态变化
     expect(p1.verdict).toBe('PROCESSING'); // 仅兼容展示字段
 
-    const p2 = projectCanonicalVerdictToLegacy(fixedCanonicalResult, { terminalStatus: 'SUCCESS', isProcessing: false });
+    const p2 = projectCanonicalVerdictToLegacy(fixedCanonicalResult, {
+      terminalStatus: 'SUCCESS',
+      isProcessing: false,
+    });
     expect(p2.passed).toBe(true);
     expect(p2.acceptance).toBe('ACCEPTED');
     expect(p2.status).toBe('SUCCESS');

@@ -88,7 +88,7 @@ export async function fetchCsrfToken(baseUrl: string, cookies: string): Promise<
         Accept: 'application/json, text/javascript, */*; q=0.01',
       },
     },
-    1
+    1,
   );
 
   if (!response.ok) {
@@ -124,7 +124,8 @@ export async function loadPanquSession(sessionFilePath?: string, targetEnv = 'te
   }
   const session = config.sessions?.find((s) => s.env === targetEnv);
   if (!session) throw new Error(`SESSION_ENV_NOT_FOUND: 在配置中未找到 env='${targetEnv}' 的可用会话`);
-  if (!session.base_url || !session.cookie_string) throw new Error('SESSION_INCOMPLETE: 会话缺失 base_url 或 cookie_string');
+  if (!session.base_url || !session.cookie_string)
+    throw new Error('SESSION_INCOMPLETE: 会话缺失 base_url 或 cookie_string');
   return session;
 }
 
@@ -169,7 +170,7 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
   let videoAlias: string | undefined;
   if (mediaType === 'video') {
     const rawAlias = typeof options.alias === 'string' ? options.alias.trim() : undefined;
-    videoAlias = rawAlias && rawAlias.length > 0 ? rawAlias : (modelId === 84 ? 'Wan3.0' : undefined);
+    videoAlias = rawAlias && rawAlias.length > 0 ? rawAlias : modelId === 84 ? 'Wan3.0' : undefined;
     if (!videoAlias) {
       return {
         ok: false,
@@ -251,7 +252,7 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
       },
       body: bodyParams.toString(),
     },
-    1
+    1,
   );
 
   const durationMs = Date.now() - startTime;
@@ -265,22 +266,44 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
 
   const taskId = typeof jsonResp.data === 'number' ? jsonResp.data : (jsonResp.data?.id ?? 0);
   const ok = jsonResp.code === 1 && taskId > 0;
-  return { ok, taskId, message: jsonResp.msg || (ok ? '提交成功' : '提交失败'), durationMs, rawResponse: jsonResp as Record<string, unknown> };
+  return {
+    ok,
+    taskId,
+    message: jsonResp.msg || (ok ? '提交成功' : '提交失败'),
+    durationMs,
+    rawResponse: jsonResp as Record<string, unknown>,
+  };
 }
 
 export async function pollTaskStatus(
   taskId: number,
-  options: PollTaskStatusOptions
-): Promise<{ finalSnapshot: TaskStatusSnapshot; totalPolls: number; timeline: { timeMs: number; status: number; progress: number }[] }> {
+  options: PollTaskStatusOptions,
+): Promise<{
+  finalSnapshot: TaskStatusSnapshot;
+  totalPolls: number;
+  timeline: { timeMs: number; status: number; progress: number }[];
+}> {
   const { baseUrl, cookies } = options;
   const timeoutMs = (options.pollTimeoutSec ?? 30) * 1000;
   const intervalMs = options.pollIntervalMs ?? 3000;
   const startTime = Date.now();
   const timeline: { timeMs: number; status: number; progress: number }[] = [];
-  const statusMap: Record<number, string> = { 1: '排队中 (Queued)', 2: '成功 (Success)', 3: '失败 (Failed)', 4: '异常 (Error)' };
+  const statusMap: Record<number, string> = {
+    1: '排队中 (Queued)',
+    2: '成功 (Success)',
+    3: '失败 (Failed)',
+    4: '异常 (Error)',
+  };
 
   let pollCount = 0;
-  let latestSnapshot: TaskStatusSnapshot = { taskId, taskStatus: 0, statusLabel: '待处理 (Pending)', progress: 0, pollCount: 0, durationMs: 0 };
+  let latestSnapshot: TaskStatusSnapshot = {
+    taskId,
+    taskStatus: 0,
+    statusLabel: '待处理 (Pending)',
+    progress: 0,
+    pollCount: 0,
+    durationMs: 0,
+  };
   const statusUrl = new URL('/aivideo/v2/task_status/apiGetStatus', baseUrl).toString();
 
   while (Date.now() - startTime < timeoutMs) {
@@ -292,15 +315,21 @@ export async function pollTaskStatus(
     try {
       const res = await fetchWithRetry(statusUrl, {
         method: 'POST',
-        headers: { Cookie: cookies, 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0' },
+        headers: {
+          Cookie: cookies,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0 PanquDevTestAgent/1.0',
+        },
         body: form.toString(),
       });
 
       if (res.ok) {
         const body = (await res.json()) as any;
-        const taskObj = Array.isArray(body?.data) ? body.data.find((item: any) => Number(item.id) === taskId) : (body?.data?.[taskId] ?? body?.data);
+        const taskObj = Array.isArray(body?.data)
+          ? body.data.find((item: any) => Number(item.id) === taskId)
+          : (body?.data?.[taskId] ?? body?.data);
         if (taskObj) {
-          const statusObj = (typeof taskObj.status === 'object' && taskObj.status !== null) ? taskObj.status : taskObj;
+          const statusObj = typeof taskObj.status === 'object' && taskObj.status !== null ? taskObj.status : taskObj;
           const taskStatus = Number(statusObj.task_status ?? (typeof taskObj.status === 'number' ? taskObj.status : 0));
           latestSnapshot = {
             taskId,
@@ -313,23 +342,24 @@ export async function pollTaskStatus(
             pollCount,
             durationMs: Date.now() - startTime,
           };
-          timeline.push({ timeMs: latestSnapshot.durationMs, status: latestSnapshot.taskStatus, progress: latestSnapshot.progress });
+          timeline.push({
+            timeMs: latestSnapshot.durationMs,
+            status: latestSnapshot.taskStatus,
+            progress: latestSnapshot.progress,
+          });
           if (options.onProgress) options.onProgress(latestSnapshot);
           if (taskStatus === 2 || taskStatus === 3 || taskStatus === 4) break;
         }
       }
-    } catch { /* 容忍单次轮询网络抖动 */ }
+    } catch {
+      /* 容忍单次轮询网络抖动 */
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   return { finalSnapshot: latestSnapshot, totalPolls: pollCount, timeline };
 }
 
-export type BillingQueryStatus =
-  | 'QUERY_SUCCESS'
-  | 'QUERY_ERROR'
-  | 'QUERY_TIMEOUT'
-  | 'AUTH_FAILED'
-  | 'PARSE_ERROR';
+export type BillingQueryStatus = 'QUERY_SUCCESS' | 'QUERY_ERROR' | 'QUERY_TIMEOUT' | 'AUTH_FAILED' | 'PARSE_ERROR';
 
 export interface BillingQueryResult {
   status: BillingQueryStatus;
@@ -353,7 +383,7 @@ export interface BillingQueryResult {
 export async function queryTaskBillingLogs(
   taskId: number,
   session: PanquSession,
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number } = {},
 ): Promise<BillingQueryResult> {
   const timeoutMs = options.timeoutMs ?? 8000;
   const baseUrl = session.base_url;
@@ -369,7 +399,7 @@ export async function queryTaskBillingLogs(
     const opParam = JSON.stringify({ task_id: '=' });
     const adminScoreUrl = new URL(
       `/auth/adminscore/index?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
-      baseUrl
+      baseUrl,
     ).toString();
 
     const ctrl = new AbortController();
@@ -387,7 +417,7 @@ export async function queryTaskBillingLogs(
           },
           signal: ctrl.signal,
         },
-        2
+        2,
       );
 
       if (res.status === 401 || res.status === 403) {
@@ -418,7 +448,7 @@ export async function queryTaskBillingLogs(
               const opSource = JSON.stringify({ source_id: '=' });
               const sourceUrl = new URL(
                 `/auth/adminscore/index?filter=${encodeURIComponent(filterSource)}&op=${encodeURIComponent(opSource)}`,
-                baseUrl
+                baseUrl,
               ).toString();
               const sourceRes = await fetchWithRetry(
                 sourceUrl,
@@ -432,7 +462,7 @@ export async function queryTaskBillingLogs(
                   },
                   signal: ctrl.signal,
                 },
-                2
+                2,
               );
               if (sourceRes.ok) {
                 const sourceBody = (await sourceRes.json()) as any;
@@ -451,7 +481,11 @@ export async function queryTaskBillingLogs(
             const memoStr = String(r.remark || r.source_name || r.memo || '');
             const parsedTaskId = isSourceIdMatch
               ? taskId
-              : (hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined));
+              : hasTaskId
+                ? Number(r.task_id)
+                : memoStr.includes(String(taskId))
+                  ? taskId
+                  : undefined;
             return {
               id: r.id,
               task_id: parsedTaskId,
@@ -490,7 +524,7 @@ export async function queryTaskBillingLogs(
   try {
     const recordsUrl = new URL(
       `/aivideo/v2/billing/apiPersonalRecords?page=1&limit=100&days=30&keyword=${encodeURIComponent(String(taskId))}`,
-      baseUrl
+      baseUrl,
     ).toString();
 
     const ctrl = new AbortController();
@@ -508,7 +542,7 @@ export async function queryTaskBillingLogs(
           },
           signal: ctrl.signal,
         },
-        2
+        2,
       );
 
       if (res.status === 401 || res.status === 403) {
@@ -546,12 +580,12 @@ export async function queryTaskBillingLogs(
         const matchedLogs: ScoreLogEntry[] = body.data.rows.map((r: any) => {
           const hasTaskId = r.task_id !== undefined && r.task_id !== null && r.task_id !== '';
           const memoStr = String(r.type_text || r.model || r.project || '');
-          const parsedTaskId = hasTaskId ? Number(r.task_id) : (memoStr.includes(String(taskId)) ? taskId : undefined);
+          const parsedTaskId = hasTaskId ? Number(r.task_id) : memoStr.includes(String(taskId)) ? taskId : undefined;
           return {
             id: r.id,
             task_id: parsedTaskId,
             type: Number(r.record_type ?? r.type ?? 2),
-            score: Number(r.points !== undefined ? Math.abs(r.points) : r.score ?? 0),
+            score: Number(r.points !== undefined ? Math.abs(r.points) : (r.score ?? 0)),
             memo: r.type_text || r.model || r.project,
             createtime: r.time || r.createtime,
           };
@@ -644,7 +678,7 @@ export interface TaskRuntimeDetails {
 export async function queryTaskRuntimeDetails(
   taskId: number,
   session: PanquSession,
-  options: { projectId?: number; timeoutMs?: number } = {}
+  options: { projectId?: number; timeoutMs?: number } = {},
 ): Promise<TaskRuntimeDetails> {
   const timeoutMs = options.timeoutMs ?? 8000;
   const baseUrl = session.base_url;
@@ -687,7 +721,10 @@ export async function queryTaskRuntimeDetails(
       missingFields: ['projectId'],
     };
   } else {
-    const editUrl = new URL(`/aivideo/v2/video/getEditData?project_id=${projectId}&video_id=${taskId}`, baseUrl).toString();
+    const editUrl = new URL(
+      `/aivideo/v2/video/getEditData?project_id=${projectId}&video_id=${taskId}`,
+      baseUrl,
+    ).toString();
     endpoints.getEditData.url = editUrl;
     try {
       const ctrl = new AbortController();
@@ -705,7 +742,7 @@ export async function queryTaskRuntimeDetails(
             },
             signal: ctrl.signal,
           },
-          1
+          1,
         );
         endpoints.getEditData.httpStatus = res.status;
         const text = await res.text();
@@ -749,7 +786,7 @@ export async function queryTaskRuntimeDetails(
   const opParam = JSON.stringify({ source_id: '=' });
   const retryLogUrl = new URL(
     `/aivideo/diversion/retrylog?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
-    baseUrl
+    baseUrl,
   ).toString();
   endpoints.retrylog.url = retryLogUrl;
 
@@ -769,7 +806,7 @@ export async function queryTaskRuntimeDetails(
           },
           signal: ctrl.signal,
         },
-        1
+        1,
       );
       endpoints.retrylog.httpStatus = res.status;
       const text = await res.text();
@@ -825,7 +862,7 @@ export async function queryTaskRuntimeDetails(
   // 3. 查询 /aivideo/exceptionaltaskdata/index?filter={"source_id":taskId}&op={"source_id":"="}
   const expUrl = new URL(
     `/aivideo/exceptionaltaskdata/index?filter=${encodeURIComponent(filterParam)}&op=${encodeURIComponent(opParam)}`,
-    baseUrl
+    baseUrl,
   ).toString();
   endpoints.exceptionaltask.url = expUrl;
 
@@ -845,7 +882,7 @@ export async function queryTaskRuntimeDetails(
           },
           signal: ctrl.signal,
         },
-        1
+        1,
       );
       endpoints.exceptionaltask.httpStatus = res.status;
       const text = await res.text();
@@ -907,4 +944,3 @@ export async function queryTaskRuntimeDetails(
 
   return result;
 }
-

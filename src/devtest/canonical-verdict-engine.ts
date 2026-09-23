@@ -85,7 +85,7 @@ export function getNestedValue(obj: unknown, path: string): unknown {
 export function evaluateOperator(
   operator: string,
   actual: unknown,
-  expected: unknown
+  expected: unknown,
 ): { status: 'PASS' | 'FAIL' | 'UNVERIFIED'; reason?: string } {
   switch (operator) {
     case 'EQUALS': {
@@ -156,7 +156,10 @@ export function evaluateOperator(
     case 'GREATER_THAN': {
       // 数值比较只接受有效数字，禁止隐式类型转换
       if (typeof actual !== 'number' || isNaN(actual) || typeof expected !== 'number' || isNaN(expected)) {
-        return { status: 'UNVERIFIED', reason: `GREATER_THAN 仅支持有效数字比较，收到 actual=${String(actual)}, expected=${String(expected)}` };
+        return {
+          status: 'UNVERIFIED',
+          reason: `GREATER_THAN 仅支持有效数字比较，收到 actual=${String(actual)}, expected=${String(expected)}`,
+        };
       }
       return actual > expected
         ? { status: 'PASS' }
@@ -165,7 +168,10 @@ export function evaluateOperator(
 
     case 'LESS_THAN': {
       if (typeof actual !== 'number' || isNaN(actual) || typeof expected !== 'number' || isNaN(expected)) {
-        return { status: 'UNVERIFIED', reason: `LESS_THAN 仅支持有效数字比较，收到 actual=${String(actual)}, expected=${String(expected)}` };
+        return {
+          status: 'UNVERIFIED',
+          reason: `LESS_THAN 仅支持有效数字比较，收到 actual=${String(actual)}, expected=${String(expected)}`,
+        };
       }
       return actual < expected
         ? { status: 'PASS' }
@@ -221,7 +227,7 @@ export function evaluateOperator(
  */
 export function evaluateCanonicalVerdict(
   spec: Readonly<CanonicalTestSpec>,
-  envelopes: ReadonlyArray<CanonicalEvidenceEnvelope>
+  envelopes: ReadonlyArray<CanonicalEvidenceEnvelope>,
 ): CanonicalVerdictResult {
   const reasons: string[] = [];
   const warnings: string[] = [];
@@ -229,7 +235,9 @@ export function evaluateCanonicalVerdict(
   const evidenceIdsUsedSet = new Set<string>();
 
   const addBlocker = (b: CanonicalBlocker) => {
-    if (!blockers.some((item) => item.code === b.code && item.evidenceKey === b.evidenceKey && item.message === b.message)) {
+    if (
+      !blockers.some((item) => item.code === b.code && item.evidenceKey === b.evidenceKey && item.message === b.message)
+    ) {
       blockers.push(b);
     }
   };
@@ -265,9 +273,13 @@ export function evaluateCanonicalVerdict(
     const envValidation = validateEvidenceEnvelope(env);
     if (!envValidation.valid) {
       warnings.push(
-        `证据 [${env?.evidenceId || 'unknown'}] 协议校验未通过 (${envValidation.errors.map((e) => e.message).join('; ')})，已排除`
+        `证据 [${env?.evidenceId || 'unknown'}] 协议校验未通过 (${envValidation.errors.map((e) => e.message).join('; ')})，已排除`,
       );
-      if (envValidation.errors.some((e) => e.code === 'SERVER_API_IMPERSONATION_FORBIDDEN' || e.code === 'SOURCE_TYPE_KEY_MISMATCH')) {
+      if (
+        envValidation.errors.some(
+          (e) => e.code === 'SERVER_API_IMPERSONATION_FORBIDDEN' || e.code === 'SOURCE_TYPE_KEY_MISMATCH',
+        )
+      ) {
         addBlocker({
           code: 'UNTRUSTED_EVIDENCE_SOURCE',
           evidenceKey: env?.evidenceKey || 'UNKNOWN',
@@ -278,15 +290,13 @@ export function evaluateCanonicalVerdict(
     }
 
     if (env.testId !== spec.testId) {
-      warnings.push(
-        `证据 [${env.evidenceId}] 的 testId (${env.testId}) 与 TestSpec (${spec.testId}) 不匹配，已排除`
-      );
+      warnings.push(`证据 [${env.evidenceId}] 的 testId (${env.testId}) 与 TestSpec (${spec.testId}) 不匹配，已排除`);
       continue;
     }
 
     if (env.environment !== spec.environment) {
       warnings.push(
-        `证据 [${env.evidenceId}] 的 environment (${env.environment}) 与 TestSpec (${spec.environment}) 不匹配，已排除`
+        `证据 [${env.evidenceId}] 的 environment (${env.environment}) 与 TestSpec (${spec.environment}) 不匹配，已排除`,
       );
       continue;
     }
@@ -429,12 +439,10 @@ export function evaluateCanonicalVerdict(
     const isRequired = spec.requiredEvidence?.includes(env.evidenceKey);
     if (!isRequired && env.observationStatus === 'FAIL') {
       const isLinkedToCriticalAssertion = assertions.some(
-        (a) => a.critical === true && a.evidenceKey === env.evidenceKey
+        (a) => a.critical === true && a.evidenceKey === env.evidenceKey,
       );
       if (!isLinkedToCriticalAssertion) {
-        warnings.push(
-          `可选证据 [${env.evidenceKey}] 观察状态为 FAIL，但未关联关键断言，不影响最终裁决`
-        );
+        warnings.push(`可选证据 [${env.evidenceKey}] 观察状态为 FAIL，但未关联关键断言，不影响最终裁决`);
       }
     }
   }
@@ -447,12 +455,26 @@ export function evaluateCanonicalVerdict(
   for (const d of reqEvaluation.details) {
     if (!d.matched) {
       if (d.envelope?.collectionStatus === 'BLOCKED') {
-        addBlocker({ code: 'EVIDENCE_COLLECTION_BLOCKED', evidenceKey: d.key, message: d.reason || `证据采集被阻断 [${d.key}]` });
+        addBlocker({
+          code: 'EVIDENCE_COLLECTION_BLOCKED',
+          evidenceKey: d.key,
+          message: d.reason || `证据采集被阻断 [${d.key}]`,
+        });
       } else if (d.reason?.includes('REAL 模式下') || d.reason?.includes('来源不能满足')) {
         addBlocker({ code: 'UNTRUSTED_EVIDENCE_SOURCE', evidenceKey: d.key, message: d.reason });
       } else if (spec.executionMode === 'REAL' && d.key.includes('GATEWAY_CHANNEL')) {
-        addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: d.key, message: d.reason || `缺少 NewAPI 网关渠道凭据 [${d.key}]` });
-      } else if (d.key.includes('PRICING') || (d.key === 'BILLING_LEDGER:TASK_RECORDS' && ((spec.inputs as any)?.pricingDetermined === false || (spec.metadata as any)?.allowPassPricing === false || (spec.inputs as any)?.pricingAllowPass === false))) {
+        addBlocker({
+          code: 'GATEWAY_CHANNEL_BLOCKED',
+          evidenceKey: d.key,
+          message: d.reason || `缺少 NewAPI 网关渠道凭据 [${d.key}]`,
+        });
+      } else if (
+        d.key.includes('PRICING') ||
+        (d.key === 'BILLING_LEDGER:TASK_RECORDS' &&
+          ((spec.inputs as any)?.pricingDetermined === false ||
+            (spec.metadata as any)?.allowPassPricing === false ||
+            (spec.inputs as any)?.pricingAllowPass === false))
+      ) {
         addBlocker({ code: 'PRICING_UNVERIFIED', evidenceKey: d.key, message: '刊例定价未核准或未确定单价' });
       } else if (d.key.includes('TASK_STATUS')) {
         addBlocker({ code: 'TASK_NOT_TERMINAL', evidenceKey: d.key, message: d.reason || '任务尚未到达终态 SUCCESS' });
@@ -465,17 +487,34 @@ export function evaluateCanonicalVerdict(
       addBlocker({ code: 'TASK_NOT_TERMINAL', evidenceKey: key, message: '任务尚未到达终态 SUCCESS' });
     } else if (spec.executionMode === 'REAL' && key.includes('GATEWAY_CHANNEL')) {
       addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: key, message: '网关渠道证据未确认通过' });
-    } else if (key === 'BILLING_LEDGER:TASK_RECORDS' && ((spec.inputs as any)?.pricingDetermined === false || (spec.metadata as any)?.allowPassPricing === false || (spec.inputs as any)?.pricingAllowPass === false)) {
+    } else if (
+      key === 'BILLING_LEDGER:TASK_RECORDS' &&
+      ((spec.inputs as any)?.pricingDetermined === false ||
+        (spec.metadata as any)?.allowPassPricing === false ||
+        (spec.inputs as any)?.pricingAllowPass === false)
+    ) {
       addBlocker({ code: 'PRICING_UNVERIFIED', evidenceKey: key, message: '刊例定价未核准或未确定单价' });
     }
   }
 
   for (const env of validEnvelopes) {
     if (env.collectionStatus === 'BLOCKED') {
-      addBlocker({ code: 'EVIDENCE_BLOCKED', evidenceKey: env.evidenceKey, message: env.error?.message || `证据 [${env.evidenceKey}] 处于 BLOCKED 状态` });
+      addBlocker({
+        code: 'EVIDENCE_BLOCKED',
+        evidenceKey: env.evidenceKey,
+        message: env.error?.message || `证据 [${env.evidenceKey}] 处于 BLOCKED 状态`,
+      });
     }
-    if (spec.executionMode === 'REAL' && env.evidenceKey.includes('GATEWAY_CHANNEL') && env.observationStatus === 'UNVERIFIED') {
-      addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: env.evidenceKey, message: `网关渠道证据未确认通过: ${String(env.normalizedFields?.actualValue || 'UNVERIFIED')}` });
+    if (
+      spec.executionMode === 'REAL' &&
+      env.evidenceKey.includes('GATEWAY_CHANNEL') &&
+      env.observationStatus === 'UNVERIFIED'
+    ) {
+      addBlocker({
+        code: 'GATEWAY_CHANNEL_BLOCKED',
+        evidenceKey: env.evidenceKey,
+        message: `网关渠道证据未确认通过: ${String(env.normalizedFields?.actualValue || 'UNVERIFIED')}`,
+      });
     }
   }
 
@@ -483,9 +522,7 @@ export function evaluateCanonicalVerdict(
   const hasRequiredEvidenceFail = reqEvaluation.failedEvidenceKeys.length > 0;
 
   // (3) FAIL 优先级二：任一 critical deterministic assertion 明确失败
-  const hasCriticalAssertionFail = assertionResults.some(
-    (a) => a.assertion.critical === true && a.status === 'FAIL'
-  );
+  const hasCriticalAssertionFail = assertionResults.some((a) => a.assertion.critical === true && a.status === 'FAIL');
 
   if (hasRequiredEvidenceFail || hasCriticalAssertionFail) {
     if (hasRequiredEvidenceFail) {
@@ -521,16 +558,14 @@ export function evaluateCanonicalVerdict(
 
   // (5) UNVERIFIED 优先级二：关键断言缺少绑定、字段缺失或无法计算
   const hasUnverifiedCriticalAssertion = assertionResults.some(
-    (a) => a.assertion.critical === true && a.status === 'UNVERIFIED'
+    (a) => a.assertion.critical === true && a.status === 'UNVERIFIED',
   );
 
   // (6) UNVERIFIED 优先级三：AI_OBSERVATION 和 USER_ASSERTION 不能单独让业务验收 PASS
   const allUsedEnvelopes = validEnvelopes.filter((e) => evidenceIdsUsedSet.has(e.evidenceId));
   const onlySubjectiveEvidence =
     allUsedEnvelopes.length > 0 &&
-    allUsedEnvelopes.every(
-      (e) => e.sourceType === 'AI_OBSERVATION' || e.sourceType === 'USER_ASSERTION'
-    );
+    allUsedEnvelopes.every((e) => e.sourceType === 'AI_OBSERVATION' || e.sourceType === 'USER_ASSERTION');
 
   if (
     hasMissingRequiredEvidence ||

@@ -16,12 +16,8 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import type {
-  CanonicalTestSpec,
-  CanonicalEvidenceEnvelope,
-} from '../../../src/devtest/canonical-protocol.js';
+import type { CanonicalTestSpec } from '../../../src/devtest/canonical-protocol.js';
 import * as coreKernel from '../../../src/devtest/core-kernel.js';
-import type { VerifyKernelOptions, VerifyKernelResult } from '../../../src/devtest/core-kernel.js';
 import { createSyntheticValidMp4 } from '../../../src/devtest/media-inspector.js';
 import {
   classifyShadowDifference,
@@ -56,7 +52,7 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
     testId: string,
     expectedPoints = 70,
     expectedChannelId = 2,
-    overrides?: Partial<CanonicalTestSpec>
+    overrides?: Partial<CanonicalTestSpec>,
   ): CanonicalTestSpec => {
     const isReal = overrides?.executionMode === 'REAL';
     const taskKey = isReal ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
@@ -94,12 +90,7 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
       ],
       costLimit: { maxCostPoints: expectedPoints },
       sideEffectPolicy: 'ALLOW_PAID',
-      requiredEvidence: [
-        taskKey,
-        'MEDIA_BINARY:CONTAINER_CHECK',
-        'BILLING_LEDGER:TASK_RECORDS',
-        routingKey,
-      ],
+      requiredEvidence: [taskKey, 'MEDIA_BINARY:CONTAINER_CHECK', 'BILLING_LEDGER:TASK_RECORDS', routingKey],
       ...overrides,
     };
   };
@@ -324,7 +315,8 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '历史基准对离线手填渠道放行 PASS；新引擎强制隔离声明为 USER_ASSERTION，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes:
+        '历史基准对离线手填渠道放行 PASS；新引擎强制隔离声明为 USER_ASSERTION，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 9: 服务端实际渠道与目标渠道不一致
@@ -438,7 +430,8 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '历史基准仅凭代码静态配置查表放行 PASS；新引擎在 REAL Spec 下缺少 SERVER_API 渠道证据，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes:
+        '历史基准仅凭代码静态配置查表放行 PASS；新引擎在 REAL Spec 下缺少 SERVER_API 渠道证据，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 13: 可信网关快照存在
@@ -536,7 +529,8 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
           'SERVER_API:ROUTING_CHANNEL',
         ],
       }),
-      notes: '历史基准在 fixture 模式放行 PASS；新引擎在 REAL Spec 下拒绝 FIXTURE 冒充，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
+      notes:
+        '历史基准在 fixture 模式放行 PASS；新引擎在 REAL Spec 下拒绝 FIXTURE 冒充，收紧为 UNVERIFIED (EXPECTED_STRICTER)',
     },
 
     // 场景 16: getEditData/extra 证据缺失
@@ -785,9 +779,7 @@ describe('Phase 1.5B 表驱动 Canonical 回归测试 (对齐冻结的 Golden Ex
         ...shadowTestCases[0],
         goldenExpectation: undefined as any,
       };
-      await expect(runSingleShadowComparison(tcWithoutGolden)).rejects.toThrowError(
-        /缺少必须的 goldenExpectation/
-      );
+      await expect(runSingleShadowComparison(tcWithoutGolden)).rejects.toThrowError(/缺少必须的 goldenExpectation/);
     });
 
     for (const tc of shadowTestCases) {

@@ -24,7 +24,7 @@ export interface McpRpcResponse {
 
 export async function processMcpRequest(
   service: DevTestMcpService,
-  request: McpRpcRequest
+  request: McpRpcRequest,
 ): Promise<McpRpcResponse | null> {
   if (request.id === undefined) return null;
   if (request.method === 'initialize') {
@@ -86,13 +86,8 @@ export async function processMcpRequest(
       };
     }
     const result = await service.call({ ...args, action });
-    const reportText =
-      (result as any)?.report ||
-      (result as any)?.summary ||
-      JSON.stringify(result, null, 2);
-    const isError = Boolean(
-      (result as any)?.isError ?? (result.ok === false && !(result as any)?.status)
-    );
+    const reportText = (result as any)?.report || (result as any)?.summary || JSON.stringify(result, null, 2);
+    const isError = Boolean((result as any)?.isError ?? (result.ok === false && !(result as any)?.status));
     return {
       jsonrpc: '2.0',
       id: request.id,
@@ -143,7 +138,8 @@ export async function serveDevTestMcp(projectRoot = process.cwd()): Promise<void
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length && (args.length !== 2 || args[0] !== '--project-root')) throw new Error('Usage: devtest-mcp [--project-root <repository>]');
+  if (args.length && (args.length !== 2 || args[0] !== '--project-root'))
+    throw new Error('Usage: devtest-mcp [--project-root <repository>]');
   // Keep third-party runtime diagnostics off the JSON-RPC channel.
   console.log = (...values: unknown[]) => console.error(...values);
   await serveDevTestMcp(args[1]);

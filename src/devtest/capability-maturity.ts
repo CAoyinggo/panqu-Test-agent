@@ -13,10 +13,7 @@
  */
 
 export type CapabilityMaturityLevel =
-  | 'IMPLEMENTED'
-  | 'CONTRACT_ONLY'
-  | 'BLOCKED_DATA_MISSING'
-  | 'DEFERRED_EXTERNAL_RUNTIME';
+  'IMPLEMENTED' | 'CONTRACT_ONLY' | 'BLOCKED_DATA_MISSING' | 'DEFERRED_EXTERNAL_RUNTIME';
 
 export const CAPABILITY_MATURITY_LEVELS: readonly CapabilityMaturityLevel[] = Object.freeze([
   'IMPLEMENTED',
@@ -42,7 +39,8 @@ export const ABSORBED_CAPABILITIES_AUDIT: readonly AbsorbedCapabilityAudit[] = O
     maturity: 'DEFERRED_EXTERNAL_RUNTIME',
     scope: 'NOT_IN_ZERO_DEPENDENCY_SCOPE',
     whatWeHave: 'DOM/Network/Screenshot 证据信封规范、确定性时间戳/证据ID契约、只读与预算门禁、PNG二进制尺寸解析',
-    whatWeDoNotHave: '真实浏览器启动与控制、CDP 连接、真实的页面导航与交互执行器（不自制 CDP 框架，NOT_IN_ZERO_DEPENDENCY_SCOPE）',
+    whatWeDoNotHave:
+      '真实浏览器启动与控制、CDP 连接、真实的页面导航与交互执行器（不自制 CDP 框架，NOT_IN_ZERO_DEPENDENCY_SCOPE）',
     runtimeDependencyStatus: '未安装 playwright，依赖外部独立浏览器运行时，不在零依赖交付范围，禁止写为已接入',
   },
   {
@@ -65,7 +63,8 @@ export const ABSORBED_CAPABILITIES_AUDIT: readonly AbsorbedCapabilityAudit[] = O
     capabilityName: 'ReportPortal',
     maturity: 'IMPLEMENTED',
     scope: 'IN_ZERO_DEPENDENCY_SCOPE',
-    whatWeHave: '标准 ExportableVerdictRecord 递归深冻结纯映射、ResultSink 最小只写不读端口、本地 NDJSON 单向结果追加导出器',
+    whatWeHave:
+      '标准 ExportableVerdictRecord 递归深冻结纯映射、ResultSink 最小只写不读端口、本地 NDJSON 单向结果追加导出器',
     whatWeDoNotHave: 'ReportPortal 远程服务客户端、网络上报协议栈、双向状态同步与回写能力（只写不读，禁止回写）',
     runtimeDependencyStatus: '零外部依赖，本地 NDJSON 单向导出完全可用，远程上报保持 CONTRACT_ONLY',
   },
@@ -74,13 +73,14 @@ export const ABSORBED_CAPABILITIES_AUDIT: readonly AbsorbedCapabilityAudit[] = O
     maturity: 'BLOCKED_DATA_MISSING',
     scope: 'IN_ZERO_DEPENDENCY_SCOPE',
     whatWeHave: '真实 Git 变更收集器 (collectGitChangedPaths)、纯函数变更影响分析 (analyzeImpact)、需求追踪关联验证',
-    whatWeDoNotHave: '仓库权威需求映射文件 (devtest-requirements.json)（Git 变更可读但缺真实映射时严格标记 BLOCKED_DATA_MISSING，禁止创建虚假映射）',
+    whatWeDoNotHave:
+      '仓库权威需求映射文件 (devtest-requirements.json)（Git 变更可读但缺真实映射时严格标记 BLOCKED_DATA_MISSING，禁止创建虚假映射）',
     runtimeDependencyStatus: '零外部依赖，Git 变更收集与分析已就绪，受限于权威需求映射数据供给',
   },
 ]);
 
 export function getCapabilityAudit(
-  capability: 'Playwright' | 'Midscene' | 'Promptfoo' | 'ReportPortal' | 'wardenIQ'
+  capability: 'Playwright' | 'Midscene' | 'Promptfoo' | 'ReportPortal' | 'wardenIQ',
 ): AbsorbedCapabilityAudit {
   const item = ABSORBED_CAPABILITIES_AUDIT.find((c) => c.capabilityName === capability);
   if (!item) {

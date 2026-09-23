@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   fetchWithRetry,
-  fetchCsrfToken,
   loadPanquSession,
   submitMediaTask,
   pollTaskStatus,
@@ -17,6 +16,8 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   // ==========================================================================
@@ -112,11 +113,14 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('服务端业务失败：code=0 响应准确解析为 ok=false 且保留服务端错误信息', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ code: 0, msg: '当前账户积分余额不足，请充值后再试' }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ code: 0, msg: '当前账户积分余额不足，请充值后再试' }),
+          }) as unknown as Response,
+      );
 
       const res = await submitMediaTask({
         baseUrl: 'https://test.panqu.com',
@@ -133,11 +137,15 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('非 JSON 响应：HTTP 502/网关 HTML 页面抛出规范 SUBMIT_RESPONSE_NOT_JSON 异常', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: false,
-        status: 502,
-        text: async () => '<html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>',
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: false,
+            status: 502,
+            text: async () =>
+              '<html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>',
+          }) as unknown as Response,
+      );
 
       await expect(
         submitMediaTask({
@@ -147,7 +155,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           mediaType: 'video',
           modelId: 84,
           projectId: 10,
-        })
+        }),
       ).rejects.toThrow('SUBMIT_RESPONSE_NOT_JSON: HTTP 502 响应非 JSON');
     });
 
@@ -377,7 +385,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           mediaType: 'video',
           modelId: 84,
           projectId: 365,
-        })
+        }),
       ).rejects.toThrow('Simulated network transport socket error');
 
       expect(postCallCount).toBe(1);
@@ -620,24 +628,29 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('SUCCESS (嵌套 status 对象结构)：正确解析主站 apiGetStatus 的嵌套 data[0].status 结构', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          msg: '获取成功',
-          data: [{
-            id: 239414,
-            status: {
-              id: 239414,
-              task_status: 2,
-              progress: 100,
-              video_url: 'https://v.panqu.com.cn/video/20260918/17873_239414_1789717440.mp4',
-              last_frame_url: 'https://img.panqu.com.cn/lastframe/20260918/17873_239414_1789717440.png',
-            },
-          }],
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              msg: '获取成功',
+              data: [
+                {
+                  id: 239414,
+                  status: {
+                    id: 239414,
+                    task_status: 2,
+                    progress: 100,
+                    video_url: 'https://v.panqu.com.cn/video/20260918/17873_239414_1789717440.mp4',
+                    last_frame_url: 'https://img.panqu.com.cn/lastframe/20260918/17873_239414_1789717440.png',
+                  },
+                },
+              ],
+            }),
+          }) as unknown as Response,
+      );
 
       const { finalSnapshot, totalPolls } = await pollTaskStatus(239414, {
         baseUrl: 'https://test.panqu.com',
@@ -655,14 +668,17 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('FAILED (task_status=3)：正确结束轮询并提取服务端 error 字段', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          data: [{ id: 77702, task_status: 3, err: 'GPU 算力节点渲染异常', progress: 45 }],
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              data: [{ id: 77702, task_status: 3, err: 'GPU 算力节点渲染异常', progress: 45 }],
+            }),
+          }) as unknown as Response,
+      );
 
       const { finalSnapshot } = await pollTaskStatus(77702, {
         baseUrl: 'https://test.panqu.com',
@@ -679,14 +695,17 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('ERROR / ABNORMAL (task_status=4)：正确标记状态并结束轮询', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          data: [{ id: 77703, task_status: 4, error: '任务超时被系统撤销' }],
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              data: [{ id: 77703, task_status: 4, error: '任务超时被系统撤销' }],
+            }),
+          }) as unknown as Response,
+      );
 
       const { finalSnapshot } = await pollTaskStatus(77703, {
         baseUrl: 'https://test.panqu.com',
@@ -744,20 +763,23 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('data 字典/对象结构兼容：后端返回以 taskId 为 key 的字典格式亦能正常解析', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          data: {
-            '77705': {
-              id: 77705,
-              status: 2,
-              video_url: 'https://cdn.panqu.com/dict_video.mp4',
-            },
-          },
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              data: {
+                '77705': {
+                  id: 77705,
+                  status: 2,
+                  video_url: 'https://cdn.panqu.com/dict_video.mp4',
+                },
+              },
+            }),
+          }) as unknown as Response,
+      );
 
       const { finalSnapshot } = await pollTaskStatus(77705, {
         baseUrl: 'https://test.panqu.com',
@@ -772,14 +794,17 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('polling timeout：任务持续保持 status=1 直到超时退出，返回最新快照且不抛未捕获异常', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          data: [{ id: 77706, task_status: 1, progress: 10 }],
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              data: [{ id: 77706, task_status: 1, progress: 10 }],
+            }),
+          }) as unknown as Response,
+      );
 
       const startTime = Date.now();
       const { finalSnapshot, totalPolls } = await pollTaskStatus(77706, {
@@ -828,14 +853,17 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('未知状态码兼容：遇到未定义状态码回退为未知状态标签', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          code: 1,
-          data: [{ id: 77708, task_status: 99, progress: 50 }],
-        }),
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 1,
+              data: [{ id: 77708, task_status: 99, progress: 50 }],
+            }),
+          }) as unknown as Response,
+      );
 
       const { finalSnapshot } = await pollTaskStatus(77708, {
         baseUrl: 'https://test.panqu.com',
@@ -864,10 +892,16 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         JSON.stringify({
           sessions: [
             { env: 'preonline', base_url: 'https://pre.panqu.com', cookie_string: 'PHPSESSID=pre_123' },
-            { env: 'test', base_url: 'https://test.panqu.com', cookie_string: 'PHPSESSID=test_456', csrf_token: 'csrf_789', project_id: 12 },
+            {
+              env: 'test',
+              base_url: 'https://test.panqu.com',
+              cookie_string: 'PHPSESSID=test_456',
+              csrf_token: 'csrf_789',
+              project_id: 12,
+            },
           ],
         }),
-        'utf8'
+        'utf8',
       );
 
       const session = await loadPanquSession(filePath, 'test');
@@ -887,7 +921,11 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       try {
         await expect(loadPanquSession()).rejects.toThrow('SESSION_CONFIG_REQUIRED');
       } finally {
-        if (oldEnv) process.env.PANQU_SESSION_COOKIES_FILE = oldEnv;
+        if (oldEnv !== undefined) {
+          process.env.PANQU_SESSION_COOKIES_FILE = oldEnv;
+        } else {
+          delete process.env.PANQU_SESSION_COOKIES_FILE;
+        }
       }
     });
 
@@ -914,11 +952,13 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       await writeFile(
         filePath,
         JSON.stringify({ sessions: [{ env: 'prod', base_url: 'https://panqu.com', cookie_string: 'PHPSESSID=p' }] }),
-        'utf8'
+        'utf8',
       );
 
       try {
-        await expect(loadPanquSession(filePath, 'test')).rejects.toThrow("SESSION_ENV_NOT_FOUND: 在配置中未找到 env='test' 的可用会话");
+        await expect(loadPanquSession(filePath, 'test')).rejects.toThrow(
+          "SESSION_ENV_NOT_FOUND: 在配置中未找到 env='test' 的可用会话",
+        );
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -930,11 +970,13 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       await writeFile(
         filePath,
         JSON.stringify({ sessions: [{ env: 'test', base_url: 'https://test.panqu.com' }] }), // 缺少 cookie_string
-        'utf8'
+        'utf8',
       );
 
       try {
-        await expect(loadPanquSession(filePath, 'test')).rejects.toThrow('SESSION_INCOMPLETE: 会话缺失 base_url 或 cookie_string');
+        await expect(loadPanquSession(filePath, 'test')).rejects.toThrow(
+          'SESSION_INCOMPLETE: 会话缺失 base_url 或 cookie_string',
+        );
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -983,9 +1025,9 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         throw new Error(`Connection failed attempt ${callCount}`);
       });
 
-      await expect(
-        fetchWithRetry('https://test.panqu.com/api', { method: 'GET' }, 2)
-      ).rejects.toThrow('Connection failed attempt 2');
+      await expect(fetchWithRetry('https://test.panqu.com/api', { method: 'GET' }, 2)).rejects.toThrow(
+        'Connection failed attempt 2',
+      );
 
       expect(callCount).toBe(2);
     });
@@ -1007,19 +1049,20 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           return {
             ok: true,
             status: 200,
-            text: async () => JSON.stringify({
-              total: 1,
-              rows: [
-                {
-                  id: 9901,
-                  task_id: '88801',
-                  score: 40,
-                  remark: 'FastAdmin 任务扣费',
-                  createtime: 1726500000,
-                  type: 2,
-                },
-              ],
-            }),
+            text: async () =>
+              JSON.stringify({
+                total: 1,
+                rows: [
+                  {
+                    id: 9901,
+                    task_id: '88801',
+                    score: 40,
+                    remark: 'FastAdmin 任务扣费',
+                    createtime: 1726500000,
+                    type: 2,
+                  },
+                ],
+              }),
           } as unknown as Response;
         }
         return { ok: false, status: 404 } as unknown as Response;
@@ -1048,22 +1091,23 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           return {
             ok: true,
             status: 200,
-            text: async () => JSON.stringify({
-              code: 1,
-              data: {
-                total: 1,
-                rows: [
-                  {
-                    id: 6601,
-                    task_id: 88899,
-                    type: 2,
-                    points: -56,
-                    type_text: '视频生成任务预扣',
-                    time: '2026-09-17 12:00:00',
-                  },
-                ],
-              },
-            }),
+            text: async () =>
+              JSON.stringify({
+                code: 1,
+                data: {
+                  total: 1,
+                  rows: [
+                    {
+                      id: 6601,
+                      task_id: 88899,
+                      type: 2,
+                      points: -56,
+                      type_text: '视频生成任务预扣',
+                      time: '2026-09-17 12:00:00',
+                    },
+                  ],
+                },
+              }),
           } as unknown as Response;
         }
         return { ok: false, status: 404 } as unknown as Response;
@@ -1079,11 +1123,14 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
 
     it('鉴权失效感知：端点返回 401/403 准确识别为 AUTH_FAILED', async () => {
-      global.fetch = vi.fn().mockImplementation(async () => ({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-      } as unknown as Response));
+      global.fetch = vi.fn().mockImplementation(
+        async () =>
+          ({
+            ok: false,
+            status: 401,
+            statusText: 'Unauthorized',
+          }) as unknown as Response,
+      );
 
       const result = await queryTaskBillingLogs(88899, session);
       expect(result.status).toBe('AUTH_FAILED');
@@ -1157,4 +1204,3 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
     });
   });
 });
-
