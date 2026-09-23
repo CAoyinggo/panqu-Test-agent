@@ -211,16 +211,21 @@ jobs:
             echo "❌ Trivy 配置扫描未执行或报告无效"
             exit 2
           fi
+          if [ "$config_status" -ne 0 ] && [ "$config_status" -ne 42 ]; then
+            echo "❌ Trivy 配置扫描异常退出"
+            exit 2
+          fi
           if grep -q '"Target"' security-reports/trivy-config.json; then
             if [ "$config_status" -eq 42 ]; then
               echo "⚠ Trivy 配置扫描发现 HIGH/CRITICAL 问题（沿用原有非阻断策略）"
-            elif [ "$config_status" -ne 0 ]; then
-              echo "❌ Trivy 配置扫描异常退出"
-              exit 2
             else
               echo "✅ Trivy 配置扫描完成：无 HIGH/CRITICAL 问题"
             fi
           else
+            if [ "$config_status" -eq 42 ]; then
+              echo "❌ Trivy 报告无扫描目标却返回漏洞状态"
+              exit 2
+            fi
             echo "⚠ 配置扫描未运行：仓库中未包含 Dockerfile、Kubernetes 或 Terraform 等 IaC 配置文件（未发现扫描目标）"
           fi
           if command -v docker >/dev/null 2>&1 && [ -f deploy/docker/Dockerfile ]; then
