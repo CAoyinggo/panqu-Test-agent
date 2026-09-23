@@ -1,0 +1,364 @@
+{
+  "version": "1.0.0-draft",
+  "status": "UNVERIFIED_PENDING_AUTH",
+  "updatedAt": "2026-09-23",
+  "sourceUrl": "https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i",
+  "verificationNote": "飞书文档暂未对机器人授权(code: 131006)，本文件数据为人工转录草案，待授权后由自动化 API 验真",
+  "pointsExchangeRate": {
+    "pointsPerYuan": 10
+  },
+
+  "video": {
+    "wan3.0-standard": {
+      "name": "Wan 3.0 标准版",
+      "provider": "阿里",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 7,
+        "720p": 14,
+        "1080p": 27
+      }
+    },
+    "wan3.0-prime": {
+      "name": "wan3.0-video-prime",
+      "provider": "阿里",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 11,
+        "720p": 22,
+        "1080p": 44
+      }
+    },
+    "seedance-2.5": {
+      "name": "Seedance 2.5",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 21,
+        "720p": 46,
+        "1080p": 115
+      },
+      "referenceVideoInputPoints": {
+        "480p": 7,
+        "720p": 15,
+        "1080p": 50
+      }
+    },
+    "seedance-2.0": {
+      "name": "Seedance 2.0",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 15,
+        "720p": 30,
+        "1080p": 75,
+        "4k": 155
+      },
+      "referenceVideoInputPoints": {
+        "480p": 7,
+        "720p": 15,
+        "1080p": 50,
+        "4k": 50
+      }
+    },
+    "seedance-2.0-fast": {
+      "name": "Seedance 2.0 fast",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 12,
+        "720p": 25
+      }
+    },
+    "seedance-2.0-mini": {
+      "name": "Seedance 2.0 mini",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 8,
+        "720p": 16
+      }
+    },
+    "seedance-2.0-lite": {
+      "name": "Seedance 2.0 lite",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "720p": 21,
+        "1080p": 30
+      }
+    },
+    "seedream-1.5pro": {
+      "name": "Seedream 1.5pro",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p_audio": 5,
+        "480p_silent": 3,
+        "720p_audio": 12,
+        "720p_silent": 6,
+        "1080p_audio": 25,
+        "1080p_silent": 12
+      }
+    },
+    "seedream-1.0pro": {
+      "name": "Seedream 1.0pro",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 5,
+        "720p": 10,
+        "1080p": 22
+      }
+    },
+    "seedream-1.0pro-fast": {
+      "name": "Seedream 1.0pro fast",
+      "provider": "火山",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 2,
+        "720p": 3,
+        "1080p": 6
+      }
+    },
+    "happyhorse-1.0": {
+      "name": "HappyHorse 1.0",
+      "provider": "阿里",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "720p": 18,
+        "1080p": 30
+      }
+    },
+    "happyhorse-1.1": {
+      "name": "HappyHorse 1.1",
+      "provider": "阿里",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "480p": 10,
+        "720p": 18,
+        "1080p": 30
+      }
+    },
+    "kling3.0-omni": {
+      "name": "kling3.0-omni",
+      "provider": "腾讯",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "720p_no_ref_silent": 15,
+        "720p_no_ref_audio": 18,
+        "720p_ref_silent": 22,
+        "720p_ref_audio": 28,
+        "1080p_no_ref_silent": 18,
+        "1080p_no_ref_audio": 25,
+        "1080p_ref_silent": 30,
+        "1080p_ref_audio": 30,
+        "2k_no_ref_silent": 25,
+        "2k_no_ref_audio": 30,
+        "2k_ref_silent": 35,
+        "2k_ref_audio": 40,
+        "4k": 80
+      }
+    },
+    "minimax-h3-stable": {
+      "name": "Minimax H3 (稳定版)",
+      "provider": "腾讯",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "768p": 15,
+        "2k": 24
+      }
+    },
+    "minimax-h3-lowcost": {
+      "name": "Minimax H3 (低价版)",
+      "provider": "数据宝",
+      "billingType": "PER_SECOND",
+      "resolutions": {
+        "768p": 10,
+        "2k": 18
+      }
+    }
+  },
+  "image": {
+    "doubao-seedream-5.0-pro": {
+      "name": "Doubao-Seedream-5.0-Pro",
+      "provider": "火山",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 15,
+        "2k": 18
+      }
+    },
+    "doubao-seedream-5.0-lite": {
+      "name": "Doubao-Seedream-5.0-lite",
+      "provider": "火山",
+      "billingType": "FIXED",
+      "price": 12
+    },
+    "seedream-4.5": {
+      "name": "Seedream4.5",
+      "provider": "火山",
+      "billingType": "FIXED",
+      "price": 12
+    },
+    "nano-banana-pro-r": {
+      "name": "Nano Banana Pro (R线路)",
+      "provider": "R线路",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 10,
+        "2k": 10,
+        "4k": 15
+      }
+    },
+    "nano-banana-pro-k": {
+      "name": "Nano Banana Pro (K线路)",
+      "provider": "K线路",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 8,
+        "2k": 8,
+        "4k": 15
+      }
+    },
+    "nano-banana-pro-tencent": {
+      "name": "Nano Banana Pro (腾讯稳定版)",
+      "provider": "腾讯",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 25,
+        "2k": 25,
+        "4k": 45
+      }
+    },
+    "nano-banana-2-r": {
+      "name": "Nano Banana 2 (R线路)",
+      "provider": "R线路",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 10,
+        "2k": 10,
+        "4k": 15
+      }
+    },
+    "nano-banana-2-k": {
+      "name": "Nano Banana 2 (K线路)",
+      "provider": "K线路",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 5,
+        "2k": 5,
+        "4k": 10
+      }
+    },
+    "gpt-image-2-rh": {
+      "name": "GPT Image2 (Runninghub 稳定版B)",
+      "provider": "Runninghub",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 9,
+        "2k": 15,
+        "4k": 18
+      }
+    },
+    "gpt-image-2.5-lowcost": {
+      "name": "GPT Image2.5 (低价版)",
+      "provider": "官方",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 12
+      }
+    },
+    "gpt-image-2.5-stable": {
+      "name": "GPT Image2.5 (稳定版)",
+      "provider": "官方",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k_low": 5,
+        "1k_medium": 8,
+        "1k_high": 15,
+        "2k_low": 8,
+        "2k_medium": 10,
+        "2k_high": 18,
+        "4k_low": 10,
+        "4k_medium": 20,
+        "4k_high": 35
+      }
+    },
+    "gpt-image-2-pro": {
+      "name": "GPT Image2 Pro",
+      "provider": "Runninghub",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k_low": 15,
+        "1k_medium": 36,
+        "1k_high": 102,
+        "2k_low": 18,
+        "2k_medium": 57,
+        "2k_high": 195,
+        "4k_low": 21,
+        "4k_medium": 87,
+        "4k_high": 315
+      }
+    },
+    "midjourney-v7": {
+      "name": "Midjourney-v7",
+      "provider": "腾讯",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 14,
+        "2k": 16,
+        "4k": 20
+      }
+    },
+    "midjourney-v8.1": {
+      "name": "Midjourney-v8.1",
+      "provider": "腾讯",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 14,
+        "2k": 16,
+        "4k": 20
+      }
+    }
+  },
+  "textAndScript": {
+    "doubao-seed-2-0-lite": { "name": "doubao-seed-2-0-lite-260215", "price": 1 },
+    "doubao-1.8": { "name": "doubao 1.8 (1.4w字剧本)", "price": 5 },
+    "deepseek-3.2": { "name": "Deepseek 3.2", "price": 3 },
+    "deepseek-v4-pro-canvas": { "name": "deepseek-v4-pro (画布组件)", "price": 5 },
+    "scriptTiers": {
+      "0-1w": 60,
+      "1w-2w": 150,
+      "2w-3w": 300,
+      "3w-4w": 450,
+      "4w-5w": 600,
+      "5w-6w": 750
+    }
+  },
+  "audioAndTools": {
+    "doubao-tts": { "name": "doubao tts (seed-tts-2.0)", "price": 10 },
+    "seed-icl-voice-clone": { "name": "声音复刻 (seed-icl-2.0)", "price": 10 },
+    "seed-audio-creation": { "name": "seed-audio-1.0-multilingual", "price": 60 },
+    "mureka-bgm": { "name": "智能配乐 (Mureka)", "price": 30 },
+    "audio-separation-per-sec": 1,
+    "video-subtitle-erase-per-sec": 2,
+    "video-reverse-script-per-sec": 2,
+    "expression-convert": 5,
+    "style-transfer-per-sec": 12,
+    "qwen3.6-plus-audit": { "name": "一键审片 (Qwen3.6-Plus)", "price": 3 }
+  },
+  "baseTierRevisions": {
+    "doubao-seedream-5.0-lite": 8,
+    "seedream-4.5": 8,
+    "seedream-4.0": 6,
+    "seedream-3.0": 8,
+    "nano-banana-standard": { "1k": 6, "2k": 6, "4k": 10 },
+    "doubao-tts-base": 1,
+    "voice-clone-base": 5,
+    "workflow-image-base": 8,
+    "seedance-2.0-fast-input-480p": 5,
+    "seedance-2.0-fast-input-720p": 10,
+    "seedream-1.5pro-silent-720p": 5
+  }
+}

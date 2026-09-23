@@ -4,7 +4,7 @@
 
 | 维度 | 检查项 | 合法范围 / 预期行为 | 违规或异常处理 |
 |---|---|---|---|
-| **积分刊例价** | list_price_points | 必须为非负整数或符合模型定价阶梯 | 缺少单价时抛出 BILLING_PRICE_UNDEFINED 阻断任务 |
+| **积分刊例价** | list_price_points | 必须为非负整数或符合模型定价阶梯 | 缺少单价时抛出 BILLING_PRICE_UNDEFINED 阻断任务（权威刊例详见 [各模型刊例价格表](https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i)） |
 | **分辨率阶梯** | 视频分辨率单价 | 480P (低)、720P (中)、1080P (高) 单价严格区分 | 不支持的分辨率拒绝提交 |
 | **时长计费** | 时长单价乘数 | 按秒计费（如 2~30s 阶梯，不足 1s 按 1s 算） | 超出时长上限（30s）拦截 |
 | **账户余额** | 可用积分 (available_points) | 必须 >= required_points | 余额不足返回 402/10001，禁止创建任务 |

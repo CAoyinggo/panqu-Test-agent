@@ -16,6 +16,11 @@ description: 处理 Panqu/盼趣的计费、积分预估、消费明细、账单
   - `pq_absetting`：积分单价配置表（含 `list_price_points`）；
   - `pq_model_config`：模型配置与定价表；
   - `pq_score_log` 及 `pq_score_log_archive_*`：用户积分流水表（按月归档，跨月核查需注意合并归档表）。
+- **各模型刊例价格与分流对账数据源**：
+  - 飞书 Wiki 价格表（基础刊例）：[各模型价格表 (Sheet: 1eZi7i)](https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i)（待授权确认草案，详见 `references/official-pricing-catalog.md`）
+  - 飞书 Wiki 价格表（分流线路与多渠道）：[分流与多线路对应表 (Sheet: 35279c / tM4eqI)](https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c)（已通过 Keychain 鉴权验证，详见 `references/channel-cost-discount-catalog.md`；本地快照见 `references/feishu-live-pricing-cache.json`）
+  - 说明：**测试分流场景时，默认必须使用已验真的分流与多线路表格（NNxfwgI2fih5iekmKABcSn2Wnne）里的价格作为断言基准**；未通过 API 鉴权的数据必须标记为待确认。新增模型或分流调整时，表格动态维护，作为 `DEVTEST_EXPECTATION` 与核销基准的客观事实源。
+
 
 ## 二、19 个核心账单端点清单
 

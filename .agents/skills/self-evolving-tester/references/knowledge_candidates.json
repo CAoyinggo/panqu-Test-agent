@@ -295,5 +295,30 @@
       "expectedOutcome": "若任务非成功终态，必须存在对应退款流水且 netDeducted === 0",
       "verificationMethod": "BillingOracle.reconcileTaskLedger netChargeZero 校验"
     }
+  },
+  {
+    "id": "KC-20260923-14",
+    "claim": "各模型最新刊例价格表以飞书 Wiki 价格表 (Sheet: 1eZi7i) 为动态基准；多线路分流定价以分流线路表 (NNxfwgI2fih5iekmKABcSn2Wnne) 为基准。未通过 API 鉴权的数据必须标记为待确认。",
+    "evidence": [
+      {
+        "source": "https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c",
+        "location": "Sheet 35279c / tM4eqI",
+        "reason": "已通过 macOS Keychain 凭据调用飞书 OpenAPI 实时验真，包含各渠道成本与折扣"
+      },
+      {
+        "source": "https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i",
+        "location": "Sheet 1eZi7i",
+        "reason": "基础刊例表，机器人暂无权限(code: 131006)，作为待确认草案供核销参考"
+      }
+    ],
+    "confidence": "PROPOSED",
+    "domain": "Billing",
+    "status": "PENDING_VERIFICATION",
+    "derived_from": [
+      "https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c",
+      "https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i"
+    ],
+    "notes": "分流线路表已通过 Keychain 自动化验真；基础刊例表 TBikw4XZXiiygBkqphbckfkXnqF 需文档管理者为「AI测试智能体」开放阅读权限后方可升级为 CONFIRMED。",
+    "sourceCandidateId": "CAND-20260923-1407"
   }
 ]

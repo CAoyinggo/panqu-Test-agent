@@ -9,7 +9,9 @@
 - [ ] **模型 ID 与别名**：确认在 `pq_model_config` 表中已分配 `id`，在 `Ai.php` 的 `getNewAPIModelAlias()` 中完成主站 ID 与 NewAPI 别名的映射（如 `wan3.0-video`）；
 - [ ] **全量开关初始态**：明确 `is_newapi_global` 是置 1（全量走全局渠道）还是置 0（仅对特定组织分流）；
 - [ ] **NewAPI 只读核对**：在 `https://aiapis.panqu.com/keys` 确认测试分组 `panqu_test` 下存在可用渠道且配置了该模型；
-- [ ] **模型能力与规格**：确认模型支持的生成分类（视频/图片）、分辨率集合、画幅比例集合以及是否支持全能参考/首尾帧。
+- [ ] **模型能力与规格**：确认模型支持的生成分类（视频/图片）、分辨率集合、画幅比例集合以及是否支持全能参考/首尾帧；
+- [ ] **刊例定价核准**：查阅 [各模型刊例价格表 (飞书 Wiki Sheet)](https://panqu-ai.feishu.cn/wiki/TBikw4XZXiiygBkqphbckfkXnqF?sheet=1eZi7i) 获取最新单价（视频按秒/图片按张）；若该表未对机器人授权则参照 `references/channel-cost-discount-catalog.md` 并标记待确认，防止缺少单价触发 `BLOCKED_FALLBACK_PRICING`。
+
 
 ---
 

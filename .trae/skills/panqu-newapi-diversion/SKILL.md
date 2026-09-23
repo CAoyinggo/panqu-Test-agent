@@ -40,8 +40,9 @@ description: 处理 Panqu 主站已有图片与视频模型增加或修改 NewAP
 
 智能体在 `plan` 阶段必须遵循严格的事实探知优先级：
 
-$$\text{SOURCE\_INPUT} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT\_FALLBACK}$$
+$$\text{SOURCE\_INPUT} > \text{SOURCE\_FEISHU\_DIVERSION} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT\_FALLBACK}$$
 
+- **【核心规则：分流测试默认定价源】**：当执行分流变更或分流测试（`flowType='diversion'`、`VIDEO_DIVERSION_CHANGE`、`IMAGE_DIVERSION_CHANGE`）时，**默认依据飞书多线路分流定价表**（链接：`https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c`，底层工作表 `35279c` 国内线路、`tM4eqI` 分流线路对应表，本地快照 `references/feishu-live-pricing-cache.json`）中的刊例价与折扣作为基准断言依据。
 - **严禁**将 `SOURCE_DEFAULT_FALLBACK` 当作真实事实直接给出 `ACCEPTED` 判决。
 - **静态冲突**：若研发显式传入的别名/规格与静态白名单冲突，产生 `CONFIG_MISMATCH` 阻断。
 - **ChangeContract 契约必备字段**：
@@ -51,7 +52,7 @@ $$\text{SOURCE\_INPUT} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT
   4. `afterState`: 预期切流状态 (`flowType='diversion'`, `routeLine=10`, `decision='NEWAPI_GLOBAL' | 'NEWAPI_IMAGE' | 'NEWAPI_ORG_GROUP'`)
   5. `requiredFacts`: `['modelId', 'mediaType', 'flowType', 'alias', 'pricing']`
   6. `routingExpectation`: 切流预期、新分流线、组织分组快照
-  7. `pricing`: 真实刊例单价与核销基准
+  7. `pricing`: 真实刊例单价与核销基准（分流测试默认取自飞书分流线路表）
 
 ---
 

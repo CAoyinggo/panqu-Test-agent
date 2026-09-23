@@ -7,3 +7,4 @@
 | **渠道权重** | weight (1~100) | 多供应商渠道按权重比例分流 (如 50:50) | 权重为 0 的渠道不得接收流量 |
 | **模型能力联动** | ability | 仅支持首尾帧的模型传入参考视频时需拦截 | 接口在参数校验阶段返回 400 PARAMETER_CONFLICT |
 | **幂等键** | idempotency_key | 保证同一任务请求在新API网关处只创建一次 | 网关去重避免多次调用上游计费供应商 |
+| **分流默认定价** | diversion_pricing | 测试分流场景默认采用飞书多线路表 (`NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c` / `feishu-live-pricing-cache.json`) 的刊例价与折扣作为基准 | 缺失单价且未匹配到飞书定价表时标记 `MANUAL_REQUIRED` 阻断 |
