@@ -1,5 +1,5 @@
 // Panqu AI DevTest - 飞书各模型官方价格表自动同步脚本
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
@@ -9,66 +9,66 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
 function loadCredentials() {
-  if (process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) {
-    return {
-      app_id: process.env.FEISHU_APP_ID,
-      app_secret: process.env.FEISHU_APP_SECRET,
-      api_base_url: process.env.FEISHU_API_BASE_URL || 'https://open.feishu.cn',
-    };
-  }
-
-  // 严格按规范仅通过 macOS Keychain 应用凭据读取，杜绝本地明文硬编码与泄漏
   try {
-    const appId = execSync('security find-generic-password -s "codex.feishu.app-id" -w', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).trim();
-    const appSecret = execSync('security find-generic-password -s "codex.feishu.app-secret" -w', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    }).trim();
+    const appId = execFileSync(
+      'security',
+      ['find-generic-password', '-a', 'panqu-ai', '-s', 'codex.feishu.app-id', '-w'],
+      {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      },
+    ).trim();
+    const appSecret = execFileSync(
+      'security',
+      ['find-generic-password', '-a', 'panqu-ai', '-s', 'codex.feishu.app-secret', '-w'],
+      {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      },
+    ).trim();
     if (appId && appSecret) {
-      return {
-        app_id: appId,
-        app_secret: appSecret,
-        api_base_url: process.env.FEISHU_API_BASE_URL || 'https://open.feishu.cn',
-      };
+      return { app_id: appId, app_secret: appSecret };
     }
   } catch {
-    // Keychain 未配置或读取失败
+    // 凭据缺失或 Keychain 拒绝访问时关闭流程。
   }
 
   throw new Error(
-    '[Feishu] 未找到飞书应用凭据，请在 macOS Keychain 配置 (codex.feishu.app-id / codex.feishu.app-secret) 或设置 FEISHU_APP_ID / FEISHU_APP_SECRET 环境变量',
+    '[Feishu] 缺少 macOS Keychain 账户 panqu-ai 下的 codex.feishu.app-id 或 codex.feishu.app-secret 访问权限',
   );
 }
-
 
 function request(url, options = {}, body = null) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
-    const req = https.request({
-      hostname: urlObj.hostname,
-      port: 443,
-      path: urlObj.pathname + urlObj.search,
-      method: options.method || 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
+    if (urlObj.protocol !== 'https:' || urlObj.hostname !== 'open.feishu.cn') {
+      return reject(new Error(`[Feishu] 目标主机受限，只允许访问 https://open.feishu.cn: ${urlObj.origin}`));
+    }
+    const req = https.request(
+      {
+        hostname: urlObj.hostname,
+        port: 443,
+        path: urlObj.pathname + urlObj.search,
+        method: options.method || 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+        timeout: 15000,
       },
-      timeout: 15000,
-    }, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        try {
-          resolve(JSON.parse(text));
-        } catch {
-          resolve({ code: -1, msg: text });
-        }
-      });
-    });
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          try {
+            resolve(JSON.parse(text));
+          } catch {
+            resolve({ code: -1, msg: text });
+          }
+        });
+      },
+    );
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
@@ -104,7 +104,7 @@ export async function fetchPriceSheet(
   sheetUrl = 'https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c',
 ) {
   const creds = loadCredentials();
-  const base = creds.api_base_url.replace(/\/$/, '');
+  const base = 'https://open.feishu.cn';
 
   // 1. 获取 tenant_access_token
   const token = await getTenantAccessToken(base, creds);
@@ -126,13 +126,7 @@ export async function fetchPriceSheet(
   });
 
   if (nodeRes.code === 131006) {
-    console.error('\n❌ [权限拦截] 飞书机器人尚无该文档阅读权限 (code: 131006)');
-    console.error('👉 解决步骤：');
-    console.error('1. 在浏览器打开表格: ' + sheetUrl);
-    console.error('2. 点击右上角【分享】或【...】(文档权限设置)');
-    console.error('3. 搜索添加「AI测试智能体」应用为协作者，权限设为【可阅读】');
-    console.error('4. 添加完成后重新运行本命令即可自动拉取最新价格！\n');
-    return null;
+    throw new Error(`[Feishu] 文档 ${wikiToken} 缺少应用阅读权限 (code: 131006)`);
   }
 
   if (nodeRes.code !== 0 || !nodeRes.data?.node) {
@@ -181,7 +175,7 @@ export async function fetchPriceSheet(
 
 export async function fetchAllSheets(wikiUrl = 'https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne') {
   const creds = loadCredentials();
-  const base = creds.api_base_url.replace(/\/$/, '');
+  const base = 'https://open.feishu.cn';
 
   const token = await getTenantAccessToken(base, creds);
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -192,6 +186,7 @@ export async function fetchAllSheets(wikiUrl = 'https://panqu-ai.feishu.cn/wiki/
   const nodeRes = await request(`${base}/open-apis/wiki/v2/spaces/get_node?token=${wikiToken}`, {
     headers: authHeaders,
   });
+  if (nodeRes.code === 131006) throw new Error(`[Feishu] 文档 ${wikiToken} 缺少应用阅读权限 (code: 131006)`);
   const objToken = nodeRes.data?.node?.obj_token;
   if (!objToken) throw new Error('[Feishu] 获取电子表格 Token 失败');
 
@@ -250,7 +245,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     const inputUrl = process.argv[2] && process.argv[2].startsWith('http') ? process.argv[2] : undefined;
     fetchPriceSheet(inputUrl)
       .then((data) => {
-        if (!data) process.exit(0);
         console.log('\n✅ 成功拉取价格表数据:');
         if (Array.isArray(data)) {
           console.table(data.slice(0, 20));
