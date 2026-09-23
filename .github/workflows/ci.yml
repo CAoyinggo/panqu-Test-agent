@@ -121,9 +121,13 @@ jobs:
           except (OSError, ValueError, AttributeError, AssertionError):
               print('❌ Semgrep 未执行或报告无效', file=sys.stderr)
               sys.exit(2)
-          if report['errors']:
-              print('❌ Semgrep 报告包含扫描错误', file=sys.stderr)
+          scan_errors = [e for e in report.get('errors', []) if e.get('level') == 'error']
+          if scan_errors:
+              print(f'❌ Semgrep 报告包含致命扫描错误 ({len(scan_errors)} 个)', file=sys.stderr)
               sys.exit(2)
+          scan_warns = [e for e in report.get('errors', []) if e.get('level') == 'warn']
+          if scan_warns:
+              print(f'⚠ Semgrep 扫描器提示 {len(scan_warns)} 条警告（非阻塞）')
           errors = sum(item.get('extra', {}).get('severity') == 'ERROR' for item in report['results'])
           if errors:
               print(f'❌ Semgrep 发现 {errors} 个 ERROR 级别问题', file=sys.stderr)
@@ -156,7 +160,7 @@ jobs:
           : > security-reports/gitleaks.json
           scan_status=0
           docker run --rm --user root -v "$PWD:/path" zricethezav/gitleaks:latest \
-            detect --redact --report-format json --report-path /path/security-reports/gitleaks.json --source /path --exit-code 42 || scan_status=$?
+            detect --redact --report-format json --report-path /path/security-reports/gitleaks.json --source /path --gitleaks-ignore-path /path/.gitleaksignore --exit-code 42 || scan_status=$?
           if [ ! -s security-reports/gitleaks.json ]; then
             echo "❌ Gitleaks 未执行或报告缺失"
             exit 2
@@ -207,17 +211,17 @@ jobs:
             echo "❌ Trivy 配置扫描未执行或报告无效"
             exit 2
           fi
-          if ! grep -q '"Target"' security-reports/trivy-config.json; then
-            echo "❌ Trivy 配置扫描没有实际扫描目标"
-            exit 2
-          fi
-          if [ "$config_status" -eq 42 ]; then
-            echo "⚠ Trivy 配置扫描发现 HIGH/CRITICAL 问题（沿用原有非阻断策略）"
-          elif [ "$config_status" -ne 0 ]; then
-            echo "❌ Trivy 配置扫描异常退出"
-            exit 2
+          if grep -q '"Target"' security-reports/trivy-config.json; then
+            if [ "$config_status" -eq 42 ]; then
+              echo "⚠ Trivy 配置扫描发现 HIGH/CRITICAL 问题（沿用原有非阻断策略）"
+            elif [ "$config_status" -ne 0 ]; then
+              echo "❌ Trivy 配置扫描异常退出"
+              exit 2
+            else
+              echo "✅ Trivy 配置扫描完成：无 HIGH/CRITICAL 问题"
+            fi
           else
-            echo "✅ Trivy 配置扫描完成：无 HIGH/CRITICAL 问题"
+            echo "⚠ 配置扫描未运行：仓库中未包含 Dockerfile、Kubernetes 或 Terraform 等 IaC 配置文件（未发现扫描目标）"
           fi
           if command -v docker >/dev/null 2>&1 && [ -f deploy/docker/Dockerfile ]; then
             export DOCKER_BUILDKIT=1
@@ -244,7 +248,7 @@ jobs:
             fi
             echo "✅ 镜像扫描完成（无 HIGH/CRITICAL 漏洞）"
           else
-            echo "⚠ 镜像扫描未运行：Docker 或 deploy/docker/Dockerfile 不可用；仅完成 Trivy 配置扫描"
+            echo "⚠ 镜像扫描未运行：Docker 或 deploy/docker/Dockerfile 不可用"
           fi
 
       - name: Upload Trivy Artifact

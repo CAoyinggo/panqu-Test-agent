@@ -38,9 +38,16 @@ def run_diagnostics(conn):
 
         # 测试关键表只读查询
         print("\n📊 核心业务表当前只读记录抽样:")
-        for table_name in ["pq_user_score_log", "pq_score_log", "pq_aivideo_new", "pq_volcengine_ai_task", "pq_admin"]:
+        target_tables = [
+            ("pq_user_score_log", "SELECT COUNT(*) FROM `pq_user_score_log`;"),
+            ("pq_score_log", "SELECT COUNT(*) FROM `pq_score_log`;"),
+            ("pq_aivideo_new", "SELECT COUNT(*) FROM `pq_aivideo_new`;"),
+            ("pq_volcengine_ai_task", "SELECT COUNT(*) FROM `pq_volcengine_ai_task`;"),
+            ("pq_admin", "SELECT COUNT(*) FROM `pq_admin`;"),
+        ]
+        for table_name, query in target_tables:
             try:
-                cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`;")
+                cursor.execute(query)
                 cnt = cursor.fetchone()
                 print(f"   - [{table_name}] 当前记录总数: {cnt[0]}")
             except Exception as table_err:

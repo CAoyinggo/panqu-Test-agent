@@ -19,6 +19,8 @@ export type {
   VerificationEvidence,
 } from './core-kernel.js';
 
+import type { Experience } from './domain-knowledge.js';
+
 export type {
   KnowledgeCredibility,
   CredibleFact,
@@ -386,11 +388,11 @@ export const DEFAULT_GITHUB_KNOWLEDGE_CONFIG = {
 export interface KnowledgeSyncPayload {
   repository: string;
   path: string;
-  knowledge: import('./domain-knowledge.js').Experience[];
+  knowledge: Experience[];
 }
 
 export interface BuildSyncPayloadOptions {
-  knowledge: import('./domain-knowledge.js').Experience[];
+  knowledge: Experience[];
   repository?: string;
   path?: string;
 }
