@@ -5,8 +5,9 @@
 **面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、物理证据验真与自动化验收门禁框架**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-38%20suites%20%7C%20695%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Tests](https://img.shields.io/badge/tests-39%20suites%20%7C%20700%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
 [![Coverage](https://img.shields.io/badge/coverage-85.87%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
+[![Security Gates](https://img.shields.io/badge/security-5%20automated%20gates-success.svg)](.github/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
 [![Architecture](https://img.shields.io/badge/architecture-Single%20Verdict%20Engine-purple.svg)](docs/ARCHITECTURE_FREEZE.md)
@@ -187,10 +188,24 @@ python3 scripts/test-db-connection.py
 
 ---
 
+## 🛡️ 五重自动化安全门禁 (GitHub Actions Security Gates)
+
+本项目在 CI/CD 流程中建立严密的零容忍自动化安全防御体系，全方位杜绝恶意代码、凭证泄漏与供应链漏洞：
+
+| 安全层级 / Job | 扫描工具与核心规则 | 阻断机制与安全目标 |
+|---|---|---|
+| **1. 生产依赖审计** (`security-audit`) | `npm audit --audit-level=high` | 严禁引入存在 High / Critical 级别 CVE 漏洞的生产依赖 |
+| **2. SAST 静态分析** (`security-sast`) | **Semgrep** (OWASP Top 10 & CWE) | 阻断代码注入、反序列化风险、不安全路径与敏感 API 误用 |
+| **3. 秘钥与凭证防泄漏** (`security-secrets`) | **Gitleaks** (全历史深度审计) | 阻断 JWT、API Key、SSH 私钥及明文密码提交代码库 |
+| **4. 配置与容器安全** (`security-trivy`) | **Trivy** (配置扫描与镜像防护) | 阻断畸变容器配置与云原生基础设施安全隐患 |
+| **5. 开源协议合规** (`security-license`) | 自研轻量纯净合规审计器 | 确保零未授权传染性协议（GPL/AGPL）污染与外部重依赖侵入 |
+
+---
+
 ## 🧪 质量门禁与测试矩阵 (100% PASS)
 
 ```bash
-# 运行全量 38 个套件、695 项单元测试
+# 运行全量 39 个套件、700 项单元测试
 npm test
 
 # 运行覆盖率门禁 (Lines/Statements/Functions >= 80%, Branches >= 70%)
@@ -201,7 +216,7 @@ npm run build
 ```
 
 <details>
-<summary><b>📊 点击展开查看 38 个测试套件明细 (695 项测试全部通过)</b></summary>
+<summary><b>📊 点击展开查看 39 个测试套件明细 (700 项测试全部通过)</b></summary>
 
 | 测试文件 | 测试用例数 | 状态 | 核心验证范围 |
 |---|---|---|---|
@@ -235,9 +250,10 @@ npm run build
 | `tests/unit/devtest/test-isolation.test.ts` | 9 tests | ✅ PASS | 全局状态隔离恢复、未捕获断言异常还原与框架级故障恢复 |
 | `tests/unit/devtest/result-sink.test.ts` | 7 tests | ✅ PASS | 单向结果持久化导出契约 (深冻结记录) |
 | `tests/unit/devtest/public-api-contract.test.ts` | 5 tests | ✅ PASS | 公共导出 API 契约与版本稳定性校验 |
+| `tests/unit/devtest/security-ci.test.ts` | 5 tests | ✅ PASS | GitHub Actions 五重安全门禁与 Trivy 扫描异常断言契约 |
 | 探索与变异专项测试 (6 个套件) | 31 tests | ✅ PASS | 状态转移、学习沉淀、变异算子与生产循环审计 |
 | 其他专项契约测试 (2 个套件) | 7 tests | ✅ PASS | 环境探活与 Trae 技能规约契约 |
-| **全量总计** | **695 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
+| **全量总计** | **700 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
 
 </details>
 
