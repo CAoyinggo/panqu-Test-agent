@@ -45,6 +45,7 @@ description: 处理 Panqu 主站已有图片与视频模型增加或修改 NewAP
 $$\text{SOURCE\_INPUT} > \text{SOURCE\_FEISHU\_DIVERSION} > \text{SOURCE\_STATIC\_CONTRACT} > \text{SOURCE\_DEFAULT\_FALLBACK}$$
 
 - **【核心规则：分流测试默认定价源】**：当执行分流变更或分流测试（`flowType='diversion'`、`VIDEO_DIVERSION_CHANGE`、`IMAGE_DIVERSION_CHANGE`）时，**默认依据飞书多线路分流定价表**（链接：`https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c`，底层工作表 `35279c` 国内线路、`tM4eqI` 分流线路对应表，本地快照 `references/feishu-live-pricing-cache.json`）中的刊例价与折扣作为基准断言依据。
+- **【表→断言的判定模块】**：机读快照由 `src/devtest/diversion-pricing-authority.ts` 消费（`resolveListPrice` 刊例价不变量 / `resolveChannelCost` 成本价（含 `J×折扣` 公式解析）/ `rankChannelsByCost` 成本升序 / `isDiversionEligible` 可分流资格+能力门槛 / `channelStatus` 接入状态）。**成本价对比 + 可分流分辨率/能力一律以此表为准**（判定协议见 `references/channel-cost-discount-catalog.md` §四）。刷新快照：`python3 scripts/refresh-feishu-pricing.py`（读凭据、拉表、解析、写快照）。
 - **严禁**将 `SOURCE_DEFAULT_FALLBACK` 当作真实事实直接给出 `ACCEPTED` 判决。
 - **静态冲突**：若研发显式传入的别名/规格与静态白名单冲突，产生 `CONFIG_MISMATCH` 阻断。
 - **ChangeContract 契约必备字段**：

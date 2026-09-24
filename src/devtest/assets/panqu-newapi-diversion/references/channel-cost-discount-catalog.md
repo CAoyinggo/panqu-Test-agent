@@ -2,9 +2,10 @@
 
 > **默认分流定价权威来源**: 飞书多线路表格 `https://panqu-ai.feishu.cn/wiki/NNxfwgI2fih5iekmKABcSn2Wnne?sheet=35279c`<br/>
 > **底层电子表格 Token**: `TBaBsTTgmhQixPtzGHXcwdQZnWh` (子表: `tM4eqI` 分流线路对应表 / `35279c` 国内线路 / `KostYN` 国际线路 / `1gamsa` 图片线路)<br/>
-> **本地同步快照**: `src/devtest/assets/panqu-billing/references/feishu-live-pricing-cache.json`<br/>
+> **机读快照 (自动生成，供代码消费)**: `references/feishu-live-pricing-cache.json`（由飞书表格实时拉取解析：已还原 `J<行>*折扣` 成本公式、拆出线路映射与能力列）<br/>
+> **消费该快照的判定模块**: `src/devtest/diversion-pricing-authority.ts`（`resolveListPrice` / `resolveChannelCost` / `rankChannelsByCost` / `isDiversionEligible` / `channelStatus`）<br/>
 > **核心铁律**: **智能体执行任何分流测试（VIDEO_DIVERSION_CHANGE / IMAGE_DIVERSION_CHANGE）时，默认以本表刊例价与折扣作为基准断言依据！**<br/>
-> **更新时间**: 2026-09-23
+> **更新时间**: 2026-09-24（对照飞书线上表重新核验并生成机读快照）
 
 
 ---
@@ -90,7 +91,7 @@
 | **新增** | 国内 | **AL-QD** | 阿里（渠道） | 视频 | wan3.0 / wan3.0P | 3.0: 6折; 3.0P: 7折 | **已接入** | 阿里渠道备选 |
 | **新增** | 国内 | **Pan-GM** | PanGemini | 图片 | banana pro/2 | - | **已接入** | 图片分流 |
 | **新增** | 国内 | **HS-New** | 火山-New | 视频 | sd2.0 / sd2.5 | **官方9折** | **已接入** | 火山新版 API |
-| **新增** | 国内 | **TXY** | 腾讯云 | 视频 | sd2.0 / sd2.5 | **官方7折** | 接入中，待测试 | 预研 |
+| **新增** | 国内 | **TXY** | 腾讯云 | 视频 | sd2.0 / sd2.5 | **官方7折** | **已接入** | 线上表已标已接入（曾为预研） |
 | **新增** | 国内 | **XMSL** | 小马算力 | 视频 | sd2.5 | **官方79折** | **已接入** | 国内分流 |
 | **新增** | 国内 | **Pan-IE** | PanImage | 图片 | image2.0/2.5 | - | **已接入** | 图片分流 |
 | **新增** | 海外 | **RH-EN** | RH（海外） | 视频 | sd2.0 / sd2.5 | **官方83折** | **已接入** | 海外备选 |
@@ -104,3 +105,24 @@
 2. **多渠道分流收益排序**：
    - Seedance 2.5 1080P：阿里万镜一刻 (¥2.278, 61折) > 星辰 > 数据宝 (¥2.92, 78折) > 火山原厂 (¥3.743)。
    - Seedance 2.0 720P：星辰 (¥0.58, 58折) > 万镜一刻 (¥0.73, 73折) > 菲玲 (¥0.7455, 75折) > 数据宝 (¥0.76, 76折)。
+
+---
+
+## 四、分流测试判定协议（表 → 断言，代码落点）
+
+> 该表如何驱动 `flowType='diversion'` / `VIDEO_DIVERSION_CHANGE` 测试。判定逻辑在
+> `src/devtest/diversion-pricing-authority.ts`（读 `feishu-live-pricing-cache.json`），
+> 断言汇入 `verify-pipeline.ts` 的分流基线核对（`baseline.expectedPoints` 漂移检测）。
+
+1. **刊例价不变量（用户扣费）**：同 `(模型,分辨率)` 的 `刊例价(积分/秒)`（表 K 列 = `pq_absetting.list_price_points`）**不随分流渠道变化**。分流前后 `pq_score_log` 净扣必须等于 `resolveListPrice(model,res)`。任一渠道扣费≠刊例价 → **FAIL（分流串改了用户计费）**。
+   - 例：Seedance2.0@720p 恒为 **30 积分/秒**，无论落到火山/RH/数据宝/腾讯云。
+
+2. **成本价对比（平台成本，不影响用户）**：分流的收益只体现在**平台成本**（表 J 列 `成本价¥` = `pq_absetting.cost_price`，喂给 `RevenueCostCalcStat` 的 `platform_cost`）。`rankChannelsByCost(model,res,{onlyActive:true})` 给出当前**已接入**渠道的成本升序；折扣渠道成本 = 火山官方价 × 折扣（表内 `J<行>*系数`，已解析为 `costPriceComputed`）。
+   - 断言：被分流命中的线路，其表内成本应 ≤ 直连(火山)成本；否则分流无收益，**告警**。
+
+3. **可分流资格（能力 + 状态门槛）**：`isDiversionEligible(model,res,channel,{require})`——
+   - **表中必须存在该 `(渠道,模型,分辨率)` 行**（否则不在可分流范围，用户指令：可分流分辨率以表为准）；
+   - 能力列门槛：`全能参考`(H)、`首尾帧`(I)、`真人人像`(G)——如任务用全能参考而渠道标「只支持无参考」→ **不可分流**；
+   - 调度状态（`tM4eqI.调度器接入状态`）：`下线/暂停/不上线`→`offline`（禁止分流），`待接入/待测试/待分流/接入中`→`pending`（未上量），`已接入`→`active`。星辰(XC)=下线、TD-CN=待分流、腾讯云(TXY)=已接入。
+
+4. **新渠道接入验收**：新增线路时，先在本表补 `(渠道,模型,分辨率,成本,刊例价,能力,状态)` 行 → 刷新快照 → 用 `isDiversionEligible` 圈定可测组合 → 用 `rankChannelsByCost` 确认成本优势 → 执行分流并核验「刊例价不变 + 命中目标线路 + 净扣归零/退款幂等」。
