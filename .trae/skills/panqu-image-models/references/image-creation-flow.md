@@ -45,19 +45,19 @@
 - **失败退款**（幂等，净扣归零）：`refundAiTaskPointsWithIdempotency()`（幂等键 `score_log userid+task_id+source_id+type=1`）；图片编辑失败退款调用点如 `Imageedit.php:1318`。
 
 ### 5. 生成与回写（Go worker，非 PHP）
-- **NewAPI 图片**：`panqu/internal/scheduler/query_newapi_image_task.go` 轮询终态；成功写 `image_url` `:480`、`image_urls` `:481`，调 `statusUpdater.UpdateImageTaskSuccess(ctx, tableName, sourceID, aiTaskID, …)` `:495` 回写**源表**（`tableName`=`pq_aivideo_goods` 等）与 `pq_volcengine_ai_task`。
+- **NewAPI 图片**：`panqu/internal/scheduler/query_newapi_image_task.go` 轮询终态；成功产物路径 `image_url` `:480`/`image_urls` `:481`，调 `statusUpdater.UpdateImageTaskSuccess(ctx, tableName, sourceID, aiTaskID, …)` `:495` 回写**源表**（`tableName`=`pq_aivideo_goods`/`_character`/`_scene`/`_fusion`，产物落到源表 `pic`，前端由此读取）与 `pq_volcengine_ai_task`。
 - **普通渠道**：腾讯/RunningHub/Gemini/阿里 等各自 `panqu/internal/…` 处理器；失败/取消统一 `UPDATE <源表> SET task_status=?, progress=0 …`（`handler/statistics/task/handlers.go:151`、`runninghub/handlers.go:111-114`）。
 - **两套状态码**（与视频同）：源表 `task_status` 2成/3败；`pq_volcengine_ai_task` 3成/4败——**别混淆**。
 
 ### 6. 读取
-- `Goods.php:2274` `get_info()`（`checkGenerateStatus()` `:2214` 轮询）——读源行 `task_status`/`image_url`(Go 写入)/`err`；产物 URL 由 Go 回写后前端可见。**无 PHP 回调端点写 image_url**。
+- `Goods.php:2274` `get_info()`——读源行并返回整行：结果图在 **`pic`** 字段（json/单值，经 `addImageUrlPrefix` `:2298-2306` 加前缀），`extra` 解析（`:2309`），另有 `task_status`、`updatetime`。**前端读的是 `pic`，不是 `image_url`**；`image_url`/`image_urls` 是 Go NewAPI 结果路径里的字段。**无 PHP 回调端点写产物**——产物由 Go 回写源表后前端可见。
 
 ---
 
 ## 表与关键字段（省 `pq_`）
 | 表 | 写入方 | 关键字段 |
 |---|---|---|
-| `aivideo_goods`/`aivideo_character`/`aivideo_scene`/`aivideo_fusion` | add 插入 / async 更新 / **Go** 回写 | `type`,`selmodelsId`,`extra(json: resolution/aspectRatio/newapi_image/deduct_points…)`,`task_status(1/2/3)`,`image_url`,`err` |
+| `aivideo_goods`/`aivideo_character`/`aivideo_scene`/`aivideo_fusion` | add 插入 / async 更新 / **Go** 回写 | `type`,`selmodelsId`,`extra(json: resolution/aspectRatio/newapi_image/deduct_points…)`,`task_status(1/2/3)`,`pic`(结果图 json/经 addImageUrlPrefix) |
 | `aivideo_onedraw` | 单图/历史引用 | 关联 `project_id` |
 | `volcengine_ai_task` | async `:873` / Go 更新 | `source_id(=源表id)`,`type`,`status(1/2/3/4)`,`task_id(供应商)`,`output_result` |
 | `score_log` | `processAiTaskPoints` / 退款 | `userid`,`task_id`,`source_id`,`score`,`type(1退/2扣)` |
