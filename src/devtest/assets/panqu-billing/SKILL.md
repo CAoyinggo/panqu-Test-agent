@@ -7,6 +7,8 @@ description: 处理 Panqu/盼趣的计费、积分预估、消费明细、账单
 
 在 Panqu/盼趣项目中，所有涉及模型生成扣费、积分结算、刊例价变动、消费明细及管理后台账单统计的需求，必须读取本 Skill 并执行端到端闭环验证。
 
+> **端到端真实代码流程**（计算 `calculatePoints` → 原子扣费 `deductPoints` → 失败幂等退费 → 账单大盘 → 成本/营收对账，含 `file:line` 与三大账务不变量强弱）见 [`references/billing-flow.md`](references/billing-flow.md)。
+
 ## 一、主战场与架构分层
 
 - **核心主战场**：`aibaseos`（PHP ThinkPHP 5），核心文件为 `application/admin/controller/aivideo/v2/Billing.php`（478KB）与 `aivideo/v2/Task.php`。

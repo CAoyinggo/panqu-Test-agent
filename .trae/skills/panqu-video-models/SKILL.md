@@ -5,7 +5,7 @@ description: 处理 Panqu/盼趣的视频生成、模型接入、素材上传限
 
 # Panqu 视频与模型
 
-先确定子仓库、当前分支、实际宿主及任务类型，再按 [代码入口](references/code-map.md) 追踪当前调用链。若通过画布节点操作，同时读取可用的 `panqu-canvas`；若修改的是共用图片能力或图片生成链路，再组合 `panqu-image-models`，不是看到参考图片就默认全量检查图片生成。
+先确定子仓库、当前分支、实际宿主及任务类型，再按 [代码入口](references/code-map.md) 追踪当前调用链。端到端真实提交流程（`Videonew::add` → `check_diversion` → `asyncGenerateVideo` → Go worker 生成 → 计费）见 [视频创建流程](references/video-creation-flow.md)。若通过画布节点操作，同时读取可用的 `panqu-canvas`；若修改的是共用图片能力或图片生成链路，再组合 `panqu-image-models`，不是看到参考图片就默认全量检查图片生成。
 
 ## 联合验证与交付
 
