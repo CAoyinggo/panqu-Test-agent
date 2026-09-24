@@ -53,6 +53,10 @@ def main():
 
     # SEC_MAIN
     try:
+        import paramiko
+        # paramiko 5.x 移除了 DSSKey；sshtunnel 0.4.0 仍引用它 → 别名回退（PASSWORD 认证不受影响）
+        if not hasattr(paramiko, "DSSKey"):
+            paramiko.DSSKey = paramiko.RSAKey
         import sshtunnel
         from sshtunnel import SSHTunnelForwarder
         import pymysql

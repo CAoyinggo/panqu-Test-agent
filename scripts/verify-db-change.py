@@ -42,7 +42,8 @@ def main():
     try:
         import pymysql
         import paramiko
-        if not hasattr(paramiko, "DSSKey"): paramiko.DSSKey = None
+        # paramiko 5.x 移除 DSSKey；sshtunnel 0.4.0 仍引用它 → 别名回退到 RSAKey（PASSWORD 认证不受影响）
+        if not hasattr(paramiko, "DSSKey"): paramiko.DSSKey = paramiko.RSAKey
         import sshtunnel
         from sshtunnel import SSHTunnelForwarder
         # SSH 连接/隧道快速失败：跳板机不可达时约 8s 内失败，避免上层 execFile 长时间卡死
