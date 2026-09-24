@@ -5,8 +5,8 @@
 **面向 Panqu AI 图片与视频生成链路的轻量纯净测试副驾、物理证据验真与自动化验收门禁框架**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-39%20suites%20%7C%20700%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
-[![Coverage](https://img.shields.io/badge/coverage-85.87%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
+[![Tests](https://img.shields.io/badge/tests-39%20suites%20%7C%20701%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Coverage](https://img.shields.io/badge/coverage-84.16%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
 [![Security Gates](https://img.shields.io/badge/security-5%20automated%20gates-success.svg)](.github/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
@@ -42,7 +42,7 @@ Panqu AI DevTest 是轻量、纯净、无副作用的测试工程副驾。它负
 | **需求追溯与影响分析** | 关联需求稳定 ID、推导影响用例范围与覆盖缺口（吸收 **wardenIQ** 精华） | [`src/devtest/requirement-trace.ts`](src/devtest/requirement-trace.ts) |
 | **规范测试规约** | 声明式确定性断言、`costLimit`、`sideEffectPolicy` 强类型规约 | [`src/devtest/canonical-protocol.ts`](src/devtest/canonical-protocol.ts) |
 | **核心内核调度** | 单向驱动 `probe` / `plan` / `execute` / `verify`，支持 `executeCanonical` | [`src/devtest/core-kernel.ts`](src/devtest/core-kernel.ts) |
-| **执行适配与 UI 证据** | DOM、网络拦截、物理截图（**Playwright**）与视觉辅助（**Midscene**） | [`src/devtest/ui-adapters.ts`](src/devtest/ui-adapters.ts) · [详细规约](docs/VERIFICATION_SPEC.md) |
+| **执行适配与 UI 证据** | 工具无关的 DOM / 网络 / 截图 / 视觉观察**事实契约**；**不内置 Playwright/Midscene 驱动**，需调用方注入对应 Evidence Producer（视觉结果恒为 `AI_OBSERVATION`，绝不单独产 PASS） | [`src/devtest/ui-adapters.ts`](src/devtest/ui-adapters.ts) · [详细规约](docs/VERIFICATION_SPEC.md) |
 | **唯一裁决引擎** | 纯三态裁决，门禁阻断严格表示为 `UNVERIFIED + blocker`，零假 PASS | [`src/devtest/canonical-verdict-engine.ts`](src/devtest/canonical-verdict-engine.ts) |
 | **多端交付与持久化** | 本地终端、IDE 智能体双模同源呈现；深冻结结果单向导出（**ReportPortal**） | [`src/devtest/result-sink.ts`](src/devtest/result-sink.ts) · [MCP 指南](docs/MCP_GUIDE.md) |
 
@@ -111,9 +111,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    START(["输入: 证据信封 + 声明式断言 + 黄金预期"]) --> CRIT{"任一必需证据 FAIL<br>或任一确定性断言 FAIL?"}
+    START(["输入: 证据信封 + 声明式断言 + 必需证据契约"]) --> CRIT{"任一必需证据 FAIL<br>或任一确定性断言 FAIL?"}
     CRIT -- 是 --> FAIL["❌ FAIL (业务明确失败)"]
-    CRIT -- 否 --> BLOCK{"存在门禁阻断 (Blocker)<br>或缺少黄金预期 / 证据缺失?"}
+    CRIT -- 否 --> BLOCK{"存在门禁阻断 (Blocker)<br>或必需证据缺失 / 空规格?"}
     BLOCK -- 是 --> UNVER["⚠️ UNVERIFIED (+ Blocker)<br>经兼容投影映射为 acceptance: BLOCKED"]
     BLOCK -- 否 --> PASS["✅ PASS (全部必需证据与断言闭环)"]
 
@@ -123,7 +123,7 @@ flowchart TD
 ```
 
 > [!CAUTION]
-> **黄金预期必填红线 (Mandatory Golden Expectation)**：测试规范中的 `goldenExpectation` 必须显式必填，严禁从 legacy 结果或当前 verify 结果反推。缺少黄金预期直接判定失败。
+> **最小证据契约红线 (Fail-Closed Minimum Evidence)**：测试规范必须至少声明 `requiredEvidence` 或 `deterministicAssertions` 之一；两者皆空时裁决引擎直接返回 `UNVERIFIED`（blocker `NO_EVALUABLE_EVIDENCE_SPEC`），严禁"空规格 PASS"。断言与证据 provenance 均须显式声明，严禁从 legacy 结果或当前 verify 结果反推（`PROVENANCE_DERIVED_FROM_EXPECTATION` 门禁）。
 
 ---
 
@@ -179,10 +179,10 @@ DevTest 原生提供符合 Model Context Protocol 标准的 stdio 接口。在�
 
 ### 3. 真实数据变更数据库取证 (Phase 5 授权规范)
 
-涉及真实任务派发与财务账目变动的测试场景，必须自动通过 SSH 隧道连接测试库进行物理落库只读取证：
+涉及真实任务派发与财务账目变动的测试场景，需通过 SSH 隧道连接测试库进行物理落库**只读**取证。**注意：该取证目前为独立的操作者手动步骤，尚未自动接入 `verify` 流水线**——流水线在缺少 DB 证据时会标记 `MANUAL_DB_EVIDENCE_REQUIRED` 并失败关闭为 `UNVERIFIED`（绝不跳过放行）：
 
 ```bash
-# 验证测试数据库只读取证连接通道 (安全只读 · 零外部密码硬编码)
+# 手动执行测试数据库只读取证 (严格只读 SELECT · 凭据读取自 gitignore 的 db-credentials.json · 失败关闭)
 python3 scripts/test-db-connection.py
 ```
 
@@ -205,7 +205,7 @@ python3 scripts/test-db-connection.py
 ## 🧪 质量门禁与测试矩阵 (100% PASS)
 
 ```bash
-# 运行全量 39 个套件、700 项单元测试
+# 运行全量 39 个套件、701 项单元测试
 npm test
 
 # 运行覆盖率门禁 (Lines/Statements/Functions >= 80%, Branches >= 70%)
@@ -216,7 +216,7 @@ npm run build
 ```
 
 <details>
-<summary><b>📊 点击展开查看 39 个测试套件明细 (700 项测试全部通过)</b></summary>
+<summary><b>📊 点击展开查看 39 个测试套件明细 (701 项测试全部通过)</b></summary>
 
 | 测试文件 | 测试用例数 | 状态 | 核心验证范围 |
 |---|---|---|---|
@@ -229,7 +229,7 @@ npm run build
 | `tests/unit/devtest/canonical-shadow-comparison.test.ts` | 30 tests | ✅ PASS | Canonical 唯一裁决引擎影子对比一致性 |
 | `tests/unit/devtest/canonical-protocol.test.ts` | 25 tests | ✅ PASS | Canonical TestSpec 与证据信封强类型校验 |
 | `tests/unit/devtest/ui-adapter-contract-poc.test.ts` | 23 tests | ✅ PASS | Playwright / Midscene 规范适配器契约与切片尺寸提取 |
-| `tests/unit/devtest/canonical-verdict-engine.test.ts` | 22 tests | ✅ PASS | 纯三态确定性断言算法与门禁阻断逻辑 |
+| `tests/unit/devtest/canonical-verdict-engine.test.ts` | 23 tests | ✅ PASS | 纯三态确定性断言算法、门禁阻断与最小证据契约底线 |
 | `tests/unit/devtest/mcp-high-level-tools.test.ts` | 22 tests | ✅ PASS | MCP stdio JSON-RPC 通讯协议与 Schema |
 | `tests/unit/devtest/legacy-protocol-mappers.test.ts` | 20 tests | ✅ PASS | 兼容投影层双向映射一致性与单向投影 |
 | `tests/unit/devtest/verify-input-contract-alignment.test.ts` | 17 tests | ✅ PASS | Verify 入参对齐、参数校验与归一化门禁 |
@@ -253,7 +253,7 @@ npm run build
 | `tests/unit/devtest/security-ci.test.ts` | 5 tests | ✅ PASS | GitHub Actions 五重安全门禁与 Trivy 扫描异常断言契约 |
 | 探索与变异专项测试 (6 个套件) | 31 tests | ✅ PASS | 状态转移、学习沉淀、变异算子与生产循环审计 |
 | 其他专项契约测试 (2 个套件) | 7 tests | ✅ PASS | 环境探活与 Trae 技能规约契约 |
-| **全量总计** | **700 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
+| **全量总计** | **701 tests 全部通过** | **100% PASS** | **零跳过 · 零失败** |
 
 </details>
 

@@ -4,6 +4,8 @@ node_modules/
 # Production & Build Artifacts
 dist/
 test-flow-*.tgz
+# 构建时由 scripts/copy-assets.mjs 从 src/devtest/assets 生成的运行副本（源在 src，勿手改此处）
+.trae/skills/
 
 # Environment & Credentials (Secrets)
 .env

@@ -7,6 +7,8 @@ description: 处理 Panqu 主站已有图片与视频模型增加或修改 NewAP
 
 本 Skill 是面向 Coding Agent 与测试工程师的**分流变更决策指南**，专门规范已有图片模型 (#201 Nano Banana 等) 与已有视频模型 (#84 Wan 3.0 等) 切流至 NewAPI 网关（`aiapis.panqu.com`）时的自测与验收。
 
+> 📎 **真实代码端到端流程（`文件:行号` 取证）见 [`references/diversion-flow.md`](references/diversion-flow.md)；代码入口速查见 [`references/code-map.md`](references/code-map.md)。** 需要理解「主站实际怎么判分流/落库/兜底/计费」时先读这两份。
+
 ---
 
 ## 一、分流变更场景决策树
