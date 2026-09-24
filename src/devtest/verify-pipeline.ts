@@ -326,7 +326,8 @@ export interface VerifyKernelOptions {
     model?: number;
     abDb?: string;
     taskType?: number;
-    resolutionCode: number;
+    resolutionCode?: number;
+    resolution?: string;
     rows?: AbsettingRow[];
     credPath?: string;
     scriptPath?: string;
@@ -604,6 +605,7 @@ export async function resolveVerifyContext(
         const p = resolveAbsettingListPrice(rows, {
           taskType: options.absettingPricing.taskType,
           resolutionCode: options.absettingPricing.resolutionCode,
+          resolution: options.absettingPricing.resolution,
         });
         if (p != null) authorityListPrice = p;
       }

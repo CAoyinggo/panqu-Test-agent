@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   readAbsettingPrices,
   resolveAbsettingListPrice,
+  resolutionNameToCode,
   type AbsettingRow,
 } from '../../../src/devtest/absetting-price-reader.js';
 import type { DbScriptRunner } from '../../../src/devtest/database-evidence-producer.js';
@@ -67,5 +68,28 @@ describe('resolveAbsettingListPrice (精确码匹配)', () => {
   });
   it('无此码 → null', () => {
     expect(resolveAbsettingListPrice(rows, { resolutionCode: 99 })).toBeNull();
+  });
+});
+
+describe('resolutionNameToCode (权威码表 getPointsFromAbSetting:271-278/:369)', () => {
+  it('名→码映射 + 大小写归一 + 未知→null', () => {
+    expect(resolutionNameToCode('480p')).toBe(1);
+    expect(resolutionNameToCode('720P')).toBe(2);
+    expect(resolutionNameToCode('768p')).toBe(2);
+    expect(resolutionNameToCode('1080p')).toBe(3);
+    expect(resolutionNameToCode('1k')).toBe(4);
+    expect(resolutionNameToCode('2K')).toBe(5);
+    expect(resolutionNameToCode('4k')).toBe(6);
+    expect(resolutionNameToCode('8k')).toBeNull();
+    expect(resolutionNameToCode(undefined)).toBeNull();
+  });
+  it('resolveAbsettingListPrice 支持分辨率名（自动转码）', () => {
+    const rows: AbsettingRow[] = [
+      { model_config_id: 78, task_type: 2, resolution: 1, billing_type: 2, list_price_points: 21, cost_price: 0.462 },
+      { model_config_id: 78, task_type: 2, resolution: 2, billing_type: 2, list_price_points: 46, cost_price: 1.512 },
+    ];
+    expect(resolveAbsettingListPrice(rows, { resolution: '480p' })).toBe(21); // →码1
+    expect(resolveAbsettingListPrice(rows, { resolution: '720P' })).toBe(46); // →码2
+    expect(resolveAbsettingListPrice(rows, { resolution: '2k' })).toBeNull(); // 码5 不在 rows
   });
 });

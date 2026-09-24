@@ -292,3 +292,22 @@ describe('absettingPricing 接线（图片刊例价取自运行时真源 pq_abse
     expect(c.customPoints).toBeUndefined();
   });
 });
+
+describe('absettingPricing 支持分辨率名（自动转码，无需整数码）', () => {
+  it('图片：resolution 名 4k → 自动转码6 取价 15', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 12,
+      mediaType: 'image',
+      absettingPricing: {
+        resolution: '4k',
+        taskType: 1,
+        rows: [
+          { model_config_id: 12, task_type: 1, resolution: 4, billing_type: 1, list_price_points: 10, cost_price: 0.2 },
+          { model_config_id: 12, task_type: 1, resolution: 6, billing_type: 1, list_price_points: 15, cost_price: 0.3 },
+        ],
+      },
+    });
+    expect(c.customPoints).toBe(15);
+  });
+});

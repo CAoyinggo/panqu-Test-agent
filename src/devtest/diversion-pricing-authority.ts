@@ -141,7 +141,7 @@ function matchRow(r: PriceRow, model: string, resolution: string, refVideo = fal
  *
  * ⚠️ 作用域=**视频**：飞书《分流渠道表》图片子表为空（imageLines=0），本函数对图片模型恒返回 null。
  * 运行时刊例价真源是 `pq_absetting`@AB 库（已实测：视频 m78 → 21/46/115 与本表一致；图片 m12 → 10/10/15，
- * 但分辨率是媒体相关整数码 video:1=480p/2=720p/3=1080p、image:4/5/6=1K/2K/4K，选取逻辑见 PointsService::getPointsFromAbSetting）。
+ * 但分辨率是统一整数码表（getPointsFromAbSetting:271-278）：480P=1/720P=768P=2/1080P=3/1K=4/2K=5/4K=6，选取逻辑见 PointsService::getPointsFromAbSetting）。
  * 图片计费请显式传 customPoints（取自运行时 absetting），勿指望本表。详见 channel-cost-discount-catalog.md §五。
  */
 export function resolveListPrice(

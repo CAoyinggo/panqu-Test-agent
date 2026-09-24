@@ -122,15 +122,39 @@ export async function readAbsettingPrices(
 }
 
 /**
- * 精确匹配取刊例价：按 resolution 整数码（+可选 task_type）过滤，唯一则返回，歧义/缺失返回 null。
- * 不复刻 getPointsFromAbSetting 的 extend_field/quality/sound_type 选取——歧义时交调用方用 task_type 收窄。
+ * 分辨率名 → absetting 整数码（权威，取自 PointsService::getPointsFromAbSetting :271-278 与 getImage25Points :369）。
+ * 统一映射（非媒体相关）：480P=1 / 720P=768P=2 / 1080P=3 / 1K=4 / 2K=5 / 4K=6。
+ */
+export const RESOLUTION_CODE_MAP: Record<string, number> = {
+  '480P': 1,
+  '720P': 2,
+  '768P': 2,
+  '1080P': 3,
+  '1K': 4,
+  '2K': 5,
+  '4K': 6,
+};
+
+/** 归一化分辨率名（大小写/前后空格）→ 整数码；未知返回 null。 */
+export function resolutionNameToCode(name: string | null | undefined): number | null {
+  if (name === null || name === undefined) return null;
+  const key = String(name).trim().toUpperCase();
+  return RESOLUTION_CODE_MAP[key] ?? null;
+}
+
+/**
+ * 精确匹配取刊例价：按分辨率（整数码 resolutionCode 或名字 resolution，二选一）+可选 task_type 过滤，
+ * 唯一则返回，歧义/缺失返回 null。不复刻 getPointsFromAbSetting 的 extend_field/quality/sound_type 选取——
+ * 歧义时交调用方用 task_type 收窄。
  */
 export function resolveAbsettingListPrice(
   rows: AbsettingRow[],
-  q: { taskType?: number; resolutionCode: number },
+  q: { taskType?: number; resolutionCode?: number; resolution?: string },
 ): number | null {
+  const code = q.resolutionCode ?? (q.resolution !== undefined ? resolutionNameToCode(q.resolution) : undefined);
+  if (code === undefined || code === null) return null;
   const matched = rows.filter(
-    (r) => r.resolution === q.resolutionCode && (q.taskType === undefined || r.task_type === q.taskType),
+    (r) => r.resolution === code && (q.taskType === undefined || r.task_type === q.taskType),
   );
   const vals = new Set<number>();
   for (const r of matched) if (typeof r.list_price_points === 'number') vals.add(r.list_price_points);
