@@ -5,7 +5,7 @@ description: 处理 Panqu/盼趣的图片生成/编辑、图片模型接入、�
 
 # Panqu 图片与模型
 
-先定位子仓库、分支、宿主与实际入口，按 [代码入口](references/code-map.md) 追踪生成或编辑链路。画布图片节点任务同时读取可用的 `panqu-canvas`；仅编辑器笔刷交互不等于模型接入，按涉及部分裁剪检查范围。与视频共用能力或跨媒体流水线发生变化时，再组合 `panqu-video-models`。
+先定位子仓库、分支、宿主与实际入口，按 [代码入口](references/code-map.md) 追踪生成或编辑链路。端到端真实提交流程（`Goods/Character/Scene/Fusion::add` → `applySnapshot` 分流快照 → `asyncGenerateImage` → Go worker 回写）见 [图片创建流程](references/image-creation-flow.md)。画布图片节点任务同时读取可用的 `panqu-canvas`；仅编辑器笔刷交互不等于模型接入，按涉及部分裁剪检查范围。与视频共用能力或跨媒体流水线发生变化时，再组合 `panqu-video-models`。
 
 ## 联合验证与交付
 
