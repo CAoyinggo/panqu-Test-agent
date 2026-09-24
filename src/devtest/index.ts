@@ -310,3 +310,13 @@ export {
   type CapabilityMaturityLevel,
   type AbsorbedCapabilityAudit,
 } from './capability-maturity.js';
+
+export {
+  DatabaseEvidenceProducer,
+  queryDatabasePhysicalFacts,
+  mapDbScoreLogsToScoreLogEntries,
+  resolveDatabaseCredentialsPath,
+  type DatabaseRawCollection,
+  type DatabaseRecordFound,
+  type DatabaseQueryOptions,
+} from './database-evidence-producer.js';

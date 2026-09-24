@@ -265,6 +265,35 @@ export function evaluateCanonicalVerdict(
     };
   }
 
+  // 1.1 最小可求值底线门禁 (Fail-Closed)
+  // 若规约既未声明必需证据，也未定义确定性断言，缺少可求值证据契约，严禁返回假 PASS
+  const hasReqEvidenceSpec = Array.isArray(spec.requiredEvidence) && spec.requiredEvidence.length > 0;
+  const hasAssertionsSpec = Array.isArray(spec.deterministicAssertions) && spec.deterministicAssertions.length > 0;
+  if (!hasReqEvidenceSpec && !hasAssertionsSpec) {
+    return {
+      verdict: 'UNVERIFIED',
+      testId: spec.testId,
+      requiredEvidenceEvaluation: {
+        satisfied: false,
+        missingEvidenceKeys: [],
+        failedEvidenceKeys: [],
+        unverifiedEvidenceKeys: [],
+        matchedEnvelopes: {},
+        details: [],
+      },
+      assertionResults: [],
+      evidenceIdsUsed: [],
+      reasons: ['TestSpec 未声明任何必需证据或确定性断言，缺少可求值证据契约，严禁产生空规格 PASS [FAIL_CLOSED]'],
+      warnings,
+      blockers: [
+        {
+          code: 'NO_EVALUABLE_EVIDENCE_SPEC',
+          message: 'TestSpec 既无 requiredEvidence 也无 deterministicAssertions，缺少最小证据求值底线',
+        },
+      ],
+    };
+  }
+
   // 2. 校验并过滤 Envelope：排除格式错误、testId 不匹配、environment 不匹配的信封
   const validEnvelopes: CanonicalEvidenceEnvelope[] = [];
   const rawEnvelopes = Array.isArray(envelopes) ? envelopes : [];
@@ -428,6 +457,34 @@ export function evaluateCanonicalVerdict(
       reason: evalRes.reason,
     });
 
+    if (isCritical && evalRes.status === 'FAIL') {
+      if (assertion.field === 'db.taskFound') {
+        addBlocker({
+          code: 'FRONTEND_TASK_NOT_FOUND',
+          evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+          message: '前台任务表 pq_aivideo_new 中未查到物理入库记录 [FAIL]',
+        });
+      } else if (assertion.field === 'db.backendTaskFound') {
+        addBlocker({
+          code: 'BACKEND_TASK_NOT_FOUND',
+          evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+          message: '后台调度表 pq_volcengine_ai_task 中未查到关联调度记录 [FAIL]',
+        });
+      } else if (assertion.field === 'db.frontendStatus') {
+        addBlocker({
+          code: 'FRONTEND_STATUS_MISMATCH',
+          evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+          message: `前台任务表 task_status 物理状态未达到期望终态 (期望: ${String(assertion.expectedValue)}, 实际: ${String(actualValue)}) [FAIL]`,
+        });
+      } else if (assertion.field === 'db.billingNetPoints') {
+        addBlocker({
+          code: 'REFUND_AMOUNT_MISMATCH',
+          evidenceKey: 'BILLING_LEDGER:DB_SCORE_LOGS',
+          message: `积分流水净扣不对账 (期望: ${String(assertion.expectedValue)} pt, 实际: ${String(actualValue)} pt，可能存在退款不一致或资损风险) [FAIL]`,
+        });
+      }
+    }
+
     if (!isCritical && evalRes.status === 'FAIL') {
       warnings.push(`非关键断言 [${assertion.field}] 失败: ${evalRes.reason || '未达预期'}`);
     }
@@ -462,6 +519,71 @@ export function evaluateCanonicalVerdict(
         });
       } else if (d.reason?.includes('REAL 模式下') || d.reason?.includes('来源不能满足')) {
         addBlocker({ code: 'UNTRUSTED_EVIDENCE_SOURCE', evidenceKey: d.key, message: d.reason });
+      } else if (d.key === 'SERVER_API:DB_TASK_RECORD') {
+        if (
+          d.envelope?.error?.code === 'MISSING_CREDENTIALS' ||
+          d.envelope?.error?.message?.includes('找不到 db-credentials')
+        ) {
+          addBlocker({
+            code: 'DB_CREDENTIALS_MISSING',
+            evidenceKey: d.key,
+            message: d.envelope?.error?.message || '缺少 db-credentials.json 数据库凭据，无法通过 SSH 隧道执行物理取证 [UNVERIFIED]',
+          });
+        } else if (
+          d.envelope?.error?.code === 'DB_QUERY_FAILED' ||
+          d.envelope?.error?.message?.includes('SSH') ||
+          d.envelope?.error?.message?.includes('连接')
+        ) {
+          addBlocker({
+            code: 'DB_CONNECTION_FAILED',
+            evidenceKey: d.key,
+            message: d.envelope?.error?.message || '数据库 SSH 隧道连接或只读查询失败 [UNVERIFIED]',
+          });
+        } else if (d.envelope?.normalizedFields?.taskFound === false) {
+          addBlocker({
+            code: 'FRONTEND_TASK_NOT_FOUND',
+            evidenceKey: d.key,
+            message: '前台任务表 pq_aivideo_new 中未查到物理入库记录 [FAIL]',
+          });
+        } else if (d.envelope?.normalizedFields?.backendTaskFound === false) {
+          addBlocker({
+            code: 'BACKEND_TASK_NOT_FOUND',
+            evidenceKey: d.key,
+            message: '后台调度表 pq_volcengine_ai_task 中未查到关联调度记录 [FAIL]',
+          });
+        } else {
+          addBlocker({
+            code: 'DB_TASK_RECORD_MISSING',
+            evidenceKey: d.key,
+            message: d.reason || '缺少前后台任务数据库物理落库证据 [SERVER_API:DB_TASK_RECORD]',
+          });
+        }
+      } else if (d.key === 'BILLING_LEDGER:DB_SCORE_LOGS') {
+        if (
+          d.envelope?.error?.code === 'MISSING_CREDENTIALS' ||
+          d.envelope?.error?.message?.includes('找不到 db-credentials')
+        ) {
+          addBlocker({
+            code: 'DB_CREDENTIALS_MISSING',
+            evidenceKey: d.key,
+            message: d.envelope?.error?.message || '缺少 db-credentials.json 凭据，无法查询积分流水 [UNVERIFIED]',
+          });
+        } else if (
+          d.envelope?.error?.code === 'DB_QUERY_FAILED' ||
+          d.envelope?.error?.message?.includes('SSH')
+        ) {
+          addBlocker({
+            code: 'DB_CONNECTION_FAILED',
+            evidenceKey: d.key,
+            message: d.envelope?.error?.message || '数据库连接失败，无法获取积分流水 [UNVERIFIED]',
+          });
+        } else {
+          addBlocker({
+            code: 'DB_SCORE_LOGS_MISSING',
+            evidenceKey: d.key,
+            message: d.reason || '数据库积分流水 pq_score_log 中未查到扣费或退款流水记录 [UNVERIFIED]',
+          });
+        }
       } else if (spec.executionMode === 'REAL' && d.key.includes('GATEWAY_CHANNEL')) {
         addBlocker({
           code: 'GATEWAY_CHANNEL_BLOCKED',
@@ -485,6 +607,10 @@ export function evaluateCanonicalVerdict(
   for (const key of reqEvaluation.unverifiedEvidenceKeys) {
     if (key.includes('TASK_STATUS')) {
       addBlocker({ code: 'TASK_NOT_TERMINAL', evidenceKey: key, message: '任务尚未到达终态 SUCCESS' });
+    } else if (key === 'SERVER_API:DB_TASK_RECORD') {
+      addBlocker({ code: 'DB_TASK_RECORD_MISSING', evidenceKey: key, message: '数据库前后台任务物理落库证据未确认通过 [UNVERIFIED]' });
+    } else if (key === 'BILLING_LEDGER:DB_SCORE_LOGS') {
+      addBlocker({ code: 'DB_SCORE_LOGS_MISSING', evidenceKey: key, message: '数据库积分流水记录未确认通过 [UNVERIFIED]' });
     } else if (spec.executionMode === 'REAL' && key.includes('GATEWAY_CHANNEL')) {
       addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: key, message: '网关渠道证据未确认通过' });
     } else if (

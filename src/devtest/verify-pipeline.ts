@@ -62,6 +62,20 @@ import {
 import type { EvidenceProducer, EvidenceProducerContext } from './execution-ports.js';
 import { mapVerdictToExportRecord, type ResultSink } from './result-sink.js';
 import { resolveRequirementTraceForSpec, type RequirementTrace } from './requirement-trace.js';
+import {
+  DatabaseEvidenceProducer,
+  queryDatabasePhysicalFacts,
+  mapDbScoreLogsToScoreLogEntries,
+  resolveDatabaseCredentialsPath,
+  type DatabaseRawCollection,
+} from './database-evidence-producer.js';
+export {
+  DatabaseEvidenceProducer,
+  queryDatabasePhysicalFacts,
+  mapDbScoreLogsToScoreLogEntries,
+  resolveDatabaseCredentialsPath,
+  type DatabaseRawCollection,
+};
 
 async function fetchFirst64K(
   url: string,
@@ -229,6 +243,7 @@ export interface VerifyKernelOptions {
   onProgress?: (snapshot: TaskStatusSnapshot) => void;
   artifactOwnership?: 'VERIFIED' | 'UNVERIFIED' | 'UNBOUND';
   isSimulated?: boolean;
+  mode?: 'real' | 'mock' | 'fixture' | 'offline';
   expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
   contract?: DiscoveredModelContract;
   expectedResolution?: string;
@@ -279,6 +294,10 @@ export interface VerifyKernelOptions {
   executionMode?: 'real' | 'offline' | 'fixture' | 'REAL' | 'OFFLINE' | 'FIXTURE';
   extraEnvelopes?: CanonicalEvidenceEnvelope[];
   isProcessing?: boolean;
+  dbVerify?: boolean;
+  dbCredPath?: string;
+  dbTimeoutMs?: number;
+  dbRawCollection?: DatabaseRawCollection;
 }
 export interface VerifyKernelResult {
   ok: boolean;
@@ -316,6 +335,20 @@ export interface VerifyKernelResult {
     extra: string;
     gatewayChannel?: string;
   };
+  channelBoundaryClarification?: {
+    mainSiteDiversionTag: {
+      status: string;
+      value?: unknown;
+      provenance: string;
+      boundaryNotice: string;
+    };
+    gatewayUpstreamChannel: {
+      verified: boolean;
+      actualChannelId?: number;
+      provenance: string;
+      boundaryNotice: string;
+    };
+  };
   canonicalVerdict?: CanonicalVerdictResult;
   canonicalEnvelopes?: CanonicalEvidenceEnvelope[];
   canonicalSpec?: CanonicalTestSpec;
@@ -325,6 +358,7 @@ export interface VerifyKernelResult {
     recordId: string;
     error?: string;
   };
+  dbEvidence?: DatabaseRawCollection;
 }
 
 export interface VerifyContext {
@@ -385,6 +419,7 @@ export interface TaskEvidenceResult {
   probeDurationMs?: number;
   runtimeDetails?: TaskRuntimeDetails;
   routingFacts: RoutingFacts;
+  dbEvidence?: DatabaseRawCollection;
 }
 
 export interface MediaEvidenceResult {
@@ -499,17 +534,23 @@ export async function resolveVerifyContext(
   }
 
   const explicitMode = options.executionMode?.toLowerCase() as 'real' | 'offline' | 'fixture' | undefined;
-  const executionMode: 'real' | 'offline' | 'fixture' = options.isSimulated
+  const isMockExecution = options.isSimulated || options.mode === 'mock' || explicitMode === 'offline';
+  const isExplicitFixture = explicitMode === 'fixture';
+  const hasFixturePayload =
+    Boolean(options.assetBuffer || options.artifactBuffer) &&
+    Boolean(options.scoreLogs && options.scoreLogs.length > 0);
+
+  const executionMode: 'real' | 'offline' | 'fixture' = isMockExecution
     ? 'offline'
-    : session || (options.sessionFile && sessionLoadError) || explicitMode === 'real'
-      ? 'real'
-      : explicitMode === 'offline'
-        ? 'offline'
-        : explicitMode === 'fixture' ||
-            (options.scoreLogs && options.scoreLogs.length > 0) ||
-            Boolean(options.assetBuffer || options.artifactBuffer)
-          ? 'fixture'
-          : 'offline';
+    : isExplicitFixture
+      ? 'fixture'
+      : explicitMode === 'real'
+        ? 'real'
+        : session
+          ? 'real'
+          : hasFixturePayload
+            ? 'fixture'
+            : 'offline';
 
   return {
     taskId,
@@ -695,6 +736,96 @@ export async function collectTaskEvidence(
       });
     } catch {
       /* 容忍只读查询非致命抖动 */
+    }
+  }
+
+  // 数据库物理事实查询 (只读，按项目规则自动加载 db-credentials.json 并走 SSH 隧道)
+  let dbRawCollection: DatabaseRawCollection | undefined = options.dbRawCollection;
+  const isRealRun = ctx.executionMode === 'real';
+  const isOfflineFixture = ctx.executionMode === 'fixture' || ctx.executionMode === 'offline';
+
+  // 真实数据变更场景强制执行数据库只读取证，不能被 CLI 参数或直接调用库的方式关闭。离线 fixture 与 VITEST 单测环境不触发真实连库。
+  const shouldQueryDb =
+    !dbRawCollection &&
+    ((isRealRun && !process.env.VITEST) ||
+      options.dbVerify === true ||
+      (options.dbVerify !== false && !process.env.VITEST && !isOfflineFixture));
+
+  if (shouldQueryDb) {
+    const credPath = resolveDatabaseCredentialsPath(options.dbCredPath);
+    if (credPath) {
+      try {
+        dbRawCollection = await queryDatabasePhysicalFacts({
+          taskId,
+          credPath,
+          // DB 取证使用独立短超时，绝不随 --poll-timeout 放大；库不可达时快速 fail-closed 为 UNVERIFIED，避免真实流程长时间卡死
+          timeoutMs: options.dbTimeoutMs ?? 10000,
+        });
+      } catch {
+        /* 容忍只读取证非致命异常，失败关闭交给后续判定 */
+      }
+    } else if (isRealRun) {
+      // 真实模式下凭据缺失，不可伪造或忽略，记录明确失败原因供唯一裁决引擎做失败关闭判定
+      dbRawCollection = {
+        status: 'UNVERIFIED',
+        taskId,
+        reason: 'MISSING_CREDENTIALS',
+        error: '找不到 db-credentials.json 数据库凭据文件，无法通过 SSH 隧道执行物理取证 [UNVERIFIED]',
+        recordsFound: {},
+      };
+    }
+  }
+
+  // 若通过数据库物理落库获得了明确终态且此前未知，自动提升终态事实
+  if (dbRawCollection?.recordsFound?.pq_aivideo_new) {
+    const dbTask = dbRawCollection.recordsFound.pq_aivideo_new;
+    const dbTaskStatus = Number(dbTask.task_status);
+    if (
+      terminalStatus === 'UNKNOWN' ||
+      taskEvidence.source === 'unqueried' ||
+      taskEvidence.source === 'task_not_found'
+    ) {
+      if (dbTaskStatus === 2) {
+        terminalStatus = 'SUCCESS';
+        taskEvidence = {
+          status: 'PASS',
+          source: 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new',
+          terminalStatus: 'SUCCESS',
+          taskStatus: 2,
+          progress: 100,
+          videoUrl: dbTask.video_url
+            ? String(dbTask.video_url).startsWith('http')
+              ? String(dbTask.video_url)
+              : `https://v.panqu.com.cn${String(dbTask.video_url)}`
+            : undefined,
+        };
+      } else if (dbTaskStatus === 3 || dbTaskStatus === 4) {
+        terminalStatus = 'FAILED';
+        taskEvidence = {
+          status: 'FAIL',
+          source: 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new',
+          terminalStatus: 'FAILED',
+          taskStatus: dbTaskStatus,
+          error: dbTask.err ? String(dbTask.err) : '数据库记录任务已失败 [DATABASE_PHYSICAL_RECORD]',
+          progress: -1,
+        };
+      }
+    }
+    // 若成片 URL 可从数据库物理记录获取且尚未探测
+    if (!artifactBuffer && (taskEvidence.videoUrl || dbTask.video_url)) {
+      const dbMediaUrl =
+        taskEvidence.videoUrl ||
+        (String(dbTask.video_url).startsWith('http')
+          ? String(dbTask.video_url)
+          : `https://v.panqu.com.cn${String(dbTask.video_url)}`);
+      mediaArtifactSource = 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new';
+      artifactOwnership = 'VERIFIED';
+      const probeRes = await fetchFirst64K(dbMediaUrl);
+      if (probeRes) {
+        artifactBuffer = probeRes.buffer;
+        artifactTailBuffer = probeRes.tailBuffer;
+        probeDurationMs = probeRes.durationMs;
+      }
     }
   }
 
@@ -962,9 +1093,21 @@ export async function collectTaskEvidence(
   let extraObj: Record<string, unknown> | undefined;
   let extraProvenance: string;
 
-  if (runtimeDetails?.extra) {
+  if (runtimeDetails?.extra && runtimeDetails.extraSource === 'HTTP_API:getEditData') {
     extraObj = runtimeDetails.extra;
-    extraProvenance = runtimeDetails.extraSource || 'HTTP_API:getEditData';
+    extraProvenance = 'HTTP_API:getEditData';
+  } else if (dbRawCollection?.recordsFound?.pq_aivideo_new?.extra) {
+    const rawDbExtra = dbRawCollection.recordsFound.pq_aivideo_new.extra;
+    try {
+      extraObj =
+        typeof rawDbExtra === 'string' ? JSON.parse(rawDbExtra) : (rawDbExtra as Record<string, unknown>);
+    } catch {
+      extraObj = undefined;
+    }
+    extraProvenance = 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new';
+  } else if (runtimeDetails?.extra) {
+    extraObj = runtimeDetails.extra;
+    extraProvenance = runtimeDetails.extraSource || 'HTTP_API:exceptional-task';
   } else if (runtimeDetails?.rawExceptionalTask?.extra) {
     const rowExtra =
       typeof runtimeDetails.rawExceptionalTask.extra === 'string'
@@ -1051,8 +1194,11 @@ export async function collectTaskEvidence(
 
   const hasServerActualChannelFact = serverActualChannelId !== undefined && !isActualChannelAssertedOnly;
 
+  // 渠道核验边界澄清 (Requirement 3):
+  // 1. 主站 extra.diversion 仅能证明主站分流标记落库，不能证明网关实际履约渠道。
+  // 2. 真实模式下，外部断言 (--gateway-channel-confirmed) 严禁作为网关履约事实；必须具备真实的网关可信快照。
   const isGatewayChannelVerified = isRealMode
-    ? Boolean(hasRealGatewaySnapshot || hasServerActualChannelFact)
+    ? Boolean(hasRealGatewaySnapshot)
     : Boolean(options.gatewayChannelConfirmed || hasRealGatewaySnapshot || serverActualChannelId !== undefined);
 
   let gatewayChannelEvidence: string;
@@ -1063,7 +1209,7 @@ export async function collectTaskEvidence(
     gatewayChannelProvenance = snapshotValidation?.snapshot
       ? `API_READONLY_COLLECTOR (${snapshotValidation.snapshot.sourceEndpoint})`
       : 'SOURCE_REAL_GATEWAY';
-  } else if (hasServerActualChannelFact) {
+  } else if (!isRealMode && hasServerActualChannelFact) {
     gatewayChannelEvidence = 'SERVER_RUN_FACT';
     gatewayChannelProvenance = channelProvenance;
   } else if (options.gatewaySnapshot && !snapshotValidation?.valid) {
@@ -1071,7 +1217,7 @@ export async function collectTaskEvidence(
     gatewayChannelProvenance = `FAIL_CLOSED (${snapshotValidation?.reason || 'INVALID_SNAPSHOT'})`;
   } else if (isRealMode && options.channels && options.channels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY')) {
     gatewayChannelEvidence = 'USER_ASSERTION_REJECTED';
-    gatewayChannelProvenance = 'CLI_ASSERTED_INPUT (BLOCKED_MISSING_TRUSTED_COLLECTOR)';
+    gatewayChannelProvenance = 'CLI_ASSERTED_INPUT (BLOCKED_MISSING_TRUSTED_COLLECTOR: REAL 模式禁止外部断言作为渠道事实)';
   } else if (options.gatewayChannelConfirmed) {
     gatewayChannelEvidence = isRealMode ? 'USER_ASSERTION_REJECTED' : 'USER_ASSERTION (FIXTURE)';
     gatewayChannelProvenance = isRealMode ? 'CLI_ASSERTED_INPUT (UNVERIFIED_FOR_REAL)' : 'FIXTURE_ASSERTED';
@@ -1125,6 +1271,7 @@ export async function collectTaskEvidence(
     probeDurationMs,
     runtimeDetails,
     routingFacts,
+    dbEvidence: dbRawCollection,
   };
 }
 
@@ -1212,6 +1359,22 @@ export async function collectBillingEvidence(
   let billingSource = options.scoreLogs ? 'score_logs' : 'missing_logs';
   let billingQueryError: string | undefined;
 
+  // 优先采用数据库物理落库流水 (Physical Database Records from pq_score_log)
+  if (!scoreLogsToReconcile && taskResult.dbEvidence?.recordsFound?.pq_score_log) {
+    const dbLogs = taskResult.dbEvidence.recordsFound.pq_score_log;
+    const backendId =
+      taskResult.dbEvidence.recordsFound.pq_volcengine_ai_task?.id !== undefined
+        ? Number(taskResult.dbEvidence.recordsFound.pq_volcengine_ai_task.id)
+        : undefined;
+    const mapped = mapDbScoreLogsToScoreLogEntries(dbLogs, taskId, backendId);
+    if (mapped.length > 0) {
+      scoreLogsToReconcile = mapped;
+      billingSource = 'DATABASE_PHYSICAL_RECORD:pq_score_log';
+      billingQueryError = undefined;
+    }
+  }
+
+  // 兜底回退：当无数据库流水且存在 session 时，调用 FastAdmin HTTP 接口查询
   if (!scoreLogsToReconcile && session) {
     const queryRes = await queryTaskBillingLogs(taskId, session);
     if (queryRes.status === 'QUERY_SUCCESS') {
@@ -1788,16 +1951,16 @@ export function buildDiffItems(args: BuildDiffItemsOptions): DiffItem[] {
         : snapshotFailure
           ? `FAIL_CLOSED (${snapshotValidation?.reason})`
           : isCallerAssertedReal
-            ? 'UNVERIFIED_USER_ASSERTION (REAL模式禁止手填或伪造网关快照)'
+            ? 'UNVERIFIED_USER_ASSERTION (REAL 模式禁止外部断言作为网关实际渠道履约证据)'
             : 'MISSING_GATEWAY_CHANNEL_EVIDENCE [BLOCKED_MISSING_TRUSTED_COLLECTOR]',
       matched: isGatewayChannelVerified,
       status: isGatewayChannelVerified ? 'PASS' : 'MANUAL_REQUIRED',
       diff: isGatewayChannelVerified
-        ? 'MATCH'
+        ? 'MATCH (网关实际履约渠道已核验)'
         : snapshotFailure
           ? `网关渠道快照未通过可信校验: ${snapshotValidation?.reason} [FAIL_CLOSED]`
           : isCallerAssertedReal
-            ? 'REAL 模式下禁止仅凭用户声明或手工入参 sourceMode=SOURCE_REAL_GATEWAY 满足网关渠道验证 [BLOCKED_MISSING_TRUSTED_COLLECTOR]'
+            ? 'REAL 模式下禁止仅凭外部断言 (--gateway-channel-confirmed) 满足网关渠道验证，必须提供 NewAPI 网关真实快照 (SOURCE_REAL_GATEWAY) [BLOCKED_MISSING_TRUSTED_COLLECTOR]'
             : '缺少 NewAPI 网关上游通道确认证据 [MANUAL_GATEWAY_CHANNEL_REQUIRED:BLOCKED_MISSING_TRUSTED_COLLECTOR]',
       critical: true,
       evidence: gatewayChannelEvidence,
@@ -1906,6 +2069,9 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     fallbackChannel,
     retryProvider,
     channelMismatchReason,
+    extraObj,
+    hasRealGatewaySnapshot,
+    isRealMode,
   } = routingFacts;
 
   const businessValidation =
@@ -2110,11 +2276,15 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
   const testId = options.testId || options.spec?.testId || `verify-${taskId}`;
   const environment = options.environment || options.spec?.environment || options.env || 'test';
   const rawMode: 'real' | 'offline' | 'fixture' =
-    session || options.executionMode?.toLowerCase() === 'real' || executionMode === 'real'
-      ? 'real'
-      : executionMode === 'offline'
-        ? 'offline'
-        : 'fixture';
+    options.mode === 'mock' || options.isSimulated || executionMode === 'offline'
+      ? 'offline'
+      : executionMode === 'fixture'
+        ? 'fixture'
+        : executionMode === 'real' || options.executionMode?.toLowerCase() === 'real'
+          ? 'real'
+          : session
+            ? 'real'
+            : 'fixture';
   const canonicalExecutionMode: ExecutionMode =
     rawMode === 'real' ? 'REAL' : rawMode === 'offline' ? 'OFFLINE' : 'FIXTURE';
 
@@ -2186,7 +2356,11 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
             verified: isGatewayChannelVerified,
             required: true,
             failureReason:
-              options.gatewaySnapshot && !snapshotValidation?.valid ? snapshotValidation?.reason : undefined,
+              options.gatewaySnapshot && !snapshotValidation?.valid
+                ? snapshotValidation?.reason
+                : isRealMode && !hasRealGatewaySnapshot
+                  ? '真实模式下外部断言 (--gateway-channel-confirmed) 严禁作为网关履约事实，缺少 NewAPI 网关真实快照'
+                  : undefined,
           }
         : undefined,
     isDbExtraVerified,
@@ -2199,7 +2373,20 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
   }
 
   // 聚合 options.evidenceProducers 产出的真实观察信封
-  if (options.evidenceProducers && options.evidenceProducers.length > 0) {
+  const producers = [...(options.evidenceProducers ?? [])];
+  const dbCollectionToUse = taskResult.dbEvidence ?? options.dbRawCollection;
+  const hasDbProducer = producers.some((p) => p.producerName === 'database-evidence-producer');
+  const shouldAttachDbProducer =
+    !hasDbProducer &&
+    (dbCollectionToUse !== undefined ||
+      options.dbVerify === true ||
+      (options.dbVerify !== false && !process.env.VITEST && Boolean(resolveDatabaseCredentialsPath(options.dbCredPath))));
+
+  if (shouldAttachDbProducer) {
+    producers.push(new DatabaseEvidenceProducer());
+  }
+
+  if (producers.length > 0) {
     const producerContext: EvidenceProducerContext = {
       testId,
       environment,
@@ -2209,13 +2396,16 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       taskId,
       modelId,
       mediaType,
+      capturedAt,
     };
-    for (const producer of options.evidenceProducers) {
+    for (const producer of producers) {
       try {
         const raw =
-          producer.producerName.includes('visual') || producer.sourceType === 'AI_OBSERVATION'
-            ? (options.uiVisualRawCollection ?? options.uiRawCollection)
-            : (options.uiRawCollection ?? options);
+          producer.producerName === 'database-evidence-producer'
+            ? dbCollectionToUse
+            : producer.producerName.includes('visual') || producer.sourceType === 'AI_OBSERVATION'
+              ? (options.uiVisualRawCollection ?? options.uiRawCollection)
+              : (options.uiRawCollection ?? options);
         const produced = await producer.produce(raw, producerContext);
         if (Array.isArray(produced)) {
           envelopes.push(...produced);
@@ -2297,6 +2487,12 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       !contract.pricing.isPricingDetermined;
     if (isBillingInScope) {
       reqEvidence.push('BILLING_LEDGER:TASK_RECORDS');
+    }
+    if (isRealSpec && (dbCollectionToUse !== undefined || options.dbVerify === true || !process.env.VITEST)) {
+      reqEvidence.push('SERVER_API:DB_TASK_RECORD');
+      if (isBillingInScope || terminalStatus !== 'UNKNOWN' || (expectedPoints !== undefined && expectedPoints > 0)) {
+        reqEvidence.push('BILLING_LEDGER:DB_SCORE_LOGS');
+      }
     }
     if (targetChannelId !== undefined) {
       reqEvidence.push(routingKey);
@@ -2396,6 +2592,65 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       evidenceKey: isRealSpec ? 'SERVER_API:EVIDENCE_CONFLICT' : 'FIXTURE:EVIDENCE_CONFLICT',
       actualField: 'hasConflict',
     });
+
+    // 真实数据变更场景强制执行数据库物理落库与账务对账断言
+    if (isRealSpec && (dbCollectionToUse !== undefined || options.dbVerify === true || !process.env.VITEST)) {
+      deterministicAssertions.push({
+        field: 'db.taskFound',
+        operator: 'EQUALS',
+        expectedValue: true,
+        description: '前台任务表 pq_aivideo_new 物理记录存在',
+        critical: true,
+        evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+        actualField: 'taskFound',
+      });
+      deterministicAssertions.push({
+        field: 'db.backendTaskFound',
+        operator: 'EQUALS',
+        expectedValue: true,
+        description: '后台调度表 pq_volcengine_ai_task 关联记录存在',
+        critical: true,
+        evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+        actualField: 'backendTaskFound',
+      });
+      if (terminalStatus === 'SUCCESS') {
+        deterministicAssertions.push({
+          field: 'db.frontendStatus',
+          operator: 'EQUALS',
+          expectedValue: 2,
+          description: '前台任务表 task_status 为 2 (SUCCESS)',
+          critical: true,
+          evidenceKey: 'SERVER_API:DB_TASK_RECORD',
+          actualField: 'frontendStatus',
+        });
+        if (
+          typeof expectedPoints === 'number' &&
+          expectedPoints > 0 &&
+          contract.pricing.allowPass &&
+          contract.pricing.isPricingDetermined
+        ) {
+          deterministicAssertions.push({
+            field: 'db.billingNetPoints',
+            operator: 'EQUALS',
+            expectedValue: expectedPoints,
+            description: '成功任务数据库积分净扣等于刊例定价',
+            critical: true,
+            evidenceKey: 'BILLING_LEDGER:DB_SCORE_LOGS',
+            actualField: 'netPoints',
+          });
+        }
+      } else if (terminalStatus === 'FAILED') {
+        deterministicAssertions.push({
+          field: 'db.billingNetPoints',
+          operator: 'EQUALS',
+          expectedValue: 0,
+          description: '失败任务数据库积分净扣必须归零 (预扣与退款一致)',
+          critical: true,
+          evidenceKey: 'BILLING_LEDGER:DB_SCORE_LOGS',
+          actualField: 'netPoints',
+        });
+      }
+    }
 
     const resolvedReq = resolveRequirementTraceForSpec({
       requirementId: options.requirementId,
@@ -2623,9 +2878,26 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       extra: extraProvenance,
       gatewayChannel: gatewayChannelProvenance,
     },
+    channelBoundaryClarification: {
+      mainSiteDiversionTag: {
+        status: isDbExtraVerified ? 'CONFIRMED' : 'UNVERIFIED',
+        value: extraObj?.diversion,
+        provenance: extraProvenance,
+        boundaryNotice: '主站数据库中的 diversion 字段仅能证明主站分流标记落库，不能证明网关实际履约渠道',
+      },
+      gatewayUpstreamChannel: {
+        verified: isGatewayChannelVerified,
+        actualChannelId: isGatewayChannelVerified ? actualChannelId : undefined,
+        provenance: gatewayChannelProvenance,
+        boundaryNotice: isRealMode
+          ? '真实模式下不得把外部断言（如 --gateway-channel-confirmed）提升为事实；必须通过网关可信快照'
+          : '仿真模式下允许通过外部声明确认渠道',
+      },
+    },
     canonicalVerdict: canonicalResult,
     canonicalEnvelopes: envelopes,
     canonicalSpec,
     exportDelivery,
+    dbEvidence: dbCollectionToUse,
   };
 }

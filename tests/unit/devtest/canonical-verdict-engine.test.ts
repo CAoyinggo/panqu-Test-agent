@@ -504,5 +504,26 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
       expect('status' in rawResult).toBe(false);
       expect(res.verdict).toBe('PASS');
     });
+
+    it('23. 空规格门禁：requiredEvidence 为空且断言为空时严格返回 UNVERIFIED [FAIL_CLOSED]', () => {
+      const emptySpec: CanonicalTestSpec = {
+        testId: 'test-empty-spec',
+        requirementId: 'REQ-EMPTY-01',
+        scenario: 'EMPTY_SPEC_TEST',
+        environment: 'test',
+        executionMode: 'REAL',
+        target: { targetType: 'model' },
+        inputs: {},
+        deterministicAssertions: [],
+        costLimit: { maxCostPoints: 0 },
+        sideEffectPolicy: 'READ_ONLY',
+        requiredEvidence: [],
+      };
+
+      const res = evaluateCanonicalVerdict(emptySpec, []);
+      expect(res.verdict).toBe('UNVERIFIED');
+      expect(res.blockers.some((b) => b.code === 'NO_EVALUABLE_EVIDENCE_SPEC')).toBe(true);
+      expect(res.reasons.some((r) => r.includes('空规格 PASS'))).toBe(true);
+    });
   });
 });

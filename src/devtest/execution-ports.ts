@@ -328,7 +328,9 @@ export class PanquMediaExecutionAdapter implements ExecutionAdapter {
               ? 'session.json'
               : existsSync('.panqu/session.json')
                 ? '.panqu/session.json'
-                : undefined)
+                : existsSync('/Users/mac/agents/test-Configuration/session-cookies.json')
+                  ? '/Users/mac/agents/test-Configuration/session-cookies.json'
+                  : undefined)
           : undefined);
 
       if (!sessionFilePath) {

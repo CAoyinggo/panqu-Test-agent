@@ -11,7 +11,7 @@
  *   devtest verify --task 12345 --model 84 --media video [--json]
  */
 
-import { realpathSync } from 'node:fs';
+import { realpathSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   probe,
@@ -26,6 +26,23 @@ import {
 } from '../src/devtest/core-kernel.js';
 import { PanquMediaExecutionAdapter, type ExecutionAdapter } from '../src/devtest/execution-ports.js';
 import { DEVTEST_VERSION } from '../src/devtest/version.js';
+
+export function resolveDefaultSessionFile(explicitPath?: string): string | undefined {
+  if (explicitPath && existsSync(explicitPath)) return explicitPath;
+  if (process.env.VITEST) return explicitPath;
+  if (process.env.PANQU_SESSION_COOKIES_FILE && existsSync(process.env.PANQU_SESSION_COOKIES_FILE)) {
+    return process.env.PANQU_SESSION_COOKIES_FILE;
+  }
+  const candidates = [
+    'session.json',
+    '.panqu/session.json',
+    '/Users/mac/agents/test-Configuration/session-cookies.json',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return explicitPath;
+}
 
 // ANSI 颜色辅助
 const c = {
@@ -61,7 +78,7 @@ ${c.bold}命令参数与示例:${c.reset}
   devtest plan --model 84 --media video [--channel 54] [--flow diversion|direct] [--change-type new_model|diversion_change] [--custom-points 5] [--alias <name>] [--is-global] [--json]
 
   ${c.yellow}# 3. 任务执行${c.reset}
-  devtest execute --model 84 --media video [--channel 54] [--mode mock|real] [--alias <name>] [--prompt "..."] [--wait] [--poll-timeout <sec>] [--json]
+  devtest execute --model 84 --media video [--channel 54] [--mode mock|real] [--alias <name>] [--prompt "..."] [--wait] [--poll-timeout <sec>] [--no-db-verify] [--json]
 
   ${c.yellow}# 4. 产物验真与对账${c.reset}
   devtest verify --task 12345 --model 84 --media video [--channel 54] [--alias <name>] [--expected-points 28] [--json]
@@ -320,6 +337,61 @@ function printVerifyResult(result: VerifyKernelResult): void {
     }
   }
 
+  if (result.dbEvidence) {
+    const db = result.dbEvidence;
+    console.log(
+      `\n${c.bold}5. 数据库物理落库与流水验真 (Database Physical Evidence):${c.reset} ${db.status === 'VERIFIED' ? `${c.green}✔ VERIFIED (物理落库核对通过)${c.reset}` : `${c.yellow}● UNVERIFIED${c.reset}`}`,
+    );
+    if (db.error) {
+      console.log(`   ${c.red}取证说明: ${db.error}${c.reset}`);
+    }
+    const aivideo = db.recordsFound.pq_aivideo_new;
+    if (aivideo) {
+      let extraObj: Record<string, unknown> | undefined;
+      try {
+        extraObj =
+          typeof aivideo.extra === 'string' ? JSON.parse(aivideo.extra) : (aivideo.extra as Record<string, unknown>);
+      } catch {
+        extraObj = undefined;
+      }
+      console.log(
+        `   - [前台任务表: pq_aivideo_new] ${c.green}✔ 物理落库${c.reset} (ID: ${aivideo.id}, 状态: ${aivideo.task_status}, 分流: ${extraObj?.diversion ?? 'N/A'}, 扣点: ${extraObj?.deduct_points ?? extraObj?.points ?? 'N/A'} pt)`,
+      );
+      console.log(
+        `     ${c.dim}核验边界: extra.diversion 仅证明主站分流标记落库，不能证明 NewAPI 网关实际履约渠道${c.reset}`,
+      );
+    } else {
+      console.log(`   - [前台任务表: pq_aivideo_new] ${c.yellow}○ 未查到记录${c.reset}`);
+    }
+
+    const volc = db.recordsFound.pq_volcengine_ai_task;
+    if (volc) {
+      console.log(
+        `   - [后台调度表: pq_volcengine_ai_task] ${c.green}✔ 物理落库${c.reset} (调度ID: ${volc.id}, 状态: ${volc.status}, 下游TaskID: ${volc.task_id || 'N/A'})`,
+      );
+    } else {
+      console.log(`   - [后台调度表: pq_volcengine_ai_task] ${c.dim}○ 未查到关联调度记录${c.reset}`);
+    }
+
+    const logs = db.recordsFound.pq_score_log;
+    if (Array.isArray(logs) && logs.length > 0) {
+      console.log(`   - [关联积分流水: pq_score_log] ${c.green}✔ 查到 ${logs.length} 条物理流水${c.reset}:`);
+      for (const log of logs) {
+        const typeLabel =
+          Number(log.type) === 1
+            ? `${c.green}[退款/返还]${c.reset}`
+            : Number(log.type) === 2
+              ? `${c.yellow}[预扣/扣费]${c.reset}`
+              : `[类型:${log.type}]`;
+        console.log(
+          `       ID: ${log.id} | ${typeLabel} ${log.score} pt | 调度Task: ${log.task_id} | 来源Task: ${log.source_id} | 时间: ${log.createtime}`,
+        );
+      }
+    } else {
+      console.log(`   - [关联积分流水: pq_score_log] ${c.yellow}○ 未查到积分流水记录${c.reset}`);
+    }
+  }
+
   if (result.reasons.length > 0) {
     console.log(`\n${c.bold}核验明细 / 告警:${c.reset}`);
     for (const r of result.reasons) console.log(`  ${result.passed ? c.green : c.yellow}👉 ${r}${c.reset}`);
@@ -372,8 +444,9 @@ export async function runDevTestCli(
     switch (command) {
       case 'probe': {
         const env = (options.env as 'test' | 'preonline') || 'test';
-        const sessionFile =
+        const rawSessionFile =
           (options['session-file'] as string) || (options.session as string) || (options.sessionFile as string);
+        const sessionFile = resolveDefaultSessionFile(rawSessionFile);
         const baseUrl = (options['base-url'] as string) || (options.baseUrl as string);
         const timeoutMs = typeof options.timeout === 'number' ? options.timeout : undefined;
 
@@ -392,7 +465,9 @@ export async function runDevTestCli(
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
-          console.log(`${c.bold}📡 DevTest 环境探活报告${c.reset} [${c.yellow}${result.env}${c.reset}]`);
+          console.log(
+            `${c.bold}📡 DevTest 环境探活报告${c.reset} [${c.yellow}${result.env}${c.reset}]${isMock ? ` ${c.yellow}[MOCK / 模拟模式]${c.reset}` : ''}`,
+          );
           console.log(
             `${c.bold}总体状态:${c.reset} ${result.status === 'HEALTHY' ? `${c.green}● HEALTHY (健康)${c.reset}` : result.status === 'DEGRADED' ? `${c.yellow}● DEGRADED (部分降级)${c.reset}` : `${c.red}● BLOCKED (阻断)${c.reset}`}`,
           );
@@ -407,6 +482,12 @@ export async function runDevTestCli(
             const icon = ep.reachable ? `${c.green}✔${c.reset}` : `${c.red}✖${c.reset}`;
             const latency = ep.latencyMs !== undefined ? `${c.dim}${ep.latencyMs}ms${c.reset}` : '';
             console.log(`  ${icon} ${ep.name.padEnd(16)} [${ep.statusCode ?? 'ERR'}] ${ep.message} ${latency}`);
+          }
+          if (isMock) {
+            console.log(`\n${c.bold}模式提示:${c.reset}`);
+            console.log(
+              `  👉 ${c.yellow}当前处于离线受控模拟模式 (Mock)，所有时延与探测指标均为仿真生成，非真实主站网络状态。${c.reset}`,
+            );
           }
           if (result.recommendations.length > 0) {
             console.log(`\n${c.bold}建议与指引:${c.reset}`);
@@ -587,7 +668,9 @@ export async function runDevTestCli(
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
         const prompt = options.prompt as string | undefined;
-        const sessionFile = (options['session-file'] as string) || (options.session as string);
+        const sessionFile = resolveDefaultSessionFile(
+          (options['session-file'] as string) || (options.session as string),
+        );
         const env = (options.env as 'test' | 'preonline') || 'test';
         const price = typeof options.price === 'number' ? (options.price as number) : undefined;
         const customPoints =
@@ -624,6 +707,15 @@ export async function runDevTestCli(
             : typeof options['poll-timeout-sec'] === 'number'
               ? (options['poll-timeout-sec'] as number)
               : undefined;
+
+        const dbVerify =
+          options['no-db-verify'] === true
+            ? false
+            : options['db-verify'] !== undefined
+              ? Boolean(options['db-verify'])
+              : undefined;
+        const dbCredPath =
+          (options['db-cred'] as string) || (options['db-cred-path'] as string) || (options.dbCredPath as string) || undefined;
 
         const sideEffectPolicy = (options['side-effect-policy'] || options.sideEffectPolicy) as any;
         const allowSubmit = Boolean(options['allow-submit'] || options.allowSubmit);
@@ -739,6 +831,8 @@ export async function runDevTestCli(
           pollTimeoutSec,
           isSimulated: result.isSimulated,
           dbExtraConfirmed,
+          dbVerify,
+          dbCredPath,
           gatewayChannelConfirmed,
           onProgress: isJson
             ? undefined
@@ -779,8 +873,9 @@ export async function runDevTestCli(
         const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED' | 'TIMEOUT') || undefined;
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
-        const sessionFile =
+        const rawSessionFile =
           (options['session-file'] as string) || (options.session as string) || (options.sessionFile as string);
+        const sessionFile = resolveDefaultSessionFile(rawSessionFile);
         const env = (options.env as 'test' | 'preonline') || 'test';
         const videoUrl = options['video-url'] as string | undefined;
         const imageUrl = options['image-url'] as string | undefined;
@@ -826,6 +921,15 @@ export async function runDevTestCli(
             : typeof options['poll-timeout-sec'] === 'number'
               ? (options['poll-timeout-sec'] as number)
               : undefined;
+        if (options['no-db-verify'] === true || options['db-verify'] === false || options['db-verify'] === 'false') {
+          console.error(
+            `${c.red}❌ 门禁拦截: 真实任务及数据变更场景强制执行数据库只读取证，禁止通过 --no-db-verify 或 --db-verify false 绕过物理核验门禁${c.reset}`,
+          );
+          return 1;
+        }
+        const dbVerify = options['db-verify'] !== undefined ? Boolean(options['db-verify']) : undefined;
+        const dbCredPath =
+          (options['db-cred'] as string) || (options['db-cred-path'] as string) || (options.dbCredPath as string) || undefined;
 
         const verifyOptions: VerifyKernelOptions = {
           taskId,
@@ -840,6 +944,8 @@ export async function runDevTestCli(
           videoUrl,
           imageUrl,
           dbExtraConfirmed,
+          dbVerify,
+          dbCredPath,
           gatewayChannelConfirmed,
           price,
           customPoints,
