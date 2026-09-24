@@ -69,6 +69,15 @@ import {
   resolveDatabaseCredentialsPath,
   type DatabaseRawCollection,
 } from './database-evidence-producer.js';
+import {
+  loadDiversionPricing,
+  resolveListPrice,
+  type PricingScope,
+} from './diversion-pricing-authority.js';
+import {
+  DiversionEligibilityProducer,
+  type DiversionEligibilityInput,
+} from './diversion-eligibility-producer.js';
 export {
   DatabaseEvidenceProducer,
   queryDatabasePhysicalFacts,
@@ -298,6 +307,10 @@ export interface VerifyKernelOptions {
   dbCredPath?: string;
   dbTimeoutMs?: number;
   dbRawCollection?: DatabaseRawCollection;
+  /** 从飞书《分流渠道表》权威快照自动取刊例价作为计费基准（opt-in）。 */
+  pricingAuthority?: { model: string; resolution: string; refVideo?: boolean; scope?: PricingScope; cachePath?: string };
+  /** NewAPI 分流运行时资格断言输入（模型×分辨率×画面比例×启用），opt-in 挂载 producer。 */
+  diversionEligibility?: DiversionEligibilityInput;
 }
 export interface VerifyKernelResult {
   ok: boolean;
@@ -467,10 +480,27 @@ export async function resolveVerifyContext(
   const { taskId } = options;
   const mediaType = options.mediaType || 'video';
   const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
+  // 计费基准可选取自飞书《分流渠道表》权威快照（opt-in）：刊例价不随分流变化，
+  // 视频=积分/秒(pointsPerSecond)，图片=每张(customPoints)。取数失败静默回退调用方入参。
+  let authorityListPrice: number | undefined;
+  if (options.pricingAuthority) {
+    try {
+      const cache = loadDiversionPricing(options.pricingAuthority.cachePath);
+      const p = resolveListPrice(cache, {
+        model: options.pricingAuthority.model,
+        resolution: options.pricingAuthority.resolution,
+        refVideo: options.pricingAuthority.refVideo,
+        scope: options.pricingAuthority.scope,
+      });
+      authorityListPrice = p ?? undefined;
+    } catch {
+      authorityListPrice = undefined;
+    }
+  }
   const customPoints =
-    options.customPoints ?? (mediaType === 'image' && options.price !== undefined ? options.price : undefined);
+    options.customPoints ?? (mediaType === 'image' ? (options.price ?? authorityListPrice) : undefined);
   const pointsPerSecond =
-    options.pointsPerSecond ?? (mediaType === 'video' && options.price !== undefined ? options.price : undefined);
+    options.pointsPerSecond ?? (mediaType === 'video' ? (options.price ?? authorityListPrice) : undefined);
 
   const contract =
     options.contract ||
@@ -2384,6 +2414,12 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
 
   if (shouldAttachDbProducer) {
     producers.push(new DatabaseEvidenceProducer());
+  }
+
+  // opt-in：分流运行时资格断言（预测 vs 落库分流标记），仅当调用方传入 diversionEligibility 时挂载
+  const hasDiversionProducer = producers.some((p) => p.producerName === 'diversion-eligibility-producer');
+  if (!hasDiversionProducer && options.diversionEligibility) {
+    producers.push(new DiversionEligibilityProducer(options.diversionEligibility, dbCollectionToUse));
   }
 
   if (producers.length > 0) {

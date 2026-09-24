@@ -46,6 +46,12 @@
 
 `src/devtest/newapi-route-eligibility.ts` 忠实镜像上述门槛：`isVideoModelRoutable` / `isVideoModelRoutableForGroup` / `isImageModelRoutable` / `matchesImageCapability` / `isVideoRequestEligible` / `evaluateVideoDiversion`(完整 check_diversion) / `evaluateImageDiversion`(check+applySnapshot)。规则 JSON 作入参（fixture 或 DB line=10 读入）。测试见 `tests/unit/devtest/newapi-route-eligibility.test.ts`。
 
+### 已接入 verify 流水线（可测性接线）
+`verify()` 两个可选入参把上述纯判定接进裁决流水线（opt-in，不传即不影响既有用例）：
+- **`pricingAuthority: { model, resolution }`** → `resolveVerifyContext` 自动从飞书快照取刊例价作计费基准（视频=积分/秒、图片=每张）；调用方显式 `pointsPerSecond`/`customPoints` 优先，取数失败静默回退。
+- **`diversionEligibility: { mediaType, video|image }`** → 挂载 `DiversionEligibilityProducer`，把**预测分流决策**（`evaluate*Diversion`）与**落库分流标记**（`extra.diversion`/`newapi_image`/`volcengine_ai_task.line`，取自 `dbRawCollection`）对照，产出可裁决信封 `SERVER_API:DIVERSION_ELIGIBILITY`（预测=实际→PASS，不符→FAIL，无落库→UNVERIFIED）。
+集成测试见 `tests/unit/devtest/diversion-pipeline-integration.test.ts`。
+
 ## 数据可达性（跑真实资格断言需要的其中一种）
 
 1. **本地 DB（最简）**：`SELECT name,value FROM pq_aivideo_diversion_config WHERE line=10`（取 `newapi_route_rules`/`newapi_route_group_rules`/`newapi_route_mode`/`newapi_global_api_key`）+ `pq_model_config(id,newapi_model_alias,is_newapi_global)` 解码模型ID。
