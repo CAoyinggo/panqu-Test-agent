@@ -83,6 +83,7 @@ import {
   toEligibilityRules,
   type DiversionConfigRawCollection,
 } from './diversion-config-reader.js';
+import { classifyDbForensics, type DbForensicsCategory } from './db-preflight.js';
 export {
   DatabaseEvidenceProducer,
   queryDatabasePhysicalFacts,
@@ -456,6 +457,8 @@ export interface VerifyKernelResult {
     error?: string;
   };
   dbEvidence?: DatabaseRawCollection;
+  /** DB 取证失败的诚实分类（区分「工具链/连通性未连上」与「记录确实不存在」）。 */
+  dbForensicsCategory?: DbForensicsCategory;
 }
 
 export interface VerifyContext {
@@ -3032,5 +3035,6 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     canonicalSpec,
     exportDelivery,
     dbEvidence: dbCollectionToUse,
+    dbForensicsCategory: classifyDbForensics(dbCollectionToUse).category,
   };
 }
