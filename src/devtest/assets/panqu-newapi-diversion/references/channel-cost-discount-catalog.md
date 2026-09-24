@@ -120,9 +120,9 @@
 2. **成本价对比（平台成本，不影响用户）**：分流的收益只体现在**平台成本**（表 J 列 `成本价¥` = `pq_absetting.cost_price`，喂给 `RevenueCostCalcStat` 的 `platform_cost`）。`rankChannelsByCost(model,res,{onlyActive:true})` 给出当前**已接入**渠道的成本升序；折扣渠道成本 = 火山官方价 × 折扣（表内 `J<行>*系数`，已解析为 `costPriceComputed`）。
    - 断言：被分流命中的线路，其表内成本应 ≤ 直连(火山)成本；否则分流无收益，**告警**。
 
-3. **可分流资格（能力 + 状态门槛）**：`isDiversionEligible(model,res,channel,{require})`——
-   - **表中必须存在该 `(渠道,模型,分辨率)` 行**（否则不在可分流范围，用户指令：可分流分辨率以表为准）；
-   - 能力列门槛：`全能参考`(H)、`首尾帧`(I)、`真人人像`(G)——如任务用全能参考而渠道标「只支持无参考」→ **不可分流**；
-   - 调度状态（`tM4eqI.调度器接入状态`）：`下线/暂停/不上线`→`offline`（禁止分流），`待接入/待测试/待分流/接入中`→`pending`（未上量），`已接入`→`active`。星辰(XC)=下线、TD-CN=待分流、腾讯云(TXY)=已接入。
+3. **可分流资格 —— 分两层，别混**：
+   - **粗粒度（业务目录，本表）**：某 `(渠道,模型,分辨率)` 是否在本表登记 + 折扣渠道能力列（`全能参考`/`首尾帧`/`真人人像`）。仅用于圈定「业务上打算分到哪些渠道」。
+   - **⚠️ 运行时真源不是本表**：实际是否分流由 **NewAPI 网关渠道配置**（每模型→允许分辨率+**画面比例**）决定，镜像在 `pq_aivideo_diversion_config`(line=10) `newapi_route_rules`，门槛 = **模型 × 分辨率 × 画面比例 × 渠道启用(status=1)**。完整门槛（含视频 `check_diversion`、图片 `check/applySnapshot`、全量模型视频跳过/图片仍校验画面比例的差异）见 [`newapi-eligibility-gate.md`](./newapi-eligibility-gate.md)，判定模块 `src/devtest/newapi-route-eligibility.ts`。
+   - 调度状态（`tM4eqI.调度器接入状态`）：`下线/暂停/不上线`→`offline`（禁止分流），`待接入/待测试/待分流/接入中`→`pending`，`已接入`→`active`。星辰(XC)=下线、TD-CN=待分流、腾讯云(TXY)=已接入。
 
 4. **新渠道接入验收**：新增线路时，先在本表补 `(渠道,模型,分辨率,成本,刊例价,能力,状态)` 行 → 刷新快照 → 用 `isDiversionEligible` 圈定可测组合 → 用 `rankChannelsByCost` 确认成本优势 → 执行分流并核验「刊例价不变 + 命中目标线路 + 净扣归零/退款幂等」。

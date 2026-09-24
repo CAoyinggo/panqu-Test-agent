@@ -210,7 +210,9 @@ export function channelStatus(cache: DiversionPricingCache, channelOrCode: strin
 }
 
 /**
- * 铁律 3：判定某渠道对某 (模型,分辨率[,能力]) 是否可分流。
+ * 铁律 3（粗粒度/业务目录级）：某渠道对某 (模型,分辨率[,能力]) 在**飞书业务表**中是否登记且能力列满足。
+ * ⚠️ 这**不是运行时分流资格**。运行时真源是 NewAPI 网关渠道配置（模型×分辨率×**画面比例**×启用），
+ * 见 `newapi-route-eligibility.ts` / `references/newapi-eligibility-gate.md`。本函数只用于业务侧圈定候选渠道。
  * 返回 { eligible, reason, status, row }。能力门槛：universalRef/firstLastFrame/realPortrait。
  */
 export function isDiversionEligible(
