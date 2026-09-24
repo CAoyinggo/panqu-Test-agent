@@ -52,6 +52,9 @@
 - **`diversionEligibility: { mediaType, video|image }`** → 挂载 `DiversionEligibilityProducer`，把**预测分流决策**（`evaluate*Diversion`）与**落库分流标记**（`extra.diversion`/`newapi_image`/`volcengine_ai_task.line`，取自 `dbRawCollection`）对照，产出可裁决信封 `SERVER_API:DIVERSION_ELIGIBILITY`（预测=实际→PASS，不符→FAIL，无落库→UNVERIFIED）。
 集成测试见 `tests/unit/devtest/diversion-pipeline-integration.test.ts`。
 
+### 自动拉取资格配置（闭环）
+`src/devtest/diversion-config-reader.ts` 经可注入执行器（默认 `scripts/read-diversion-config.py`，只读 SSH 隧道）拉取 `pq_aivideo_diversion_config`(line=10) + `pq_model_config`，返回 `{routeMode, routeRules, groupRules, globalModelIds, aliasMap, globalApiKeyConfigured}`；fail-closed、脱敏，测试注入假执行器即 100% 离线覆盖。`toEligibilityRules(cfg, modelId)` 把它桥接成 `evaluate*Diversion` 的入参（routeMode/routeRules/groupRules/isGlobalModel/alias/hasGlobalApiKey）。**真实环境无需手喂规则**：`readDiversionConfig()` → `toEligibilityRules()` → `verify({ diversionEligibility })`。测试见 `tests/unit/devtest/diversion-config-reader.test.ts`。
+
 ## 数据可达性（跑真实资格断言需要的其中一种）
 
 1. **本地 DB（最简）**：`SELECT name,value FROM pq_aivideo_diversion_config WHERE line=10`（取 `newapi_route_rules`/`newapi_route_group_rules`/`newapi_route_mode`/`newapi_global_api_key`）+ `pq_model_config(id,newapi_model_alias,is_newapi_global)` 解码模型ID。
