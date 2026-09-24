@@ -84,6 +84,11 @@ import {
   type DiversionConfigRawCollection,
 } from './diversion-config-reader.js';
 import { classifyDbForensics, type DbForensicsCategory } from './db-preflight.js';
+import {
+  readAbsettingPrices,
+  resolveAbsettingListPrice,
+  type AbsettingRow,
+} from './absetting-price-reader.js';
 export {
   DatabaseEvidenceProducer,
   queryDatabasePhysicalFacts,
@@ -313,8 +318,20 @@ export interface VerifyKernelOptions {
   dbCredPath?: string;
   dbTimeoutMs?: number;
   dbRawCollection?: DatabaseRawCollection;
-  /** 从飞书《分流渠道表》权威快照自动取刊例价作为计费基准（opt-in）。 */
+  /** 从飞书《分流渠道表》权威快照自动取刊例价作为计费基准（opt-in）。仅视频；图片见 absettingPricing。 */
   pricingAuthority?: { model: string; resolution: string; refVideo?: boolean; scope?: PricingScope; cachePath?: string };
+  /** 从 pq_absetting（运行时真源）取刊例价作为计费基准（opt-in，支持图片）。
+   *  给 rows 用之（离线/测试），否则真实环境经 readAbsettingPrices 读库（VITEST 下跳过）。 */
+  absettingPricing?: {
+    model?: number;
+    abDb?: string;
+    taskType?: number;
+    resolutionCode: number;
+    rows?: AbsettingRow[];
+    credPath?: string;
+    scriptPath?: string;
+    timeoutMs?: number;
+  };
   /** NewAPI 分流运行时资格断言输入（模型×分辨率×画面比例×启用），opt-in 挂载 producer。 */
   diversionEligibility?: DiversionEligibilityInput;
   /** 一键化：自动读 line=10 配置(pq_aivideo_diversion_config)并构造 diversionEligibility。
@@ -567,10 +584,34 @@ export async function resolveVerifyContext(
   const { taskId } = options;
   const mediaType = options.mediaType || 'video';
   const modelId = options.modelId ?? (mediaType === 'video' ? 84 : 201);
-  // 计费基准可选取自飞书《分流渠道表》权威快照（opt-in）：刊例价不随分流变化，
-  // 视频=积分/秒(pointsPerSecond)，图片=每张(customPoints)。取数失败静默回退调用方入参。
+  // 计费基准可选取自权威源（opt-in）：刊例价不随分流变化，视频=积分/秒、图片=每张。
+  // 优先级：absettingPricing（运行时真源，支持图片）> pricingAuthority（飞书分流表，仅视频）；取数失败静默回退调用方入参。
   let authorityListPrice: number | undefined;
-  if (options.pricingAuthority) {
+  if (options.absettingPricing) {
+    try {
+      let rows = options.absettingPricing.rows;
+      if (!rows && !process.env.VITEST) {
+        const raw = await readAbsettingPrices({
+          model: options.absettingPricing.model ?? modelId,
+          abDb: options.absettingPricing.abDb,
+          credPath: options.absettingPricing.credPath,
+          scriptPath: options.absettingPricing.scriptPath,
+          timeoutMs: options.absettingPricing.timeoutMs,
+        });
+        rows = raw.status === 'VERIFIED' ? raw.rows : [];
+      }
+      if (rows) {
+        const p = resolveAbsettingListPrice(rows, {
+          taskType: options.absettingPricing.taskType,
+          resolutionCode: options.absettingPricing.resolutionCode,
+        });
+        if (p != null) authorityListPrice = p;
+      }
+    } catch {
+      /* fail-open：回退 pricingAuthority / 显式入参 */
+    }
+  }
+  if (authorityListPrice === undefined && options.pricingAuthority) {
     try {
       const cache = loadDiversionPricing(options.pricingAuthority.cachePath);
       const p = resolveListPrice(cache, {

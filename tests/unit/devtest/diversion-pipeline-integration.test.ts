@@ -265,3 +265,30 @@ describe('pricingAuthority 图片安全：不误导（无匹配即不自动取�
     expect(c.customPoints).toBeUndefined();
   });
 });
+
+describe('absettingPricing 接线（图片刊例价取自运行时真源 pq_absetting）', () => {
+  const m12rows = [
+    { model_config_id: 12, task_type: 1, resolution: 4, billing_type: 1, list_price_points: 10, cost_price: 0.2 },
+    { model_config_id: 12, task_type: 1, resolution: 6, billing_type: 1, list_price_points: 15, cost_price: 0.3 },
+  ];
+  it('图片：absettingPricing(rows) → customPoints=按分辨率码精确取价', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 12,
+      mediaType: 'image',
+      absettingPricing: { resolutionCode: 6, taskType: 1, rows: m12rows },
+    });
+    expect(c.customPoints).toBe(15);
+  });
+  it('absettingPricing 优先于 pricingAuthority；VITEST 下无 rows 不触网（回退）', async () => {
+    // 无 rows 且处于 VITEST → 不读库；无飞书匹配的图片模型 → 无权威价，customPoints 保持未定义
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 12,
+      mediaType: 'image',
+      absettingPricing: { resolutionCode: 6 },
+      pricingAuthority: { model: 'pan-banana-pro', resolution: '2k' },
+    });
+    expect(c.customPoints).toBeUndefined();
+  });
+});
