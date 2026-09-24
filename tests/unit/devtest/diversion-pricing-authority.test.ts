@@ -105,3 +105,11 @@ describe('diversion-pricing-authority (飞书分流渠道表权威)', () => {
     expect(all[0].cost).toBeCloseTo(0.58, 3);
   });
 });
+
+describe('作用域边界：图片刊例价不在本(视频)分流表', () => {
+  it('图片模型 → resolveListPrice 返回 null（图片刊例价在 pq_absetting，非本表）', () => {
+    const c = loadDiversionPricing();
+    expect(resolveListPrice(c, { model: 'pan-banana-pro', resolution: '2k' })).toBeNull();
+    expect(resolveListPrice(c, { model: 'gemini-3-pro-image', resolution: '1k' })).toBeNull();
+  });
+});

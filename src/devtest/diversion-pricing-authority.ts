@@ -138,6 +138,11 @@ function matchRow(r: PriceRow, model: string, resolution: string, refVideo = fal
 /**
  * 铁律 1：解析某 (模型,分辨率) 的刊例价（积分/秒或每次）。
  * 跨渠道必须唯一，否则抛错（暴露表内不一致，绝不猜）。返回 null 表示表中无此项。
+ *
+ * ⚠️ 作用域=**视频**：飞书《分流渠道表》图片子表为空（imageLines=0），本函数对图片模型恒返回 null。
+ * 运行时刊例价真源是 `pq_absetting`@AB 库（已实测：视频 m78 → 21/46/115 与本表一致；图片 m12 → 10/10/15，
+ * 但分辨率是媒体相关整数码 video:1=480p/2=720p/3=1080p、image:4/5/6=1K/2K/4K，选取逻辑见 PointsService::getPointsFromAbSetting）。
+ * 图片计费请显式传 customPoints（取自运行时 absetting），勿指望本表。详见 channel-cost-discount-catalog.md §五。
  */
 export function resolveListPrice(
   cache: DiversionPricingCache,

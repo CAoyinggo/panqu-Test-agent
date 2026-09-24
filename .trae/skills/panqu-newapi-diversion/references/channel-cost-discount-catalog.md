@@ -126,3 +126,13 @@
    - 调度状态（`tM4eqI.调度器接入状态`）：`下线/暂停/不上线`→`offline`（禁止分流），`待接入/待测试/待分流/接入中`→`pending`，`已接入`→`active`。星辰(XC)=下线、TD-CN=待分流、腾讯云(TXY)=已接入。
 
 4. **新渠道接入验收**：新增线路时，先在本表补 `(渠道,模型,分辨率,成本,刊例价,能力,状态)` 行 → 刷新快照 → 用 `isDiversionEligible` 圈定可测组合 → 用 `rankChannelsByCost` 确认成本优势 → 执行分流并核验「刊例价不变 + 命中目标线路 + 净扣归零/退款幂等」。
+
+---
+
+## 五、刊例价的运行时真源与「图片不在本表」边界（2026-09-24 实测）
+
+- **本表是视频的刊例/成本规划口径**；运行时真源是 **`pq_absetting`@AB 库**（测试环境库名 `ai_video_ab_test`，`PointsService::getPointsFromAbSetting` 据此取 `list_price_points`）。
+- **视频已交叉验证一致**：AB 库 `pq_absetting` 模型 78(Seedance2.5) → 分辨率码 1/2/3 = **21/46/115 pt/s**，与本表 480p/720p/1080p 完全吻合 → `pricingAuthority`（取自本表）对视频可信。
+- **⚠️ 图片刊例价不在本表**：飞书图片子表为空（`imageLines=0`），`resolveListPrice` 对图片恒返回 null。图片刊例价只在 AB 库 absetting（实测 model 12 pan-banana-pro → 分辨率码 4/5/6 = **10/10/15 pt/张**）。**图片计费请显式传 `customPoints`（取自运行时 absetting），不要依赖本表 / pricingAuthority**。
+- **分辨率是媒体相关整数码**（勿硬编码）：视频 `1=480p,2=720p,3=1080p`；图片 `4/5/6=1K/2K/4K`。映射与选取逻辑在 `getPointsFromAbSetting`（resolution 映射 `:271`、extend_field LIKE 匹配 quality/sound_type）。
+- **要把图片刊例价也做成自动源** = 需要一个 `pq_absetting` 读取器（AB 库名需显式配置——不在 db-credentials.json 内、且 information_schema 跨库列不可见故无法自动探测）+ 复刻 `getPointsFromAbSetting` 的分辨率码/task_type/extend_field 选取。属中等工作量、环境耦合，未做（避免选取逻辑复刻出错导致假价格）。

@@ -252,3 +252,16 @@ describe('回归：磁盘自动会话不得把 fixture 调用误升为真实轮�
     expect(c.executionMode).toBe('offline');
   });
 });
+
+describe('pricingAuthority 图片安全：不误导（无匹配即不自动取价）', () => {
+  it('图片模型 + pricingAuthority → customPoints/pointsPerSecond 保持未定义（回退显式 customPoints）', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 12,
+      mediaType: 'image',
+      pricingAuthority: { model: 'pan-banana-pro', resolution: '2k' },
+    });
+    expect(c.pointsPerSecond).toBeUndefined();
+    expect(c.customPoints).toBeUndefined();
+  });
+});
