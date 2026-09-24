@@ -62,3 +62,10 @@
 3. **后台 AJAX（需管理员会话）**：`GET aivideo/channel/index`（isAjax）→ 每渠道 `models[].{model,resolutions,aspect_ratios}`。
 
 > 无匿名接口。把上述任一导出（或某渠道的 route_rules JSON）给测试代理，即可离线断言 (模型,分辨率,画面比例,启用) 资格；无需真实提交。
+
+## legacy 模式（概率分流，NewAPI 故障回切）的可测性
+
+`newapi_route_mode='legacy'` 时走 `LegacyDiversionService::check`（线路 2=RH/5=SJB/6=XC/7=ZQ）：ratio 累计区间随机落点 → 通用规则 → 角色/时间/积分上限 → Redis 限速锁。**可测性边界（诚实）**：
+- ✅ **可确定性断言**（`src/devtest/legacy-diversion-eligibility.ts`）：`passesLegacyCommonRules`（任务型/模型/分辨率/画幅/真人像/参考视频/cueword，逐行镜像 `:53-119`）、`matchLegacyLineByRatio`（给定 bucket 的区间匹配）、`isLegacyRoleAllowed`、`isLegacyTimeAllowed`；`evaluateLegacyDiversion` 给出到角色/时间为止的确定性裁决。
+- ❌ **运行时/有状态，不可离线断言**（命中时以 `runtimeGated` 标注）：随机落点 `createDiversionBucket`（pid+hrtime+random_bytes）、积分上限 `isDiversionScoreLimitReached`（查 `pq_score_log` 实时累计）、限速锁 `acquireDiversionSpeedLock`（Redis，有副作用）。
+- ⚠️ 已发现 SUT 小瑕疵：`line6` 有 `model78` 画幅规则，但 line6 支持模型是 `[15,16]`，78 先被模型门槛挡下——那段是死代码（本模块忠实镜像，不擅自"修正"）。测试见 `tests/unit/devtest/legacy-diversion-eligibility.test.ts`。
