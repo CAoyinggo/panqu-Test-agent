@@ -78,6 +78,11 @@ import {
   DiversionEligibilityProducer,
   type DiversionEligibilityInput,
 } from './diversion-eligibility-producer.js';
+import {
+  readDiversionConfig,
+  toEligibilityRules,
+  type DiversionConfigRawCollection,
+} from './diversion-config-reader.js';
 export {
   DatabaseEvidenceProducer,
   queryDatabasePhysicalFacts,
@@ -311,6 +316,85 @@ export interface VerifyKernelOptions {
   pricingAuthority?: { model: string; resolution: string; refVideo?: boolean; scope?: PricingScope; cachePath?: string };
   /** NewAPI 分流运行时资格断言输入（模型×分辨率×画面比例×启用），opt-in 挂载 producer。 */
   diversionEligibility?: DiversionEligibilityInput;
+  /** 一键化：自动读 line=10 配置(pq_aivideo_diversion_config)并构造 diversionEligibility。
+   *  传 config 用它（离线/测试），否则真实环境经 readDiversionConfig 读库（VITEST 下跳过）。 */
+  autoDiversionEligibility?: AutoDiversionEligibilityOptions;
+}
+
+/** verify() 一键分流资格断言的入参（DB 侧规则/模型上下文自动补全，仅需给请求参数）。 */
+export interface AutoDiversionEligibilityOptions {
+  mediaType?: 'video' | 'image';
+  eligible?: boolean; // 视频硬性资格(isVideoRequestEligible)结果，默认 true
+  resolution?: string; // 默认取 options.resolution
+  aspect?: string; // 默认 'auto'
+  routeGroup?: { newapi_group: string; usable: boolean } | null;
+  serviceline?: string; // 图片，默认 'r'
+  sizeType?: string;
+  refImageCount?: number;
+  modelClass?: 'normal' | 'image2_lowcost' | 'image25' | 'mj_v82';
+  credPath?: string;
+  scriptPath?: string;
+  timeoutMs?: number;
+  config?: DiversionConfigRawCollection; // 预读配置（给了就不读库）
+}
+
+/**
+ * 一键构造分流资格断言输入：DB 侧规则/模型上下文经 readDiversionConfig+toEligibilityRules 自动补全，
+ * 与调用方给的请求参数（分辨率/画面比例/路由组等）合并。fail-closed：配置读不到→返回 undefined（不产断言）。
+ * VITEST 下若未给 config 则跳过真实读库，避免测试触网。
+ */
+export async function buildAutoDiversionEligibility(
+  options: VerifyKernelOptions,
+  modelId: number,
+): Promise<DiversionEligibilityInput | undefined> {
+  const a = options.autoDiversionEligibility;
+  if (!a) return undefined;
+  const mediaType = a.mediaType ?? options.mediaType ?? 'video';
+  let cfg = a.config;
+  if (!cfg) {
+    if (process.env.VITEST) return undefined;
+    cfg = await readDiversionConfig({ credPath: a.credPath, scriptPath: a.scriptPath, timeoutMs: a.timeoutMs });
+  }
+  if (cfg.status !== 'VERIFIED') return undefined;
+  const b = toEligibilityRules(cfg, modelId);
+  const resolution = a.resolution ?? options.resolution ?? '';
+  const aspect = a.aspect ?? 'auto';
+  if (mediaType === 'image') {
+    return {
+      mediaType: 'image',
+      image: {
+        selmodelsId: modelId,
+        modelClass: a.modelClass,
+        isGlobalModel: b.isGlobalModel,
+        alias: b.alias,
+        hasGlobalApiKey: b.hasGlobalApiKey,
+        serviceline: a.serviceline ?? 'r',
+        sizeType: a.sizeType,
+        refImageCount: a.refImageCount,
+        resolution,
+        aspect,
+        routeGroup: a.routeGroup ?? null,
+        routeRules: b.routeRules,
+        groupRules: b.groupRules,
+      },
+    };
+  }
+  return {
+    mediaType: 'video',
+    video: {
+      routeMode: b.routeMode,
+      eligible: a.eligible ?? true,
+      modelId,
+      isGlobalModel: b.isGlobalModel,
+      alias: b.alias,
+      hasGlobalApiKey: b.hasGlobalApiKey,
+      resolution,
+      aspect,
+      routeGroup: a.routeGroup ?? null,
+      routeRules: b.routeRules,
+      groupRules: b.groupRules,
+    },
+  };
 }
 export interface VerifyKernelResult {
   ok: boolean;
@@ -2416,10 +2500,13 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     producers.push(new DatabaseEvidenceProducer());
   }
 
-  // opt-in：分流运行时资格断言（预测 vs 落库分流标记），仅当调用方传入 diversionEligibility 时挂载
+  // opt-in：分流运行时资格断言（预测 vs 落库分流标记）。diversionEligibility 直传优先；
+  // 否则 autoDiversionEligibility 一键读 line=10 配置自动构造（VITEST 下不触网）。
   const hasDiversionProducer = producers.some((p) => p.producerName === 'diversion-eligibility-producer');
-  if (!hasDiversionProducer && options.diversionEligibility) {
-    producers.push(new DiversionEligibilityProducer(options.diversionEligibility, dbCollectionToUse));
+  const effectiveDiversionEligibility =
+    options.diversionEligibility ?? (options.autoDiversionEligibility ? await buildAutoDiversionEligibility(options, modelId) : undefined);
+  if (!hasDiversionProducer && effectiveDiversionEligibility) {
+    producers.push(new DiversionEligibilityProducer(effectiveDiversionEligibility, dbCollectionToUse));
   }
 
   if (producers.length > 0) {

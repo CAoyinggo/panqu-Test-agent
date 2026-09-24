@@ -7,7 +7,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { verify } from '../../../src/devtest/core-kernel.js';
-import { resolveVerifyContext } from '../../../src/devtest/verify-pipeline.js';
+import { resolveVerifyContext, buildAutoDiversionEligibility } from '../../../src/devtest/verify-pipeline.js';
+import type { DiversionConfigRawCollection } from '../../../src/devtest/diversion-config-reader.js';
 import {
   DiversionEligibilityProducer,
   type DiversionEligibilityInput,
@@ -177,3 +178,58 @@ describe('verify() 集成：diversionEligibility 自动挂载 producer', () => {
   });
 });
 
+
+describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断言）', () => {
+  const cfg: DiversionConfigRawCollection = {
+    status: 'VERIFIED',
+    routeMode: 'newapi',
+    routeRules: {
+      video: { '78': { resolutions: ['720p', '1080p'], aspect_ratios: ['16:9', 'auto'] } },
+      image: { '12': { channels: [{ resolutions: ['2k'], aspect_ratios: ['1:1'] }] } },
+    },
+    groupRules: {},
+    globalApiKeyConfigured: true,
+    globalModelIds: [12],
+    aliasMap: { '78': 'seedance-2.5', '12': 'pan-banana-pro' },
+  };
+
+  it('buildAutoDiversionEligibility：给 config 时从库侧规则+模型上下文自动补全 video 输入', async () => {
+    const input = await buildAutoDiversionEligibility(
+      {
+        taskId: 1,
+        modelId: 78,
+        mediaType: 'video',
+        autoDiversionEligibility: { config: cfg, resolution: '720p', aspect: '16:9', routeGroup: { newapi_group: 'default', usable: true } },
+      },
+      78,
+    );
+    expect(input?.mediaType).toBe('video');
+    expect(input?.video?.isGlobalModel).toBe(false); // 78 非全量
+    expect(input?.video?.alias).toBe('seedance-2.5');
+    expect(input?.video?.routeRules).toBe(cfg.routeRules);
+  });
+
+  it('未给 config 且处于 VITEST → 跳过真实读库，返回 undefined（不触网）', async () => {
+    const input = await buildAutoDiversionEligibility(
+      { taskId: 1, modelId: 78, mediaType: 'video', autoDiversionEligibility: { resolution: '720p' } },
+      78,
+    );
+    expect(input).toBeUndefined();
+  });
+
+  it('verify() 传 autoDiversionEligibility(config) → 自动挂载并裁决 PASS', async () => {
+    const result = await verify({
+      taskId: 501,
+      modelId: 78,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      dbRawCollection: dbWith({ diversion: 10 }, 10),
+      autoDiversionEligibility: { config: cfg, resolution: '720p', aspect: '16:9', routeGroup: { newapi_group: 'default', usable: true } },
+    });
+    const env = result.canonicalEnvelopes?.find((e) => e.evidenceKey === 'SERVER_API:DIVERSION_ELIGIBILITY');
+    expect(env).toBeDefined();
+    expect(env?.observationStatus).toBe('PASS');
+    expect(env?.normalizedFields.predictedDecision).toBe('NEWAPI_ORG_GROUP');
+  });
+});
