@@ -617,6 +617,7 @@ export async function resolveVerifyContext(
     options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
 
   let session: PanquSession | null = null;
+  let sessionFromAuto = false;
   let sessionLoadError: string | undefined;
   const env = options.env || (options.environment as 'test' | 'preonline' | undefined) || 'test';
   const autoSession =
@@ -640,6 +641,7 @@ export async function resolveVerifyContext(
   } else if (autoSession) {
     try {
       session = await loadPanquSession(autoSession, env);
+      sessionFromAuto = true;
     } catch {
       /* ignore auto session */
     }
@@ -653,6 +655,9 @@ export async function resolveVerifyContext(
   const hasFixturePayload =
     Boolean(options.assetBuffer || options.artifactBuffer) &&
     Boolean(options.scoreLogs && options.scoreLogs.length > 0);
+  // 调用方提供了取证数据（dbRawCollection 或 asset+scoreLogs）即为 fixture 意图：
+  // 磁盘上偶然存在的 .panqu/session.json 不应把这类调用悄悄提升为真实轮询运行（否则会卡到 poll 超时）。
+  const hasFixtureData = hasFixturePayload || options.dbRawCollection !== undefined;
 
   const executionMode: 'real' | 'offline' | 'fixture' = isMockExecution
     ? 'offline'
@@ -660,11 +665,16 @@ export async function resolveVerifyContext(
       ? 'fixture'
       : explicitMode === 'real'
         ? 'real'
-        : session
+        : session && !(sessionFromAuto && hasFixtureData)
           ? 'real'
           : hasFixturePayload
             ? 'fixture'
             : 'offline';
+
+  // 有 fixture 数据时，丢弃磁盘上自动发现的会话，避免下游把它当真实运行去轮询任务（poll 超时导致的卡死）。
+  if (sessionFromAuto && hasFixtureData) {
+    session = null;
+  }
 
   return {
     taskId,

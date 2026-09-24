@@ -233,3 +233,22 @@ describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断
     expect(env?.normalizedFields.predictedDecision).toBe('NEWAPI_ORG_GROUP');
   });
 });
+
+describe('回归：磁盘自动会话不得把 fixture 调用误升为真实轮询（防 >180s poll 卡死）', () => {
+  it('显式 session + dbRawCollection → 仍 real（守卫只丢弃磁盘自动发现的会话，不动显式 session）', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1, modelId: 78, mediaType: 'video', duration: 4, resolution: '720p',
+      session: { env: 'test', base_url: 'https://x.test', cookie_string: 'c' },
+      dbRawCollection: dbWith({ diversion: 10 }, 10),
+    });
+    expect(c.executionMode).toBe('real');
+  });
+
+  it('无显式 session + dbRawCollection fixture → offline（不轮询）', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1, modelId: 78, mediaType: 'video', duration: 4, resolution: '720p',
+      dbRawCollection: dbWith({ diversion: 10 }, 10),
+    });
+    expect(c.executionMode).toBe('offline');
+  });
+});
