@@ -24,8 +24,22 @@ describe('readAbsettingPrices (注入执行器)', () => {
         abSchema: 'ai_video_ab_test',
         model: 12,
         rows: [
-          { model_config_id: 12, task_type: 1, resolution: 4, billing_type: 1, list_price_points: '10.00', cost_price: '0.2000' },
-          { model_config_id: 12, task_type: 1, resolution: 6, billing_type: 1, list_price_points: '15.00', cost_price: '0.3000' },
+          {
+            model_config_id: 12,
+            task_type: 1,
+            resolution: 4,
+            billing_type: 1,
+            list_price_points: '10.00',
+            cost_price: '0.2000',
+          },
+          {
+            model_config_id: 12,
+            task_type: 1,
+            resolution: 6,
+            billing_type: 1,
+            list_price_points: '15.00',
+            cost_price: '0.3000',
+          },
         ],
       }),
     });

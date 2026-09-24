@@ -55,7 +55,10 @@ function resolveConfigScriptPath(explicit?: string): string | undefined {
   return undefined;
 }
 
-const EMPTY = (): Pick<DiversionConfigRawCollection, 'routeMode' | 'routeRules' | 'groupRules' | 'globalApiKeyConfigured' | 'globalModelIds' | 'aliasMap'> => ({
+const EMPTY = (): Pick<
+  DiversionConfigRawCollection,
+  'routeMode' | 'routeRules' | 'groupRules' | 'globalApiKeyConfigured' | 'globalModelIds' | 'aliasMap'
+> => ({
   routeMode: null,
   routeRules: {},
   groupRules: {},
@@ -74,15 +77,31 @@ export async function readDiversionConfig(
   const queriedAt = new Date().toISOString();
   const credPath = resolveDatabaseCredentialsPath(options.credPath);
   if (!credPath) {
-    return { status: 'UNVERIFIED', reason: 'MISSING_CREDENTIALS', error: '找不到 db-credentials.json，无法读取分流资格配置 [UNVERIFIED]', ...EMPTY(), queriedAt };
+    return {
+      status: 'UNVERIFIED',
+      reason: 'MISSING_CREDENTIALS',
+      error: '找不到 db-credentials.json，无法读取分流资格配置 [UNVERIFIED]',
+      ...EMPTY(),
+      queriedAt,
+    };
   }
   const scriptPath = resolveConfigScriptPath(options.scriptPath);
   if (!scriptPath || !existsSync(scriptPath)) {
-    return { status: 'UNVERIFIED', reason: 'SCRIPT_NOT_FOUND', error: `读取脚本不存在: ${scriptPath || 'scripts/read-diversion-config.py'} [UNVERIFIED]`, ...EMPTY(), credPath, queriedAt };
+    return {
+      status: 'UNVERIFIED',
+      reason: 'SCRIPT_NOT_FOUND',
+      error: `读取脚本不存在: ${scriptPath || 'scripts/read-diversion-config.py'} [UNVERIFIED]`,
+      ...EMPTY(),
+      credPath,
+      queriedAt,
+    };
   }
   const args = [scriptPath, '--cred-path', credPath, '--json'];
   try {
-    const { stdout } = await runner('python3', args, { timeout: options.timeoutMs ?? 15000, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await runner('python3', args, {
+      timeout: options.timeoutMs ?? 15000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
     const parsed = JSON.parse(stdout.trim()) as Partial<DiversionConfigRawCollection>;
     return {
       status: parsed.status === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED',
@@ -99,7 +118,14 @@ export async function readDiversionConfig(
     };
   } catch (err) {
     const sanitized = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
-    return { status: 'UNVERIFIED', reason: 'CONFIG_READ_FAILED', error: `分流资格配置读取失败: ${sanitized} [UNVERIFIED]`, ...EMPTY(), credPath, queriedAt };
+    return {
+      status: 'UNVERIFIED',
+      reason: 'CONFIG_READ_FAILED',
+      error: `分流资格配置读取失败: ${sanitized} [UNVERIFIED]`,
+      ...EMPTY(),
+      credPath,
+      queriedAt,
+    };
   }
 }
 
@@ -129,4 +155,3 @@ export function toEligibilityRules(
     hasGlobalApiKey: cfg.globalApiKeyConfigured,
   };
 }
-

@@ -90,12 +90,24 @@ export class DiversionEligibilityProducer implements EvidenceProducer {
       input.mediaType === 'image' && input.image
         ? (() => {
             const r = evaluateImageDiversion(input.image!);
-            return { line: r.diverted ? 10 : 0, diverted: r.diverted, decision: r.decision, reason: r.reason, hardError: r.hardError };
+            return {
+              line: r.diverted ? 10 : 0,
+              diverted: r.diverted,
+              decision: r.decision,
+              reason: r.reason,
+              hardError: r.hardError,
+            };
           })()
         : input.video
           ? (() => {
               const r = evaluateVideoDiversion(input.video!);
-              return { line: r.line, diverted: r.line === 10, decision: r.decision, reason: r.reason, hardError: r.hardError };
+              return {
+                line: r.line,
+                diverted: r.line === 10,
+                decision: r.decision,
+                reason: r.reason,
+                hardError: r.hardError,
+              };
             })()
           : { line: 0, diverted: false, decision: 'NO_INPUT', reason: '缺少 video/image 输入', hardError: false };
 
@@ -143,4 +155,3 @@ export class DiversionEligibilityProducer implements EvidenceProducer {
     ];
   }
 }
-

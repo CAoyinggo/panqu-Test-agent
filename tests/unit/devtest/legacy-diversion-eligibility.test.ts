@@ -84,11 +84,26 @@ describe('evaluateLegacyDiversion (确定性裁决 + runtimeGated 标注)', () =
     const r = evaluateLegacyDiversion({ ...base, req: { selmodelsId: 15, videoResolution: '720p' } });
     expect(r.decision).toBe('LEGACY_HIT');
     expect(r.line).toBe(5);
-    expect(r.runtimeGated).toEqual(expect.arrayContaining([expect.stringContaining('score_limit'), expect.stringContaining('speed_lock')]));
+    expect(r.runtimeGated).toEqual(
+      expect.arrayContaining([expect.stringContaining('score_limit'), expect.stringContaining('speed_lock')]),
+    );
   });
   it('RATIO_MISS / COMMON_RULES_FAIL / TIME_DENIED', () => {
     expect(evaluateLegacyDiversion({ ...base, bucket: 100, req: { selmodelsId: 15 } }).decision).toBe('RATIO_MISS');
-    expect(evaluateLegacyDiversion({ ...base, req: { selmodelsId: 16, videoResolution: '1080p' }, orderedLines: [{ line: 7, ratio: 100 }] }).decision).toBe('COMMON_RULES_FAIL');
-    expect(evaluateLegacyDiversion({ ...base, currentMinutes: 100, lineConfig: { 5: { time_interval: '09:00-18:00' } }, req: { selmodelsId: 15 } }).decision).toBe('TIME_DENIED');
+    expect(
+      evaluateLegacyDiversion({
+        ...base,
+        req: { selmodelsId: 16, videoResolution: '1080p' },
+        orderedLines: [{ line: 7, ratio: 100 }],
+      }).decision,
+    ).toBe('COMMON_RULES_FAIL');
+    expect(
+      evaluateLegacyDiversion({
+        ...base,
+        currentMinutes: 100,
+        lineConfig: { 5: { time_interval: '09:00-18:00' } },
+        req: { selmodelsId: 15 },
+      }).decision,
+    ).toBe('TIME_DENIED');
   });
 });

@@ -94,18 +94,34 @@ export async function readAbsettingPrices(
   runner: DbScriptRunner = (file, args, opts) => execFileAsync(file, args, opts),
 ): Promise<AbsettingPriceRawCollection> {
   const queriedAt = new Date().toISOString();
-  const base: AbsettingPriceRawCollection = { status: 'UNVERIFIED', abSchema: null, model: options.model, rows: [], queriedAt };
+  const base: AbsettingPriceRawCollection = {
+    status: 'UNVERIFIED',
+    abSchema: null,
+    model: options.model,
+    rows: [],
+    queriedAt,
+  };
   const credPath = resolveDatabaseCredentialsPath(options.credPath);
   if (!credPath) return { ...base, reason: 'MISSING_CREDENTIALS', error: '找不到 db-credentials.json' };
   const scriptPath = resolveAbScriptPath(options.scriptPath);
   if (!scriptPath || !existsSync(scriptPath)) {
-    return { ...base, reason: 'SCRIPT_NOT_FOUND', error: `读取脚本不存在: ${scriptPath || 'scripts/read-absetting-price.py'}`, credPath };
+    return {
+      ...base,
+      reason: 'SCRIPT_NOT_FOUND',
+      error: `读取脚本不存在: ${scriptPath || 'scripts/read-absetting-price.py'}`,
+      credPath,
+    };
   }
   const args = [scriptPath, '--model', String(options.model), '--cred-path', credPath, '--json'];
   if (options.abDb) args.push('--ab-db', options.abDb);
   try {
-    const { stdout } = await runner('python3', args, { timeout: options.timeoutMs ?? 15000, maxBuffer: 4 * 1024 * 1024 });
-    const parsed = JSON.parse(stdout.trim()) as Partial<AbsettingPriceRawCollection> & { rows?: Record<string, unknown>[] };
+    const { stdout } = await runner('python3', args, {
+      timeout: options.timeoutMs ?? 15000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout.trim()) as Partial<AbsettingPriceRawCollection> & {
+      rows?: Record<string, unknown>[];
+    };
     return {
       status: parsed.status === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED',
       abSchema: parsed.abSchema ?? null,
@@ -117,7 +133,12 @@ export async function readAbsettingPrices(
       queriedAt,
     };
   } catch (err) {
-    return { ...base, reason: 'ABSETTING_READ_FAILED', error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)), credPath };
+    return {
+      ...base,
+      reason: 'ABSETTING_READ_FAILED',
+      error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+      credPath,
+    };
   }
 }
 
@@ -153,11 +174,8 @@ export function resolveAbsettingListPrice(
 ): number | null {
   const code = q.resolutionCode ?? (q.resolution !== undefined ? resolutionNameToCode(q.resolution) : undefined);
   if (code === undefined || code === null) return null;
-  const matched = rows.filter(
-    (r) => r.resolution === code && (q.taskType === undefined || r.task_type === q.taskType),
-  );
+  const matched = rows.filter((r) => r.resolution === code && (q.taskType === undefined || r.task_type === q.taskType));
   const vals = new Set<number>();
   for (const r of matched) if (typeof r.list_price_points === 'number') vals.add(r.list_price_points);
   return vals.size === 1 ? [...vals][0] : null;
 }
-

@@ -14,7 +14,9 @@ describe('classifyDbForensics (区分工具链/连通性 vs 记录缺失)', () =
     expect(classifyDbForensics({ status: 'VERIFIED', recordsFound: { pq_aivideo_new: {} } }).category).toBe('OK');
   });
   it('MISSING_CREDENTIALS', () => {
-    expect(classifyDbForensics({ status: 'UNVERIFIED', reason: 'MISSING_CREDENTIALS' }).category).toBe('MISSING_CREDENTIALS');
+    expect(classifyDbForensics({ status: 'UNVERIFIED', reason: 'MISSING_CREDENTIALS' }).category).toBe(
+      'MISSING_CREDENTIALS',
+    );
   });
   it('DB_QUERY_FAILED → TOOLCHAIN_OR_CONNECTIVITY（不是记录缺失）', () => {
     const c = classifyDbForensics({ status: 'UNVERIFIED', reason: 'DB_QUERY_FAILED' });
@@ -35,14 +37,18 @@ describe('classifyDbForensics (区分工具链/连通性 vs 记录缺失)', () =
 describe('checkDbToolchain (注入执行器)', () => {
   const opts = { credPath: existingPath, scriptPath: existingPath };
   it('执行器返回 connected JSON → ok=true, stage=connected, tables', async () => {
-    const runner: DbScriptRunner = async () => ({ stdout: JSON.stringify({ ok: true, stage: 'connected', tables: 219 }) });
+    const runner: DbScriptRunner = async () => ({
+      stdout: JSON.stringify({ ok: true, stage: 'connected', tables: 219 }),
+    });
     const r = await checkDbToolchain(opts, runner);
     expect(r.ok).toBe(true);
     expect(r.stage).toBe('connected');
     expect(r.tables).toBe(219);
   });
   it('执行器返回 deps 失败 JSON → ok=false, stage=deps', async () => {
-    const runner: DbScriptRunner = async () => ({ stdout: JSON.stringify({ ok: false, stage: 'deps', error: 'MISSING_DEPENDENCY: sshtunnel' }) });
+    const runner: DbScriptRunner = async () => ({
+      stdout: JSON.stringify({ ok: false, stage: 'deps', error: 'MISSING_DEPENDENCY: sshtunnel' }),
+    });
     const r = await checkDbToolchain(opts, runner);
     expect(r.ok).toBe(false);
     expect(r.stage).toBe('deps');

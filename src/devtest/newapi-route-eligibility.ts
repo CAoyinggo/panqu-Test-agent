@@ -22,12 +22,16 @@
 
 /** 归一化画面比例：小写去空格；adaptive/auto → 'auto'；其余原样（对应 PHP normalizeAspectRatio）。 */
 export function normalizeAspectRatio(value: string | null | undefined): string {
-  const v = String(value ?? '').toLowerCase().trim();
+  const v = String(value ?? '')
+    .toLowerCase()
+    .trim();
   return v === 'adaptive' || v === 'auto' ? 'auto' : v;
 }
 
 function normRes(value: string | null | undefined): string {
-  return String(value ?? '').toLowerCase().trim();
+  return String(value ?? '')
+    .toLowerCase()
+    .trim();
 }
 
 /** 单模型能力（视频）：允许分辨率 + 允许画面比例。 */
@@ -138,7 +142,12 @@ export function isImageModelRoutableForGroup(
 ): boolean {
   const image = groupRules?.image;
   if (!image || typeof image !== 'object') return false;
-  const groups = ['default', ...String(q.group ?? '').toLowerCase().split(',')];
+  const groups = [
+    'default',
+    ...String(q.group ?? '')
+      .toLowerCase()
+      .split(','),
+  ];
   for (const g of groups) {
     if (matchesImageCapability(image[g.trim()]?.[String(q.modelId)], q)) return true;
   }
@@ -174,7 +183,12 @@ export function isVideoRequestEligible(
   }
   if (q.hasRealHumanPortrait) return false;
   if ((q.cuewordLength ?? 0) > 5000) return false;
-  if (String(q.outputFormat ?? '').toLowerCase().trim() === 'mov') return false;
+  if (
+    String(q.outputFormat ?? '')
+      .toLowerCase()
+      .trim() === 'mov'
+  )
+    return false;
   return true;
 }
 
@@ -225,19 +239,32 @@ export function evaluateVideoDiversion(input: VideoDiversionInput): {
   if (!input.eligible) return { line: 0, decision: 'INELIGIBLE', reason: '未过硬性资格(isRequestEligible)，直连' };
 
   if (input.isGlobalModel) {
-    if (input.alias === '') return { line: 0, decision: 'CONFIG_ERROR', reason: '全量模型别名未配置(Ai.php)，提交中断', hardError: true };
-    if (!input.hasGlobalApiKey) return { line: 0, decision: 'CONFIG_ERROR', reason: '全量模型全局Key未配置，提交中断', hardError: true };
+    if (input.alias === '')
+      return { line: 0, decision: 'CONFIG_ERROR', reason: '全量模型别名未配置(Ai.php)，提交中断', hardError: true };
+    if (!input.hasGlobalApiKey)
+      return { line: 0, decision: 'CONFIG_ERROR', reason: '全量模型全局Key未配置，提交中断', hardError: true };
     return { line: 10, decision: 'NEWAPI_GLOBAL', reason: '全量模型→全局Key（跳过分辨率/画面比例校验）' };
   }
 
   if (!isVideoModelRoutable(input.routeRules, input)) {
-    return { line: 0, decision: 'FALLBACK_NOT_ROUTABLE', reason: `模型/分辨率/画面比例不在启用渠道能力并集内 (res=${input.resolution}, aspect=${input.aspect})，回退直连` };
+    return {
+      line: 0,
+      decision: 'FALLBACK_NOT_ROUTABLE',
+      reason: `模型/分辨率/画面比例不在启用渠道能力并集内 (res=${input.resolution}, aspect=${input.aspect})，回退直连`,
+    };
   }
-  if (!input.routeGroup) return { line: 0, decision: 'FALLBACK_NO_ROUTE_GROUP', reason: '未解析到企业路由组，回退直连' };
-  if (!input.routeGroup.usable) return { line: 0, decision: 'CONFIG_ERROR', reason: '路由组停用/缺Key，提交中断', hardError: true };
-  if (input.alias === '') return { line: 0, decision: 'CONFIG_ERROR', reason: '分组模型别名未配置，提交中断', hardError: true };
+  if (!input.routeGroup)
+    return { line: 0, decision: 'FALLBACK_NO_ROUTE_GROUP', reason: '未解析到企业路由组，回退直连' };
+  if (!input.routeGroup.usable)
+    return { line: 0, decision: 'CONFIG_ERROR', reason: '路由组停用/缺Key，提交中断', hardError: true };
+  if (input.alias === '')
+    return { line: 0, decision: 'CONFIG_ERROR', reason: '分组模型别名未配置，提交中断', hardError: true };
   if (!isVideoModelRoutableForGroup(input.groupRules, { ...input, group: input.routeGroup.newapi_group })) {
-    return { line: 0, decision: 'FALLBACK_GROUP_NOT_ROUTABLE', reason: `路由组分组[${input.routeGroup.newapi_group}]内无该模型/分辨率/画面比例渠道，回退直连` };
+    return {
+      line: 0,
+      decision: 'FALLBACK_GROUP_NOT_ROUTABLE',
+      reason: `路由组分组[${input.routeGroup.newapi_group}]内无该模型/分辨率/画面比例渠道，回退直连`,
+    };
   }
   return { line: 10, decision: 'NEWAPI_ORG_GROUP', reason: `命中企业路由组[${input.routeGroup.newapi_group}]` };
 }
@@ -296,35 +323,73 @@ export function evaluateImageDiversion(input: ImageDiversionInput): {
   // applySnapshot 首段：Image2.5 / MJ v8.2 特判
   if (cls === 'image25') {
     if (input.alias === '' || !input.hasGlobalApiKey || !isImageModelRoutable(input.routeRules, imgQ)) {
-      return { diverted: false, decision: 'IMAGE25_NO_CHANNEL', reason: '所选分辨率/画幅暂无可用图片渠道（抛用户错误，提交中断）', hardError: true };
+      return {
+        diverted: false,
+        decision: 'IMAGE25_NO_CHANNEL',
+        reason: '所选分辨率/画幅暂无可用图片渠道（抛用户错误，提交中断）',
+        hardError: true,
+      };
     }
-    return { diverted: true, decision: 'NEWAPI_IMAGE25_GLOBAL', reason: 'Image2.5→全局NewAPI（已校验分辨率/画面比例）' };
+    return {
+      diverted: true,
+      decision: 'NEWAPI_IMAGE25_GLOBAL',
+      reason: 'Image2.5→全局NewAPI（已校验分辨率/画面比例）',
+    };
   }
   if (cls === 'mj_v82') {
     return { diverted: true, decision: 'NEWAPI_MJ_V82', reason: 'MJ v8.2 固定路由，无分辨率/画面比例校验' };
   }
 
   // check()：静默回退型资格
-  if (cls === 'image2_lowcost') return { diverted: false, decision: 'FALLBACK_IMAGE2_LOWCOST_PAUSED', reason: 'Image2低价版(57)暂停分流，回退原渠道' };
-  if (input.alias === '') return { diverted: false, decision: 'FALLBACK_NO_ALIAS', reason: '模型别名留空=不分流，回退原渠道' };
-  if (String(input.serviceline).toLowerCase().trim() !== 'r') return { diverted: false, decision: 'FALLBACK_SERVICELINE', reason: `serviceline≠r (=${input.serviceline})，回退原渠道` };
-  if (String(input.sizeType ?? 'resolution').toLowerCase().trim() === 'pixels') return { diverted: false, decision: 'FALLBACK_PIXELS', reason: 'size_type=pixels(自定义像素)，回退原渠道' };
-  if ((input.refImageCount ?? 0) > 10) return { diverted: false, decision: 'FALLBACK_REF_LIMIT', reason: `参考图>${10}，回退原渠道` };
+  if (cls === 'image2_lowcost')
+    return {
+      diverted: false,
+      decision: 'FALLBACK_IMAGE2_LOWCOST_PAUSED',
+      reason: 'Image2低价版(57)暂停分流，回退原渠道',
+    };
+  if (input.alias === '')
+    return { diverted: false, decision: 'FALLBACK_NO_ALIAS', reason: '模型别名留空=不分流，回退原渠道' };
+  if (String(input.serviceline).toLowerCase().trim() !== 'r')
+    return {
+      diverted: false,
+      decision: 'FALLBACK_SERVICELINE',
+      reason: `serviceline≠r (=${input.serviceline})，回退原渠道`,
+    };
+  if (
+    String(input.sizeType ?? 'resolution')
+      .toLowerCase()
+      .trim() === 'pixels'
+  )
+    return { diverted: false, decision: 'FALLBACK_PIXELS', reason: 'size_type=pixels(自定义像素)，回退原渠道' };
+  if ((input.refImageCount ?? 0) > 10)
+    return { diverted: false, decision: 'FALLBACK_REF_LIMIT', reason: `参考图>${10}，回退原渠道` };
 
   if (!isImageModelRoutable(input.routeRules, imgQ)) {
-    return { diverted: false, decision: 'FALLBACK_NOT_ROUTABLE', reason: `无启用渠道同时支持 res=${input.resolution ?? '2k'}/aspect=${input.aspect ?? '1:1'}，回退原渠道` };
+    return {
+      diverted: false,
+      decision: 'FALLBACK_NOT_ROUTABLE',
+      reason: `无启用渠道同时支持 res=${input.resolution ?? '2k'}/aspect=${input.aspect ?? '1:1'}，回退原渠道`,
+    };
   }
   if (input.isGlobalModel) {
-    if (!input.hasGlobalApiKey) return { diverted: false, decision: 'FALLBACK_NO_GLOBAL_KEY', reason: '全量图片模型全局Key未配置，回退原渠道' };
+    if (!input.hasGlobalApiKey)
+      return { diverted: false, decision: 'FALLBACK_NO_GLOBAL_KEY', reason: '全量图片模型全局Key未配置，回退原渠道' };
     return { diverted: true, decision: 'NEWAPI_IMAGE_GLOBAL', reason: '全量图片模型→全局Key' };
   }
-  if (!input.routeGroup) return { diverted: false, decision: 'FALLBACK_NO_ROUTE_GROUP', reason: '未解析到企业路由组，回退原渠道' };
-  if (!input.routeGroup.usable) return { diverted: false, decision: 'FALLBACK_GROUP_UNUSABLE', reason: '路由组停用/缺Key，回退原渠道' };
+  if (!input.routeGroup)
+    return { diverted: false, decision: 'FALLBACK_NO_ROUTE_GROUP', reason: '未解析到企业路由组，回退原渠道' };
+  if (!input.routeGroup.usable)
+    return { diverted: false, decision: 'FALLBACK_GROUP_UNUSABLE', reason: '路由组停用/缺Key，回退原渠道' };
   if (!isImageModelRoutableForGroup(input.groupRules, { ...imgQ, group: input.routeGroup.newapi_group })) {
-    return { diverted: false, decision: 'FALLBACK_GROUP_NOT_ROUTABLE', reason: `路由组分组[${input.routeGroup.newapi_group}]内无该图片模型渠道，回退原渠道` };
+    return {
+      diverted: false,
+      decision: 'FALLBACK_GROUP_NOT_ROUTABLE',
+      reason: `路由组分组[${input.routeGroup.newapi_group}]内无该图片模型渠道，回退原渠道`,
+    };
   }
-  return { diverted: true, decision: 'NEWAPI_IMAGE_ORG_GROUP', reason: `命中企业路由组[${input.routeGroup.newapi_group}]` };
+  return {
+    diverted: true,
+    decision: 'NEWAPI_IMAGE_ORG_GROUP',
+    reason: `命中企业路由组[${input.routeGroup.newapi_group}]`,
+  };
 }
-
-
-

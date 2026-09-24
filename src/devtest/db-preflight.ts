@@ -49,12 +49,16 @@ export function classifyDbForensics(
   }
   const reason = String(raw.reason || '').toUpperCase();
   if (reason === 'MISSING_CREDENTIALS') {
-    return { category: 'MISSING_CREDENTIALS', actionable: '配置 db-credentials.json（host/user/password/database + ssh_tunnel）后重试' };
+    return {
+      category: 'MISSING_CREDENTIALS',
+      actionable: '配置 db-credentials.json（host/user/password/database + ssh_tunnel）后重试',
+    };
   }
   if (['DB_QUERY_FAILED', 'CONFIG_READ_FAILED', 'SCRIPT_NOT_FOUND', 'MISSING_DEPENDENCY'].includes(reason)) {
     return {
       category: 'TOOLCHAIN_OR_CONNECTIVITY',
-      actionable: '跑 `checkDbToolchain`/test-db-connection.py 预检：核对 paramiko/sshtunnel/pymysql 版本与跳板机可达性——这不是「记录缺失」',
+      actionable:
+        '跑 `checkDbToolchain`/test-db-connection.py 预检：核对 paramiko/sshtunnel/pymysql 版本与跳板机可达性——这不是「记录缺失」',
     };
   }
   if (reason === 'NO_RECORD_FOUND' || (raw.status !== 'VERIFIED' && !hasRecords)) {
@@ -117,7 +121,11 @@ export async function checkDbToolchain(
       credPath,
     };
   } catch (err) {
-    return { ok: false, stage: 'unknown', error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)), credPath };
+    return {
+      ok: false,
+      stage: 'unknown',
+      error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+      credPath,
+    };
   }
 }
-

@@ -75,10 +75,7 @@ export function passesLegacyCommonRules(req: LegacyRequest, line: number): boole
 // APPEND_LEGACY
 
 /** ratio 累计区间匹配（matchDiversionLineByRatio :152-181）。orderedLines 按 Ai::diversion() 顺序给出，bucket∈[0,100)。 */
-export function matchLegacyLineByRatio(
-  orderedLines: Array<{ line: number; ratio: number }>,
-  bucket: number,
-): number {
+export function matchLegacyLineByRatio(orderedLines: Array<{ line: number; ratio: number }>, bucket: number): number {
   let cumulative = 0;
   for (const { line, ratio } of orderedLines) {
     const r = Math.min(100, Math.max(0, Number(ratio) || 0));
@@ -154,7 +151,11 @@ export function evaluateLegacyDiversion(input: LegacyDiversionInput): {
   const line = matchLegacyLineByRatio(input.orderedLines, input.bucket);
   if (line === 0) return { line: 0, decision: 'RATIO_MISS', reason: `随机落点 ${input.bucket} 未命中任何 ratio 区间` };
   if (!passesLegacyCommonRules(input.req, line)) {
-    return { line: 0, decision: 'COMMON_RULES_FAIL', reason: `线路 ${line} 通用规则不通过（任务型/模型/分辨率/画幅/真人像等）` };
+    return {
+      line: 0,
+      decision: 'COMMON_RULES_FAIL',
+      reason: `线路 ${line} 通用规则不通过（任务型/模型/分辨率/画幅/真人像等）`,
+    };
   }
   const cfg = input.lineConfig?.[line] ?? {};
   if (!isLegacyRoleAllowed(cfg.role, input.groupIds)) {
@@ -170,4 +171,3 @@ export function evaluateLegacyDiversion(input: LegacyDiversionInput): {
     runtimeGated: ['score_limit(pq_score_log 实时累计)', 'speed_lock(Redis 限速)'],
   };
 }
-

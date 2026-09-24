@@ -57,10 +57,18 @@ describe('newapi-route-eligibility · 基础谓词', () => {
   });
 
   it('isVideoModelRoutableForGroup: group 空/规则空→放行；否则精确匹配', () => {
-    expect(isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '720p', aspect: '16:9', group: '' })).toBe(true);
-    expect(isVideoModelRoutableForGroup(null, { modelId: 78, resolution: '720p', aspect: '16:9', group: 'x' })).toBe(true);
-    expect(isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '720p', aspect: '16:9', group: 'default' })).toBe(true);
-    expect(isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '1080p', aspect: '16:9', group: 'default' })).toBe(false);
+    expect(
+      isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '720p', aspect: '16:9', group: '' }),
+    ).toBe(true);
+    expect(isVideoModelRoutableForGroup(null, { modelId: 78, resolution: '720p', aspect: '16:9', group: 'x' })).toBe(
+      true,
+    );
+    expect(
+      isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '720p', aspect: '16:9', group: 'default' }),
+    ).toBe(true);
+    expect(
+      isVideoModelRoutableForGroup(groupRules, { modelId: 78, resolution: '1080p', aspect: '16:9', group: 'default' }),
+    ).toBe(false);
   });
 
   it('matchesImageCapability: 同一渠道须同时支持分辨率与画面比例', () => {
@@ -90,68 +98,135 @@ describe('newapi-route-eligibility · 视频硬性资格', () => {
   });
 
   it('真人人像 / cueword>5000 / output=mov 一票否决', () => {
-    expect(isVideoRequestEligible({ isWan3: true, videoType: 6, selmodelsId: 84, hasRealHumanPortrait: true })).toBe(false);
+    expect(isVideoRequestEligible({ isWan3: true, videoType: 6, selmodelsId: 84, hasRealHumanPortrait: true })).toBe(
+      false,
+    );
     expect(isVideoRequestEligible({ isWan3: true, videoType: 6, selmodelsId: 84, cuewordLength: 5001 })).toBe(false);
     expect(isVideoRequestEligible({ isWan3: true, videoType: 6, selmodelsId: 84, outputFormat: 'MOV' })).toBe(false);
   });
 });
 
 describe('newapi-route-eligibility · 视频分流决策(check_diversion 镜像)', () => {
-  const base = { modelId: 78, alias: 'seedance-2.5', hasGlobalApiKey: true, resolution: '720p', aspect: '16:9', routeRules, groupRules };
+  const base = {
+    modelId: 78,
+    alias: 'seedance-2.5',
+    hasGlobalApiKey: true,
+    resolution: '720p',
+    aspect: '16:9',
+    routeRules,
+    groupRules,
+  };
 
   it('off/legacy/ineligible', () => {
-    expect(evaluateVideoDiversion({ ...base, routeMode: 'off', eligible: true, isGlobalModel: false }).decision).toBe('OFF');
-    expect(evaluateVideoDiversion({ ...base, routeMode: 'legacy', eligible: true, isGlobalModel: false, legacyResult: 5 }).line).toBe(5);
-    expect(evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: false, isGlobalModel: false }).decision).toBe('INELIGIBLE');
+    expect(evaluateVideoDiversion({ ...base, routeMode: 'off', eligible: true, isGlobalModel: false }).decision).toBe(
+      'OFF',
+    );
+    expect(
+      evaluateVideoDiversion({ ...base, routeMode: 'legacy', eligible: true, isGlobalModel: false, legacyResult: 5 })
+        .line,
+    ).toBe(5);
+    expect(
+      evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: false, isGlobalModel: false }).decision,
+    ).toBe('INELIGIBLE');
   });
 
   it('全量模型跳过分辨率/画面比例校验（即便画面比例非法也命中）', () => {
-    const r = evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: true, aspect: '21:9' });
+    const r = evaluateVideoDiversion({
+      ...base,
+      routeMode: 'newapi',
+      eligible: true,
+      isGlobalModel: true,
+      aspect: '21:9',
+    });
     expect(r.line).toBe(10);
     expect(r.decision).toBe('NEWAPI_GLOBAL');
   });
 
   it('全量模型缺全局Key → CONFIG_ERROR(hardError)', () => {
-    const r = evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: true, hasGlobalApiKey: false });
+    const r = evaluateVideoDiversion({
+      ...base,
+      routeMode: 'newapi',
+      eligible: true,
+      isGlobalModel: true,
+      hasGlobalApiKey: false,
+    });
     expect(r.decision).toBe('CONFIG_ERROR');
     expect(r.hardError).toBe(true);
   });
 
   it('分组模型：能力并集不含→回退；命中路由组→NEWAPI_ORG_GROUP', () => {
     expect(
-      evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: false, aspect: '21:9', routeGroup: { newapi_group: 'default', usable: true } }).decision,
+      evaluateVideoDiversion({
+        ...base,
+        routeMode: 'newapi',
+        eligible: true,
+        isGlobalModel: false,
+        aspect: '21:9',
+        routeGroup: { newapi_group: 'default', usable: true },
+      }).decision,
     ).toBe('FALLBACK_NOT_ROUTABLE');
     expect(
-      evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: false, routeGroup: null }).decision,
+      evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: false, routeGroup: null })
+        .decision,
     ).toBe('FALLBACK_NO_ROUTE_GROUP');
-    const ok = evaluateVideoDiversion({ ...base, routeMode: 'newapi', eligible: true, isGlobalModel: false, routeGroup: { newapi_group: 'default', usable: true } });
+    const ok = evaluateVideoDiversion({
+      ...base,
+      routeMode: 'newapi',
+      eligible: true,
+      isGlobalModel: false,
+      routeGroup: { newapi_group: 'default', usable: true },
+    });
     expect(ok.line).toBe(10);
     expect(ok.decision).toBe('NEWAPI_ORG_GROUP');
   });
 });
 
 describe('newapi-route-eligibility · 图片分流决策', () => {
-  const base = { selmodelsId: 1201, alias: 'gemini-3-pro-image', hasGlobalApiKey: true, serviceline: 'r', resolution: '2k', aspect: '1:1', routeRules, groupRules };
+  const base = {
+    selmodelsId: 1201,
+    alias: 'gemini-3-pro-image',
+    hasGlobalApiKey: true,
+    serviceline: 'r',
+    resolution: '2k',
+    aspect: '1:1',
+    routeRules,
+    groupRules,
+  };
 
   it('图片全量模型仍校验分辨率/画面比例（与视频不同）', () => {
-    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, aspect: '21:9' }).decision).toBe('FALLBACK_NOT_ROUTABLE');
+    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, aspect: '21:9' }).decision).toBe(
+      'FALLBACK_NOT_ROUTABLE',
+    );
     expect(evaluateImageDiversion({ ...base, isGlobalModel: true }).decision).toBe('NEWAPI_IMAGE_GLOBAL');
   });
 
   it('serviceline≠r / size_type=pixels 静默回退', () => {
-    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, serviceline: 't' }).decision).toBe('FALLBACK_SERVICELINE');
-    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, sizeType: 'pixels' }).decision).toBe('FALLBACK_PIXELS');
+    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, serviceline: 't' }).decision).toBe(
+      'FALLBACK_SERVICELINE',
+    );
+    expect(evaluateImageDiversion({ ...base, isGlobalModel: true, sizeType: 'pixels' }).decision).toBe(
+      'FALLBACK_PIXELS',
+    );
   });
 
   it('Image2.5 无渠道→抛错(hardError)；MJ v8.2 无条件分流', () => {
-    expect(evaluateImageDiversion({ ...base, modelClass: 'image25', isGlobalModel: true, aspect: '21:9' })).toMatchObject({ decision: 'IMAGE25_NO_CHANNEL', hardError: true });
-    expect(evaluateImageDiversion({ ...base, modelClass: 'mj_v82', isGlobalModel: false, aspect: '21:9' }).decision).toBe('NEWAPI_MJ_V82');
+    expect(
+      evaluateImageDiversion({ ...base, modelClass: 'image25', isGlobalModel: true, aspect: '21:9' }),
+    ).toMatchObject({ decision: 'IMAGE25_NO_CHANNEL', hardError: true });
+    expect(
+      evaluateImageDiversion({ ...base, modelClass: 'mj_v82', isGlobalModel: false, aspect: '21:9' }).decision,
+    ).toBe('NEWAPI_MJ_V82');
   });
 
   it('分组图片命中', () => {
-    const r = evaluateImageDiversion({ ...base, isGlobalModel: false, resolution: '2k', aspect: '1:1', routeGroup: { newapi_group: 'vip', usable: true } });
+    const r = evaluateImageDiversion({
+      ...base,
+      isGlobalModel: false,
+      resolution: '2k',
+      aspect: '1:1',
+      routeGroup: { newapi_group: 'vip', usable: true },
+    });
     expect(r.diverted).toBe(true);
     expect(r.decision).toBe('NEWAPI_IMAGE_ORG_GROUP');
   });
 });
-

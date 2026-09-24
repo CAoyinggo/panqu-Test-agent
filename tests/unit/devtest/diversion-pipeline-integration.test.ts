@@ -178,7 +178,6 @@ describe('verify() 集成：diversionEligibility 自动挂载 producer', () => {
   });
 });
 
-
 describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断言）', () => {
   const cfg: DiversionConfigRawCollection = {
     status: 'VERIFIED',
@@ -199,7 +198,12 @@ describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断
         taskId: 1,
         modelId: 78,
         mediaType: 'video',
-        autoDiversionEligibility: { config: cfg, resolution: '720p', aspect: '16:9', routeGroup: { newapi_group: 'default', usable: true } },
+        autoDiversionEligibility: {
+          config: cfg,
+          resolution: '720p',
+          aspect: '16:9',
+          routeGroup: { newapi_group: 'default', usable: true },
+        },
       },
       78,
     );
@@ -225,7 +229,12 @@ describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断
       duration: 4,
       resolution: '720p',
       dbRawCollection: dbWith({ diversion: 10 }, 10),
-      autoDiversionEligibility: { config: cfg, resolution: '720p', aspect: '16:9', routeGroup: { newapi_group: 'default', usable: true } },
+      autoDiversionEligibility: {
+        config: cfg,
+        resolution: '720p',
+        aspect: '16:9',
+        routeGroup: { newapi_group: 'default', usable: true },
+      },
     });
     const env = result.canonicalEnvelopes?.find((e) => e.evidenceKey === 'SERVER_API:DIVERSION_ELIGIBILITY');
     expect(env).toBeDefined();
@@ -237,7 +246,11 @@ describe('autoDiversionEligibility 一键化（读 line=10 配置自动构造断
 describe('回归：磁盘自动会话不得把 fixture 调用误升为真实轮询（防 >180s poll 卡死）', () => {
   it('显式 session + dbRawCollection → 仍 real（守卫只丢弃磁盘自动发现的会话，不动显式 session）', async () => {
     const c = await resolveVerifyContext({
-      taskId: 1, modelId: 78, mediaType: 'video', duration: 4, resolution: '720p',
+      taskId: 1,
+      modelId: 78,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
       session: { env: 'test', base_url: 'https://x.test', cookie_string: 'c' },
       dbRawCollection: dbWith({ diversion: 10 }, 10),
     });
@@ -246,7 +259,11 @@ describe('回归：磁盘自动会话不得把 fixture 调用误升为真实轮�
 
   it('无显式 session + dbRawCollection fixture → offline（不轮询）', async () => {
     const c = await resolveVerifyContext({
-      taskId: 1, modelId: 78, mediaType: 'video', duration: 4, resolution: '720p',
+      taskId: 1,
+      modelId: 78,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
       dbRawCollection: dbWith({ diversion: 10 }, 10),
     });
     expect(c.executionMode).toBe('offline');

@@ -218,6 +218,10 @@ src/devtest/
    - **授权背景**：为杜绝“仅凭 HTTP 200 或网关接口返回即假定落库成功”的测试虚假放行隐患，人工明确授权：凡是执行涉及真实数据变更（任务派发、Task 落库、积分扣费/退款流水变动等写副作用场景）的测试，强制自动连接数据库进行只读取证；
    - **连接规约**：自动读取项目工作区 `db-credentials.json`，通过 DBeaver 同款 SSH 隧道模式（跳板机 115.191.19.88:22）安全建立连接；
    - **硬约束（不可违背）**：① 数据库连接严格保持只读（`READ_ONLY`），禁止在测试或验证中向数据库执行任何修改操作（INSERT/UPDATE/DELETE）；② 核心内核 `core-kernel` 保持 Fail-closed 和单向证据规约不变，数据库取证作为外部证据采集器接入，绝不将数据库连接作为生产内核基础架构的强依赖；③ 缺失数据库真实落库证据时，严格 Fail-Closed 判定为 `UNVERIFIED`，坚决执行零假 PASS。
+6. **Phase 6 verify-pipeline 物理分解授权（2026-09-24 人工明确授权）**：
+   - 授权将 `verify-pipeline.ts`（已增长至 ~3083 行）按其**既有内聚函数边界**做纯物理文件分解，把证据采集组（`collectTaskEvidence` / `collectMediaEvidence` / `collectBillingEvidence`）抽到 `evidence-collectors.ts`，把裁决投影组（`computeRegressionDiff` / `buildDiffItems` / `computeFinalVerdict`）抽到 `verdict-projection.ts`，均由 `verify-pipeline` 单向 `import` 并**原样 re-export** 以保持公共导出面零变化；
+   - **硬约束（不可违背，沿用 Phase 4）**：① 不新增核心动作（仍为 probe/plan/execute/verify）；② 严禁新增 Manager/Orchestrator/Service 等包装层或无价值“中间层”，仅做行为等价的代码搬迁；③ `core-kernel.ts` 与 `verify-pipeline.ts` 对外导出面、`src/devtest/index.ts` 公共契约零变化（新模块经 verify-pipeline re-export）；④ 单一裁决引擎、五维证据、Fail-closed、verify 永久只读等所有核心不变量零改动；⑤ 新模块只能单向依赖（共享类型用 `import type` 引自 verify-pipeline，运行时零反向依赖、无环），严禁 core-kernel 反向依赖新模块；⑥ 全程行为等价，`tsc --noEmit`、`npm test`（全部套件/用例）、`npm run build`、`dependency-cycle` 与 `architecture-convergence` 套件必须持续全绿；
+   - 本授权**仅限此次 verify-pipeline 物理分解**，不构成后续无限重构授权，不改变 §2「永久禁止项」的其余任何条款。
 
 ### 实际能力边界与接入状态声明：
 * **边界界定**：上述能力按成熟度客观划分，严禁把 `CONTRACT_ONLY` 或 `DEFERRED_EXTERNAL_RUNTIME` 宣传为“已完成端到端接入”。成熟度与零依赖交付范围是两个正交维度。

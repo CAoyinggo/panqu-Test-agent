@@ -98,7 +98,9 @@ export function __resetPricingCache(): void {
 /** 归一化分辨率：'720p/无参考视频' | '480P' | '4K' → '720p' | '480p' | '4k'。 */
 export function normalizeResolution(res: string | null | undefined): string {
   if (!res) return '';
-  const m = String(res).toLowerCase().match(/(\d+\s*k|\d+\s*p|\d+)/);
+  const m = String(res)
+    .toLowerCase()
+    .match(/(\d+\s*k|\d+\s*p|\d+)/);
   if (!m) return '';
   return m[1].replace(/\s+/g, '').replace(/^(\d+)$/, '$1p');
 }
@@ -182,7 +184,11 @@ export function resolveChannelCost(
   q: { model: string; resolution: string; channel: string; refVideo?: boolean; scope?: PricingScope },
 ): number | null {
   for (const r of scopedRows(cache, q.scope)) {
-    if (matchRow(r, q.model, q.resolution, q.refVideo) && channelMatches(r, q.channel, cache) && r.costPriceComputed != null) {
+    if (
+      matchRow(r, q.model, q.resolution, q.refVideo) &&
+      channelMatches(r, q.channel, cache) &&
+      r.costPriceComputed != null
+    ) {
       return r.costPriceComputed;
     }
   }
@@ -234,10 +240,16 @@ export function isDiversionEligible(
 ): { eligible: boolean; reason: string; status: ChannelStatus; row: PriceRow | null } {
   const status = channelStatus(cache, q.channel);
   const row =
-    scopedRows(cache, q.scope).find((r) => matchRow(r, q.model, q.resolution, q.refVideo) && channelMatches(r, q.channel, cache)) ??
-    null;
+    scopedRows(cache, q.scope).find(
+      (r) => matchRow(r, q.model, q.resolution, q.refVideo) && channelMatches(r, q.channel, cache),
+    ) ?? null;
   if (!row) {
-    return { eligible: false, reason: `表中无 ${q.channel} 的 ${q.model}@${q.resolution} 行，不在可分流范围`, status, row: null };
+    return {
+      eligible: false,
+      reason: `表中无 ${q.channel} 的 ${q.model}@${q.resolution} 行，不在可分流范围`,
+      status,
+      row: null,
+    };
   }
   if (q.requireActive !== false && status === 'offline') {
     return { eligible: false, reason: `渠道 ${q.channel} 已下线/暂停 (status=${status})`, status, row };
@@ -304,4 +316,3 @@ export function rankChannelsByCost(
   }
   return [...seen.values()].sort((a, b) => a.cost - b.cost);
 }
-
