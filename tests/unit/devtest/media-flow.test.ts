@@ -48,6 +48,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         csrfToken: 'token_csrf_456',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         prompt: '测试生视频 prompt',
         resolution: '720p',
         aspectRatio: '16:9',
@@ -65,7 +66,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       expect(params.get('project_id')).toBe('10');
       expect(params.get('row[type]')).toBe('6');
       expect(params.get('row[selmodelsId]')).toBe('84');
-      expect(params.get('row[extra][selmodels]')).toBe('84-Wan3.0');
+      expect(params.get('row[extra][selmodels]')).toBe('84-wan3.0-video');
       expect(params.get('row[extra][cueword]')).toBe('测试生视频 prompt');
       expect(params.get('row[extra][duration]')).toBe('5');
       expect(params.get('row[extra][video_resolution]')).toBe('720p');
@@ -130,6 +131,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         csrfToken: 'token_csrf_fail',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         projectId: 10,
       });
 
@@ -156,6 +158,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           csrfToken: 'token_csrf_502',
           mediaType: 'video',
           modelId: 84,
+          alias: 'wan3.0-video',
           projectId: 10,
         }),
       ).rejects.toThrow('SUBMIT_RESPONSE_NOT_JSON: HTTP 502 响应非 JSON');
@@ -211,6 +214,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         csrfToken: 'explicit_csrf_token_secret',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         projectId: 365,
       });
 
@@ -248,6 +252,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         cookies: 'PHPSESSID=session_without_csrf',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         projectId: 365,
       });
 
@@ -282,6 +287,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         cookies: 'PHPSESSID=sensitive_secret_cookie_999',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         projectId: 365,
       });
 
@@ -360,6 +366,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         csrfToken: 'some_csrf',
         mediaType: 'video',
         modelId: 84,
+        alias: 'wan3.0-video',
         projectId: -1,
       });
 
@@ -386,6 +393,7 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
           csrfToken: 'valid_csrf_token',
           mediaType: 'video',
           modelId: 84,
+          alias: 'wan3.0-video',
           projectId: 365,
         }),
       ).rejects.toThrow('Simulated network transport socket error');

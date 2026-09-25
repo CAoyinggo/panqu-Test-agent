@@ -530,7 +530,9 @@ export function evaluateCanonicalVerdict(
           addBlocker({
             code: 'DB_CREDENTIALS_MISSING',
             evidenceKey: d.key,
-            message: d.envelope?.error?.message || '缺少 db-credentials.json 数据库凭据，无法通过 SSH 隧道执行物理取证 [UNVERIFIED]',
+            message:
+              d.envelope?.error?.message ||
+              '缺少 db-credentials.json 数据库凭据，无法通过 SSH 隧道执行物理取证 [UNVERIFIED]',
           });
         } else if (
           d.envelope?.error?.code === 'DB_QUERY_FAILED' ||
@@ -546,7 +548,8 @@ export function evaluateCanonicalVerdict(
           addBlocker({
             code: 'FRONTEND_TASK_NOT_FOUND',
             evidenceKey: d.key,
-            message: '前台任务源表（视频 pq_aivideo_new / 图片 goods·character·scene·fusion）中未查到物理入库记录 [FAIL]',
+            message:
+              '前台任务源表（视频 pq_aivideo_new / 图片 goods·character·scene·fusion）中未查到物理入库记录 [FAIL]',
           });
         } else if (d.envelope?.normalizedFields?.backendTaskFound === false) {
           addBlocker({
@@ -571,10 +574,7 @@ export function evaluateCanonicalVerdict(
             evidenceKey: d.key,
             message: d.envelope?.error?.message || '缺少 db-credentials.json 凭据，无法查询积分流水 [UNVERIFIED]',
           });
-        } else if (
-          d.envelope?.error?.code === 'DB_QUERY_FAILED' ||
-          d.envelope?.error?.message?.includes('SSH')
-        ) {
+        } else if (d.envelope?.error?.code === 'DB_QUERY_FAILED' || d.envelope?.error?.message?.includes('SSH')) {
           addBlocker({
             code: 'DB_CONNECTION_FAILED',
             evidenceKey: d.key,
@@ -611,9 +611,17 @@ export function evaluateCanonicalVerdict(
     if (key.includes('TASK_STATUS')) {
       addBlocker({ code: 'TASK_NOT_TERMINAL', evidenceKey: key, message: '任务尚未到达终态 SUCCESS' });
     } else if (key === 'SERVER_API:DB_TASK_RECORD') {
-      addBlocker({ code: 'DB_TASK_RECORD_MISSING', evidenceKey: key, message: '数据库前后台任务物理落库证据未确认通过 [UNVERIFIED]' });
+      addBlocker({
+        code: 'DB_TASK_RECORD_MISSING',
+        evidenceKey: key,
+        message: '数据库前后台任务物理落库证据未确认通过 [UNVERIFIED]',
+      });
     } else if (key === 'BILLING_LEDGER:DB_SCORE_LOGS') {
-      addBlocker({ code: 'DB_SCORE_LOGS_MISSING', evidenceKey: key, message: '数据库积分流水记录未确认通过 [UNVERIFIED]' });
+      addBlocker({
+        code: 'DB_SCORE_LOGS_MISSING',
+        evidenceKey: key,
+        message: '数据库积分流水记录未确认通过 [UNVERIFIED]',
+      });
     } else if (spec.executionMode === 'REAL' && key.includes('GATEWAY_CHANNEL')) {
       addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: key, message: '网关渠道证据未确认通过' });
     } else if (

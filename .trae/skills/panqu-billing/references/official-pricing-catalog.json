@@ -8,6 +8,24 @@
     "pointsPerYuan": 10
   },
 
+  "modelIndex": {
+    "_comment": "工具模型 ID → 本目录定价条目键的映射（数据驱动，改价改此文件即可，勿写死进代码）。图片可按 serviceline 选线路条目。",
+    "video": {
+      "84": "wan3.0-standard",
+      "88": "wan3.0-prime",
+      "15": "seedance-2.0",
+      "78": "seedance-2.5"
+    },
+    "image": {
+      "12": {
+        "default": "nano-banana-pro-r",
+        "byServiceline": { "r": "nano-banana-pro-r", "k": "nano-banana-pro-k", "t": "nano-banana-pro-tencent" }
+      },
+      "201": "nano-banana-2-k",
+      "205": "gpt-image-2.5-baseline"
+    }
+  },
+
   "video": {
     "wan3.0-standard": {
       "name": "Wan 3.0 标准版",
@@ -180,6 +198,16 @@
     }
   },
   "image": {
+    "gpt-image-2.5-baseline": {
+      "name": "GPT-Image 2.5 (工具基线价，待真实验价对齐)",
+      "provider": "(tool-baseline)",
+      "billingType": "FIXED",
+      "resolutions": {
+        "1k": 10,
+        "2k": 15,
+        "4k": 15
+      }
+    },
     "doubao-seedream-5.0-pro": {
       "name": "Doubao-Seedream-5.0-Pro",
       "provider": "火山",

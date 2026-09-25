@@ -4,3 +4,5 @@ coverage
 output
 security-reports
 *.md
+# 机器生成的定价缓存（脚本刷新产物，非手工维护，不纳入 prettier 门禁）
+**/feishu-live-pricing-cache.json

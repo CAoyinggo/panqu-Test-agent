@@ -1490,16 +1490,16 @@ describe('3. 边界核验与双模一致性 (Idempotency & Boundary Audits)', ()
 });
 
 describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency & Drift Elimination)', () => {
-  it('Case A: Model 84 缺省 resolution - plan / execute / verify 统一推导 480p 且积分规格一致 (56 pt)', async () => {
-    // 1. plan: 缺省 resolution 推导首项 480p, duration 推导首项 4s, 计费 14 pt/s * 4s = 56 pt
+  it('Case A: Model 84 缺省 resolution - plan / execute / verify 统一推导 480p 且积分规格一致 (28 pt)', async () => {
+    // 1. plan: 缺省 resolution 推导首项 480p, duration 推导首项 4s, 计费 7 pt/s(480p 数据目录价) * 4s = 28 pt
     const planRes = await plan({ modelId: 84, mediaType: 'video' });
-    expect(planRes.expectedPoints).toBe(56);
+    expect(planRes.expectedPoints).toBe(28);
     expect(planRes.testerActionSummary?.nextStep).toContain('--resolution 480p');
     expect(planRes.testerActionSummary?.nextStep).toContain('--duration 4');
 
-    // 2. execute: 缺省 resolution 仿真模式返回 56 pt
+    // 2. execute: 缺省 resolution 仿真模式返回 28 pt
     const execRes = await execute({ modelId: 84, mediaType: 'video', mode: 'mock' });
-    expect(execRes.points).toBe(56);
+    expect(execRes.points).toBe(28);
 
     // 3. execute: 真实提交时携带推导的 480p，绝不再盲目硬编码 720p
     const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
@@ -1531,29 +1531,29 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     sessionSpy.mockRestore();
     submitSpy.mockRestore();
 
-    // 4. verify: 缺省 resolution 独立核验推导 480p/4s -> 56 pt
+    // 4. verify: 缺省 resolution 独立核验推导 480p/4s -> 28 pt
     const verifyRes = await verify({
       taskId: execRes.taskId,
       modelId: 84,
       mediaType: 'video',
       terminalStatus: 'SUCCESS',
-      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -56, memo: '预扣' }],
+      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -28, memo: '预扣' }],
     });
-    expect(verifyRes.evidence.billing.expectedPoints).toBe(56);
-    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(28);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(28);
     expect(verifyRes.evidence.billing.status).toBe('PASS');
   });
 
-  it('Case B: Model 15 (Seedance) 缺省 duration - plan / execute / verify 统一推导 3s (75 pt)', async () => {
-    // 1. plan: Seedance 契约 durations=[3, 4, 5]，首选值为 3s，计费 25 pt/s * 3s = 75 pt
+  it('Case B: Model 15 (Seedance) 缺省 duration - plan / execute / verify 统一推导 3s (45 pt)', async () => {
+    // 1. plan: Seedance 契约 durations=[3, 4, 5]，首选值为 3s；缺省 resolution 首项 480p，计费 15 pt/s(480p 数据目录价) * 3s = 45 pt
     const planRes = await plan({ modelId: 15, mediaType: 'video' });
-    expect(planRes.expectedPoints).toBe(75);
+    expect(planRes.expectedPoints).toBe(45);
     expect(planRes.testerActionSummary?.nextStep).toContain('--duration 3');
     expect(planRes.testerActionSummary?.nextStep).toContain('--resolution 480p');
 
-    // 2. execute: 缺省 duration 统一推导为 3s (75 pt)
+    // 2. execute: 缺省 duration 统一推导为 3s (45 pt)
     const execRes = await execute({ modelId: 15, mediaType: 'video', mode: 'mock' });
-    expect(execRes.points).toBe(75);
+    expect(execRes.points).toBe(45);
 
     // 3. execute: 真实提交验证携带 duration: 3
     const sessionSpy = vi.spyOn(mediaFlow, 'loadPanquSession').mockResolvedValueOnce({
@@ -1585,16 +1585,16 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
     sessionSpy.mockRestore();
     submitSpy.mockRestore();
 
-    // 4. verify: 缺省 duration 独立推导为 3s，与预扣 75 pt 完全对齐
+    // 4. verify: 缺省 duration 独立推导为 3s，与预扣 45 pt 完全对齐
     const verifyRes = await verify({
       taskId: execRes.taskId,
       modelId: 15,
       mediaType: 'video',
       terminalStatus: 'SUCCESS',
-      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -75, memo: '预扣' }],
+      scoreLogs: [{ task_id: execRes.taskId, type: 2, score: -45, memo: '预扣' }],
     });
-    expect(verifyRes.evidence.billing.expectedPoints).toBe(75);
-    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(75);
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(45);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(45);
     expect(verifyRes.evidence.billing.status).toBe('PASS');
   });
 
@@ -1677,13 +1677,13 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       modelId: 84,
       mediaType: 'video',
       terminalStatus: 'SUCCESS',
-      scoreLogs: [{ task_id: 88801, type: 2, score: -56 }],
+      scoreLogs: [{ task_id: 88801, type: 2, score: -28 }],
     });
 
     expect(verifyRes.contract).toBeDefined();
     expect(verifyRes.contract?.modelId).toBe(84);
-    expect(verifyRes.evidence.billing.expectedPoints).toBe(56);
-    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(56);
+    expect(verifyRes.evidence.billing.expectedPoints).toBe(28);
+    expect(verifyRes.evidence.billing.netDeductedPoints).toBe(28);
     expect(verifyRes.evidence.billing.status).toBe('PASS');
     // 缺少物理产物时遵循 Fail-Closed 原则，整体状态为 UNVERIFIED
     expect(verifyRes.passed).toBe(false);
@@ -1700,7 +1700,7 @@ describe('4. 参数一致性与漂移消除回归测试 (Parameter Consistency &
       terminalStatus: 'SUCCESS',
       scoreLogs: [{ task_id: 88802, type: 2, score: -56 }],
     });
-    expect(vVideo.contract?.pricing.pointsPerSecond?.value).toBe(14);
+    expect(vVideo.contract?.pricing.pointsPerSecond?.value).toBe(7);
     expect(vVideo.contract?.pricing.customPoints?.value).toBeUndefined();
 
     // 2. 图片模型传入 expectedPoints：兼容作为 customPoints 提供刊例基准
@@ -1794,7 +1794,7 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
           },
         ],
       },
-      scoreLogs: [{ task_id: 91001, type: 2, score: -56, memo: 'Wan 3.0 4s 扣除' }],
+      scoreLogs: [{ task_id: 91001, type: 2, score: -28, memo: 'Wan 3.0 480p 4s 扣除' }],
     });
 
     pollSpy.mockRestore();
@@ -2060,7 +2060,7 @@ describe('E2E 闭环收口与防假 PASS 状态机测试 (v6.0.0 Hardening)', ()
       timeline: [],
     }));
     const querySpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockImplementation(async (taskId) => ({
-      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -56 }],
+      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -28 }],
       status: 'QUERY_SUCCESS',
       source: 'api_query',
       total: 1,
@@ -2139,7 +2139,7 @@ describe('MCP DevTestMcpService execute + wait:true 闭环', () => {
       timeline: [],
     }));
     const querySpy = vi.spyOn(mediaFlow, 'queryTaskBillingLogs').mockImplementation(async (taskId) => ({
-      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -56 }],
+      scoreLogs: [{ task_id: Number(taskId), type: 2, score: -28 }],
       status: 'QUERY_SUCCESS',
       source: 'api_query',
       total: 1,

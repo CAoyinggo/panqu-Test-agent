@@ -2,7 +2,9 @@
  * Panqu AI DevTest 用户积分流水对账 (Billing Oracle)
  *
  * 积分流水级对账：防重复扣款、失败净扣归零、退款幂等三大不变量核验。
+ * 刊例价数据驱动：单一价源 = official-pricing-catalog.json（见 pricing-catalog.ts），勿把价格写死进本文件。
  */
+import { resolveCatalogModelPrice } from './pricing-catalog.js';
 
 export type FlowMediaType = 'video' | 'image' | 'canvas';
 export type FlowStepStatus =
@@ -69,6 +71,7 @@ export class BillingOracle {
     hasReferenceVideo?: boolean;
     customPoints?: number;
     pointsPerSecond?: number;
+    serviceline?: string;
   }): number {
     if (params.customPoints !== undefined && params.customPoints >= 0) {
       return Math.round(params.customPoints);
@@ -78,46 +81,22 @@ export class BillingOracle {
       return Math.round(params.pointsPerSecond * duration);
     }
 
-    if (params.mediaType === 'image') {
-      if (params.modelId === 205) {
-        const res = (params.resolution || '').toLowerCase().trim();
-        if (res.includes('2k') || res.includes('flare') || res.includes('hd') || res.includes('4k')) return 15;
-        return 10;
-      }
-      if (params.modelId === 12 && params.resolution) {
-        const res = params.resolution.toLowerCase().trim();
-        if (res.includes('4k')) return 15;
-        if (res.includes('2k')) return 10;
-      }
-      return 5;
-    }
-
     const duration = Math.max(1, params.duration ?? 4);
-    const resolution = (params.resolution || '').toLowerCase().trim();
-
-    if (params.modelId === 84) {
-      if (resolution.includes('720')) return Math.round(14 * duration);
-      if (resolution.includes('1080')) return Math.round(27 * duration);
-      return Math.round(7 * duration);
+    // 数据驱动：刊例价从 official-pricing-catalog.json 解析（可编辑/可刷新，勿写死）。
+    // 视频=PER_SECOND 费率×时长；图片=FIXED 总分。目录已对齐验证过的关键模型。
+    if (params.mediaType === 'video' || params.mediaType === 'image') {
+      const cat = resolveCatalogModelPrice({
+        mediaType: params.mediaType,
+        modelId: params.modelId,
+        resolution: params.resolution,
+        serviceline: params.serviceline,
+      });
+      if (cat) {
+        return cat.billingType === 'PER_SECOND' ? Math.round(cat.value * duration) : Math.round(cat.value);
+      }
     }
-
-    if (params.modelId === 88) {
-      if (resolution.includes('480')) return Math.round(11 * duration);
-      if (resolution.includes('1080')) return Math.round(44 * duration);
-      return Math.round(22 * duration);
-    }
-
-    if (params.modelId === 15) {
-      if (resolution.includes('480')) return Math.round(15 * duration);
-      return Math.round(30 * duration);
-    }
-
-    if (params.modelId === 78) {
-      if (resolution.includes('480')) return Math.round(20 * duration);
-      return Math.round(40 * duration);
-    }
-
-    return Math.round(7 * duration);
+    // 目录未登记模型的保守兜底（勿据此判超扣）：图片 5 分、视频/其他 7/s。
+    return params.mediaType === 'image' ? 5 : Math.round(7 * duration);
   }
 
   public static reconcileTaskLedger(params: {

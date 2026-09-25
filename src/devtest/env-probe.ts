@@ -12,6 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { RoutingOracle, type GatewayChannelConfig, type MainSiteConfigSnapshot } from './routing.js';
 import type { ChangeScenario, DiscoveredModelContract, DiscoveredFact, FactSource } from './types.js';
+import { resolveCatalogModelPrice } from './pricing-catalog.js';
 
 export function createDiscoveredFact<T>(
   value: T,
@@ -123,7 +124,6 @@ export const STATIC_MODELS: Record<'video' | 'image', Record<number, StaticModel
       durations: [4, 5],
       supportsReferenceVideo: true,
       supportsFirstLastFrame: true,
-      pricingPerSecond: 14,
       hasFallback: false,
     },
     88: {
@@ -134,7 +134,6 @@ export const STATIC_MODELS: Record<'video' | 'image', Record<number, StaticModel
       durations: [4, 5],
       supportsReferenceVideo: true,
       supportsFirstLastFrame: true,
-      pricingPerSecond: 22,
       hasFallback: false,
     },
     15: {
@@ -145,7 +144,6 @@ export const STATIC_MODELS: Record<'video' | 'image', Record<number, StaticModel
       durations: [3, 4, 5],
       supportsReferenceVideo: false,
       supportsFirstLastFrame: true,
-      pricingPerSecond: 25,
       hasFallback: true,
     },
     78: {
@@ -156,7 +154,6 @@ export const STATIC_MODELS: Record<'video' | 'image', Record<number, StaticModel
       durations: [3, 4, 5],
       supportsReferenceVideo: false,
       supportsFirstLastFrame: true,
-      pricingPerSecond: 28,
       hasFallback: true,
     },
   },
@@ -470,6 +467,17 @@ export function discoverModelContract(
         : intentPrice?.pointsPerSecond;
 
   let pricing: DiscoveredModelContract['pricing'];
+  // 数据驱动刊例价：显式输入优先，其次从 official-pricing-catalog.json 按 模型ID×分辨率(图片含 serviceline) 解析。
+  const catalogPrice =
+    mediaType === 'video' || mediaType === 'image'
+      ? resolveCatalogModelPrice({
+          mediaType,
+          modelId,
+          // 用有效分辨率(显式 > 模型首选档 resolutions[0])，与 plan 推荐的 --resolution 保持一致，避免"价与推荐档不符"
+          resolution: options.resolution ?? staticInfo?.resolutions?.[0],
+          serviceline: staticInfo?.serviceline,
+        })
+      : undefined;
   if (explicitCustomPoints !== undefined) {
     pricing = {
       customPoints: createDiscoveredFact(explicitCustomPoints, 'SOURCE_INPUT'),
@@ -484,9 +492,18 @@ export function discoverModelContract(
       allowPass: true,
       source: 'SOURCE_INPUT',
     };
-  } else if (staticInfo?.pricingPerSecond !== undefined) {
+  } else if (catalogPrice?.billingType === 'PER_SECOND') {
+    // 视频：目录给分辨率相关的按秒费率（取代旧的扁平 STATIC pricingPerSecond，修复分辨率不敏感）
     pricing = {
-      pointsPerSecond: createDiscoveredFact(staticInfo.pricingPerSecond, 'SOURCE_STATIC_CONTRACT'),
+      pointsPerSecond: createDiscoveredFact(catalogPrice.value, 'SOURCE_STATIC_CONTRACT'),
+      isPricingDetermined: true,
+      allowPass: true,
+      source: 'SOURCE_STATIC_CONTRACT',
+    };
+  } else if (catalogPrice?.billingType === 'FIXED') {
+    // 图片：目录给固定总分（按分辨率/线路）
+    pricing = {
+      customPoints: createDiscoveredFact(catalogPrice.value, 'SOURCE_STATIC_CONTRACT'),
       isPricingDetermined: true,
       allowPass: true,
       source: 'SOURCE_STATIC_CONTRACT',
@@ -494,27 +511,6 @@ export function discoverModelContract(
   } else if (staticInfo?.fixedPrice !== undefined) {
     pricing = {
       customPoints: createDiscoveredFact(staticInfo.fixedPrice, 'SOURCE_STATIC_CONTRACT'),
-      isPricingDetermined: true,
-      allowPass: true,
-      source: 'SOURCE_STATIC_CONTRACT',
-    };
-  } else if (modelId === 205) {
-    const res = (options.resolution || '1k').toLowerCase();
-    const pts = res.includes('2k') || res.includes('flare') || res.includes('hd') || res.includes('4k') ? 15 : 10;
-    pricing = {
-      customPoints: createDiscoveredFact(pts, 'SOURCE_STATIC_CONTRACT'),
-      isPricingDetermined: true,
-      allowPass: true,
-      source: 'SOURCE_STATIC_CONTRACT',
-    };
-  } else if (modelId === 12) {
-    // Nano Banana Pro（pan-banana-pro）刊例价见 official-pricing-catalog `nano-banana-pro-*`：
-    // 默认 R 线路 1k/2k=10、4k=15（与真实扣费 task 1037 实测净扣 10 一致；旧值 1k=5 为过期低价，已订正）。
-    // 注：K 线路 1k/2k=8、腾讯稳定版 1k/2k=25 更贵；此处按默认 R 线路计价，需精确到线路时应接 absettingPricing 运行时权威。
-    const res = (options.resolution || '1k').toLowerCase();
-    const pts = res.includes('4k') ? 15 : 10;
-    pricing = {
-      customPoints: createDiscoveredFact(pts, 'SOURCE_STATIC_CONTRACT'),
       isPricingDetermined: true,
       allowPass: true,
       source: 'SOURCE_STATIC_CONTRACT',

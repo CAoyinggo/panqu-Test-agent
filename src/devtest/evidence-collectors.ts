@@ -674,9 +674,7 @@ export async function collectTaskEvidence(
     extraObj = runtimeDetails.extra;
     extraProvenance = 'HTTP_API:getEditData';
   } else if (resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra) {
-    const { record: dbFrontendRec, table: dbFrontendTable } = resolveFrontendTaskRecord(
-      dbRawCollection?.recordsFound,
-    );
+    const { record: dbFrontendRec, table: dbFrontendTable } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
     const rawDbExtra = dbFrontendRec!.extra;
     try {
       extraObj = typeof rawDbExtra === 'string' ? JSON.parse(rawDbExtra) : (rawDbExtra as Record<string, unknown>);

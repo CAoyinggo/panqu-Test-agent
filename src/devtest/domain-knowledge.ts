@@ -663,7 +663,15 @@ export const PANQU_TASK_KNOWLEDGE: Record<string, TaskKnowledge> = {
     taskType: 'IMAGE_GEN',
     numericType: 2,
     creationApi: '/aivideo/goods/add',
-    parameters: ['project_id (GET)', 'row[name]', 'row[extra][selmodels]', 'row[extra][cueword]', 'row[extra][resolution]', 'row[extra][serviceline]', 'row[extra][size_type]'],
+    parameters: [
+      'project_id (GET)',
+      'row[name]',
+      'row[extra][selmodels]',
+      'row[extra][cueword]',
+      'row[extra][resolution]',
+      'row[extra][serviceline]',
+      'row[extra][size_type]',
+    ],
     lifecycle: [
       { status: 1, name: 'QUEUED_OR_PROCESSING', isTerminal: false, isSuccess: false, description: '生图渲染排队' },
       { status: 2, name: 'SUCCESS', isTerminal: true, isSuccess: true, description: '生图完成' },

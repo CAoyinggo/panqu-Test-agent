@@ -715,7 +715,10 @@ export async function runDevTestCli(
               ? Boolean(options['db-verify'])
               : undefined;
         const dbCredPath =
-          (options['db-cred'] as string) || (options['db-cred-path'] as string) || (options.dbCredPath as string) || undefined;
+          (options['db-cred'] as string) ||
+          (options['db-cred-path'] as string) ||
+          (options.dbCredPath as string) ||
+          undefined;
 
         const sideEffectPolicy = (options['side-effect-policy'] || options.sideEffectPolicy) as any;
         const allowSubmit = Boolean(options['allow-submit'] || options.allowSubmit);
@@ -929,7 +932,10 @@ export async function runDevTestCli(
         }
         const dbVerify = options['db-verify'] !== undefined ? Boolean(options['db-verify']) : undefined;
         const dbCredPath =
-          (options['db-cred'] as string) || (options['db-cred-path'] as string) || (options.dbCredPath as string) || undefined;
+          (options['db-cred'] as string) ||
+          (options['db-cred-path'] as string) ||
+          (options.dbCredPath as string) ||
+          undefined;
 
         const verifyOptions: VerifyKernelOptions = {
           taskId,

@@ -170,7 +170,9 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
   let videoAlias: string | undefined;
   if (mediaType === 'video') {
     const rawAlias = typeof options.alias === 'string' ? options.alias.trim() : undefined;
-    videoAlias = rawAlias && rawAlias.length > 0 ? rawAlias : modelId === 84 ? 'Wan3.0' : undefined;
+    // 不再对 84 写死回退别名 'Wan3.0'：别名统一由调用方(合约/STATIC_MODELS 单一来源，如 84='wan3.0-video')显式提供；
+    // 缺失即 BLOCKED（与其余视频模型一致），杜绝写死的模型→别名分叉。
+    videoAlias = rawAlias && rawAlias.length > 0 ? rawAlias : undefined;
     if (!videoAlias) {
       return {
         ok: false,

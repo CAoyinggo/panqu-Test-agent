@@ -252,7 +252,7 @@ export function mapDbScoreLogsToScoreLogEntries(
         ? targetTaskId
         : targetTaskId !== undefined && memoStr.includes(String(targetTaskId))
           ? targetTaskId
-          : targetTaskId ?? (r.source_id !== undefined ? Number(r.source_id) : Number(r.task_id));
+          : (targetTaskId ?? (r.source_id !== undefined ? Number(r.source_id) : Number(r.task_id)));
 
     return {
       id: r.id !== undefined ? String(r.id) : undefined,
@@ -273,10 +273,7 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
   readonly producerName = 'database-evidence-producer';
   readonly sourceType: EvidenceSourceType = 'SERVER_API';
 
-  async produce(
-    rawCollection: unknown,
-    context: EvidenceProducerContext,
-  ): Promise<CanonicalEvidenceEnvelope[]> {
+  async produce(rawCollection: unknown, context: EvidenceProducerContext): Promise<CanonicalEvidenceEnvelope[]> {
     const envelopes: CanonicalEvidenceEnvelope[] = [];
     const testId = context.testId || `db-evidence-${Date.now()}`;
     const environment = context.environment || 'test';
@@ -288,11 +285,8 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
           : undefined;
     const subjectId: string | number =
       taskIdNum ??
-      (typeof context.subjectId === 'string' || typeof context.subjectId === 'number'
-        ? context.subjectId
-        : 0);
-    const capturedAt =
-      (typeof context.capturedAt === 'string' && context.capturedAt) || new Date().toISOString();
+      (typeof context.subjectId === 'string' || typeof context.subjectId === 'number' ? context.subjectId : 0);
+    const capturedAt = (typeof context.capturedAt === 'string' && context.capturedAt) || new Date().toISOString();
 
     // 1. 解析已有原始数据，或按需执行真实取证
     let raw: DatabaseRawCollection;
@@ -330,14 +324,15 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
     if (aivideoRec?.extra) {
       try {
         extraObj =
-          typeof aivideoRec.extra === 'string' ? JSON.parse(aivideoRec.extra) : (aivideoRec.extra as Record<string, unknown>);
+          typeof aivideoRec.extra === 'string'
+            ? JSON.parse(aivideoRec.extra)
+            : (aivideoRec.extra as Record<string, unknown>);
       } catch {
         extraObj = undefined;
       }
     }
 
-    const taskObservationStatus =
-      raw.status === 'VERIFIED' && hasTaskRecord ? 'PASS' : 'UNVERIFIED';
+    const taskObservationStatus = raw.status === 'VERIFIED' && hasTaskRecord ? 'PASS' : 'UNVERIFIED';
 
     envelopes.push({
       evidenceId: `${testId}-db-task-record`,
@@ -370,13 +365,12 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
       immutable: true,
       redacted: true,
       collectionStatus: hasTaskRecord ? 'SUCCESS' : raw.status === 'UNVERIFIED' ? 'COLLECTION_FAILED' : 'MISSING',
-      error:
-        !hasTaskRecord
-          ? {
-              code: raw.reason || 'NO_PHYSICAL_TASK_FOUND',
-              message: raw.error || '数据库中未查询到对应的任务物理落库记录',
-            }
-          : undefined,
+      error: !hasTaskRecord
+        ? {
+            code: raw.reason || 'NO_PHYSICAL_TASK_FOUND',
+            message: raw.error || '数据库中未查询到对应的任务物理落库记录',
+          }
+        : undefined,
     });
 
     // ------------------------------------------------------------------------
@@ -395,8 +389,7 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
     }
     const netPoints = totalPreDeduct - totalRefund;
 
-    const billingObservationStatus =
-      raw.status === 'VERIFIED' && hasScoreLogs ? 'PASS' : 'UNVERIFIED';
+    const billingObservationStatus = raw.status === 'VERIFIED' && hasScoreLogs ? 'PASS' : 'UNVERIFIED';
 
     envelopes.push({
       evidenceId: `${testId}-db-score-logs`,
@@ -427,13 +420,12 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
       immutable: true,
       redacted: true,
       collectionStatus: hasScoreLogs ? 'SUCCESS' : 'MISSING',
-      error:
-        !hasScoreLogs
-          ? {
-              code: 'NO_SCORE_LOG_FOUND',
-              message: raw.error || '数据库中未查询到关联的积分扣费或退款流水记录',
-            }
-          : undefined,
+      error: !hasScoreLogs
+        ? {
+            code: 'NO_SCORE_LOG_FOUND',
+            message: raw.error || '数据库中未查询到关联的积分扣费或退款流水记录',
+          }
+        : undefined,
     });
 
     return envelopes;
