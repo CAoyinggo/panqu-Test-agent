@@ -567,4 +567,64 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
       expect(res.reasons.some((r) => r.includes('空规格 PASS'))).toBe(true);
     });
   });
+
+  // ==========================================================================
+  // 路由对账门禁: 预测分流但真实直连必须 fail-closed 到 UNVERIFIED, 严禁静默 PASS
+  // ==========================================================================
+  describe('九、路由预测/真实落库对账 (ROUTING_RECONCILIATION) 裁决门禁', () => {
+    const createReconEnv = (overrides?: Partial<CanonicalEvidenceEnvelope>): CanonicalEvidenceEnvelope => ({
+      evidenceId: 'ev-recon-1',
+      testId: 'test-verdict-001',
+      sourceTool: 'routing-oracle.reconciliation',
+      sourceType: 'SERVER_API',
+      evidenceKey: 'SERVER_API:ROUTING_RECONCILIATION',
+      observationStatus: 'UNVERIFIED',
+      capturedAt: FIXED_TIME,
+      environment: 'test',
+      subjectType: 'routing_reconciliation',
+      subjectId: 239545,
+      normalizedFields: {
+        observedStatus: 'UNVERIFIED',
+        actualValue: 'ACTUAL_DIRECT',
+        expectedValue: 'DIVERTED_VIA_NEWAPI_GATEWAY',
+        assertionMatched: false,
+        predictedDivert: true,
+        actualDiverted: false,
+        reconciliationCode: 'ROUTING_PREDICTION_MISMATCH',
+        mismatchReason: '契约预测走网关分流但真实落库为直连',
+      },
+      provenance: 'DB_READONLY (pq_aivideo_new.extra.diversion + pq_volcengine_ai_task.line + pq_newapi_task_log)',
+      confidence: 0.0,
+      immutable: true,
+      redacted: true,
+      collectionStatus: 'SUCCESS',
+      ...overrides,
+    });
+
+    it('必需的 ROUTING_RECONCILIATION 信封 (采集成功但观察 UNVERIFIED) → 整体裁决 UNVERIFIED + ROUTING_PREDICTION_MISMATCH blocker, 绝非 PASS', () => {
+      const specWithRecon: CanonicalTestSpec = {
+        ...baseSpec,
+        requiredEvidence: [...baseSpec.requiredEvidence, 'SERVER_API:ROUTING_RECONCILIATION'],
+      };
+      // 其余必需证据全部 PASS, 唯一未决的就是路由对账 —— 证明是它把裁决拉到 UNVERIFIED
+      const envelopes = [createServerTaskEnv(), createServerChannelEnv(), createBillingEnv(), createReconEnv()];
+
+      const res = evaluateCanonicalVerdict(specWithRecon, envelopes);
+
+      expect(res.verdict).toBe('UNVERIFIED');
+      expect(res.verdict).not.toBe('PASS');
+      expect(res.requiredEvidenceEvaluation.unverifiedEvidenceKeys).toContain('SERVER_API:ROUTING_RECONCILIATION');
+      expect(res.blockers.some((b) => b.code === 'ROUTING_PREDICTION_MISMATCH')).toBe(true);
+    });
+
+    it('反证: 对账信封仅为可选证据 (未列入 requiredEvidence) 时, 其 UNVERIFIED 不得制造假 FAIL/UNVERIFIED, 正确预测的任务仍可 PASS', () => {
+      // baseSpec.requiredEvidence 不含 ROUTING_RECONCILIATION; 附带一个可选对账信封
+      const envelopes = [createServerTaskEnv(), createServerChannelEnv(), createBillingEnv(), createReconEnv()];
+
+      const res = evaluateCanonicalVerdict(baseSpec, envelopes);
+
+      expect(res.verdict).toBe('PASS');
+      expect(res.blockers.some((b) => b.code === 'ROUTING_PREDICTION_MISMATCH')).toBe(false);
+    });
+  });
 });

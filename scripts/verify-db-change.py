@@ -116,6 +116,35 @@ def main():
                     if t_rec:
                         evidence["recordsFound"]["pq_volcengine_ai_task"] = t_rec
 
+                    # 2b. NewAPI 网关调用日志 (分流任务真实上游渠道履约事实)。
+                    #     经 pq_volcengine_ai_task.extra.newapi_log_id 回指其 id；亦按 ai_task_id 兜底。
+                    #     严格只读且仅取非敏感列 (不含 request_payload/submit_response 等可能夹带凭据的原文)。
+                    newapi_log_id = None
+                    backend_pk = t_rec["id"] if t_rec and "id" in t_rec else None
+                    if t_rec and t_rec.get("extra"):
+                        try:
+                            _ex = json.loads(t_rec["extra"]) if isinstance(t_rec["extra"], str) else t_rec["extra"]
+                            if isinstance(_ex, dict) and _ex.get("newapi_log_id") is not None:
+                                newapi_log_id = _ex.get("newapi_log_id")
+                        except Exception:
+                            newapi_log_id = None
+                    if newapi_log_id is not None or backend_pk is not None:
+                        SAFE_COLS = ("id, ai_task_id, task_type, org_id, route_group_id, newapi_group, "
+                                     "newapi_task_id, upstream_task_id, channel_id, provider_code, "
+                                     "upstream_model_name, status, progress, fail_reason, "
+                                     "createtime, updatetime, finishtime")
+                        try:
+                            if newapi_log_id is not None:
+                                cur.execute("SELECT {} FROM pq_newapi_task_log WHERE id = %s LIMIT 1;".format(SAFE_COLS), (newapi_log_id,))
+                            else:
+                                cur.execute("SELECT {} FROM pq_newapi_task_log WHERE ai_task_id = %s ORDER BY id DESC LIMIT 1;".format(SAFE_COLS), (backend_pk,))
+                            n_rec = cur.fetchone()
+                            if n_rec:
+                                evidence["recordsFound"]["pq_newapi_task_log"] = n_rec
+                        except Exception:
+                            # 表不存在或列缺失时静默跳过 (老库兼容)，不影响其余取证
+                            pass
+
                     # 3. 查询关联积分流水 (pq_score_log: task_id 对应后台任务 id 或前台 id，source_id 对应前台 id)
                     backend_id = t_rec["id"] if t_rec and "id" in t_rec else None
                     frontend_id = v_rec["id"] if v_rec and "id" in v_rec else None

@@ -28,6 +28,8 @@ export interface DatabaseRecordFound {
   pq_aivideo_scene?: Record<string, unknown>;
   pq_aivideo_fusion?: Record<string, unknown>;
   pq_volcengine_ai_task?: Record<string, unknown>;
+  // NewAPI 网关调用日志（分流任务真实上游渠道履约事实）：channel_id/provider_code/upstream_model_name/status
+  pq_newapi_task_log?: Record<string, unknown>;
   pq_score_log?: Array<Record<string, unknown>>;
   user_score_logs?: Array<Record<string, unknown>>;
   [key: string]: unknown;

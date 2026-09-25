@@ -593,6 +593,18 @@ export function evaluateCanonicalVerdict(
           evidenceKey: d.key,
           message: d.reason || `缺少 NewAPI 网关渠道凭据 [${d.key}]`,
         });
+      } else if (d.key.includes('ROUTING_RECONCILIATION')) {
+        addBlocker({
+          code: 'ROUTING_PREDICTION_MISMATCH',
+          evidenceKey: d.key,
+          message:
+            (typeof d.envelope?.normalizedFields?.mismatchReason === 'string'
+              ? d.envelope.normalizedFields.mismatchReason
+              : undefined) ||
+            d.envelope?.error?.message ||
+            d.reason ||
+            '契约预测走网关分流但真实落库为直连，分流实际未发生，需人工确认是否为合法能力降级 [UNVERIFIED]',
+        });
       } else if (
         d.key.includes('PRICING') ||
         (d.key === 'BILLING_LEDGER:TASK_RECORDS' &&

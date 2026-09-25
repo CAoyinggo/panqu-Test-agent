@@ -1061,6 +1061,15 @@ export interface CanonicalVerifyFacts {
     failureReason?: string;
   };
 
+  // 路由预测/真实落库对账事实 (可选)：契约预测走网关分流 (willDivert=true)，
+  // 但真实物理落库证明未经网关 (extra.diversion≠10 / line≠10 / 无网关调用日志)。
+  // 该场景绝不静默判 PASS：作为独立 UNVERIFIED 信号交由裁决层如实呈现 (fail-closed 待人工确认直连是否合法)。
+  routingReconciliation?: {
+    predictedDivert: boolean;
+    actualDiverted?: boolean;
+    mismatch?: string;
+  };
+
   // DB Extra 落库事实 (可选)
   isDbExtraVerified?: boolean;
 }
@@ -1595,6 +1604,44 @@ export function buildCanonicalEvidenceFromVerifyFacts(
       immutable: true,
       redacted: true,
       collectionStatus: isGwPass || isGwFail ? 'SUCCESS' : 'MISSING',
+    });
+  }
+
+  // 11. 路由预测/真实落库对账证据 (Routing Prediction Reconciliation)
+  //     契约预测走 NewAPI 网关分流但真实落库为直连时，生成独立 UNVERIFIED 信封 (采集成功、结论未决)，
+  //     绝不因"网关不适用"而静默判 PASS。直连是否为合法能力降级需人工确认。
+  if (facts.routingReconciliation?.mismatch) {
+    envelopes.push({
+      evidenceId: `${testId}-routing-reconciliation-1`,
+      testId,
+      sourceTool: 'routing-oracle.reconciliation',
+      sourceType: isReal ? 'SERVER_API' : 'FIXTURE',
+      evidenceKey: isReal ? 'SERVER_API:ROUTING_RECONCILIATION' : 'FIXTURE:ROUTING_RECONCILIATION',
+      observationStatus: 'UNVERIFIED',
+      capturedAt,
+      environment,
+      subjectType: 'routing_reconciliation',
+      subjectId: facts.taskId,
+      normalizedFields: {
+        observedStatus: 'UNVERIFIED',
+        actualValue: 'ACTUAL_DIRECT',
+        expectedValue: 'DIVERTED_VIA_NEWAPI_GATEWAY',
+        assertionMatched: false,
+        predictedDivert: facts.routingReconciliation.predictedDivert,
+        actualDiverted: facts.routingReconciliation.actualDiverted ?? false,
+        // 采集成功、结论未决：偏差原因属于业务观察事实，记录在 normalizedFields。
+        // error 字段仅用于采集失败 (collectionStatus !== SUCCESS)，此处采集成功故绝不使用 error，
+        // 否则 validateEvidenceEnvelope 会以 ERROR_NOT_ALLOWED_ON_SUCCESS 判其非法并静默丢弃该信封。
+        reconciliationCode: 'ROUTING_PREDICTION_MISMATCH',
+        mismatchReason: facts.routingReconciliation.mismatch,
+      },
+      provenance: isReal
+        ? 'DB_READONLY (pq_aivideo_new.extra.diversion + pq_volcengine_ai_task.line + pq_newapi_task_log)'
+        : 'FIXTURE (routing_reconciliation)',
+      confidence: 0.0,
+      immutable: true,
+      redacted: true,
+      collectionStatus: 'SUCCESS',
     });
   }
 

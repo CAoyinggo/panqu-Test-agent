@@ -869,3 +869,53 @@ export function validateTrustedGatewaySnapshot(
   }
   return { valid: true, snapshot };
 }
+
+/**
+ * 从真实 DB 只读取证记录 `pq_newapi_task_log` 构造可信网关渠道快照。
+ *
+ * 这是网关渠道证据的**真源采集器**：主站 PHP 在 NewAPI 分流提交时建 `pq_newapi_task_log`
+ * (`extra.newapi_log_id` 回指其 id)，Go 消费者履约后把实际上游渠道回写进
+ * `channel_id / provider_code / upstream_model_name / status`。这些列与其它取证表同库同隧道，
+ * 故无需外部网关 DB / admin API 即可获得**物理落库**的网关履约事实。
+ *
+ * fail-closed：仅当行存在且 `channel_id > 0`（渠道真实回写）才产出 SUCCESS 快照；
+ * 否则返回 undefined，交由上层保持 UNVERIFIED，绝不臆造渠道。
+ */
+export function buildTrustedGatewaySnapshotFromNewapiTaskLog(
+  row: Record<string, unknown> | undefined,
+  options?: { environment?: string; capturedAt?: string },
+): TrustedGatewaySnapshot | undefined {
+  if (!row || typeof row !== 'object') return undefined;
+  const channelId = Number(row.channel_id);
+  if (!Number.isFinite(channelId) || channelId <= 0) return undefined;
+
+  const providerCode = row.provider_code != null ? String(row.provider_code) : '';
+  const upstreamModel = row.upstream_model_name != null ? String(row.upstream_model_name) : '';
+  const newapiGroup = row.newapi_group != null ? String(row.newapi_group) : '';
+  const rawStatus = row.status != null ? String(row.status).toUpperCase() : 'UNKNOWN';
+  // 网关履约明确失败/未完成的渠道不得作为合格履约事实上报；仅 SUCCESS 视为已履约。
+  const collectionStatus: TrustedGatewaySnapshot['collectionStatus'] = rawStatus === 'SUCCESS' ? 'SUCCESS' : 'FAILED';
+
+  const channel: GatewayChannelConfig = {
+    id: channelId,
+    name: providerCode || String(channelId),
+    group: newapiGroup,
+    models: upstreamModel ? [upstreamModel] : [],
+    status: 1,
+    weight: 0,
+    dailyQuotaLimit: 0,
+    usedQuota: 0,
+    sourceMode: 'SOURCE_REAL_GATEWAY',
+  };
+
+  return {
+    environment: options?.environment || 'test',
+    capturedAt: options?.capturedAt || new Date().toISOString(),
+    // 端点以 '/' 起始满足可信快照校验；标注真源为库内网关调用日志表（只读取证）。
+    sourceEndpoint: '/db/pq_newapi_task_log',
+    collectionStatus,
+    provenance: 'API_READONLY_COLLECTOR',
+    channels: [channel],
+    collectorVersion: 'db-newapi-task-log-v1',
+  };
+}

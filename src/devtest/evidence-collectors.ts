@@ -19,7 +19,11 @@
  * 单一裁决权威仍为 canonical-verdict-engine;本模块只做证据搬运与投影。
  */
 
-import { RoutingOracle, validateTrustedGatewaySnapshot } from './routing.js';
+import {
+  RoutingOracle,
+  validateTrustedGatewaySnapshot,
+  buildTrustedGatewaySnapshotFromNewapiTaskLog,
+} from './routing.js';
 import { BillingOracle, type ScoreLogEntry } from './billing.js';
 import { inspectMp4Buffer, inspectImageBuffer } from './media-inspector.js';
 import {
@@ -337,6 +341,46 @@ export async function collectTaskEvidence(
     }
   }
 
+  // ── 网关渠道真源采集 (DB 只读) ───────────────────────────────────────────────
+  // 从物理落库记录派生"实际是否经 NewAPI 网关分流"与真实上游渠道履约事实。
+  // 真源链路: pq_aivideo_new.extra.diversion=10 → pq_volcengine_ai_task.line=10
+  //          → pq_newapi_task_log{channel_id,provider_code,upstream_model_name,status}
+  const dbNewapiLogRow = dbRawCollection?.recordsFound?.pq_newapi_task_log as
+    | Record<string, unknown>
+    | undefined;
+  const dbVolcRow = dbRawCollection?.recordsFound?.pq_volcengine_ai_task as Record<string, unknown> | undefined;
+  const dbFrontExtraRaw = resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra as unknown;
+  let dbFrontDiversion: number | undefined;
+  if (dbFrontExtraRaw !== undefined) {
+    try {
+      const ex =
+        typeof dbFrontExtraRaw === 'string'
+          ? (JSON.parse(dbFrontExtraRaw) as Record<string, unknown>)
+          : (dbFrontExtraRaw as Record<string, unknown>);
+      if (ex && ex.diversion !== undefined) dbFrontDiversion = Number(ex.diversion);
+    } catch {
+      /* extra 非法 JSON 时忽略, 不臆造分流值 */
+    }
+  }
+  const dbBackendLine = dbVolcRow?.line !== undefined ? Number(dbVolcRow.line) : undefined;
+  const dbGatewayChannelId =
+    dbNewapiLogRow && Number(dbNewapiLogRow.channel_id) > 0 ? Number(dbNewapiLogRow.channel_id) : undefined;
+  // 三选一为真即视为"真实经网关分流": 网关日志有真实渠道 / 后台线=10(NewAPI) / 前台 extra.diversion=10。
+  // 三者皆有明确直连信号 (line=1 且 diversion=0 且无网关日志) 则判定"实际直连"。
+  const dbActualDiverted: boolean | undefined =
+    dbGatewayChannelId !== undefined || dbBackendLine === 10 || dbFrontDiversion === 10
+      ? true
+      : dbBackendLine !== undefined || dbFrontDiversion !== undefined
+        ? false
+        : undefined;
+
+  // 若真源网关日志已回写真实渠道, 构造可信只读快照 (provenance=API_READONLY_COLLECTOR)。
+  const collectedGatewaySnapshot = options.gatewaySnapshot
+    ? undefined
+    : buildTrustedGatewaySnapshotFromNewapiTaskLog(dbNewapiLogRow, {
+        environment: options.env || (options.environment as string | undefined),
+      });
+
   // 若通过数据库物理落库获得了明确终态且此前未知，自动提升终态事实
   const { record: frontendDbRec, table: frontendDbTable } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
   if (frontendDbRec) {
@@ -429,11 +473,14 @@ export async function collectTaskEvidence(
   // 1. 服务端只读事实提取 (Server Facts)
   const serverActualChannelId =
     runtimeDetails?.actualChannelId ??
-    (options.retryLog?.newapi_channel_id ? Number(options.retryLog.newapi_channel_id) : undefined);
+    (options.retryLog?.newapi_channel_id ? Number(options.retryLog.newapi_channel_id) : undefined) ??
+    // DB 网关日志真实回写的上游渠道 (物理落库事实, 最可信的服务端来源之一)
+    dbGatewayChannelId;
   const serverActualChannelName =
     runtimeDetails?.actualChannelName ??
     (options.retryLog?.newapi_provider_name ? String(options.retryLog.newapi_provider_name) : undefined) ??
-    (runtimeDetails?.rawExceptionalTask?.line_name ? String(runtimeDetails.rawExceptionalTask.line_name) : undefined);
+    (runtimeDetails?.rawExceptionalTask?.line_name ? String(runtimeDetails.rawExceptionalTask.line_name) : undefined) ??
+    (dbNewapiLogRow?.provider_code != null ? String(dbNewapiLogRow.provider_code) : undefined);
   const serverFallbackChannel =
     runtimeDetails?.fallbackChannel ??
     (options.retryLog?.fallback_channel ? String(options.retryLog.fallback_channel) : undefined);
@@ -752,14 +799,32 @@ export async function collectTaskEvidence(
   }
 
   const isRealMode = Boolean(session && !options.isSimulated);
+
+  // 网关渠道真源快照：优先采用显式传入的 options.gatewaySnapshot；否则采用 DB 只读采集器
+  // 从 pq_newapi_task_log 构造的真实快照 (二者不并存, 见 collectedGatewaySnapshot 构造处)。
+  const effectiveGatewaySnapshot = options.gatewaySnapshot ?? collectedGatewaySnapshot;
+
+  // 预测/实际分流一致性对账 (ROUTING_PREDICTION_MISMATCH)：
+  // 契约预测 willDivert=true, 但真实落库证明未经网关 (extra.diversion=0 / line≠10 / 无网关日志) → 记录不一致。
+  // 该场景下网关渠道**不可采集也不应要求** (根本没走网关)，但**绝不据此静默判 PASS**：
+  // 保留为独立的路由不一致信号交由裁决层如实呈现 (非"缺采集器"的误导性阻断)。
+  const routingPredictionMismatch =
+    ctx.contract.routing.value.willDivert && dbActualDiverted === false
+      ? `契约预测走 NewAPI 网关分流 (willDivert=true)，但真实落库为直连 (extra.diversion=${
+          dbFrontDiversion ?? 'n/a'
+        }, line=${dbBackendLine ?? 'n/a'}, 无网关调用日志)——分流实际未发生 [ROUTING_PREDICTION_MISMATCH]`
+      : undefined;
+
   // 网关渠道核验要求：视频分流一律要求；图片分流**在提供了网关快照时**也要求（校验机器是媒体无关的）。
   // 图片未提供网关快照时不强制（避免无证据地把图片分流恒判 UNVERIFIED）——待接图片网关证据采集后可去掉此守卫。
+  // 真实落库证明直连 (dbActualDiverted===false) 时不要求网关渠道 (没走网关, 要求它是伪命题)。
   const isGatewayChannelRequired =
     ctx.contract.routing.value.willDivert &&
-    (mediaType === 'video' || (mediaType === 'image' && Boolean(options.gatewaySnapshot)));
+    dbActualDiverted !== false &&
+    (mediaType === 'video' || (mediaType === 'image' && Boolean(effectiveGatewaySnapshot)));
 
-  const snapshotValidation = options.gatewaySnapshot
-    ? validateTrustedGatewaySnapshot(options.gatewaySnapshot, {
+  const snapshotValidation = effectiveGatewaySnapshot
+    ? validateTrustedGatewaySnapshot(effectiveGatewaySnapshot, {
         expectedEnv: options.env || (options.environment as 'test' | 'preonline' | undefined),
       })
     : undefined;
@@ -793,7 +858,11 @@ export async function collectTaskEvidence(
   } else if (!isRealMode && hasServerActualChannelFact) {
     gatewayChannelEvidence = 'SERVER_RUN_FACT';
     gatewayChannelProvenance = channelProvenance;
-  } else if (options.gatewaySnapshot && !snapshotValidation?.valid) {
+  } else if (routingPredictionMismatch) {
+    // 真实直连: 网关渠道非"缺采集器", 而是根本没走网关。据实标注, 不误导为可采集而未采。
+    gatewayChannelEvidence = 'NOT_APPLICABLE_DIRECT';
+    gatewayChannelProvenance = `NOT_DIVERTED (${routingPredictionMismatch})`;
+  } else if (effectiveGatewaySnapshot && !snapshotValidation?.valid) {
     gatewayChannelEvidence = 'INVALID_GATEWAY_SNAPSHOT';
     gatewayChannelProvenance = `FAIL_CLOSED (${snapshotValidation?.reason || 'INVALID_SNAPSHOT'})`;
   } else if (isRealMode && options.channels && options.channels.some((c) => c.sourceMode === 'SOURCE_REAL_GATEWAY')) {
@@ -841,6 +910,13 @@ export async function collectTaskEvidence(
     channelMismatchReason,
     fallbackChannel,
     retryProvider,
+    actualDivertedFromDb: dbActualDiverted,
+    gatewaySnapshotSource: options.gatewaySnapshot
+      ? 'OPTIONS'
+      : collectedGatewaySnapshot
+        ? 'DB_NEWAPI_TASK_LOG'
+        : undefined,
+    routingPredictionMismatch,
   };
 
   return {

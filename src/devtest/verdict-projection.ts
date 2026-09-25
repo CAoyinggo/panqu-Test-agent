@@ -321,6 +321,7 @@ export function buildDiffItems(args: BuildDiffItemsOptions): DiffItem[] {
     snapshotValidation,
     isRealMode,
     gatewayChannelEvidence,
+    routingPredictionMismatch,
   } = routingFacts;
 
   const businessValidation =
@@ -554,6 +555,21 @@ export function buildDiffItems(args: BuildDiffItemsOptions): DiffItem[] {
     });
   }
 
+  // 路由预测/真实落库对账 (预测走网关分流但真实直连)：独立呈现为待人工确认信号，绝不静默判 PASS。
+  if (routingPredictionMismatch) {
+    diffItems.push({
+      field: 'routingReconciliation',
+      layer: 'routing',
+      expected: 'DIVERTED_VIA_NEWAPI_GATEWAY (契约预测 willDivert=true)',
+      actual: 'ACTUAL_DIRECT (真实落库直连, 无网关调用日志)',
+      matched: false,
+      status: 'MANUAL_REQUIRED',
+      diff: routingPredictionMismatch,
+      critical: false,
+      evidence: gatewayChannelEvidence,
+    });
+  }
+
   if (options.unconfirmedStatic) {
     diffItems.push({
       field: 'staticContractConfirmation',
@@ -679,6 +695,9 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     extraObj,
     hasRealGatewaySnapshot,
     isRealMode,
+    gatewaySnapshotSource,
+    routingPredictionMismatch,
+    actualDivertedFromDb,
   } = routingFacts;
 
   const businessValidation =
@@ -958,12 +977,13 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     contractConflicts: contract.conflicts.length > 0 ? contract.conflicts : undefined,
     businessValidationStatus: businessValidation.status,
     gatewayChannelFact:
-      isGatewayChannelRequired && (options.gatewaySnapshot || options.gatewayChannelConfirmed || options.channels)
+      isGatewayChannelRequired &&
+      (options.gatewaySnapshot || options.gatewayChannelConfirmed || options.channels || hasRealGatewaySnapshot)
         ? {
             verified: isGatewayChannelVerified,
             required: true,
             failureReason:
-              options.gatewaySnapshot && !snapshotValidation?.valid
+              (options.gatewaySnapshot || gatewaySnapshotSource === 'DB_NEWAPI_TASK_LOG') && !snapshotValidation?.valid
                 ? snapshotValidation?.reason
                 : isRealMode && !hasRealGatewaySnapshot
                   ? '真实模式下外部断言 (--gateway-channel-confirmed) 严禁作为网关履约事实，缺少 NewAPI 网关真实快照'
@@ -971,6 +991,13 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
           }
         : undefined,
     isDbExtraVerified,
+    routingReconciliation: routingPredictionMismatch
+      ? {
+          predictedDivert: Boolean(contract.routing.value.willDivert),
+          actualDiverted: actualDivertedFromDb,
+          mismatch: routingPredictionMismatch,
+        }
+      : undefined,
   };
 
   const evidenceRes = buildCanonicalEvidenceFromVerifyFacts(facts);
@@ -1132,6 +1159,12 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       options.channels !== undefined;
     if (isGatewayChannelRequired && isGatewayInScope) {
       reqEvidence.push(isRealSpec ? 'SERVER_API:GATEWAY_CHANNEL' : 'FIXTURE:GATEWAY_CHANNEL');
+    }
+
+    // 路由预测/真实落库对账：契约预测走网关分流但真实落库为直连时，要求独立对账证据 (恒为 UNVERIFIED)，
+    // 使裁决 fail-closed 为 UNVERIFIED (待人工确认直连是否为合法能力降级)，绝不静默判 PASS。
+    if (routingPredictionMismatch) {
+      reqEvidence.push(isRealSpec ? 'SERVER_API:ROUTING_RECONCILIATION' : 'FIXTURE:ROUTING_RECONCILIATION');
     }
 
     // 需要核验 extra.diversion 时，即使没有 DB/API 证据也必须要求对应 evidenceKey
@@ -1403,6 +1436,9 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     }
     if (isGatewayChannelRequired && !isGatewayChannelVerified) {
       reportReasons.push('[证据不足] 缺少 NewAPI 视频模型网关渠道与上游通道确认 [MANUAL_GATEWAY_CHANNEL_REQUIRED]');
+    }
+    if (routingPredictionMismatch) {
+      reportReasons.push(`[路由对账未定] ${routingPredictionMismatch}——需人工确认直连是否为合法能力降级`);
     }
     if (regressionDiff?.regressionStatus === 'UNKNOWN') {
       reportReasons.push('[回归分析未定] 因基线验证证据不完整，分流回归状态为 UNKNOWN，无法确认 CLEAN');

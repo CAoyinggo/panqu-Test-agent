@@ -4,7 +4,9 @@ import {
   mapProbeToCanonicalEvidence,
   mapExecuteToExecutionResult,
   mapVerifyToCanonicalEvidence,
+  buildCanonicalEvidenceFromVerifyFacts,
   redactSensitiveData,
+  type CanonicalVerifyFacts,
 } from '../../../src/devtest/legacy-protocol-mappers.js';
 import type {
   PlanKernelResult,
@@ -910,6 +912,81 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
       const missingBilling = resMissing.value!.find((e) => e.evidenceKey === 'BILLING_LEDGER:TASK_RECORDS');
       expect(missingBilling?.collectionStatus).toBe('MISSING');
       expect(missingBilling?.observationStatus).toBe('UNVERIFIED');
+    });
+  });
+
+  // ==========================================================================
+  // 7. 路由预测/真实落库对账证据 (Routing Prediction Reconciliation)
+  //    契约预测走 NewAPI 网关分流, 但真实落库为直连 (diversion=0/line=1, 无 pq_newapi_task_log 行)。
+  //    绝不因"网关不适用"而静默 PASS: 必须生成独立 UNVERIFIED 信封, 结论未决交人工确认是否为合法能力降级。
+  // ==========================================================================
+  describe('7. 路由对账 UNVERIFIED 证据映射 (预测分流 vs 真实直连)', () => {
+    const baseFacts: CanonicalVerifyFacts = {
+      testId: 'v-routing-recon',
+      capturedAt: FIXED_TIME,
+      executionMode: 'real',
+      taskId: 239545,
+    };
+
+    it('7.1 REAL 模式预测分流但真实直连 → 生成 SERVER_API:ROUTING_RECONCILIATION 信封 (采集 SUCCESS, 观察 UNVERIFIED, 附 ROUTING_PREDICTION_MISMATCH)', () => {
+      const facts: CanonicalVerifyFacts = {
+        ...baseFacts,
+        routingReconciliation: {
+          predictedDivert: true,
+          actualDiverted: false,
+          mismatch:
+            '契约预测 willDivert=true, 但 pq_aivideo_new.extra.diversion=0 / pq_volcengine_ai_task.line=1, 真实直连未走网关',
+        },
+      };
+
+      const res = buildCanonicalEvidenceFromVerifyFacts(facts);
+      expect(res.success).toBe(true);
+      const recon = res.value!.find((e) => e.evidenceKey === 'SERVER_API:ROUTING_RECONCILIATION');
+      expect(recon).toBeDefined();
+      // 采集成功、结论未决: 决不能因为网关不适用就消失或判 PASS
+      expect(recon?.collectionStatus).toBe('SUCCESS');
+      expect(recon?.observationStatus).toBe('UNVERIFIED');
+      expect(recon?.confidence).toBe(0.0);
+      expect(recon?.sourceType).toBe('SERVER_API');
+      expect(recon?.subjectType).toBe('routing_reconciliation');
+      expect(recon?.subjectId).toBe(239545);
+      expect(recon?.normalizedFields?.actualValue).toBe('ACTUAL_DIRECT');
+      expect(recon?.normalizedFields?.expectedValue).toBe('DIVERTED_VIA_NEWAPI_GATEWAY');
+      expect(recon?.normalizedFields?.predictedDivert).toBe(true);
+      expect(recon?.normalizedFields?.actualDiverted).toBe(false);
+      // 采集成功 → error 字段绝不出现 (否则 ERROR_NOT_ALLOWED_ON_SUCCESS 会令信封被静默丢弃);
+      // 偏差原因/代码作为业务观察事实记录在 normalizedFields
+      expect(recon?.error).toBeUndefined();
+      expect(recon?.normalizedFields?.reconciliationCode).toBe('ROUTING_PREDICTION_MISMATCH');
+      expect(recon?.normalizedFields?.mismatchReason).toContain('真实直连');
+      expect(recon?.provenance).toContain('pq_newapi_task_log');
+    });
+
+    it('7.2 OFFLINE/FIXTURE 模式对账映射到 FIXTURE:ROUTING_RECONCILIATION, 绝不冒充 SERVER_API', () => {
+      const facts: CanonicalVerifyFacts = {
+        ...baseFacts,
+        executionMode: 'fixture',
+        routingReconciliation: {
+          predictedDivert: true,
+          actualDiverted: false,
+          mismatch: '静态契约: 预测分流但 fixture 落库直连',
+        },
+      };
+
+      const res = buildCanonicalEvidenceFromVerifyFacts(facts);
+      expect(res.success).toBe(true);
+      expect(res.value!.some((e) => e.evidenceKey === 'SERVER_API:ROUTING_RECONCILIATION')).toBe(false);
+      const recon = res.value!.find((e) => e.evidenceKey === 'FIXTURE:ROUTING_RECONCILIATION');
+      expect(recon).toBeDefined();
+      expect(recon?.sourceType).toBe('FIXTURE');
+      expect(recon?.observationStatus).toBe('UNVERIFIED');
+      expect(recon?.provenance).toContain('FIXTURE');
+    });
+
+    it('7.3 无对账偏差 (未设置 routingReconciliation.mismatch) → 绝不生成对账信封, 不制造假 FAIL/UNVERIFIED', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts(baseFacts);
+      expect(res.success).toBe(true);
+      expect(res.value!.some((e) => e.evidenceKey.includes('ROUTING_RECONCILIATION'))).toBe(false);
     });
   });
 });

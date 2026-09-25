@@ -355,6 +355,12 @@ export interface RoutingFacts {
   channelMismatchReason?: string;
   fallbackChannel?: string;
   retryProvider?: string;
+  /** 真实落库派生的"实际是否经 NewAPI 网关分流" (true=经网关/false=直连/undefined=无DB证据)。 */
+  actualDivertedFromDb?: boolean;
+  /** 网关渠道快照来源: OPTIONS=显式传入 / DB_NEWAPI_TASK_LOG=DB 只读采集器 / undefined=无。 */
+  gatewaySnapshotSource?: 'OPTIONS' | 'DB_NEWAPI_TASK_LOG';
+  /** 契约预测分流但真实直连的路由不一致说明 (ROUTING_PREDICTION_MISMATCH)。 */
+  routingPredictionMismatch?: string;
 }
 
 export interface TaskEvidenceResult {

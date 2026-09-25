@@ -4,6 +4,7 @@ import {
   RoutingOracle,
   DEFAULT_KNOWN_GATEWAY_CHANNELS,
   validateTrustedGatewaySnapshot,
+  buildTrustedGatewaySnapshotFromNewapiTaskLog,
   type TrustedGatewaySnapshot,
 } from '../../../src/devtest/routing.js';
 import { plan, execute, verify } from '../../../src/devtest/core-kernel.js';
@@ -1589,6 +1590,77 @@ describe('Routing Disambiguation & Gateway Channel Regression Tests', () => {
       expect(diff?.status).toBe('PASS');
       expect(diff?.evidence).toBe('SOURCE_REAL_GATEWAY');
       expect(res.provenance?.gatewayChannel).toBe('API_READONLY_COLLECTOR (/aivideo/channel/index)');
+    });
+  });
+
+  describe('13. buildTrustedGatewaySnapshotFromNewapiTaskLog 库内网关调用日志只读取证', () => {
+    // 真实网关履约链: pq_aivideo_new.extra.diversion=10 → pq_volcengine_ai_task.line=10 +
+    // extra.newapi_log_id=N → pq_newapi_task_log.id=N (channel_id/provider_code/upstream_model_name/status)。
+    // 该表在 verify-db-change.py 可只读访问的同库同隧道内, 无需任何外部 NewAPI 网关或令牌。
+    const successRow: Record<string, unknown> = {
+      id: 88123,
+      channel_id: 4,
+      provider_code: 'databao',
+      upstream_model_name: 'doubao-seedance-2.0',
+      newapi_group: 'panqu_video',
+      newapi_task_id: 'up-task-abc',
+      upstream_task_id: 'seed-xyz',
+      status: 'SUCCESS',
+      fail_reason: '',
+    };
+
+    it('channel_id>0 且 status=SUCCESS → 生成合法只读快照 (SOURCE_REAL_GATEWAY / API_READONLY_COLLECTOR) 并通过快照校验器', () => {
+      const snap = buildTrustedGatewaySnapshotFromNewapiTaskLog(successRow);
+      expect(snap).toBeDefined();
+      expect(snap?.provenance).toBe('API_READONLY_COLLECTOR');
+      expect(snap?.collectionStatus).toBe('SUCCESS');
+      expect(snap?.sourceEndpoint).toBe('/db/pq_newapi_task_log');
+      expect(snap?.collectorVersion).toBe('db-newapi-task-log-v1');
+      expect(snap?.channels).toHaveLength(1);
+      const ch = snap!.channels[0];
+      expect(ch.id).toBe(4);
+      expect(ch.name).toBe('databao');
+      expect(ch.group).toBe('panqu_video');
+      expect(ch.models).toEqual(['doubao-seedance-2.0']);
+      expect(ch.sourceMode).toBe('SOURCE_REAL_GATEWAY');
+
+      // 关键: 库内采集快照必须能被同一个可信快照校验器判为 valid, 从而清除 MANUAL_GATEWAY_CHANNEL_REQUIRED
+      const v = validateTrustedGatewaySnapshot(snap);
+      expect(v.valid).toBe(true);
+    });
+
+    it('channel_id 缺失或 <=0 → 返回 undefined (直连无网关渠道, 严禁伪造网关履约事实)', () => {
+      expect(buildTrustedGatewaySnapshotFromNewapiTaskLog(undefined)).toBeUndefined();
+      expect(buildTrustedGatewaySnapshotFromNewapiTaskLog({})).toBeUndefined();
+      expect(buildTrustedGatewaySnapshotFromNewapiTaskLog({ channel_id: 0 })).toBeUndefined();
+      expect(buildTrustedGatewaySnapshotFromNewapiTaskLog({ channel_id: -1 })).toBeUndefined();
+      expect(buildTrustedGatewaySnapshotFromNewapiTaskLog({ channel_id: 'not-a-number' })).toBeUndefined();
+    });
+
+    it('channel_id>0 但网关调用未 SUCCESS → collectionStatus=FAILED 且被快照校验器 fail-closed (COLLECTION_FAILED)', () => {
+      const failRow = { ...successRow, status: 'FAILED', fail_reason: 'upstream 5xx' };
+      const snap = buildTrustedGatewaySnapshotFromNewapiTaskLog(failRow);
+      expect(snap).toBeDefined();
+      expect(snap?.collectionStatus).toBe('FAILED');
+
+      // 网关明确履约失败绝不可作为合格网关事实; 校验器必须拒绝
+      const v = validateTrustedGatewaySnapshot(snap);
+      expect(v.valid).toBe(false);
+      expect(v.reason).toContain('COLLECTION_FAILED');
+    });
+
+    it('options 覆盖 environment / capturedAt 且默认落到 test / now', () => {
+      const fixed = '2026-09-21T10:00:00.000Z';
+      const snap = buildTrustedGatewaySnapshotFromNewapiTaskLog(successRow, {
+        environment: 'prod',
+        capturedAt: fixed,
+      });
+      expect(snap?.environment).toBe('prod');
+      expect(snap?.capturedAt).toBe(fixed);
+
+      const dflt = buildTrustedGatewaySnapshotFromNewapiTaskLog(successRow);
+      expect(dflt?.environment).toBe('test');
+      expect(Number.isNaN(Date.parse(dflt!.capturedAt))).toBe(false);
     });
   });
 });
