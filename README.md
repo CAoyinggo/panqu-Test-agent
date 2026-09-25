@@ -5,8 +5,8 @@
 **面向 Panqu AI 图片 / 视频生成链路的测试工程副驾 —— 意图编排、物理证据验真、零假 PASS 确定性验收门禁**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-40%20suites%20%7C%20715%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
-[![Coverage](https://img.shields.io/badge/coverage-86.4%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
+[![Tests](https://img.shields.io/badge/tests-47%20suites%20%7C%20792%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Coverage](https://img.shields.io/badge/coverage-86.31%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
 [![Security Gates](https://img.shields.io/badge/security-5%20automated%20gates-success.svg)](.github/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
@@ -121,12 +121,15 @@ flowchart TD
 
 ## 🗄️ 真实数据库物理取证（已接入 verify）
 
-涉及真实任务派发与账目变动的场景，`verify` 在**真实模式**下会自动经 `DatabaseEvidenceProducer` 通过 SSH 隧道对测试库做**只读**物理落库取证（`pq_aivideo_new` / `pq_volcengine_ai_task` / `pq_score_log` 等），并将证据折算进唯一裁决：
+涉及真实任务派发与账目变动的场景，`verify` 在**真实模式**下会自动经 `DatabaseEvidenceProducer` 通过 SSH 隧道对测试库做**只读**物理落库取证（**按媒体类型选源表**：视频 `pq_aivideo_new`，图片按模式 `pq_aivideo_goods`/`_character`/`_scene`/`_fusion`；另含后台 `pq_volcengine_ai_task` 与积分流水 `pq_score_log`），并将证据折算进唯一裁决：
 
 - **严格只读**（仅 `SELECT`），凭据读取自 gitignore 的 `db-credentials.json`，绝不硬编码；
 - **失败关闭**：库不可达 / 记录缺失 / 流水不一致 → `UNVERIFIED` / `BLOCKED`，绝不凭 HTTP 200 假 PASS；
 - **快速失败**：SSH 8s、DB 取证独立 10s 超时（不随 `--poll-timeout` 放大），避免卡死；
 - **边界**：单元测试（VITEST）不触发真实连库；真实运行可用 `--no-db-verify` 显式跳过；亦提供独立手动脚本 `python3 scripts/test-db-connection.py`。
+
+> [!NOTE]
+> **真实闭环已端到端验证**：一条真实图片生成任务经 `execute`（真实付费提交）→ 轮询终态 → 产物解码 → DB 只读取证 → 账单流水对账，产出全绿裁决；同一真实任务在**错误刊例价**下裁决引擎正确判 `FAIL`（多扣费资损告警），在正确价下判 `PASS` —— 零假 PASS 与零假 FAIL 双向坐实。
 
 > 渠道权重挑选与 NewAPI→火山自动兜底运行在网关侧 Go 消费者（不在本仓库）；DevTest 覆盖主站侧「决策 / 落库 / 回读」全链路。
 
@@ -176,13 +179,13 @@ flowchart TD
 ## 🧪 质量门禁与测试矩阵
 
 ```bash
-npm test                      # 全量 40 套件 / 715 单元测试
+npm test                      # 全量 47 套件 / 792 单元测试
 npx vitest run --coverage     # 覆盖率门禁 (Statements/Lines/Functions ≥ 80%, Branches ≥ 70%)
 npm run build                 # TypeScript 编译 + 内置技能同步 (dist/ 与 .trae/skills/)
 npm run lint                  # ESLint + Prettier
 ```
 
-当前状态：**40 套件 / 715 用例 100% 通过，零跳过零失败**；覆盖率 语句 86.4% / 行 87.15% / 分支 78.8% / 函数 91.07%（过门禁）。
+当前状态：**47 套件 / 792 用例 100% 通过，零跳过零失败**；覆盖率 语句 86.31% / 行 87.36% / 分支 78.68% / 函数 91.37%（过门禁）。
 
 <details>
 <summary><b>📊 测试矩阵（按验证域）</b></summary>
