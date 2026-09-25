@@ -223,6 +223,12 @@ src/devtest/
    - **硬约束（不可违背，沿用 Phase 4）**：① 不新增核心动作（仍为 probe/plan/execute/verify）；② 严禁新增 Manager/Orchestrator/Service 等包装层或无价值“中间层”，仅做行为等价的代码搬迁；③ `core-kernel.ts` 与 `verify-pipeline.ts` 对外导出面、`src/devtest/index.ts` 公共契约零变化（新模块经 verify-pipeline re-export）；④ 单一裁决引擎、五维证据、Fail-closed、verify 永久只读等所有核心不变量零改动；⑤ 新模块只能单向依赖（共享类型用 `import type` 引自 verify-pipeline，运行时零反向依赖、无环），严禁 core-kernel 反向依赖新模块；⑥ 全程行为等价，`tsc --noEmit`、`npm test`（全部套件/用例）、`npm run build`、`dependency-cycle` 与 `architecture-convergence` 套件必须持续全绿；
    - 本授权**仅限此次 verify-pipeline 物理分解**，不构成后续无限重构授权，不改变 §2「永久禁止项」的其余任何条款。
 
+7. **Phase 7 裁决引擎 Fail-closed 判定语义硬化授权（2026-09-25 人工明确授权：「直接执行优化与修复，不用询问我的意见」）**：
+   - 授权在 `canonical-verdict-engine.ts` 收紧确定性断言的阻断语义：断言 `status=FAIL` 一律阻断裁决（判 FAIL），**除非显式声明 `critical:false`（顾问性/advisory）**。即 `critical` 省略时默认按阻断处理（等价 `critical:true`），堵住「省略 critical → FAIL 被静默降级为 warning → 假 PASS」通路（审计 #1）。
+   - **性质**：此为 fail-closed **强化**（只会让更多真实失败被判 FAIL，绝不放宽任何 PASS），与 §2 唯一裁决 / 零假 PASS 不变量同向；默认链路行为等价（自动生成的非关键项从不产出 FAIL，实测全绿）；显式 `critical:false` 顾问性断言语义不变（仍仅告警、不阻断）。
+   - **硬约束**：① 不新增核心动作；② 不新增包装层；③ 公共导出面零变化；④ 仍为单一裁决引擎、五维证据、verify 永久只读；⑤ 变更附回归测试（省略 critical 的 FAIL → 裁决 FAIL）守护；⑥ `tsc`、`npm test`、`build`、`dependency-cycle`、`architecture-convergence` 持续全绿。
+   - 本授权**仅限此次 fail-closed 判定语义硬化**，不构成后续无限重构授权，不改变 §2「永久禁止项」的其余任何条款。
+
 ### 实际能力边界与接入状态声明：
 * **边界界定**：上述能力按成熟度客观划分，严禁把 `CONTRACT_ONLY` 或 `DEFERRED_EXTERNAL_RUNTIME` 宣传为“已完成端到端接入”。成熟度与零依赖交付范围是两个正交维度。
 * **状态声明**：生产运行时动作（probe/plan/execute/verify）保持既有拓扑，未新增 CLI/MCP 冗余动作命令。

@@ -365,6 +365,9 @@ export function evaluateCanonicalVerdict(
 
   for (const assertion of assertions) {
     const isCritical = assertion.critical === true;
+    // Fail-closed 默认：断言 FAIL 一律阻断裁决，除非显式声明 critical:false（顾问性/advisory）。
+    // 修复「critical 省略即被静默降级」的假 PASS 通路：省略 critical 视为阻断（等价 critical:true）。
+    const isBlocking = assertion.critical !== false;
 
     // 关键断言必须有明确 evidenceKey 和 actualField；缺少绑定不得猜测，结果为 UNVERIFIED
     if (isCritical && (!assertion.evidenceKey || !assertion.actualField)) {
@@ -457,7 +460,7 @@ export function evaluateCanonicalVerdict(
       reason: evalRes.reason,
     });
 
-    if (isCritical && evalRes.status === 'FAIL') {
+    if (isBlocking && evalRes.status === 'FAIL') {
       if (assertion.field === 'db.taskFound') {
         addBlocker({
           code: 'FRONTEND_TASK_NOT_FOUND',
@@ -485,8 +488,8 @@ export function evaluateCanonicalVerdict(
       }
     }
 
-    if (!isCritical && evalRes.status === 'FAIL') {
-      warnings.push(`非关键断言 [${assertion.field}] 失败: ${evalRes.reason || '未达预期'}`);
+    if (!isBlocking && evalRes.status === 'FAIL') {
+      warnings.push(`顾问性断言 [${assertion.field}] 失败(critical:false，不阻断): ${evalRes.reason || '未达预期'}`);
     }
   }
 
@@ -648,7 +651,7 @@ export function evaluateCanonicalVerdict(
   const hasRequiredEvidenceFail = reqEvaluation.failedEvidenceKeys.length > 0;
 
   // (3) FAIL 优先级二：任一 critical deterministic assertion 明确失败
-  const hasCriticalAssertionFail = assertionResults.some((a) => a.assertion.critical === true && a.status === 'FAIL');
+  const hasCriticalAssertionFail = assertionResults.some((a) => a.assertion.critical !== false && a.status === 'FAIL');
 
   if (hasRequiredEvidenceFail || hasCriticalAssertionFail) {
     if (hasRequiredEvidenceFail) {
@@ -661,7 +664,7 @@ export function evaluateCanonicalVerdict(
     }
     if (hasCriticalAssertionFail) {
       const failedCritList = assertionResults
-        .filter((a) => a.assertion.critical === true && a.status === 'FAIL')
+        .filter((a) => a.assertion.critical !== false && a.status === 'FAIL')
         .map((a) => `${a.assertion.field} (${a.reason || '断言失败'})`);
       reasons.push(`关键确定性断言明确失败: ${failedCritList.join('; ')}`);
     }

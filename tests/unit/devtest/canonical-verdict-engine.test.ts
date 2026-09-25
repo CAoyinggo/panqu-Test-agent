@@ -326,11 +326,52 @@ describe('Canonical Verdict Engine 纯函数与真值表测试 (Phase 1.4)', () 
       const envelopes = [createServerTaskEnv(), createServerChannelEnv(), createBillingEnv(), mediaEnv];
       const res = evaluateCanonicalVerdict(specWithNonCritical, envelopes);
 
-      // 非关键断言失败，Verdict 仍保持 PASS
+      // 非关键断言(显式 critical:false)失败，Verdict 仍保持 PASS
       expect(res.verdict).toBe('PASS');
       const nonCrit = res.assertionResults.find((a) => a.assertion.field === 'media.format');
       expect(nonCrit?.status).toBe('FAIL');
-      expect(res.warnings.some((w) => w.includes('非关键断言 [media.format] 失败'))).toBe(true);
+      expect(res.warnings.some((w) => w.includes('顾问性断言 [media.format] 失败'))).toBe(true);
+    });
+
+    it('13b. critical 省略的断言 FAIL → FAIL（fail-closed 默认阻断，堵住"省略即降级"的假 PASS 通路）', () => {
+      const specOmittedCritical: CanonicalTestSpec = {
+        ...baseSpec,
+        deterministicAssertions: [
+          ...baseSpec.deterministicAssertions,
+          {
+            field: 'media.format',
+            operator: 'EQUALS',
+            expectedValue: 'mp4',
+            // 故意省略 critical —— 修复后应默认阻断（等价 critical:true）
+            evidenceKey: 'MEDIA_BINARY:CONTAINER_CHECK',
+            actualField: 'format',
+          },
+        ],
+      };
+      const mediaEnv: CanonicalEvidenceEnvelope = {
+        evidenceId: 'ev-media-1',
+        testId: 'test-verdict-001',
+        sourceTool: 'media-inspector',
+        sourceType: 'MEDIA_BINARY',
+        evidenceKey: 'MEDIA_BINARY:CONTAINER_CHECK',
+        observationStatus: 'PASS',
+        capturedAt: FIXED_TIME,
+        environment: 'test',
+        subjectType: 'artifact',
+        subjectId: 1001,
+        normalizedFields: { format: 'webm' }, // 与 mp4 不符 → FAIL
+        provenance: 'MEDIA_BINARY',
+        confidence: 1.0,
+        immutable: true,
+        redacted: true,
+        collectionStatus: 'SUCCESS',
+      };
+      const envelopes = [createServerTaskEnv(), createServerChannelEnv(), createBillingEnv(), mediaEnv];
+      const res = evaluateCanonicalVerdict(specOmittedCritical, envelopes);
+      expect(res.verdict).toBe('FAIL');
+      const a = res.assertionResults.find((x) => x.assertion.field === 'media.format');
+      expect(a?.status).toBe('FAIL');
+      expect(res.reasons.some((r) => r.includes('关键确定性断言明确失败'))).toBe(true);
     });
   });
 
