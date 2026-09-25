@@ -462,7 +462,7 @@ export function evaluateCanonicalVerdict(
         addBlocker({
           code: 'FRONTEND_TASK_NOT_FOUND',
           evidenceKey: 'SERVER_API:DB_TASK_RECORD',
-          message: '前台任务表 pq_aivideo_new 中未查到物理入库记录 [FAIL]',
+          message: '前台任务源表（视频 pq_aivideo_new / 图片 goods·character·scene·fusion）中未查到物理入库记录 [FAIL]',
         });
       } else if (assertion.field === 'db.backendTaskFound') {
         addBlocker({
@@ -543,7 +543,7 @@ export function evaluateCanonicalVerdict(
           addBlocker({
             code: 'FRONTEND_TASK_NOT_FOUND',
             evidenceKey: d.key,
-            message: '前台任务表 pq_aivideo_new 中未查到物理入库记录 [FAIL]',
+            message: '前台任务源表（视频 pq_aivideo_new / 图片 goods·character·scene·fusion）中未查到物理入库记录 [FAIL]',
           });
         } else if (d.envelope?.normalizedFields?.backendTaskFound === false) {
           addBlocker({

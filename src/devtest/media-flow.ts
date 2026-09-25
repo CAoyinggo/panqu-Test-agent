@@ -228,11 +228,22 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
     bodyParams.set('row[extra][video_resolution]', options.resolution || '720p');
     bodyParams.set('row[extra][video_aspect_ratio]', options.aspectRatio || '16:9');
   } else {
-    submitUrl = new URL('/aivideo/v2/generate/submit_picture_custom_size', baseUrl).toString();
-    bodyParams.set('row[selmodelsId]', String(modelId));
-    bodyParams.set('row[extra][prompt]', safePrompt);
-    bodyParams.set('row[extra][resolution]', options.resolution || '1k');
+    // 图片真实提交端点 = /aivideo/goods/add（控制器 application/admin/controller/aivideo/Goods.php::add；
+    // v2/Goods 经 __call 委派同源）。add() 从 GET 读取 project_id（$this->request->get("project_id")），
+    // 故拼进查询串；提示词字段是 extra.cueword（add() 校验其非空）；模型走 extra.selmodels（可 '12-alias' 或 '12'）；
+    // 成功回 {code:1, data:{id}}（$this->success(..., ['id'=>goodsId])）。
+    const imageSelmodels = options.alias && options.alias.length > 0 ? `${modelId}-${options.alias}` : String(modelId);
+    submitUrl = new URL(
+      `/aivideo/goods/add?project_id=${encodeURIComponent(String(options.projectId))}`,
+      baseUrl,
+    ).toString();
+    bodyParams.set('row[type]', '1'); // type=1 = AI 生图分支（add() 全部生图逻辑都在 $params['type']==1 内）
+    bodyParams.set('row[extra][selmodels]', imageSelmodels);
+    bodyParams.set('row[extra][cueword]', safePrompt);
     bodyParams.set('row[extra][serviceline]', options.serviceline || 'r');
+    bodyParams.set('row[extra][size_type]', 'resolution');
+    bodyParams.set('row[extra][resolution]', options.resolution || '1K');
+    if (options.aspectRatio) bodyParams.set('row[extra][pixels]', options.aspectRatio);
   }
 
   if (options.extraParams) {

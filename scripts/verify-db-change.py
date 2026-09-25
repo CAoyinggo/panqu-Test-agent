@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--task-id", type=str, help="任务 ID")
     parser.add_argument("--user-id", type=str, help="用户 ID")
     parser.add_argument("--cred-path", type=str, help="凭据文件路径 (可选)")
+    parser.add_argument("--media-type", type=str, default="video", choices=["video", "image"],
+                        help="媒体类型：video=前台表 pq_aivideo_new；image=生图源表 goods/character/scene/fusion")
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出结果")
     args = parser.parse_args()
 
@@ -83,12 +85,26 @@ def main():
                 if args.task_id:
                     tid = str(args.task_id).strip()
 
-                    # 1. 查询 aivideo_new (前台任务表，主键为 id)
+                    # 1. 前台任务源表（媒体相关）：video=pq_aivideo_new；image=生图四源表。
+                    #    各表 id 空间独立且重叠，故按 media-type 只查对应表，避免跨表误命中。
                     v_rec = None
-                    cur.execute("SELECT * FROM pq_aivideo_new WHERE id = %s LIMIT 1;", (tid,))
-                    v_rec = cur.fetchone()
-                    if v_rec:
-                        evidence["recordsFound"]["pq_aivideo_new"] = v_rec
+                    if args.media_type == "image":
+                        # 表名来自固定白名单（非用户输入），tid 仍走参数化占位符
+                        for tbl in ("pq_aivideo_goods", "pq_aivideo_character", "pq_aivideo_scene", "pq_aivideo_fusion"):
+                            try:
+                                cur.execute("SELECT * FROM {} WHERE id = %s LIMIT 1;".format(tbl), (tid,))
+                            except Exception:
+                                continue
+                            rec = cur.fetchone()
+                            if rec:
+                                evidence["recordsFound"][tbl] = rec
+                                if v_rec is None:
+                                    v_rec = rec
+                    else:
+                        cur.execute("SELECT * FROM pq_aivideo_new WHERE id = %s LIMIT 1;", (tid,))
+                        v_rec = cur.fetchone()
+                        if v_rec:
+                            evidence["recordsFound"]["pq_aivideo_new"] = v_rec
 
                     # 2. 查询 volcengine_ai_task (后台调度表，id 或 source_id 或 task_id)
                     t_rec = None

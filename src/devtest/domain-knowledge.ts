@@ -271,7 +271,7 @@ export const PANQU_API_KNOWLEDGE: Record<string, ApiKnowledge> = {
   IMAGE_SUBMIT: {
     id: 'api_image_submit',
     name: '生图任务提交接口',
-    endpoint: '/aivideo/v2/generate/submit_picture_custom_size',
+    endpoint: '/aivideo/goods/add',
     method: 'POST',
     parameters: [
       { name: '__token__', type: 'string', meaning: 'CSRF 防护令牌', required: true, credibility: 'CONFIRMED' },
@@ -662,8 +662,8 @@ export const PANQU_TASK_KNOWLEDGE: Record<string, TaskKnowledge> = {
     name: '生图任务 (Image Generation Task)',
     taskType: 'IMAGE_GEN',
     numericType: 2,
-    creationApi: '/aivideo/v2/generate/submit_picture_custom_size',
-    parameters: ['project_id', 'row[name]', 'row[selmodelsId]', 'row[extra][prompt]', 'row[extra][resolution]'],
+    creationApi: '/aivideo/goods/add',
+    parameters: ['project_id (GET)', 'row[name]', 'row[extra][selmodels]', 'row[extra][cueword]', 'row[extra][resolution]', 'row[extra][serviceline]', 'row[extra][size_type]'],
     lifecycle: [
       { status: 1, name: 'QUEUED_OR_PROCESSING', isTerminal: false, isSuccess: false, description: '生图渲染排队' },
       { status: 2, name: 'SUCCESS', isTerminal: true, isSuccess: true, description: '生图完成' },

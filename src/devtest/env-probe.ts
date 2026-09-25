@@ -508,8 +508,11 @@ export function discoverModelContract(
       source: 'SOURCE_STATIC_CONTRACT',
     };
   } else if (modelId === 12) {
+    // Nano Banana Pro（pan-banana-pro）刊例价见 official-pricing-catalog `nano-banana-pro-*`：
+    // 默认 R 线路 1k/2k=10、4k=15（与真实扣费 task 1037 实测净扣 10 一致；旧值 1k=5 为过期低价，已订正）。
+    // 注：K 线路 1k/2k=8、腾讯稳定版 1k/2k=25 更贵；此处按默认 R 线路计价，需精确到线路时应接 absettingPricing 运行时权威。
     const res = (options.resolution || '1k').toLowerCase();
-    const pts = res.includes('4k') ? 15 : res.includes('2k') ? 10 : 5;
+    const pts = res.includes('4k') ? 15 : 10;
     pricing = {
       customPoints: createDiscoveredFact(pts, 'SOURCE_STATIC_CONTRACT'),
       isPricingDetermined: true,

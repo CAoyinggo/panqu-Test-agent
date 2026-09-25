@@ -22,10 +22,41 @@ const execFileAsync = promisify(execFile);
 
 export interface DatabaseRecordFound {
   pq_aivideo_new?: Record<string, unknown>;
+  // 图片任务按模式分四张源表（NON-video）：Goods/Character/Scene/Fusion
+  pq_aivideo_goods?: Record<string, unknown>;
+  pq_aivideo_character?: Record<string, unknown>;
+  pq_aivideo_scene?: Record<string, unknown>;
+  pq_aivideo_fusion?: Record<string, unknown>;
   pq_volcengine_ai_task?: Record<string, unknown>;
   pq_score_log?: Array<Record<string, unknown>>;
   user_score_logs?: Array<Record<string, unknown>>;
   [key: string]: unknown;
+}
+
+/** 图片"前台任务源表"（视频用 pq_aivideo_new）。按 add() 四类生图模式分表。 */
+export const IMAGE_FRONTEND_TABLES = [
+  'pq_aivideo_goods',
+  'pq_aivideo_character',
+  'pq_aivideo_scene',
+  'pq_aivideo_fusion',
+] as const;
+
+/**
+ * 解析"前台任务源表"物理记录（媒体无关消费入口）：视频=pq_aivideo_new；
+ * 图片=goods/character/scene/fusion 取首个命中。返回记录及其真实表名（用于 provenance）。
+ * 注意：各源表 id 空间独立且重叠，取证脚本已按 mediaType 只查正确表，故此处顺序回退即可。
+ */
+export function resolveFrontendTaskRecord(recordsFound: DatabaseRecordFound | undefined): {
+  record?: Record<string, unknown>;
+  table?: string;
+} {
+  if (!recordsFound) return {};
+  if (recordsFound.pq_aivideo_new) return { record: recordsFound.pq_aivideo_new, table: 'pq_aivideo_new' };
+  for (const t of IMAGE_FRONTEND_TABLES) {
+    const rec = recordsFound[t] as Record<string, unknown> | undefined;
+    if (rec) return { record: rec, table: t };
+  }
+  return {};
 }
 
 export interface DatabaseRawCollection {
@@ -45,6 +76,7 @@ export interface DatabaseQueryOptions {
   credPath?: string;
   scriptPath?: string;
   timeoutMs?: number;
+  mediaType?: 'video' | 'image';
 }
 
 /**
@@ -152,6 +184,9 @@ export async function queryDatabasePhysicalFacts(
   }
   if (options.userId !== undefined && options.userId !== null && options.userId !== '') {
     args.push('--user-id', String(options.userId));
+  }
+  if (options.mediaType) {
+    args.push('--media-type', options.mediaType);
   }
 
   const timeoutMs = options.timeoutMs ?? 15000;
@@ -268,7 +303,8 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
     ) {
       raw = rawCollection as DatabaseRawCollection;
     } else if (taskIdNum !== undefined) {
-      raw = await queryDatabasePhysicalFacts({ taskId: taskIdNum });
+      const ctxMediaType = (context as { mediaType?: 'video' | 'image' }).mediaType;
+      raw = await queryDatabasePhysicalFacts({ taskId: taskIdNum, mediaType: ctxMediaType });
     } else {
       raw = {
         status: 'UNVERIFIED',
@@ -281,7 +317,8 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
     }
 
     const { recordsFound } = raw;
-    const aivideoRec = recordsFound.pq_aivideo_new;
+    // 媒体无关地解析前台任务源表记录（视频=pq_aivideo_new；图片=goods/character/scene/fusion）
+    const { record: aivideoRec, table: frontendTable } = resolveFrontendTaskRecord(recordsFound);
     const volcengineRec = recordsFound.pq_volcengine_ai_task;
     const scoreLogs = recordsFound.pq_score_log;
 
@@ -328,7 +365,7 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
         points: extraObj?.points,
         deductPoints: extraObj?.deduct_points,
       },
-      provenance: 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new+pq_volcengine_ai_task',
+      provenance: `DATABASE_PHYSICAL_RECORD:${frontendTable ?? 'pq_aivideo_new'}+pq_volcengine_ai_task`,
       confidence: hasTaskRecord ? 1.0 : 0.0,
       immutable: true,
       redacted: true,

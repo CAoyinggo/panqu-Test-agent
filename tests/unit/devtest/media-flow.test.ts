@@ -100,12 +100,14 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
         serviceline: 'r',
       });
 
-      expect(recordedUrl).toBe('https://test.panqu.com/aivideo/v2/generate/submit_picture_custom_size');
+      expect(recordedUrl).toBe('https://test.panqu.com/aivideo/goods/add?project_id=10');
       const params = new URLSearchParams(recordedBody);
-      expect(params.get('row[selmodelsId]')).toBe('201');
-      expect(params.get('row[extra][prompt]')).toBe('devtest_sample_image');
+      expect(params.get('row[type]')).toBe('1');
+      expect(params.get('row[extra][selmodels]')).toBe('201');
+      expect(params.get('row[extra][cueword]')).toBe('devtest_sample_image');
       expect(params.get('row[extra][resolution]')).toBe('2k');
       expect(params.get('row[extra][serviceline]')).toBe('r');
+      expect(params.get('row[extra][size_type]')).toBe('resolution');
 
       expect(res.ok).toBe(true);
       expect(res.taskId).toBe(99902);

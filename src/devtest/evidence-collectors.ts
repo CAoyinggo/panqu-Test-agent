@@ -33,6 +33,7 @@ import {
   queryDatabasePhysicalFacts,
   mapDbScoreLogsToScoreLogEntries,
   resolveDatabaseCredentialsPath,
+  resolveFrontendTaskRecord,
   type DatabaseRawCollection,
 } from './database-evidence-producer.js';
 
@@ -317,6 +318,7 @@ export async function collectTaskEvidence(
         dbRawCollection = await queryDatabasePhysicalFacts({
           taskId,
           credPath,
+          mediaType: ctx.mediaType,
           // DB 取证使用独立短超时，绝不随 --poll-timeout 放大；库不可达时快速 fail-closed 为 UNVERIFIED，避免真实流程长时间卡死
           timeoutMs: options.dbTimeoutMs ?? 10000,
         });
@@ -336,8 +338,9 @@ export async function collectTaskEvidence(
   }
 
   // 若通过数据库物理落库获得了明确终态且此前未知，自动提升终态事实
-  if (dbRawCollection?.recordsFound?.pq_aivideo_new) {
-    const dbTask = dbRawCollection.recordsFound.pq_aivideo_new;
+  const { record: frontendDbRec } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
+  if (frontendDbRec) {
+    const dbTask = frontendDbRec;
     const dbTaskStatus = Number(dbTask.task_status);
     if (
       terminalStatus === 'UNKNOWN' ||
@@ -655,14 +658,17 @@ export async function collectTaskEvidence(
   if (runtimeDetails?.extra && runtimeDetails.extraSource === 'HTTP_API:getEditData') {
     extraObj = runtimeDetails.extra;
     extraProvenance = 'HTTP_API:getEditData';
-  } else if (dbRawCollection?.recordsFound?.pq_aivideo_new?.extra) {
-    const rawDbExtra = dbRawCollection.recordsFound.pq_aivideo_new.extra;
+  } else if (resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra) {
+    const { record: dbFrontendRec, table: dbFrontendTable } = resolveFrontendTaskRecord(
+      dbRawCollection?.recordsFound,
+    );
+    const rawDbExtra = dbFrontendRec!.extra;
     try {
       extraObj = typeof rawDbExtra === 'string' ? JSON.parse(rawDbExtra) : (rawDbExtra as Record<string, unknown>);
     } catch {
       extraObj = undefined;
     }
-    extraProvenance = 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new';
+    extraProvenance = `DATABASE_PHYSICAL_RECORD:${dbFrontendTable ?? 'pq_aivideo_new'}`;
   } else if (runtimeDetails?.extra) {
     extraObj = runtimeDetails.extra;
     extraProvenance = runtimeDetails.extraSource || 'HTTP_API:exceptional-task';
