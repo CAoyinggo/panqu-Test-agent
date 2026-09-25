@@ -5,8 +5,8 @@
 **面向 Panqu AI 图片 / 视频生成链路的测试工程副驾 —— 意图编排、物理证据验真、零假 PASS 确定性验收门禁**
 
 [![Version](https://img.shields.io/badge/version-6.0.0-blue.svg)](package.json)
-[![Tests](https://img.shields.io/badge/tests-47%20suites%20%7C%20792%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
-[![Coverage](https://img.shields.io/badge/coverage-86.31%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
+[![Tests](https://img.shields.io/badge/tests-48%20suites%20%7C%20811%20passed%20(100%25)-brightgreen.svg)](tests/unit/devtest)
+[![Coverage](https://img.shields.io/badge/coverage-86.08%25%20(Statements)-brightgreen.svg)](vitest.config.ts)
 [![Security Gates](https://img.shields.io/badge/security-5%20automated%20gates-success.svg)](.github/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-orange.svg)](package.json)
 [![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5.9-blue.svg)](package.json)
@@ -60,7 +60,7 @@ npm run devtest -- execute --model 84 --media video --mode mock --wait
 
 ### ③ Trae / Cursor MCP（可选 · 同源包装）
 
-DevTest 附带符合 MCP 标准的 stdio 接口，是对同一 `core-kernel` 的薄包装。在 `.trae/mcp.json` 配置：
+DevTest 附带符合 MCP 标准的 stdio 接口，是对同一 `core-kernel` 的薄包装。仓库内 [`.trae/mcp.json`](.trae/mcp.json) 已登记好，配置与此一致：
 
 ```json
 {
@@ -68,16 +68,17 @@ DevTest 附带符合 MCP 标准的 stdio 接口，是对同一 `core-kernel` 的
     "devtest": {
       "command": "node",
       "args": ["${workspaceFolder}/dist/bin/devtest-mcp.js", "--project-root", "${workspaceFolder}"],
-      "env": { "NODE_OPTIONS": "", "NODE_USE_ENV_PROXY": "1" }
+      "env": { "NODE_OPTIONS": "", "NODE_USE_ENV_PROXY": "1", "PANQU_MCP_INTEGRATION_VERSION": "6.0.0" }
     }
   }
 }
 ```
 
+> 仓库内 `.trae/mcp.json` 另注册了别名 `panqu-test-mcp`，指向同一 stdio 入口（`dist/bin/devtest-mcp.js`）；两者等价，按需保留其一即可。
+
 详见 ➔ [**MCP 集成指南**](docs/MCP_GUIDE.md)。
 
 ---
-
 ## 🔄 四大核心动作闭环
 
 ```mermaid
@@ -118,7 +119,6 @@ flowchart TD
 > **最小证据契约红线**：TestSpec 必须至少声明 `requiredEvidence` 或 `deterministicAssertions` 之一；两者皆空时裁决引擎直接返回 `UNVERIFIED`（blocker `NO_EVALUABLE_EVIDENCE_SPEC`），严禁"空规格 PASS"。证据 provenance 严禁从预期值反推（`PROVENANCE_DERIVED_FROM_EXPECTATION` 门禁）。
 
 ---
-
 ## 🗄️ 真实数据库物理取证（已接入 verify）
 
 涉及真实任务派发与账目变动的场景，`verify` 在**真实模式**下会自动经 `DatabaseEvidenceProducer` 通过 SSH 隧道对测试库做**只读**物理落库取证（**按媒体类型选源表**：视频 `pq_aivideo_new`，图片按模式 `pq_aivideo_goods`/`_character`/`_scene`/`_fusion`；另含后台 `pq_volcengine_ai_task` 与积分流水 `pq_score_log`），并将证据折算进唯一裁决：
@@ -131,7 +131,7 @@ flowchart TD
 > [!NOTE]
 > **真实闭环已端到端验证**：一条真实图片生成任务经 `execute`（真实付费提交）→ 轮询终态 → 产物解码 → DB 只读取证 → 账单流水对账，产出全绿裁决；同一真实任务在**错误刊例价**下裁决引擎正确判 `FAIL`（多扣费资损告警），在正确价下判 `PASS` —— 零假 PASS 与零假 FAIL 双向坐实。
 
-> 渠道权重挑选与 NewAPI→火山自动兜底运行在网关侧 Go 消费者（不在本仓库）；DevTest 覆盖主站侧「决策 / 落库 / 回读」全链路。
+> 渠道权重挑选与 NewAPI→火山自动兜底运行在网关侧 Go 消费者（不在本仓库）；DevTest 覆盖主站侧「决策 / 落库 / 回读」全链路（网关渠道可凭 `pq_newapi_task_log` 只读快照盖章）。
 
 ---
 
@@ -146,7 +146,20 @@ flowchart TD
 | `panqu-billing` | 计费扣费、积分预估、账单大盘与对账 |
 | `panqu-newapi-model-onboarding` | NewAPI 新模型接入 SOP 与排障 |
 | `panqu-canvas` | 画布、工作流节点、协作与执行 |
-| `devtest` | DevTest 主技能：需求澄清、计划一次确认、证据门禁 |
+| `devtest` | DevTest 主技能：需求澄清、计划一次确认、证据门禁、报告产出（见下方「自测报告产物」与 [`report-template.md`](src/devtest/assets/devtest/report-template.md)） |
+
+---
+## 🧾 自测报告产物（双模同源）
+
+测试结论有两种同源产物，均收敛自唯一裁决引擎，遵循同一套「零假 PASS」纪律：
+
+- **聊天简报**（默认）：`状态 / 概况 / 证据 / 缺口 / 下一步` 五段式，规约见 [`devtest/SKILL.md`](src/devtest/assets/devtest/SKILL.md) 第十节。
+- **文件报告**（可交付）：按 [`report-template.md`](src/devtest/assets/devtest/report-template.md) 的骨架产出，裁决置顶为唯一真相源、证据可追溯。
+
+> [!NOTE]
+> **文件报告六条硬规则**：① 顶部裁决表是唯一现行结论，禁止层层叠加"以本节为准"覆盖段；② 执行状态只用 canonical 集合 `PASS / FAIL / PROCESSING / IN_FLIGHT / UNVERIFIED / BLOCKED / ERROR`；③ 证据强度（`CONFIRMED / SOURCE / DERIVED / DESIGN`）另立一轴，不与状态混用；④ 任何 PASS 必带真实证据链接，设计用例永不计入验收；⑤ 证据一律相对路径，不泄露绝对路径与凭证明文；⑥ 按事实伸缩，已确认缺陷与阻断条件分开写。
+
+骨架：裁决 + 提测检查单 → 概览数字 → 范围 / 环境 → 证据总览 → 真实执行记录 → 缺陷与风险 → 计费对账 → 分流与网关 → 未覆盖 / 追溯 → 结论，附设计用例、版本快照、证据索引、数据清理与复现命令等附录。
 
 ---
 
@@ -163,7 +176,6 @@ flowchart TD
 | **多端交付与持久化** | 双模同源呈现；深冻结结果单向导出 | [`result-sink.ts`](src/devtest/result-sink.ts) |
 
 ---
-
 ## 🛡️ 五重自动化安全门禁 (GitHub Actions)
 
 | 安全层级 / Job | 扫描工具 | 目标 |
@@ -179,13 +191,13 @@ flowchart TD
 ## 🧪 质量门禁与测试矩阵
 
 ```bash
-npm test                      # 全量 47 套件 / 792 单元测试
+npm test                      # 全量 48 套件 / 811 单元测试
 npx vitest run --coverage     # 覆盖率门禁 (Statements/Lines/Functions ≥ 80%, Branches ≥ 70%)
 npm run build                 # TypeScript 编译 + 内置技能同步 (dist/ 与 .trae/skills/)
 npm run lint                  # ESLint + Prettier
 ```
 
-当前状态：**47 套件 / 792 用例 100% 通过，零跳过零失败**；覆盖率 语句 86.31% / 行 87.36% / 分支 78.68% / 函数 91.37%（过门禁）。
+当前状态：**48 套件 / 811 用例 100% 通过，零跳过零失败**；覆盖率 语句 86.08% / 行 87.17% / 分支 78.58% / 函数 91.31%（过门禁）。
 
 <details>
 <summary><b>📊 测试矩阵（按验证域）</b></summary>
@@ -202,7 +214,6 @@ npm run lint                  # ESLint + Prettier
 </details>
 
 ---
-
 ## 📚 深度文档中心
 
 - 📐 [**架构永久冻结规范**](docs/ARCHITECTURE_FREEZE.md) — 核心拓扑、受控扩展红线与不可变原则
@@ -210,4 +221,10 @@ npm run lint                  # ESLint + Prettier
 - 🤖 [**MCP 集成指南**](docs/MCP_GUIDE.md) — Trae / Cursor 配置与闭环交互
 - 🔍 [**验真与金融对账白皮书**](docs/VERIFICATION_SPEC.md) — MP4 Box 解构、尾部切片、三大金融不变量
 - 🔀 [**NewAPI 分流真实代码流程**](src/devtest/assets/panqu-newapi-diversion/references/diversion-flow.md) — 主站分流端到端取证映射
+- 🧾 [**文件报告基础模板**](src/devtest/assets/devtest/report-template.md) — 可交付自测报告的骨架与六条硬规则
+
+
+
+
+
 
