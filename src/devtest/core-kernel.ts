@@ -15,6 +15,7 @@ import {
 } from './routing.js';
 import { BillingOracle } from './billing.js';
 import { predictDiversion, type DiversionPrediction } from './diversion-context.js';
+import { readDiversionConfig, toEligibilityRules } from './diversion-config-reader.js';
 import type {
   ChangeScenario,
   DiscoveredModelContract,
@@ -497,18 +498,42 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
 
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
   // 分流预测接地（opt-in）：提供 line=10 路由规则时，用资格引擎按真实规则预测分流；否则 provisional。
+  // autoDiversionRules：自动读 line=10 配置补全规则（需 DB 凭据；VITEST 下跳过、失败 fail-closed 保持 provisional）。
+  let dvRouteRules = options.routeRules;
+  let dvGroupRules = options.groupRules;
+  let dvRouteMode = options.routeMode;
+  let dvIsGlobalModel = contract.isGlobal.value;
+  let dvAlias = contract.alias.value;
+  let dvHasGlobalApiKey: boolean | undefined;
+  if (options.autoDiversionRules && !process.env.VITEST) {
+    try {
+      const cfg = await readDiversionConfig({});
+      if (cfg.status === 'VERIFIED') {
+        const rules = toEligibilityRules(cfg, modelId);
+        dvRouteRules = rules.routeRules;
+        dvGroupRules = rules.groupRules;
+        dvRouteMode = rules.routeMode;
+        dvIsGlobalModel = rules.isGlobalModel;
+        dvAlias = rules.alias || dvAlias;
+        dvHasGlobalApiKey = rules.hasGlobalApiKey;
+      }
+    } catch {
+      /* fail-closed：读配置失败则保持 provisional，绝不臆断分流 */
+    }
+  }
   const diversionPrediction = predictDiversion({
     mediaType,
     modelId,
-    alias: contract.alias.value,
-    isGlobalModel: contract.isGlobal.value,
+    alias: dvAlias,
+    isGlobalModel: dvIsGlobalModel,
     resolution:
       options.resolution || contract.supportedResolutions.value[0] || (contract.mediaType === 'video' ? '720p' : '1k'),
     aspect: options.aspectRatio,
-    routeMode: options.routeMode,
-    routeRules: options.routeRules,
-    groupRules: options.groupRules,
+    routeMode: dvRouteMode,
+    routeRules: dvRouteRules,
+    groupRules: dvGroupRules,
     routeGroup: options.routeGroup,
+    hasGlobalApiKey: dvHasGlobalApiKey,
   });
   const testPlan = generateDynamicTestPlan(
     contract,

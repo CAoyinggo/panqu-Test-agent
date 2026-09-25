@@ -752,7 +752,11 @@ export async function collectTaskEvidence(
   }
 
   const isRealMode = Boolean(session && !options.isSimulated);
-  const isGatewayChannelRequired = mediaType === 'video' && ctx.contract.routing.value.willDivert;
+  // 网关渠道核验要求：视频分流一律要求；图片分流**在提供了网关快照时**也要求（校验机器是媒体无关的）。
+  // 图片未提供网关快照时不强制（避免无证据地把图片分流恒判 UNVERIFIED）——待接图片网关证据采集后可去掉此守卫。
+  const isGatewayChannelRequired =
+    ctx.contract.routing.value.willDivert &&
+    (mediaType === 'video' || (mediaType === 'image' && Boolean(options.gatewaySnapshot)));
 
   const snapshotValidation = options.gatewaySnapshot
     ? validateTrustedGatewaySnapshot(options.gatewaySnapshot, {

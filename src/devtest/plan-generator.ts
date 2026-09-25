@@ -65,6 +65,8 @@ export interface PlanKernelOptions {
   groupRules?: GroupedRouteRules | null;
   routeMode?: RouteMode;
   routeGroup?: { newapi_group: string; usable: boolean } | null;
+  // opt-in：自动读 line=10 配置(需 DB 凭据；VITEST 下跳过)补全上面的路由规则，让接地开箱即用。
+  autoDiversionRules?: boolean;
 }
 
 export function generateDynamicTestPlan(
