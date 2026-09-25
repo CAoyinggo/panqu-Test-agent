@@ -77,6 +77,63 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       expect(res.message).toBe('ok');
     });
 
+    it('回归(真实 task 239544): SUT 将 data.id 序列化为字符串时, 必须归一为非负整数 taskId (防 INVALID_TEST_SPEC)', async () => {
+      // FastAdmin/ThinkPHP 常把自增 id 作为 JSON 字符串返回。历史缺陷: 字符串 "239544" 原样透出,
+      // 向下游 canonicalSpec.target.taskId 泄漏, 触发严格校验器 INVALID_TEST_SPEC 短路, 断言不被求值。
+      global.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, msg: 'ok', data: { id: '239544' } }),
+        } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_video_str',
+        csrfToken: 'token_csrf_str',
+        mediaType: 'video',
+        modelId: 84,
+        alias: 'wan3.0-video',
+        prompt: 'a calm ocean wave at sunset',
+        resolution: '480p',
+        duration: 4,
+        projectId: 10,
+      });
+
+      expect(res.ok).toBe(true);
+      // 关键断言: 数值型而非字符串, 且等值——满足 canonical 校验器 Number.isInteger(taskId) 契约
+      expect(res.taskId).toBe(239544);
+      expect(typeof res.taskId).toBe('number');
+      expect(Number.isInteger(res.taskId)).toBe(true);
+    });
+
+    it('回归: data.id 为非数值脏值时 fail-closed 归 0 且 ok=false, 不放行伪 taskId', async () => {
+      global.fetch = vi.fn().mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 1, msg: 'ok', data: { id: 'not-a-number' } }),
+        } as unknown as Response;
+      });
+
+      const res = await submitMediaTask({
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=session_dirty',
+        csrfToken: 'token_dirty',
+        mediaType: 'video',
+        modelId: 84,
+        alias: 'wan3.0-video',
+        prompt: 'x',
+        resolution: '480p',
+        duration: 4,
+        projectId: 10,
+      });
+
+      expect(res.taskId).toBe(0);
+      expect(res.ok).toBe(false);
+    });
+
     it('图片任务提交：正确构造生图专用 URL 与 extra 字段 (支持 data 直接为数字)', async () => {
       let recordedUrl = '';
       let recordedBody = '';

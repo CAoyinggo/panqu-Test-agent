@@ -1280,6 +1280,13 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       testId,
     });
 
+    // 防御纵深: canonicalSpec.target/inputs.taskId 契约要求非负整数。上游边界 (media-flow 提交解析)
+    // 已归一, 此处再兜底一层——数值型 id (含 SUT 返回的数字字符串) 归一为整数; 真正非法的值保持原样,
+    // 交由 canonical 校验器如实拦截, 绝不静默放行伪 taskId。
+    const parsedSpecTaskId = Number(taskId);
+    const canonicalTaskId =
+      Number.isFinite(parsedSpecTaskId) && parsedSpecTaskId >= 0 ? Math.trunc(parsedSpecTaskId) : taskId;
+
     canonicalSpec = {
       testId,
       requirementId: resolvedReq.requirementId,
@@ -1290,10 +1297,10 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
         targetType: 'model',
         modelId,
         expectedChannelId: targetChannelId,
-        taskId,
+        taskId: canonicalTaskId,
       },
       inputs: {
-        taskId,
+        taskId: canonicalTaskId,
         expectedPoints,
         targetChannelId,
         pricingDetermined: contract.pricing.isPricingDetermined,

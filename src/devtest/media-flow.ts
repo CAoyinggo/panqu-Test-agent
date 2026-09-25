@@ -270,14 +270,19 @@ export async function submitMediaTask(options: SubmitMediaTaskOptions): Promise<
 
   const durationMs = Date.now() - startTime;
   const rawText = await response.text();
-  let jsonResp: { code?: number; msg?: string; data?: { id?: number } | number };
+  let jsonResp: { code?: number; msg?: string; data?: { id?: number | string } | number };
   try {
     jsonResp = JSON.parse(rawText);
   } catch {
     throw new Error(`SUBMIT_RESPONSE_NOT_JSON: HTTP ${response.status} 响应非 JSON: ${rawText.slice(0, 200)}`);
   }
 
-  const taskId = typeof jsonResp.data === 'number' ? jsonResp.data : (jsonResp.data?.id ?? 0);
+  // SUT (FastAdmin/ThinkPHP) 常把 DB 自增 id 序列化为字符串, 必须在提交解析边界统一归一为非负整数:
+  // 否则字符串 taskId 会向下游 canonicalSpec.target.taskId 泄漏, 触发严格校验器 INVALID_TEST_SPEC 短路,
+  // 使确定性断言根本不被求值 (集成 execute→verify 链路的真实缺陷)。此处 fail-closed: 非数值一律归 0。
+  const rawTaskId = typeof jsonResp.data === 'number' ? jsonResp.data : (jsonResp.data?.id ?? 0);
+  const parsedTaskId = Number(rawTaskId);
+  const taskId = Number.isFinite(parsedTaskId) && parsedTaskId > 0 ? Math.trunc(parsedTaskId) : 0;
   const ok = jsonResp.code === 1 && taskId > 0;
   return {
     ok,
