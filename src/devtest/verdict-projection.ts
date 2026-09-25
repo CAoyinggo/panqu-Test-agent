@@ -569,15 +569,35 @@ export function buildDiffItems(args: BuildDiffItemsOptions): DiffItem[] {
   }
 
   if (artifact?.dimensions) {
-    const expectedRes = options.expectedResolution || resolution || '720p';
+    const expectedRes = String(options.expectedResolution || resolution || '720p')
+      .toLowerCase()
+      .trim();
+    const { width, height } = artifact.dimensions;
+    const minDim = Math.min(width, height);
+    // 分辨率档位 → 特征像素(短边)。视频/图片档位都以「短边≈档位数」为特征
+    // (如 720p→短边720；1k 图片 1792x1024→短边1024)。档位与像素并非严格一一对应(随画面比例浮动)，
+    // 故仅在短边落入 ±15% 容差时判 PASS；无法自动确证时判 MANUAL_REQUIRED，绝不臆断 PASS(堵住"永远 MATCH"的假验证)。
+    const tierMap: Record<string, number> = {
+      '480p': 480,
+      '720p': 720,
+      '768p': 768,
+      '1080p': 1080,
+      '2k': 2048,
+      '4k': 4096,
+      '1k': 1024,
+    };
+    const tier = tierMap[expectedRes];
+    const dimMatched = tier !== undefined && Math.abs(minDim - tier) <= tier * 0.15;
     diffItems.push({
       field: 'dimensions',
       layer: 'artifact',
       expected: expectedRes,
-      actual: `${artifact.dimensions.width}x${artifact.dimensions.height}`,
-      matched: true,
-      status: 'PASS',
-      diff: 'MATCH',
+      actual: `${width}x${height}`,
+      matched: dimMatched,
+      status: dimMatched ? 'PASS' : 'MANUAL_REQUIRED',
+      diff: dimMatched
+        ? 'MATCH'
+        : `分辨率档位(${expectedRes})与实际像素(${width}x${height})无法自动确证一致，需人工确认 [MANUAL_REQUIRED]`,
       critical: false,
       evidence: `${mediaArtifactSource}:${artifact.format}`,
     });
@@ -1412,10 +1432,10 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
       billingLedger: billingEvidence.status === 'PASS' ? 'VERIFIED' : 'UNVERIFIED',
     },
     manualVerificationGuide: {
-      extraQuerySql: `SELECT id, extra, user_group_id, created_at FROM ai_tasks WHERE id = ${taskId} LIMIT 1;`,
+      extraQuerySql: `SELECT id, extra, task_status FROM ${mediaType === 'image' ? 'pq_aivideo_goods' : 'pq_aivideo_new'} WHERE id = ${Number(taskId) || 0} LIMIT 1;`,
       notice: isDbExtraVerified
         ? '已通过只读 HTTP API (/aivideo/v2/video/getEditData) 成功获取 extra 分流落库证据，无需手动查询数据库。'
-        : '主站 HTTP 查询接口（/apiGetStatus 或常规任务详情接口）不返回 extra 字段。如需核实真实分流落库 (extra.diversion=10)，可优先通过只读 HTTP API (/aivideo/v2/video/getEditData) 或以只读权限查询 DB ai_tasks 表。',
+        : `主站 HTTP 查询接口（/apiGetStatus 或常规任务详情接口）不返回 extra 字段。如需核实真实分流落库 (${mediaType === 'image' ? 'extra.newapi_image=1' : 'extra.diversion=10'})，可优先通过只读 HTTP API (/aivideo/v2/video/getEditData) 或以只读权限查询 DB ${mediaType === 'image' ? 'pq_aivideo_goods（图片按模式亦可能在 character/scene/fusion）' : 'pq_aivideo_new'} 表。`,
     },
     regressionDiff,
     evidenceCompleteness,

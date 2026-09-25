@@ -732,7 +732,7 @@ export function generateDynamicTestPlan(
     manualRequiredSummary.push(
       contract.mediaType === 'video'
         ? '底层落库核验: 执行 SQL `SELECT extra FROM pq_aivideo_new WHERE id = <taskId>;` 确认 extra.diversion=10'
-        : '底层落库核验: 执行 SQL `SELECT extra FROM pq_ai_tasks WHERE id = <taskId>;` 确认 extra.newapi_image=1',
+        : '底层落库核验: 执行 SQL `SELECT extra FROM pq_aivideo_goods WHERE id = <taskId>;`（图片按模式亦可能在 character/scene/fusion）确认 extra.newapi_image=1',
     );
   } else {
     if (contract.mediaType === 'video') {

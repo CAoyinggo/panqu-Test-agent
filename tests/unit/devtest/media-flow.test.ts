@@ -629,6 +629,38 @@ describe('media-flow - 媒体流执行器真实高价值契约测试', () => {
       expect(finalSnapshot.progress).toBe(100);
     });
 
+    it('图片轮询 type 必须为 goods（与 /aivideo/goods/add 提交模式一致，防跨表同 id 张冠李戴），并读取 pic_url', async () => {
+      let callCount = 0;
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        callCount++;
+        const params = new URLSearchParams(String(init?.body || ''));
+        expect(params.get('type')).toBe('goods'); // 关键：不得为 'scene'
+        expect(params.get('ids')).toBe('1037');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 1,
+            data: [
+              { id: 1037, status: { task_status: 2, progress: 100, pic_url: 'https://img.panqu.com/goods_1037.png' } },
+            ],
+          }),
+        } as unknown as Response;
+      });
+
+      const { finalSnapshot } = await pollTaskStatus(1037, {
+        baseUrl: 'https://test.panqu.com',
+        cookies: 'PHPSESSID=poll_img',
+        mediaType: 'image',
+        pollTimeoutSec: 1,
+        pollIntervalMs: 10,
+      });
+
+      expect(callCount).toBe(1);
+      expect(finalSnapshot.taskStatus).toBe(2);
+      expect(finalSnapshot.imageUrl).toBe('https://img.panqu.com/goods_1037.png');
+    });
+
     it('SUCCESS (嵌套 status 对象结构)：正确解析主站 apiGetStatus 的嵌套 data[0].status 结构', async () => {
       global.fetch = vi.fn().mockImplementation(
         async () =>

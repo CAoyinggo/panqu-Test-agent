@@ -338,10 +338,33 @@ export async function collectTaskEvidence(
   }
 
   // 若通过数据库物理落库获得了明确终态且此前未知，自动提升终态事实
-  const { record: frontendDbRec } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
+  const { record: frontendDbRec, table: frontendDbTable } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
   if (frontendDbRec) {
     const dbTask = frontendDbRec;
     const dbTaskStatus = Number(dbTask.task_status);
+    const dbSource = `DATABASE_PHYSICAL_RECORD:${frontendDbTable ?? 'pq_aivideo_new'}`;
+    // 媒体感知解析产物 URL：视频取 video_url(相对补 v.panqu.com.cn)；图片取 image_url/pic
+    // (pic 可能是 JSON 数组相对路径，如 ["/character/..png"])。仅采用可直接抓取的绝对 http URL；
+    // 图片相对路径缺 CDN 域名时不臆测前缀(fail-closed，交由轮询主路径获取产物)。
+    const resolveDbMediaUrl = (): string | undefined => {
+      if (ctx.mediaType === 'image') {
+        const cand = dbTask.image_url ?? dbTask.pic;
+        if (!cand) return undefined;
+        let s = String(cand).trim();
+        if (s.startsWith('[')) {
+          try {
+            const arr: unknown = JSON.parse(s);
+            s = Array.isArray(arr) && arr.length > 0 ? String(arr[0]) : '';
+          } catch {
+            s = '';
+          }
+        }
+        return s.startsWith('http') ? s : undefined;
+      }
+      if (!dbTask.video_url) return undefined;
+      const v = String(dbTask.video_url);
+      return v.startsWith('http') ? v : `https://v.panqu.com.cn${v}`;
+    };
     if (
       terminalStatus === 'UNKNOWN' ||
       taskEvidence.source === 'unqueried' ||
@@ -351,21 +374,17 @@ export async function collectTaskEvidence(
         terminalStatus = 'SUCCESS';
         taskEvidence = {
           status: 'PASS',
-          source: 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new',
+          source: dbSource,
           terminalStatus: 'SUCCESS',
           taskStatus: 2,
           progress: 100,
-          videoUrl: dbTask.video_url
-            ? String(dbTask.video_url).startsWith('http')
-              ? String(dbTask.video_url)
-              : `https://v.panqu.com.cn${String(dbTask.video_url)}`
-            : undefined,
+          videoUrl: ctx.mediaType === 'video' ? resolveDbMediaUrl() : undefined,
         };
       } else if (dbTaskStatus === 3 || dbTaskStatus === 4) {
         terminalStatus = 'FAILED';
         taskEvidence = {
           status: 'FAIL',
-          source: 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new',
+          source: dbSource,
           terminalStatus: 'FAILED',
           taskStatus: dbTaskStatus,
           error: dbTask.err ? String(dbTask.err) : '数据库记录任务已失败 [DATABASE_PHYSICAL_RECORD]',
@@ -373,14 +392,10 @@ export async function collectTaskEvidence(
         };
       }
     }
-    // 若成片 URL 可从数据库物理记录获取且尚未探测
-    if (!artifactBuffer && (taskEvidence.videoUrl || dbTask.video_url)) {
-      const dbMediaUrl =
-        taskEvidence.videoUrl ||
-        (String(dbTask.video_url).startsWith('http')
-          ? String(dbTask.video_url)
-          : `https://v.panqu.com.cn${String(dbTask.video_url)}`);
-      mediaArtifactSource = 'DATABASE_PHYSICAL_RECORD:pq_aivideo_new';
+    // 若产物 URL 可从数据库物理记录获取且尚未探测（媒体感知；图片相对路径缺域名时为 undefined，不抓取）
+    const dbMediaUrl = taskEvidence.videoUrl || resolveDbMediaUrl();
+    if (!artifactBuffer && dbMediaUrl) {
+      mediaArtifactSource = dbSource;
       artifactOwnership = 'VERIFIED';
       const probeRes = await fetchFirst64K(dbMediaUrl);
       if (probeRes) {

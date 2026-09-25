@@ -320,7 +320,9 @@ export async function pollTaskStatus(
   while (Date.now() - startTime < timeoutMs) {
     pollCount++;
     const form = new URLSearchParams();
-    form.set('type', options.mediaType === 'image' ? 'scene' : 'video');
+    // 轮询 type 必须与提交模式一致：图片经 /aivideo/goods/add 提交(goods 模式)，故查 type='goods'。
+    // （各图片源表 id 空间独立且重叠，用 'scene' 会误查 scene 表的同 id 任务 → 证据张冠李戴。）
+    form.set('type', options.mediaType === 'image' ? 'goods' : 'video');
     form.set('ids', String(taskId));
 
     try {
