@@ -27,6 +27,8 @@ import type {
 } from './types.js';
 import type { Experience } from './domain-knowledge.js';
 import type { RequirementTrace } from './requirement-trace.js';
+import type { RouteRules, GroupedRouteRules, RouteMode } from './newapi-route-eligibility.js';
+import type { DiversionPrediction } from './diversion-context.js';
 
 export interface PlanKernelOptions {
   modelId?: number;
@@ -58,6 +60,11 @@ export interface PlanKernelOptions {
   testId?: string;
   changedPaths?: readonly string[];
   traces?: readonly RequirementTrace[];
+  // 分流预测接地（opt-in）：提供 line=10 路由规则时，plan 的分流预期改由资格引擎按真实规则算，而非场景假设。
+  routeRules?: RouteRules | null;
+  groupRules?: GroupedRouteRules | null;
+  routeMode?: RouteMode;
+  routeGroup?: { newapi_group: string; usable: boolean } | null;
 }
 
 export function generateDynamicTestPlan(
@@ -66,8 +73,12 @@ export function generateDynamicTestPlan(
   mainVerdict: MainSiteRoutingVerdict,
   gwVerdict: GatewayRoutingVerdict,
   expectedPoints: number,
+  diversionPrediction?: DiversionPrediction,
 ): TestPlan {
   const scenario = contract.scenario;
+  // 接地分流预测（仅当基于真实 line=10 路由规则）：用于把分流场景的 willDivert/decision/line
+  // 从"场景假设"改为"按真实规则计算"。未接地(无规则)时为 undefined，保持既有场景默认，杜绝破坏离线行为。
+  const grounded = diversionPrediction?.provenance === 'GROUNDED_ROUTE_RULES' ? diversionPrediction : undefined;
   const changeType: 'new_model' | 'diversion_change' = scenario.includes('DIVERSION')
     ? 'diversion_change'
     : 'new_model';
@@ -381,7 +392,14 @@ export function generateDynamicTestPlan(
           ? '全量开放生图模型命中全局分流'
           : '非全量生图模型满足组织配置命中 NEWAPI_IMAGE 组织分流，预期快照写入 newapi_image=1',
         input: { selmodelsId: contract.modelId, serviceline: 'r', sizeType: 'resolution' },
-        expected: { willDivert: true, decision: 'NEWAPI_IMAGE', line: 10, newapiModel: contract.alias.value },
+        expected: grounded
+          ? {
+              willDivert: grounded.willDivert,
+              decision: grounded.decision,
+              line: grounded.line,
+              newapiModel: contract.alias.value,
+            }
+          : { willDivert: true, decision: 'NEWAPI_IMAGE', line: 10, newapiModel: contract.alias.value },
         requiredEvidence: ['routing_decision', 'expectedSnapshot'],
         executionMode: 'plan_only',
         status: 'READY',
@@ -571,7 +589,9 @@ export function generateDynamicTestPlan(
         layer: 'routing',
         purpose: '非全量模型满足组织配置与能力并集命中 NEWAPI_ORG_GROUP 分流',
         input: { modelId: contract.modelId, userGroupIds: options.userGroupIds || [10] },
-        expected: { willDivert: true, decision: 'NEWAPI_ORG_GROUP', line: 10 },
+        expected: grounded
+          ? { willDivert: grounded.willDivert, decision: grounded.decision, line: grounded.line }
+          : { willDivert: true, decision: 'NEWAPI_ORG_GROUP', line: 10 },
         requiredEvidence: ['routing_decision', 'expectedSnapshot'],
         executionMode: 'plan_only',
         status: 'READY',

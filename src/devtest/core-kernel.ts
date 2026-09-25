@@ -14,6 +14,7 @@ import {
   type GatewayChannelConfig,
 } from './routing.js';
 import { BillingOracle } from './billing.js';
+import { predictDiversion, type DiversionPrediction } from './diversion-context.js';
 import type {
   ChangeScenario,
   DiscoveredModelContract,
@@ -211,6 +212,8 @@ export interface PlanKernelResult {
   };
   domainPlan?: DomainExecutionPlan;
   disambiguation?: TargetDisambiguationResult;
+  /** 分流预测（接地/临时假设）：接地=按真实 line=10 路由规则算，provisional=无规则的场景假设。 */
+  diversionPrediction?: DiversionPrediction;
   canonicalSpec?: CanonicalTestSpec;
 }
 
@@ -493,7 +496,28 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
   }
 
   const gwVerdict = RoutingOracle.evaluateGatewayRouting(targetGroup, targetModel, expectedPoints, channels);
-  const testPlan = generateDynamicTestPlan(contract, options, mainVerdict, gwVerdict, expectedPoints);
+  // 分流预测接地（opt-in）：提供 line=10 路由规则时，用资格引擎按真实规则预测分流；否则 provisional。
+  const diversionPrediction = predictDiversion({
+    mediaType,
+    modelId,
+    alias: contract.alias.value,
+    isGlobalModel: contract.isGlobal.value,
+    resolution:
+      options.resolution || contract.supportedResolutions.value[0] || (contract.mediaType === 'video' ? '720p' : '1k'),
+    aspect: options.aspectRatio,
+    routeMode: options.routeMode,
+    routeRules: options.routeRules,
+    groupRules: options.groupRules,
+    routeGroup: options.routeGroup,
+  });
+  const testPlan = generateDynamicTestPlan(
+    contract,
+    options,
+    mainVerdict,
+    gwVerdict,
+    expectedPoints,
+    diversionPrediction,
+  );
 
   const domainPlan = generateDomainExecutionPlan({
     modelId,
@@ -754,6 +778,7 @@ export async function plan(options: PlanKernelOptions): Promise<PlanKernelResult
     testerActionSummary: testPlan.testerActionSummary,
     domainPlan,
     disambiguation,
+    diversionPrediction,
     canonicalSpec,
   };
 }
