@@ -68,12 +68,12 @@ export function getNestedValue(obj: unknown, path: string): unknown {
   }
   // 点路径遍历
   const parts = path.split('.');
-  let current: any = obj;
+  let current: unknown = obj;
   for (const part of parts) {
     if (current === null || current === undefined || typeof current !== 'object') {
       return undefined;
     }
-    current = current[part];
+    current = (current as Record<string, unknown>)[part];
   }
   return current;
 }
@@ -608,9 +608,9 @@ export function evaluateCanonicalVerdict(
       } else if (
         d.key.includes('PRICING') ||
         (d.key === 'BILLING_LEDGER:TASK_RECORDS' &&
-          ((spec.inputs as any)?.pricingDetermined === false ||
-            (spec.metadata as any)?.allowPassPricing === false ||
-            (spec.inputs as any)?.pricingAllowPass === false))
+          ((spec.inputs as Record<string, unknown>)?.pricingDetermined === false ||
+            (spec.metadata as Record<string, unknown>)?.allowPassPricing === false ||
+            (spec.inputs as Record<string, unknown>)?.pricingAllowPass === false))
       ) {
         addBlocker({ code: 'PRICING_UNVERIFIED', evidenceKey: d.key, message: '刊例定价未核准或未确定单价' });
       } else if (d.key.includes('TASK_STATUS')) {
@@ -638,9 +638,9 @@ export function evaluateCanonicalVerdict(
       addBlocker({ code: 'GATEWAY_CHANNEL_BLOCKED', evidenceKey: key, message: '网关渠道证据未确认通过' });
     } else if (
       key === 'BILLING_LEDGER:TASK_RECORDS' &&
-      ((spec.inputs as any)?.pricingDetermined === false ||
-        (spec.metadata as any)?.allowPassPricing === false ||
-        (spec.inputs as any)?.pricingAllowPass === false)
+      ((spec.inputs as Record<string, unknown>)?.pricingDetermined === false ||
+        (spec.metadata as Record<string, unknown>)?.allowPassPricing === false ||
+        (spec.inputs as Record<string, unknown>)?.pricingAllowPass === false)
     ) {
       addBlocker({ code: 'PRICING_UNVERIFIED', evidenceKey: key, message: '刊例定价未核准或未确定单价' });
     }

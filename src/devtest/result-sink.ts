@@ -278,22 +278,23 @@ export class NdjsonResultSink implements ResultSink<ExportableVerdictRecord> {
 
   private sanitizeRecord(record: Readonly<ExportableVerdictRecord>): Record<string, unknown> {
     const raw = JSON.parse(JSON.stringify(record));
-    const mask = (obj: any) => {
+    const mask = (obj: unknown): void => {
       if (!obj || typeof obj !== 'object') return;
       if (Array.isArray(obj)) {
         for (const item of obj) mask(item);
         return;
       }
-      if (typeof obj.key === 'string' && typeof obj.value === 'string') {
-        if (/token|secret|password|credential|authorization|auth/i.test(obj.key)) {
-          obj.value = '***REDACTED***';
+      const rec = obj as Record<string, unknown>;
+      if (typeof rec.key === 'string' && typeof rec.value === 'string') {
+        if (/token|secret|password|credential|authorization|auth/i.test(rec.key)) {
+          rec.value = '***REDACTED***';
         }
       }
-      for (const k of Object.keys(obj)) {
-        if (/token|secret|password|credential|authorization|auth/i.test(k) && typeof obj[k] === 'string') {
-          obj[k] = '***REDACTED***';
-        } else if (typeof obj[k] === 'object') {
-          mask(obj[k]);
+      for (const k of Object.keys(rec)) {
+        if (/token|secret|password|credential|authorization|auth/i.test(k) && typeof rec[k] === 'string') {
+          rec[k] = '***REDACTED***';
+        } else if (typeof rec[k] === 'object') {
+          mask(rec[k]);
         }
       }
     };

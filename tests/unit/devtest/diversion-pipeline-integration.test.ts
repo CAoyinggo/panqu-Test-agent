@@ -345,11 +345,7 @@ describe('dbActualDiverted 媒体感知（图片 extra.newapi_image 必须计入
     } as unknown as DatabaseRawCollection;
   }
 
-  async function routingFactsFor(
-    mediaType: 'video' | 'image',
-    extra: Record<string, unknown>,
-    line?: number,
-  ) {
+  async function routingFactsFor(mediaType: 'video' | 'image', extra: Record<string, unknown>, line?: number) {
     const options = {
       taskId: 700,
       modelId: mediaType === 'image' ? 1201 : 78,
@@ -392,5 +388,177 @@ describe('dbActualDiverted 媒体感知（图片 extra.newapi_image 必须计入
   it('守卫: 视频路径不受影响 — extra.diversion=10 → true；extra.diversion=0 → false', async () => {
     expect((await routingFactsFor('video', { diversion: 10 }, 10)).actualDivertedFromDb).toBe(true);
     expect((await routingFactsFor('video', { diversion: 0 })).actualDivertedFromDb).toBe(false);
+  });
+});
+
+// ── #1 图片分流网关证据「采集」端到端（离线，形状取自真实只读取证 character#4519）──────────
+// 只读取证真源(2026-09-26)确认：图片分流(newapi_image=1,line=10)在 pq_newapi_task_log 有两类落库——
+//   (a) 正渠道履约: channel_id>0（如 Pan-IE#5/gpt-image-2、Pan-GE#26/gemini-3-pro-image，SUCCESS）；
+//   (b) image-sync: channel_id=0/provider=image-sync（无正上游渠道）。
+// 网关采集器媒体无关：给到 (a) 的网关日志即构造可信只读快照(provenance=API_READONLY_COLLECTOR)并要求+核验
+// 网关渠道；(b) 无正渠道则不强制（避免无证据地把图片分流恒判 UNVERIFIED）。以下用真实形状离线锁死两路径。
+describe('图片分流网关证据端到端（采集器媒体无关 · 真实 character#4519 形状）', () => {
+  // 真实正渠道分流图片任务：pq_aivideo_character(extra.newapi_image=1) + volc.line=10 + pq_newapi_task_log。
+  function imageDivertDb(newapiLog: Record<string, unknown> | undefined): DatabaseRawCollection {
+    return {
+      status: 'VERIFIED',
+      taskId: '4519',
+      recordsFound: {
+        pq_aivideo_character: {
+          id: 4519,
+          task_status: 2,
+          extra: JSON.stringify({
+            newapi_image: 1,
+            selmodelsId: 57,
+            selmodelsName: 'Pan Image 2 低价版',
+            newapi_model: 'pan-image-2',
+            serviceline: 'k',
+            resolution: '1K',
+          }),
+        },
+        pq_volcengine_ai_task: {
+          id: 18316,
+          source_id: 4519,
+          line: 10,
+          status: 3,
+          extra: JSON.stringify({ newapi_log_id: 999 }),
+        },
+        ...(newapiLog ? { pq_newapi_task_log: newapiLog } : {}),
+      },
+    } as unknown as DatabaseRawCollection;
+  }
+  async function facts(db: DatabaseRawCollection) {
+    const options = {
+      taskId: 4519,
+      modelId: 57,
+      mediaType: 'image' as const,
+      terminalStatus: 'SUCCESS' as const,
+      dbRawCollection: db,
+    };
+    const c = await resolveVerifyContext(options);
+    const cx = {
+      ...c,
+      contract: {
+        ...c.contract,
+        routing: { ...c.contract.routing, value: { ...c.contract.routing.value, willDivert: true } },
+      },
+    };
+    return (await collectTaskEvidence(cx, options as never)).routingFacts;
+  }
+
+  it('(a) 正渠道 channel_id=5/Pan-IE/gpt-image-2/SUCCESS → 网关渠道要求且核验通过(SOURCE_REAL_GATEWAY)', async () => {
+    const rf = await facts(
+      imageDivertDb({
+        id: 999,
+        channel_id: 5,
+        provider_code: 'Pan-IE',
+        upstream_model_name: 'gpt-image-2',
+        status: 'SUCCESS',
+        newapi_group: '',
+      }),
+    );
+    expect(rf.actualDivertedFromDb).toBe(true);
+    expect(rf.isGatewayChannelRequired).toBe(true); // 图片 + 存在可信快照 → 媒体无关地要求核验
+    expect(rf.isGatewayChannelVerified).toBe(true);
+    expect(rf.hasRealGatewaySnapshot).toBe(true);
+    expect(rf.gatewayChannelEvidence).toBe('SOURCE_REAL_GATEWAY');
+    expect(rf.gatewaySnapshotSource).toBe('DB_NEWAPI_TASK_LOG');
+    expect(rf.routingPredictionMismatch).toBeUndefined();
+  });
+
+  it('(b) image-sync channel_id=0 → 仍判真实分流(true)，但无正渠道快照即不强制网关渠道（诚实边界）', async () => {
+    const rf = await facts(
+      imageDivertDb({
+        id: 999,
+        channel_id: 0,
+        provider_code: 'image-sync',
+        upstream_model_name: '',
+        status: 'SUCCESS',
+      }),
+    );
+    expect(rf.actualDivertedFromDb).toBe(true); // newapi_image=1 / line=10 仍判真实分流
+    expect(rf.isGatewayChannelRequired).toBe(false); // channel_id=0 → 快照 undefined → 不无证据地强制
+    expect(rf.gatewaySnapshotSource).toBeUndefined();
+    expect(rf.routingPredictionMismatch).toBeUndefined(); // 未直连，不误报 mismatch
+  });
+
+  it('无网关日志(仅 newapi_image=1) → 分流检测 true；图片无快照时不强制网关渠道', async () => {
+    const rf = await facts(imageDivertDb(undefined));
+    expect(rf.actualDivertedFromDb).toBe(true);
+    expect(rf.isGatewayChannelRequired).toBe(false);
+  });
+});
+
+// ── #2 FP-005 证伪：真实任务 239541 计费口径正确（净扣 120 == 刊例 120），非超扣 ──────────────
+// 只读取证真源(2026-09-26)：pq_aivideo_new.model_id=15(seedance-2.0)、720p、4s；pq_score_log 单条
+// type=2 score=120、无退款；网关 line=10/channel_id=4/databao/doubao-seedance-2.0/SUCCESS。
+// 目录解析器 seedance-2.0@720p=30/s ×4s=120 → netDeducted(120)==expected(120) → 计费 PASS、overCharged=false。
+// report-template.md 的「预期45/净扣120/超扣75」为示例占位数字，绝非 239541 真实事实——本用例锁死证伪，防再污染。
+describe('FP-005 证伪：真实 239541 计费正确(120==120)，verify() 不得误判超扣', () => {
+  const db239541: DatabaseRawCollection = {
+    status: 'VERIFIED',
+    taskId: '239541',
+    recordsFound: {
+      pq_aivideo_new: {
+        id: 239541,
+        task_status: 2,
+        status: 1,
+        extra: JSON.stringify({
+          selmodelsId: '15',
+          selmodelsName: 'seedance-2.0',
+          video_duration: '4',
+          video_resolution: '720p',
+          diversion: 10,
+          points: 120,
+          deduct_points: 120,
+          newapi_model: 'seedance-2.0',
+          newapi_group: 'default',
+        }),
+      },
+      pq_volcengine_ai_task: {
+        id: 18316,
+        source_id: 239541,
+        line: 10,
+        status: 3,
+        extra: JSON.stringify({ newapi_log_id: 895 }),
+      },
+      pq_newapi_task_log: {
+        id: 895,
+        channel_id: 4,
+        provider_code: 'databao',
+        upstream_model_name: 'doubao-seedance-2.0',
+        status: 'SUCCESS',
+        newapi_group: 'default',
+      },
+      pq_score_log: [
+        {
+          id: 20310,
+          userid: 345,
+          task_id: 18316,
+          source_id: 239541,
+          score: 120,
+          type: 2,
+          remark: '',
+          createtime: '2026-09-24 15:39:11',
+        },
+      ],
+    },
+  } as unknown as DatabaseRawCollection;
+
+  it('verify(model 15/720p/4s + 真实 239541 DB) → expected=120, net=120, billing PASS, overCharged=false, 非 FAIL', async () => {
+    const result = await verify({
+      taskId: 239541,
+      modelId: 15,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      terminalStatus: 'SUCCESS',
+      dbRawCollection: db239541,
+    });
+    expect(result.evidence.billing.expectedPoints).toBe(120); // 目录 30/s ×4s，绝非示例中的 45
+    expect(result.evidence.billing.netDeductedPoints).toBe(120);
+    expect(result.evidence.billing.status).toBe('PASS');
+    expect(result.billing?.overCharged).toBe(false);
+    expect(result.verdict).not.toBe('FAIL'); // 无幻影超扣 → 计费不制造假 FAIL
   });
 });
