@@ -26,6 +26,21 @@ describe('classifyDbForensics (区分工具链/连通性 vs 记录缺失)', () =
   it('NO_RECORD_FOUND → RECORD_ABSENT', () => {
     expect(classifyDbForensics({ status: 'UNVERIFIED', reason: 'NO_RECORD_FOUND' }).category).toBe('RECORD_ABSENT');
   });
+  it('DB_CONNECT_FAILED → TOOLCHAIN_OR_CONNECTIVITY（连接失败绝不误标记录缺失）[R1]', () => {
+    const c = classifyDbForensics({ status: 'UNVERIFIED', reason: 'DB_CONNECT_FAILED', error: 'tunnel timeout' });
+    expect(c.category).toBe('TOOLCHAIN_OR_CONNECTIVITY');
+    expect(c.category).not.toBe('RECORD_ABSENT');
+  });
+  it('CONFIG_READ_FAILED → TOOLCHAIN_OR_CONNECTIVITY [R1]', () => {
+    expect(
+      classifyDbForensics({ status: 'UNVERIFIED', reason: 'CONFIG_READ_FAILED', error: 'bad json' }).category,
+    ).toBe('TOOLCHAIN_OR_CONNECTIVITY');
+  });
+  it('有 error 但 reason 缺失(旧脚本行为) → TOOLCHAIN_OR_CONNECTIVITY（回归防护：连接失败绝不误标 RECORD_ABSENT）[R1]', () => {
+    const c = classifyDbForensics({ status: 'UNVERIFIED', error: 'Connection refused', recordsFound: {} });
+    expect(c.category).toBe('TOOLCHAIN_OR_CONNECTIVITY');
+    expect(c.category).not.toBe('RECORD_ABSENT');
+  });
   it('UNVERIFIED 无 reason 无记录 → RECORD_ABSENT', () => {
     expect(classifyDbForensics({ status: 'UNVERIFIED', recordsFound: {} }).category).toBe('RECORD_ABSENT');
   });
@@ -85,5 +100,20 @@ describe('verify() 结果携带 dbForensicsCategory', () => {
       dbRawCollection: { status: 'UNVERIFIED', taskId: '701', reason: 'NO_RECORD_FOUND', recordsFound: {} } as never,
     });
     expect(result.dbForensicsCategory).toBe('RECORD_ABSENT');
+  });
+  it('UNVERIFIED + 连接异常(DB_CONNECT_FAILED/error) → TOOLCHAIN_OR_CONNECTIVITY（不误报记录缺失）[R1]', async () => {
+    const result = await verify({
+      taskId: 702,
+      modelId: 78,
+      mediaType: 'video',
+      dbRawCollection: {
+        status: 'UNVERIFIED',
+        taskId: '702',
+        reason: 'DB_CONNECT_FAILED',
+        error: 'ssh tunnel timeout',
+        recordsFound: {},
+      } as never,
+    });
+    expect(result.dbForensicsCategory).toBe('TOOLCHAIN_OR_CONNECTIVITY');
   });
 });

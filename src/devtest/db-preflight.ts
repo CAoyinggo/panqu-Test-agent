@@ -40,7 +40,7 @@ export interface DbForensicsClassification {
  * 关键：把「工具链/连通性失败」与「记录确实不存在」区分开，避免误报。
  */
 export function classifyDbForensics(
-  raw: { status?: string; reason?: string; recordsFound?: Record<string, unknown> } | null | undefined,
+  raw: { status?: string; reason?: string; error?: string; recordsFound?: Record<string, unknown> } | null | undefined,
 ): DbForensicsClassification {
   if (!raw) return { category: 'UNKNOWN', actionable: '无 DB 取证结果（未启用或未提供 dbRawCollection）' };
   const hasRecords = !!raw.recordsFound && Object.keys(raw.recordsFound).length > 0;
@@ -54,14 +54,32 @@ export function classifyDbForensics(
       actionable: '配置 db-credentials.json（host/user/password/database + ssh_tunnel）后重试',
     };
   }
-  if (['DB_QUERY_FAILED', 'CONFIG_READ_FAILED', 'SCRIPT_NOT_FOUND', 'MISSING_DEPENDENCY'].includes(reason)) {
+  if (
+    ['DB_CONNECT_FAILED', 'DB_QUERY_FAILED', 'CONFIG_READ_FAILED', 'SCRIPT_NOT_FOUND', 'MISSING_DEPENDENCY'].includes(
+      reason,
+    )
+  ) {
     return {
       category: 'TOOLCHAIN_OR_CONNECTIVITY',
       actionable:
         '跑 `checkDbToolchain`/test-db-connection.py 预检：核对 paramiko/sshtunnel/pymysql 版本与跳板机可达性——这不是「记录缺失」',
     };
   }
-  if (reason === 'NO_RECORD_FOUND' || (raw.status !== 'VERIFIED' && !hasRecords)) {
+  // 显式 NO_RECORD_FOUND 才是「已连库但查无记录」。
+  if (reason === 'NO_RECORD_FOUND') {
+    return { category: 'RECORD_ABSENT', actionable: '已连库但查无此任务记录：确认 taskId 与环境是否正确' };
+  }
+  // 存在 error 但 reason 未识别 = 取证路径抛异常（隧道/连接/查询失败），根本没连上；
+  // 绝不据此误标 RECORD_ABSENT（否则把"连不上"伪装成"查无此记录"）。
+  if (raw.error) {
+    return {
+      category: 'TOOLCHAIN_OR_CONNECTIVITY',
+      actionable:
+        '取证过程抛出异常（连接/隧道/查询失败）：跑 `checkDbToolchain`/test-db-connection.py 预检链路可达性——这不是「记录缺失」',
+    };
+  }
+  // 无 error、非 VERIFIED、且无记录：保守判为记录缺失。
+  if (raw.status !== 'VERIFIED' && !hasRecords) {
     return { category: 'RECORD_ABSENT', actionable: '已连库但查无此任务记录：确认 taskId 与环境是否正确' };
   }
   return { category: 'UNKNOWN', actionable: `未识别的取证状态 (status=${raw.status}, reason=${raw.reason})` };

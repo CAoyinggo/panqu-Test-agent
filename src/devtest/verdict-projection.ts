@@ -753,6 +753,16 @@ export async function computeFinalVerdict(args: ComputeFinalVerdictArgs): Promis
     });
 
   const reasons: string[] = [];
+  // R3: 计费期望来源如实标注。--expected-points 覆盖系统刊例推导值时，账务断言的可信度
+  // 完全取决于该操作者输入是否正确——显式记入 reasons，避免「自证其说」式误判被静默放过。
+  if (ctx.expectedPointsSource === 'OPERATOR_SUPPLIED') {
+    const sysVal = ctx.systemCalculatedExpectedPoints;
+    reasons.push(
+      sysVal !== expectedPoints
+        ? `[计费期望来源] expected-points=${expectedPoints} 由操作者显式提供 (OPERATOR_SUPPLIED)，已覆盖系统刊例推导值 ${sysVal} pt；二者不一致，账务断言正确性取决于该输入 [OPERATOR_SUPPLIED_EXPECTATION]`
+        : `[计费期望来源] expected-points=${expectedPoints} 由操作者显式提供 (OPERATOR_SUPPLIED)，与系统刊例推导值一致；账务断言正确性仍取决于该输入 [OPERATOR_SUPPLIED_EXPECTATION]`,
+    );
+  }
   if (taskEvidence.status === 'PROCESSING' || terminalStatus === 'PROCESSING') {
     reasons.push(
       `任务 #${taskId} 仍在排队/生成中 (进度: ${taskEvidence.progress ?? options.progress ?? 0}%)，未到达终态。`,

@@ -27,6 +27,10 @@ reports/
 eval-reports/
 security-reports/
 
+# Python (取证脚本编译缓存)
+__pycache__/
+*.pyc
+
 # Cache & Local State
 .cache/
 .trivycache/

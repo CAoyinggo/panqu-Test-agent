@@ -989,4 +989,99 @@ describe('Legacy Protocol Mappers (Phase 1.3 & 1.3B)', () => {
       expect(res.value!.some((e) => e.evidenceKey.includes('ROUTING_RECONCILIATION'))).toBe(false);
     });
   });
+
+  // ==========================================================================
+  // 8. 业务校验缺省 fail-closed
+  //    businessValidationStatus 未提供时: 信封判 UNVERIFIED(结论未决), 绝不缺省 PASS。
+  //    这是"伪绿态"防线的一环: 缺失的前置校验不得被静默当作通过。
+  // ==========================================================================
+  describe('8. 业务校验缺省 fail-closed (businessValidationStatus 未提供 → UNVERIFIED, 绝不默认 PASS)', () => {
+    const bvBase: CanonicalVerifyFacts = {
+      testId: 'v-bizval-default',
+      capturedAt: FIXED_TIME,
+      executionMode: 'real',
+      taskId: 240001,
+    };
+
+    it('8.1 未提供 businessValidationStatus → observationStatus=UNVERIFIED (fail-closed, 不冒充 PASS)', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts(bvBase);
+      expect(res.success).toBe(true);
+      const bv = res.value!.find((e) => e.evidenceKey === 'SERVER_API:BUSINESS_VALIDATION');
+      expect(bv).toBeDefined();
+      expect(bv?.observationStatus).toBe('UNVERIFIED');
+      expect(bv?.normalizedFields?.assertionMatched).toBe(false);
+    });
+
+    it('8.2 显式提供 businessValidationStatus=PASS → 如实透传 PASS', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({ ...bvBase, businessValidationStatus: 'PASS' });
+      expect(res.success).toBe(true);
+      const bv = res.value!.find((e) => e.evidenceKey === 'SERVER_API:BUSINESS_VALIDATION');
+      expect(bv?.observationStatus).toBe('PASS');
+      expect(bv?.normalizedFields?.assertionMatched).toBe(true);
+    });
+
+    it('8.3 显式提供 businessValidationStatus=FAIL → 如实透传 FAIL', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({ ...bvBase, businessValidationStatus: 'FAIL' });
+      const bv = res.value!.find((e) => e.evidenceKey === 'SERVER_API:BUSINESS_VALIDATION');
+      expect(bv?.observationStatus).toBe('FAIL');
+    });
+  });
+
+  // ==========================================================================
+  // 9. 账单 provenance 据实标注 (真实 billingSource → BILLING_LEDGER, 绝不误标 FIXTURE)
+  //    provenance 应反映真实数据来源(DB 物理落库 / AdminScore HTTP), 而非用 expectedChargeSource
+  //    (仅描述"预期分"来源)反推。误标真实证据为 FIXTURE 会自伤可信度(安全方向, 非伪绿态,
+  //    但同属不诚实标注), 此处收敛。
+  // ==========================================================================
+  describe('9. 账单 provenance 据实标注真实数据来源', () => {
+    const billBase: CanonicalVerifyFacts = {
+      testId: 'v-bill-prov',
+      capturedAt: FIXED_TIME,
+      executionMode: 'real',
+      taskId: 240010,
+    };
+    const KEY = 'BILLING_LEDGER:TASK_RECORDS';
+
+    it('9.1 真实 DB 物理落库 (source=DATABASE_PHYSICAL_RECORD) + 默认 DEVTEST_EXPECTATION → BILLING_LEDGER, 不得标 FIXTURE', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({
+        ...billBase,
+        billing: { status: 'PASS', passed: true, settledPoints: 120, source: 'DATABASE_PHYSICAL_RECORD:pq_score_log' },
+      });
+      const bill = res.value!.find((e) => e.evidenceKey === KEY);
+      expect(bill).toBeDefined();
+      expect(bill?.observationStatus).toBe('PASS');
+      expect(bill?.provenance).toContain('BILLING_LEDGER');
+      expect(bill?.provenance).toContain('DATABASE_PHYSICAL_RECORD:pq_score_log');
+      expect(bill?.provenance).not.toContain('FIXTURE');
+    });
+
+    it('9.2 真实 AdminScore HTTP 实测 (source=auth_adminscore) → BILLING_LEDGER (auth_adminscore)', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({
+        ...billBase,
+        billing: { status: 'PASS', passed: true, settledPoints: 120, source: 'auth_adminscore' },
+      });
+      const bill = res.value!.find((e) => e.evidenceKey === KEY);
+      expect(bill?.provenance).toBe('BILLING_LEDGER (auth_adminscore)');
+    });
+
+    it('9.3 无真实来源标识且非 REAL_BILLING_FACT → 回落 FIXTURE (billing_fixture), 不冒充真实账本', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({
+        ...billBase,
+        executionMode: 'fixture',
+        billing: { status: 'PASS', passed: true, settledPoints: 120, source: 'score_logs' },
+      });
+      const bill = res.value!.find((e) => e.evidenceKey === KEY);
+      expect(bill?.provenance).toBe('FIXTURE (billing_fixture)');
+    });
+
+    it('9.4 expectedChargeSource=REAL_BILLING_FACT 且无 source → 保持既有 BILLING_LEDGER (GET /auth/adminscore/index)', () => {
+      const res = buildCanonicalEvidenceFromVerifyFacts({
+        ...billBase,
+        expectedChargeSource: 'REAL_BILLING_FACT',
+        billing: { status: 'PASS', passed: true, settledPoints: 120 },
+      });
+      const bill = res.value!.find((e) => e.evidenceKey === KEY);
+      expect(bill?.provenance).toBe('BILLING_LEDGER (GET /auth/adminscore/index)');
+    });
+  });
 });

@@ -47,12 +47,24 @@ export const IMAGE_FRONTEND_TABLES = [
  * 解析"前台任务源表"物理记录（媒体无关消费入口）：视频=pq_aivideo_new；
  * 图片=goods/character/scene/fusion 取首个命中。返回记录及其真实表名（用于 provenance）。
  * 注意：各源表 id 空间独立且重叠，取证脚本已按 mediaType 只查正确表，故此处顺序回退即可。
+ *
+ * preferredTable（可选消歧）：图片四源表 id 空间重叠时，operator 指明真实源表（如 pq_aivideo_character）
+ * 后必须只落该表；**指定了却无该表记录时返回空（结论未决）而非静默回退到其他表**，
+ * 杜绝"顺序首命中"落到错误任务上的假命中（fail-closed）。
  */
-export function resolveFrontendTaskRecord(recordsFound: DatabaseRecordFound | undefined): {
+export function resolveFrontendTaskRecord(
+  recordsFound: DatabaseRecordFound | undefined,
+  preferredTable?: string,
+): {
   record?: Record<string, unknown>;
   table?: string;
 } {
   if (!recordsFound) return {};
+  if (preferredTable) {
+    const rec = recordsFound[preferredTable as keyof DatabaseRecordFound] as Record<string, unknown> | undefined;
+    // 明确指定源表：命中即用；未命中不回退到其他表（避免落到重叠 id 的错误任务）。
+    return rec ? { record: rec, table: preferredTable } : {};
+  }
   if (recordsFound.pq_aivideo_new) return { record: recordsFound.pq_aivideo_new, table: 'pq_aivideo_new' };
   for (const t of IMAGE_FRONTEND_TABLES) {
     const rec = recordsFound[t] as Record<string, unknown> | undefined;
@@ -79,6 +91,17 @@ export interface DatabaseQueryOptions {
   scriptPath?: string;
   timeoutMs?: number;
   mediaType?: 'video' | 'image';
+  /** 图片四源表消歧（opt-in）：id 空间重叠时指明真实源表, 脚本只查该表、解析只落该表。 */
+  imageSource?: ImageSource;
+}
+
+/** 图片生图四模式源表的短名（对应 pq_aivideo_<goods|character|scene|fusion>）。 */
+export type ImageSource = 'goods' | 'character' | 'scene' | 'fusion';
+export const IMAGE_SOURCE_VALUES: readonly ImageSource[] = ['goods', 'character', 'scene', 'fusion'] as const;
+
+/** 图片源表短名 → 物理表名（pq_aivideo_character 等）。用于消歧解析的 preferredTable。 */
+export function imageSourceToFrontendTable(src: ImageSource): string {
+  return `pq_aivideo_${src}`;
 }
 
 /**
@@ -190,6 +213,9 @@ export async function queryDatabasePhysicalFacts(
   if (options.mediaType) {
     args.push('--media-type', options.mediaType);
   }
+  if (options.imageSource) {
+    args.push('--image-source', options.imageSource);
+  }
 
   const timeoutMs = options.timeoutMs ?? 15000;
 
@@ -300,7 +326,12 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
       raw = rawCollection as DatabaseRawCollection;
     } else if (taskIdNum !== undefined) {
       const ctxMediaType = (context as { mediaType?: 'video' | 'image' }).mediaType;
-      raw = await queryDatabasePhysicalFacts({ taskId: taskIdNum, mediaType: ctxMediaType });
+      const ctxImageSource = (context as { imageSource?: ImageSource }).imageSource;
+      raw = await queryDatabasePhysicalFacts({
+        taskId: taskIdNum,
+        mediaType: ctxMediaType,
+        imageSource: ctxImageSource,
+      });
     } else {
       raw = {
         status: 'UNVERIFIED',
@@ -313,8 +344,14 @@ export class DatabaseEvidenceProducer implements EvidenceProducer {
     }
 
     const { recordsFound } = raw;
-    // 媒体无关地解析前台任务源表记录（视频=pq_aivideo_new；图片=goods/character/scene/fusion）
-    const { record: aivideoRec, table: frontendTable } = resolveFrontendTaskRecord(recordsFound);
+    // 媒体无关地解析前台任务源表记录（视频=pq_aivideo_new；图片=goods/character/scene/fusion）。
+    // 图片消歧（opt-in）：context.imageSource 指明真实源表时只落该表，规避重叠 id 误命中。
+    const ctxImageSource = (context as { imageSource?: ImageSource }).imageSource;
+    const preferredFrontendTable = ctxImageSource ? imageSourceToFrontendTable(ctxImageSource) : undefined;
+    const { record: aivideoRec, table: frontendTable } = resolveFrontendTaskRecord(
+      recordsFound,
+      preferredFrontendTable,
+    );
     const volcengineRec = recordsFound.pq_volcengine_ai_task;
     const scoreLogs = recordsFound.pq_score_log;
 

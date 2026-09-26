@@ -497,6 +497,23 @@ export function mapExecuteToCanonicalTestSpec(
 
   const taskKey = executionMode === 'REAL' ? 'SERVER_API:TASK_STATUS' : 'FIXTURE:TASK_STATUS';
 
+  // execOptions.contract 为 unknown（execOptions: Record<string, unknown>）；
+  // 用一个「宽松只读契约」局部类型收敛一次，替代散落的 `as any`：
+  // 行为等价（可选链缺字段照样得 undefined），但比 any 更类型安全、可静态检查字段名。
+  type LooseContract = {
+    defaultResolution?: string;
+    supportedResolutions?: { value?: string[] };
+    defaultDuration?: number;
+    supportedDurations?: { value?: number[] };
+    defaultAspectRatio?: string;
+    serviceline?: string;
+    flow?: string;
+    flowType?: string;
+    alias?: { value?: string };
+    pricing?: { customPoints?: { value?: number }; pointsPerSecond?: { value?: number } };
+  };
+  const looseContract = execOptions?.contract as LooseContract | undefined;
+
   return {
     testId,
     requirementId: resolvedReq.requirementId,
@@ -515,18 +532,18 @@ export function mapExecuteToCanonicalTestSpec(
       prompt: execOptions?.prompt,
       resolution:
         (execOptions?.resolution as string | undefined) ||
-        (execOptions?.contract as any)?.defaultResolution ||
-        (execOptions?.contract as any)?.supportedResolutions?.value?.[0],
+        looseContract?.defaultResolution ||
+        looseContract?.supportedResolutions?.value?.[0],
       duration:
         typeof execOptions?.duration === 'number'
           ? execOptions.duration
-          : typeof (execOptions?.contract as any)?.defaultDuration === 'number'
-            ? (execOptions?.contract as any).defaultDuration
-            : (execOptions?.contract as any)?.supportedDurations?.value?.[0],
-      aspectRatio: execOptions?.aspectRatio || (execOptions?.contract as any)?.defaultAspectRatio,
-      serviceline: execOptions?.serviceline || (execOptions?.contract as any)?.serviceline,
-      flow: execOptions?.flow || (execOptions?.contract as any)?.flow,
-      flowType: execOptions?.flowType || (execOptions?.contract as any)?.flowType,
+          : typeof looseContract?.defaultDuration === 'number'
+            ? looseContract.defaultDuration
+            : looseContract?.supportedDurations?.value?.[0],
+      aspectRatio: execOptions?.aspectRatio || looseContract?.defaultAspectRatio,
+      serviceline: execOptions?.serviceline || looseContract?.serviceline,
+      flow: execOptions?.flow || looseContract?.flow,
+      flowType: execOptions?.flowType || looseContract?.flowType,
       extraParams: execOptions?.extraParams,
       mode: execOptions?.mode,
     },
@@ -536,16 +553,16 @@ export function mapExecuteToCanonicalTestSpec(
     requiredEvidence: [taskKey],
     metadata: {
       action: 'execute',
-      alias: (execOptions?.alias as string | undefined) || (execOptions?.contract as any)?.alias?.value,
+      alias: (execOptions?.alias as string | undefined) || looseContract?.alias?.value,
       price: execOptions?.price as number | undefined,
       customPoints:
         typeof execOptions?.customPoints === 'number'
           ? execOptions.customPoints
-          : (execOptions?.contract as any)?.pricing?.customPoints?.value,
+          : looseContract?.pricing?.customPoints?.value,
       pointsPerSecond:
         typeof execOptions?.pointsPerSecond === 'number'
           ? execOptions.pointsPerSecond
-          : (execOptions?.contract as any)?.pricing?.pointsPerSecond?.value,
+          : looseContract?.pricing?.pointsPerSecond?.value,
       contract: execOptions?.contract,
       channelName: execOptions?.channelName,
       rawTarget: execOptions?.rawTarget,
@@ -1001,6 +1018,9 @@ export interface CanonicalVerifyFacts {
     preDeductedPoints?: number;
     expectedPoints?: number;
     hasViolations?: boolean;
+    // 真实账务数据来源标识 (billingSource): 'DATABASE_PHYSICAL_RECORD:pq_score_log' | 'auth_adminscore'
+    // | 'score_logs' | 'missing_logs' ... 用于据实标注 provenance, 而非用 expectedChargeSource 反推。
+    source?: string;
   };
   billingAudit?: 'AUDITED' | 'SKIPPED_NO_LOGS';
   expectedChargeSource?: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
@@ -1267,6 +1287,20 @@ export function buildCanonicalEvidenceFromVerifyFacts(
         ? facts.billing.settledPoints
         : (facts.billing?.netDeductedPoints ?? 0);
 
+    // provenance 据实标注真实数据来源(billingSource), 不再用 expectedChargeSource(仅描述"预期分"来源)反推:
+    // 真实 DB 物理落库 / AdminScore HTTP 实测 → BILLING_LEDGER(附具体来源); 否则回落既有语义。
+    // 关键: billing.passed 只可能由真实 scoreLogs 得出(无流水则 UNVERIFIED, fail-closed),
+    // 故真实来源绝不会被误标 FIXTURE, 也不存在 fixture 数据冒充真实计费 PASS 的通道。
+    const billingSrc = facts.billing?.source;
+    const isRealLedgerSource =
+      typeof billingSrc === 'string' &&
+      (billingSrc.startsWith('DATABASE_PHYSICAL_RECORD') || billingSrc === 'auth_adminscore');
+    const billingProvenance = isRealLedgerSource
+      ? `BILLING_LEDGER (${billingSrc})`
+      : facts.expectedChargeSource === 'REAL_BILLING_FACT'
+        ? 'BILLING_LEDGER (GET /auth/adminscore/index)'
+        : 'FIXTURE (billing_fixture)';
+
     envelopes.push({
       evidenceId: `${testId}-billing-1`,
       testId,
@@ -1289,10 +1323,7 @@ export function buildCanonicalEvidenceFromVerifyFacts(
         netChargeZero: facts.invariants?.netChargeZero,
         refundIdempotency: facts.invariants?.refundIdempotency,
       },
-      provenance:
-        facts.expectedChargeSource === 'REAL_BILLING_FACT'
-          ? 'BILLING_LEDGER (GET /auth/adminscore/index)'
-          : 'FIXTURE (billing_fixture)',
+      provenance: billingProvenance,
       confidence: isSkippedLogs ? 0.0 : 1.0,
       immutable: true,
       redacted: true,
@@ -1523,7 +1554,8 @@ export function buildCanonicalEvidenceFromVerifyFacts(
   });
 
   // 8. 领域业务校验事实证据 (Business Validation Evidence: 总是生成信封)
-  const bValStatus = facts.businessValidationStatus || 'PASS';
+  //    fail-closed: 调用方未显式给出校验结论时判 UNVERIFIED(结论未决), 绝不缺省 PASS 制造伪绿态。
+  const bValStatus = facts.businessValidationStatus ?? 'UNVERIFIED';
   envelopes.push({
     evidenceId: `${testId}-business-validation-1`,
     testId,
@@ -1694,6 +1726,7 @@ export function mapVerifyToCanonicalEvidence(
       ? {
           ...verifyResult.billing,
           status: verifyResult.evidence?.billing?.status,
+          source: verifyResult.evidence?.billing?.source,
         }
       : undefined,
     billingAudit: verifyResult.billingAudit,

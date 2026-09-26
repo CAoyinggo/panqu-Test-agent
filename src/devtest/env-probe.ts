@@ -1043,7 +1043,11 @@ export class EnvironmentProbe {
       }
     }
 
-    const ok = unreachable.length === 0 && authStatus !== 'EXPIRED';
+    // fail-closed: 实路径(真实探活)要求 authStatus === 'VALID' 才判 ok/HEALTHY。
+    // MISSING 与 EXPIRED 同属"无法鉴权"——旧逻辑 `!== 'EXPIRED'` 会把"根本没有会话"当作健康(伪绿态);
+    // 二者现在一视同仁 → DEGRADED。(离线 mock 路径 generateMockReport 维持宽松结构态,
+    //  缺鉴权交由 --enforce/R4 opt-in 严格门拦截, 以守住既有"默认零改变"契约。)
+    const ok = unreachable.length === 0 && authStatus === 'VALID';
     const status = unreachable.length > 0 ? 'BLOCKED' : ok ? 'HEALTHY' : 'DEGRADED';
 
     return {

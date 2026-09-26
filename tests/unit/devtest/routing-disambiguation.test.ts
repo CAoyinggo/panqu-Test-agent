@@ -1662,5 +1662,55 @@ describe('Routing Disambiguation & Gateway Channel Regression Tests', () => {
       expect(dflt?.environment).toBe('test');
       expect(Number.isNaN(Date.parse(dflt!.capturedAt))).toBe(false);
     });
+
+    // R7: 证明库内网关证据采集器是**媒体无关**的 —— 图片分流与视频分流走同一条
+    // pq_newapi_task_log 只读落库链，采集器不看 mediaType，图片同样能产出合格网关快照。
+    // 这是"图片网关证据端到端"锁死点的可离线闭环单元证明（真实图片分流全链验证仍需外部只读凭据+真实任务）。
+    it('R7: 图片分流的 pq_newapi_task_log 行 → 采集器同样产出合法只读快照（媒体无关，与视频同源）', () => {
+      const imageRow: Record<string, unknown> = {
+        id: 90211,
+        channel_id: 7,
+        provider_code: 'doubao-image',
+        upstream_model_name: 'doubao-seedream-3.0',
+        newapi_group: 'panqu_image',
+        newapi_task_id: 'img-task-def',
+        upstream_task_id: 'seedream-uvw',
+        status: 'SUCCESS',
+        fail_reason: '',
+      };
+      const snap = buildTrustedGatewaySnapshotFromNewapiTaskLog(imageRow);
+      expect(snap).toBeDefined();
+      // 与视频行完全相同的 provenance / 端点 / 采集器版本 → 证明采集逻辑不因媒体类型分叉
+      expect(snap?.provenance).toBe('API_READONLY_COLLECTOR');
+      expect(snap?.collectionStatus).toBe('SUCCESS');
+      expect(snap?.sourceEndpoint).toBe('/db/pq_newapi_task_log');
+      expect(snap?.collectorVersion).toBe('db-newapi-task-log-v1');
+      const ch = snap!.channels[0];
+      expect(ch.id).toBe(7);
+      expect(ch.name).toBe('doubao-image');
+      expect(ch.group).toBe('panqu_image');
+      expect(ch.models).toEqual(['doubao-seedream-3.0']);
+      expect(ch.sourceMode).toBe('SOURCE_REAL_GATEWAY');
+      // 关键: 图片采集快照必须同样能被可信快照校验器判为 valid，
+      // 从而在 evidence-collectors 的图片守卫 (mediaType==='image' && Boolean(snapshot)) 下清除 MANUAL_GATEWAY_CHANNEL_REQUIRED。
+      expect(validateTrustedGatewaySnapshot(snap).valid).toBe(true);
+    });
+
+    it('R7: 图片行网关明确失败 → collectionStatus=FAILED 且被校验器拒绝（图片同样 fail-closed，绝不伪造履约）', () => {
+      const imageFailRow: Record<string, unknown> = {
+        id: 90212,
+        channel_id: 7,
+        provider_code: 'doubao-image',
+        upstream_model_name: 'doubao-seedream-3.0',
+        newapi_group: 'panqu_image',
+        status: 'FAILED',
+        fail_reason: 'content policy blocked',
+      };
+      const snap = buildTrustedGatewaySnapshotFromNewapiTaskLog(imageFailRow);
+      expect(snap?.collectionStatus).toBe('FAILED');
+      const v = validateTrustedGatewaySnapshot(snap);
+      expect(v.valid).toBe(false);
+      expect(v.reason).toContain('COLLECTION_FAILED');
+    });
   });
 });

@@ -25,7 +25,9 @@ import {
   type VerifyKernelResult,
 } from '../src/devtest/core-kernel.js';
 import { PanquMediaExecutionAdapter, type ExecutionAdapter } from '../src/devtest/execution-ports.js';
+import { evaluateProbeEnforcement } from '../src/devtest/probe-enforcement.js';
 import { DEVTEST_VERSION } from '../src/devtest/version.js';
+import { IMAGE_SOURCE_VALUES, type ImageSource } from '../src/devtest/database-evidence-producer.js';
 
 export function resolveDefaultSessionFile(explicitPath?: string): string | undefined {
   if (explicitPath && existsSync(explicitPath)) return explicitPath;
@@ -82,9 +84,12 @@ ${c.bold}命令参数与示例:${c.reset}
 
   ${c.yellow}# 4. 产物验真与对账${c.reset}
   devtest verify --task 12345 --model 84 --media video [--channel 54] [--alias <name>] [--expected-points 28] [--json]
+  ${c.dim}# 图片任务四源表 id 重叠时，用 --image-source 精确命中真实源表（消歧，opt-in）${c.reset}
+  devtest verify --task 12345 --media image --image-source character [--json]
 
 ${c.bold}通用参数:${c.reset}
   --channel <id>  指定网关渠道 ID (如 54 为 TD_国际)，执行前进行对象消歧与承接关系校验
+  --image-source <t>  图片源表消歧: goods|character|scene|fusion (仅 --media image 生效)
   --json          以 JSON 格式输出纯结构化数据（便于脚本和智能体解析）
   --help, -h      显示帮助信息
   --version, -v   显示当前版本
@@ -461,8 +466,14 @@ export async function runDevTestCli(
 
         const result = await probe(probeOptions);
 
+        // R4: opt-in 强制门禁 —— 仅在 --enforce 时，用更严格的 fail-closed 规则
+        // 把「鉴权非 VALID / 候选渠道为 0 / 端点不可达」等降级信号收敛为阻断。
+        // 默认关闭，完全不改变既有 probe 退出码与语义（纯诊断增量）。
+        const enforce = options.enforce === true;
+        const enforcement = evaluateProbeEnforcement(result, enforce);
+
         if (isJson) {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({ ...result, enforcement }, null, 2));
         } else {
           console.log(`\n${c.bold}${c.cyan}======================================================${c.reset}`);
           console.log(
@@ -493,9 +504,19 @@ export async function runDevTestCli(
             console.log(`\n${c.bold}建议与指引:${c.reset}`);
             for (const r of result.recommendations) console.log(`  👉 ${r}`);
           }
+          if (enforcement.enforced) {
+            if (enforcement.blocked) {
+              console.log(`\n${c.bold}${c.red}🔒 强制门禁 (--enforce): BLOCKED${c.reset}`);
+              for (const v of enforcement.violations) console.log(`  ${c.red}✖${c.reset} ${v}`);
+            } else {
+              console.log(
+                `\n${c.bold}${c.green}🔒 强制门禁 (--enforce): PASS${c.reset} ${c.dim}(鉴权/渠道/端点均满足硬性要求)${c.reset}`,
+              );
+            }
+          }
           console.log(`${c.bold}${c.cyan}======================================================${c.reset}\n`);
         }
-        return result.ok ? 0 : 1;
+        return result.ok && !enforcement.blocked ? 0 : 1;
       }
 
       case 'plan': {
@@ -714,6 +735,24 @@ export async function runDevTestCli(
             : options['db-verify'] !== undefined
               ? Boolean(options['db-verify'])
               : undefined;
+
+        // R2: 与 verify 命令对称的 DB 取证门禁。真实执行会产生真实数据变更，其下游验真
+        // 不得跳过数据库只读物理核验。--wait 会自动把 taskId 灌入 verify（见下方 verify 调用），
+        // 因此 real + wait + 跳过 DB 取证 == 绕过 verify 命令的强制门禁 → 硬拦截；
+        // real 且未 --wait 时本命令不做验真，给出强告警提醒后续手动 verify 不可跳过。
+        const wantsSkipDbVerify =
+          options['no-db-verify'] === true || options['db-verify'] === false || options['db-verify'] === 'false';
+        if (wantsSkipDbVerify && mode === 'real') {
+          if (wait) {
+            console.error(
+              `${c.red}❌ 门禁拦截: --mode real --wait 的自动闭环验真强制数据库只读取证，禁止通过 --no-db-verify / --db-verify false 绕过物理核验门禁${c.reset}`,
+            );
+            return 1;
+          }
+          console.error(
+            `${c.yellow}⚠️  警告: 已请求跳过 DB 取证，但真实执行产生的数据变更必须经数据库只读核验；本命令未 --wait 不做验真，后续请运行 devtest verify（其强制 DB 取证，不可 --no-db-verify）。${c.reset}`,
+          );
+        }
         const dbCredPath =
           (options['db-cred'] as string) ||
           (options['db-cred-path'] as string) ||
@@ -871,8 +910,33 @@ export async function runDevTestCli(
             ? (((options.media ?? options['media-type'] ?? options.mediaType) as string).toLowerCase() as
                 'video' | 'image')
             : undefined;
+        // 图片四源表 id 空间重叠消歧（opt-in）：--image-source goods|character|scene|fusion。
+        // fail-closed：给了非法值直接拒绝，绝不静默忽略后落到「四表顺序首命中」的错误任务。
+        const rawImageSource = (options['image-source'] ?? options.imageSource) as string | undefined;
+        let imageSource: ImageSource | undefined;
+        if (rawImageSource !== undefined) {
+          const normalized = String(rawImageSource).toLowerCase();
+          if (!IMAGE_SOURCE_VALUES.includes(normalized as ImageSource)) {
+            console.error(
+              `${c.red}错误: --image-source 取值非法 "${rawImageSource}"，必须为 ${IMAGE_SOURCE_VALUES.join('|')} 之一${c.reset}`,
+            );
+            return 1;
+          }
+          imageSource = normalized as ImageSource;
+          if (mediaType !== 'image') {
+            console.error(
+              `${c.yellow}⚠️  提示: --image-source 仅对 --media image 生效（视频任务落 pq_aivideo_new）；当前 media=${mediaType ?? 'video(默认)'}，该参数将被忽略。${c.reset}`,
+            );
+          }
+        }
         const expectedPoints =
           typeof options['expected-points'] === 'number' ? (options['expected-points'] as number) : undefined;
+        if (expectedPoints !== undefined) {
+          // R3: --expected-points 覆盖系统刊例推导值，账务断言可信度取决于该输入正确性。
+          console.error(
+            `${c.yellow}⚠️  提示: --expected-points=${expectedPoints} 为操作者显式提供，将覆盖系统刊例推导的期望积分；账务断言可信度取决于该输入是否正确 (OPERATOR_SUPPLIED)。${c.reset}`,
+          );
+        }
         const terminalStatus = (options['terminal-status'] as 'SUCCESS' | 'FAILED' | 'TIMEOUT') || undefined;
         const resolution = options.resolution as string | undefined;
         const duration = typeof options.duration === 'number' ? options.duration : undefined;
@@ -941,6 +1005,7 @@ export async function runDevTestCli(
           taskId,
           modelId,
           mediaType,
+          imageSource,
           expectedPoints,
           terminalStatus,
           resolution,

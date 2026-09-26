@@ -16,6 +16,9 @@ import {
   mapDbScoreLogsToScoreLogEntries,
   resolveDatabaseCredentialsPath,
   queryDatabasePhysicalFacts,
+  resolveFrontendTaskRecord,
+  imageSourceToFrontendTable,
+  IMAGE_SOURCE_VALUES,
   sanitizeErrorMessage,
   type DatabaseRawCollection,
   type DbScriptRunner,
@@ -363,5 +366,75 @@ describe('queryDatabasePhysicalFacts (注入假执行器 · 100% 离线覆盖 I/
     expect(res.status).toBe('UNVERIFIED');
     expect(res.reason).toBe('DB_QUERY_FAILED');
     expect(res.error || '').not.toContain('SuperSecret123');
+  });
+
+  it('imageSource 指定 → 透传 --image-source 参数给取证脚本', async () => {
+    let capturedArgs: string[] = [];
+    const captureRunner: DbScriptRunner = async (_file, args) => {
+      capturedArgs = args;
+      return { stdout: JSON.stringify({ status: 'UNVERIFIED', recordsFound: {} }) };
+    };
+    await queryDatabasePhysicalFacts(
+      { taskId: 5, credPath: existingPath, scriptPath: existingPath, mediaType: 'image', imageSource: 'character' },
+      captureRunner,
+    );
+    const idx = capturedArgs.indexOf('--image-source');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(capturedArgs[idx + 1]).toBe('character');
+  });
+
+  it('未指定 imageSource → 绝不注入 --image-source（默认零改变）', async () => {
+    let capturedArgs: string[] = [];
+    const captureRunner: DbScriptRunner = async (_file, args) => {
+      capturedArgs = args;
+      return { stdout: JSON.stringify({ status: 'UNVERIFIED', recordsFound: {} }) };
+    };
+    await queryDatabasePhysicalFacts(
+      { taskId: 5, credPath: existingPath, scriptPath: existingPath, mediaType: 'image' },
+      captureRunner,
+    );
+    expect(capturedArgs).not.toContain('--image-source');
+  });
+});
+
+describe('resolveFrontendTaskRecord (图片四源表 id 重叠消歧 · 纯函数, 零 I/O)', () => {
+  it('imageSourceToFrontendTable / IMAGE_SOURCE_VALUES 契约稳定', () => {
+    expect(IMAGE_SOURCE_VALUES).toEqual(['goods', 'character', 'scene', 'fusion']);
+    expect(imageSourceToFrontendTable('character')).toBe('pq_aivideo_character');
+    expect(imageSourceToFrontendTable('fusion')).toBe('pq_aivideo_fusion');
+  });
+
+  it('无 preferredTable：视频源表 pq_aivideo_new 优先命中', () => {
+    const rf = { pq_aivideo_new: { id: 1 }, pq_aivideo_goods: { id: 1 } } as DatabaseRawCollection['recordsFound'];
+    expect(resolveFrontendTaskRecord(rf)).toEqual({ record: { id: 1 }, table: 'pq_aivideo_new' });
+  });
+
+  it('无 preferredTable：仅图片表时按 goods→character→scene→fusion 顺序首命中(既有行为)', () => {
+    const rf = {
+      pq_aivideo_character: { id: 7 },
+      pq_aivideo_scene: { id: 7 },
+    } as DatabaseRawCollection['recordsFound'];
+    expect(resolveFrontendTaskRecord(rf)).toEqual({ record: { id: 7 }, table: 'pq_aivideo_character' });
+  });
+
+  it('指定 preferredTable：id 重叠时精确命中该表, 绝不落到顺序首命中的错误任务', () => {
+    // goods 与 character 同 id=7 但属不同任务；operator 指明 character 必须落 character。
+    const rf = {
+      pq_aivideo_goods: { id: 7, task_status: 2 },
+      pq_aivideo_character: { id: 7, task_status: 3 },
+    } as DatabaseRawCollection['recordsFound'];
+    const out = resolveFrontendTaskRecord(rf, 'pq_aivideo_character');
+    expect(out.table).toBe('pq_aivideo_character');
+    expect((out.record as Record<string, unknown>).task_status).toBe(3);
+  });
+
+  it('指定 preferredTable 但该表无记录 → 返回空(fail-closed), 不静默回退其他表', () => {
+    const rf = { pq_aivideo_goods: { id: 7 } } as DatabaseRawCollection['recordsFound'];
+    expect(resolveFrontendTaskRecord(rf, 'pq_aivideo_character')).toEqual({});
+  });
+
+  it('recordsFound 缺失 → 返回空对象', () => {
+    expect(resolveFrontendTaskRecord(undefined)).toEqual({});
+    expect(resolveFrontendTaskRecord(undefined, 'pq_aivideo_goods')).toEqual({});
   });
 });

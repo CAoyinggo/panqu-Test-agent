@@ -689,6 +689,69 @@ describe('DevTest 本地 CLI 运行入口 (devtest-cli)', () => {
     expect(json.isSimulated).toBe(true);
   });
 
+  it('R2: execute --mode real --wait --no-db-verify → 与 verify 对称的门禁硬拦截 (code 1)，不触达真实提交', async () => {
+    const errs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((...a) => {
+      errs.push(a.join(' '));
+    });
+    const code = await runDevTestCli(
+      ['execute', '--model', '84', '--media', 'video', '--mode', 'real', '--wait', '--no-db-verify', '--alias', 'x'],
+      { executionAdapter: new TestOfflineExecutionAdapter() },
+    );
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    expect(code).toBe(1);
+    expect(errs.join('\n')).toContain('门禁拦截');
+  });
+
+  it('R2: execute --mode mock --no-db-verify → 不触发门禁（mock 无真实数据变更），正常仿真派发', async () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a) => {
+      logs.push(a.join(' '));
+    });
+    const code = await runDevTestCli(
+      ['execute', '--model', '84', '--media', 'video', '--mode', 'mock', '--no-db-verify', '--json'],
+      { executionAdapter: new TestOfflineExecutionAdapter() },
+    );
+    logSpy.mockRestore();
+    expect(code).toBe(0);
+    const json = JSON.parse(logs.join(''));
+    expect(json.mode).toBe('mock');
+  });
+
+  it('R4: probe --mock --enforce → 抓住 "HEALTHY 但鉴权 MISSING" 的伪绿态并硬阻断 (code 1)', async () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a) => {
+      logs.push(a.join(' '));
+    });
+    const code = await runDevTestCli(['probe', '--mock', '--enforce', '--json']);
+    logSpy.mockRestore();
+    const json = JSON.parse(logs.join(''));
+    expect(json.enforcement.enforced).toBe(true);
+    // 离线测试环境无 session → 探活 status=HEALTHY 但 auth=MISSING（既有 ok 逻辑不看鉴权）；
+    // --enforce 必须把这种 "看着绿、真实派发必失败" 的伪绿态收敛为阻断。
+    expect(json.status).toBe('HEALTHY');
+    expect(json.auth.status).toBe('MISSING');
+    expect(json.enforcement.blocked).toBe(true);
+    expect(json.enforcement.violations.join('\n')).toMatch(/鉴权/);
+    expect(code).toBe(1);
+  });
+
+  it('R4: probe --mock --json（无 --enforce）→ enforcement.enforced=false 且退出码不变 (0)，默认行为零改变', async () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...a) => {
+      logs.push(a.join(' '));
+    });
+    const code = await runDevTestCli(['probe', '--mock', '--json']);
+    logSpy.mockRestore();
+    const json = JSON.parse(logs.join(''));
+    expect(json.enforcement.enforced).toBe(false);
+    expect(json.enforcement.blocked).toBe(false);
+    // 同样是 auth=MISSING 的 HEALTHY 态，不加 --enforce 时退出码保持既有语义 → 证明默认零改变
+    expect(code).toBe(0);
+  });
+
   it('TD #54 CLI execute 缺少 alias：返回非 0 且 status=BLOCKED、包含 BLOCKED_MISSING_INPUT', async () => {
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {

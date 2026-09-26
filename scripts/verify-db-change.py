@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--cred-path", type=str, help="凭据文件路径 (可选)")
     parser.add_argument("--media-type", type=str, default="video", choices=["video", "image"],
                         help="媒体类型：video=前台表 pq_aivideo_new；image=生图源表 goods/character/scene/fusion")
+    parser.add_argument("--image-source", type=str, default=None,
+                        choices=["goods", "character", "scene", "fusion"],
+                        help="图片源表消歧(可选)：只查 pq_aivideo_<该值>，用于四源表 id 空间重叠时精确命中真实任务")
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出结果")
     args = parser.parse_args()
 
@@ -38,8 +41,16 @@ def main():
         print(json.dumps(res, ensure_ascii=False) if args.json else res["message"])
         sys.exit(1)
 
-    with open(cred_path, "r", encoding="utf-8") as f:
-        cred = json.load(f)
+    try:
+        with open(cred_path, "r", encoding="utf-8") as f:
+            cred = json.load(f)
+    except Exception as e:
+        # 凭据文件损坏/不可读 = 配置问题，显式归类 CONFIG_READ_FAILED，
+        # 供上层 classifyDbForensics 判为 TOOLCHAIN_OR_CONNECTIVITY（绝非"记录缺失"）。
+        res = {"status": "UNVERIFIED", "reason": "CONFIG_READ_FAILED", "error": str(e),
+               "message": "读取 db-credentials.json 失败"}
+        print(json.dumps(res, ensure_ascii=False) if args.json else f"❌ 凭据读取失败: {e}")
+        sys.exit(1)
 
     try:
         import pymysql
@@ -89,8 +100,12 @@ def main():
                     #    各表 id 空间独立且重叠，故按 media-type 只查对应表，避免跨表误命中。
                     v_rec = None
                     if args.media_type == "image":
-                        # 表名来自固定白名单（非用户输入），tid 仍走参数化占位符
-                        for tbl in ("pq_aivideo_goods", "pq_aivideo_character", "pq_aivideo_scene", "pq_aivideo_fusion"):
+                        # 表名来自固定白名单（非用户输入），tid 仍走参数化占位符。
+                        # --image-source 指定时只查该表（消歧：四源表 id 空间重叠, 同一 id 可能命中多表的不同任务）。
+                        image_tables = (("pq_aivideo_" + args.image_source,) if args.image_source
+                                        else ("pq_aivideo_goods", "pq_aivideo_character",
+                                              "pq_aivideo_scene", "pq_aivideo_fusion"))
+                        for tbl in image_tables:
                             try:
                                 cur.execute("SELECT * FROM {} WHERE id = %s LIMIT 1;".format(tbl), (tid,))
                             except Exception:
@@ -180,6 +195,10 @@ def main():
     except Exception as e:
         evidence["status"] = "UNVERIFIED"
         evidence["error"] = str(e)
+        # SSH 隧道 / pymysql 连接 / 查询阶段抛错 = 根本没连上或查询失败，绝非"库里没这条记录"。
+        # 显式置 reason，供上层 classifyDbForensics 归类为 TOOLCHAIN_OR_CONNECTIVITY，
+        # 避免把"连接失败"误标成 RECORD_ABSENT（诚实性硬化）。
+        evidence["reason"] = "DB_CONNECT_FAILED"
 
     if args.json:
         # 处理 datetime 序列化

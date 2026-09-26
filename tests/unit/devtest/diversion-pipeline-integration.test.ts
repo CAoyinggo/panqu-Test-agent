@@ -562,3 +562,59 @@ describe('FP-005 证伪：真实 239541 计费正确(120==120)，verify() 不得
     expect(result.verdict).not.toBe('FAIL'); // 无幻影超扣 → 计费不制造假 FAIL
   });
 });
+
+describe('R3: 计费期望来源 provenance (--expected-points → OPERATOR_SUPPLIED)', () => {
+  it('未提供 expected-points → DEVTEST_CALCULATED，expectedPoints=系统刊例推导值', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 16,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      pricingAuthority: { model: 'Seedance2.0', resolution: '720p' },
+    });
+    expect(c.expectedPointsSource).toBe('DEVTEST_CALCULATED');
+    expect(c.systemCalculatedExpectedPoints).toBe(120);
+    expect(c.expectedPoints).toBe(120);
+  });
+
+  it('提供 expected-points → OPERATOR_SUPPLIED，覆盖推导值但保留 systemCalculated 供对账', async () => {
+    const c = await resolveVerifyContext({
+      taskId: 1,
+      modelId: 16,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      pricingAuthority: { model: 'Seedance2.0', resolution: '720p' },
+      expectedPoints: 999,
+    });
+    expect(c.expectedPointsSource).toBe('OPERATOR_SUPPLIED');
+    expect(c.expectedPoints).toBe(999);
+    expect(c.systemCalculatedExpectedPoints).toBe(120);
+  });
+
+  it('verify(): expected-points 覆盖 → reasons 出现 OPERATOR_SUPPLIED_EXPECTATION 来源标记', async () => {
+    const result = await verify({
+      taskId: 500,
+      modelId: 78,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      expectedPoints: 999,
+      dbRawCollection: dbWith({ diversion: 0 }),
+    });
+    expect(result.reasons.some((r) => r.includes('OPERATOR_SUPPLIED_EXPECTATION'))).toBe(true);
+  });
+
+  it('verify(): 未提供 expected-points → reasons 不含 OPERATOR_SUPPLIED_EXPECTATION', async () => {
+    const result = await verify({
+      taskId: 500,
+      modelId: 78,
+      mediaType: 'video',
+      duration: 4,
+      resolution: '720p',
+      dbRawCollection: dbWith({ diversion: 0 }),
+    });
+    expect(result.reasons.some((r) => r.includes('OPERATOR_SUPPLIED_EXPECTATION'))).toBe(false);
+  });
+});

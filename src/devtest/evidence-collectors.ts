@@ -38,6 +38,7 @@ import {
   mapDbScoreLogsToScoreLogEntries,
   resolveDatabaseCredentialsPath,
   resolveFrontendTaskRecord,
+  imageSourceToFrontendTable,
   type DatabaseRawCollection,
 } from './database-evidence-producer.js';
 
@@ -141,6 +142,9 @@ export async function collectTaskEvidence(
   options: VerifyKernelOptions,
 ): Promise<TaskEvidenceResult> {
   const { taskId, session, sessionLoadError, mediaType, modelId } = ctx;
+  // 图片四源表 id 空间重叠消歧（opt-in）：operator 经 --image-source 指明真实源表时，
+  // DB 取证只查该表、解析只落该表；未指定则维持既有「四表顺序首命中」行为（默认零改变）。
+  const preferredFrontendTable = options.imageSource ? imageSourceToFrontendTable(options.imageSource) : undefined;
   let artifactBuffer = options.assetBuffer ?? options.artifactBuffer;
   let artifactTailBuffer = options.tailBuffer;
   let probeDurationMs: number | undefined;
@@ -323,6 +327,8 @@ export async function collectTaskEvidence(
           taskId,
           credPath,
           mediaType: ctx.mediaType,
+          // 图片四源表消歧（opt-in）：指定后脚本只查 pq_aivideo_<imageSource>，规避重叠 id 误命中。
+          imageSource: options.imageSource,
           // DB 取证使用独立短超时，绝不随 --poll-timeout 放大；库不可达时快速 fail-closed 为 UNVERIFIED，避免真实流程长时间卡死
           timeoutMs: options.dbTimeoutMs ?? 10000,
         });
@@ -345,11 +351,10 @@ export async function collectTaskEvidence(
   // 从物理落库记录派生"实际是否经 NewAPI 网关分流"与真实上游渠道履约事实。
   // 真源链路: pq_aivideo_new.extra.diversion=10 → pq_volcengine_ai_task.line=10
   //          → pq_newapi_task_log{channel_id,provider_code,upstream_model_name,status}
-  const dbNewapiLogRow = dbRawCollection?.recordsFound?.pq_newapi_task_log as
-    | Record<string, unknown>
-    | undefined;
+  const dbNewapiLogRow = dbRawCollection?.recordsFound?.pq_newapi_task_log as Record<string, unknown> | undefined;
   const dbVolcRow = dbRawCollection?.recordsFound?.pq_volcengine_ai_task as Record<string, unknown> | undefined;
-  const dbFrontExtraRaw = resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra as unknown;
+  const dbFrontExtraRaw = resolveFrontendTaskRecord(dbRawCollection?.recordsFound, preferredFrontendTable).record
+    ?.extra as unknown;
   let dbFrontDiversion: number | undefined;
   // 图片分流落库标记与视频不同：视频为 extra.diversion=10，图片为 extra.newapi_image=1
   // (Goods.php:1078/1211/1340；canonical 参见 diversion-context.ts)。此处媒体无关地双读两枚标记，
@@ -388,7 +393,10 @@ export async function collectTaskEvidence(
       });
 
   // 若通过数据库物理落库获得了明确终态且此前未知，自动提升终态事实
-  const { record: frontendDbRec, table: frontendDbTable } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
+  const { record: frontendDbRec, table: frontendDbTable } = resolveFrontendTaskRecord(
+    dbRawCollection?.recordsFound,
+    preferredFrontendTable,
+  );
   if (frontendDbRec) {
     const dbTask = frontendDbRec;
     const dbTaskStatus = Number(dbTask.task_status);
@@ -726,8 +734,11 @@ export async function collectTaskEvidence(
   if (runtimeDetails?.extra && runtimeDetails.extraSource === 'HTTP_API:getEditData') {
     extraObj = runtimeDetails.extra;
     extraProvenance = 'HTTP_API:getEditData';
-  } else if (resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra) {
-    const { record: dbFrontendRec, table: dbFrontendTable } = resolveFrontendTaskRecord(dbRawCollection?.recordsFound);
+  } else if (resolveFrontendTaskRecord(dbRawCollection?.recordsFound, preferredFrontendTable).record?.extra) {
+    const { record: dbFrontendRec, table: dbFrontendTable } = resolveFrontendTaskRecord(
+      dbRawCollection?.recordsFound,
+      preferredFrontendTable,
+    );
     const rawDbExtra = dbFrontendRec!.extra;
     try {
       extraObj = typeof rawDbExtra === 'string' ? JSON.parse(rawDbExtra) : (rawDbExtra as Record<string, unknown>);

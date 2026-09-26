@@ -44,6 +44,7 @@ import {
   mapDbScoreLogsToScoreLogEntries,
   resolveDatabaseCredentialsPath,
   type DatabaseRawCollection,
+  type ImageSource,
 } from './database-evidence-producer.js';
 import { loadDiversionPricing, resolveListPrice, type PricingScope } from './diversion-pricing-authority.js';
 import { type DiversionEligibilityInput } from './diversion-eligibility-producer.js';
@@ -127,6 +128,9 @@ export interface VerifyKernelOptions {
   taskId: number;
   modelId?: number;
   mediaType?: 'video' | 'image';
+  /** 图片四源表 id 空间重叠消歧（opt-in）：指明真实源表(goods/character/scene/fusion)后,
+   *  DB 取证只查 pq_aivideo_<该值>、解析只落该表；未指定维持既有四表顺序首命中(默认零改变)。 */
+  imageSource?: ImageSource;
   scoreLogs?: ScoreLogEntry[];
   expectedPoints?: number;
   assetBuffer?: Buffer;
@@ -320,6 +324,10 @@ export interface VerifyContext {
   resolution?: string;
   expectedPoints: number;
   expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION';
+  /** R3: 计费期望来源。OPERATOR_SUPPLIED = 由 --expected-points 显式注入并覆盖了系统刊例推导值。 */
+  expectedPointsSource: 'OPERATOR_SUPPLIED' | 'DEVTEST_CALCULATED';
+  /** R3: 系统刊例推导的期望积分（无论是否被操作者覆盖都保留，用于来源对账与降权提示）。 */
+  systemCalculatedExpectedPoints: number;
   session: PanquSession | null;
   sessionLoadError?: string;
   executionMode: 'real' | 'offline' | 'fixture';
@@ -485,16 +493,20 @@ export async function resolveVerifyContext(
   const resolution =
     options.resolution ?? contract.supportedResolutions.value[0] ?? (mediaType === 'video' ? '720p' : '1k');
 
-  const expectedPoints =
-    options.expectedPoints ??
-    BillingOracle.calculateExpectedPoints({
-      mediaType,
-      modelId,
-      duration,
-      resolution,
-      customPoints: customPoints ?? contract.pricing.customPoints?.value,
-      pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
-    });
+  // R3: 始终计算系统刊例推导值并保留 provenance。--expected-points（options.expectedPoints）
+  // 会覆盖系统推导值；覆盖时标记 OPERATOR_SUPPLIED，供裁决层如实呈现「账务期望来源」，
+  // 避免操作者填错期望值导致账务断言「自证其说」而无人察觉。
+  const systemCalculatedExpectedPoints = BillingOracle.calculateExpectedPoints({
+    mediaType,
+    modelId,
+    duration,
+    resolution,
+    customPoints: customPoints ?? contract.pricing.customPoints?.value,
+    pointsPerSecond: pointsPerSecond ?? contract.pricing.pointsPerSecond?.value,
+  });
+  const expectedPointsSource: 'OPERATOR_SUPPLIED' | 'DEVTEST_CALCULATED' =
+    options.expectedPoints !== undefined ? 'OPERATOR_SUPPLIED' : 'DEVTEST_CALCULATED';
+  const expectedPoints = options.expectedPoints ?? systemCalculatedExpectedPoints;
   const expectedChargeSource: 'REAL_BILLING_FACT' | 'DEVTEST_EXPECTATION' =
     options.expectedChargeSource ?? 'DEVTEST_EXPECTATION';
 
@@ -569,6 +581,8 @@ export async function resolveVerifyContext(
     resolution,
     expectedPoints,
     expectedChargeSource,
+    expectedPointsSource,
+    systemCalculatedExpectedPoints,
     session,
     sessionLoadError,
     executionMode,
