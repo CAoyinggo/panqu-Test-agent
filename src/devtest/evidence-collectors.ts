@@ -351,6 +351,10 @@ export async function collectTaskEvidence(
   const dbVolcRow = dbRawCollection?.recordsFound?.pq_volcengine_ai_task as Record<string, unknown> | undefined;
   const dbFrontExtraRaw = resolveFrontendTaskRecord(dbRawCollection?.recordsFound).record?.extra as unknown;
   let dbFrontDiversion: number | undefined;
+  // 图片分流落库标记与视频不同：视频为 extra.diversion=10，图片为 extra.newapi_image=1
+  // (Goods.php:1078/1211/1340；canonical 参见 diversion-context.ts)。此处媒体无关地双读两枚标记，
+  // 与本文件 isDbExtraVerified 处 (extra.diversion || extra.newapi_image) 保持一致，避免漏采图片分流信号。
+  let dbFrontNewapiImage: number | undefined;
   if (dbFrontExtraRaw !== undefined) {
     try {
       const ex =
@@ -358,6 +362,7 @@ export async function collectTaskEvidence(
           ? (JSON.parse(dbFrontExtraRaw) as Record<string, unknown>)
           : (dbFrontExtraRaw as Record<string, unknown>);
       if (ex && ex.diversion !== undefined) dbFrontDiversion = Number(ex.diversion);
+      if (ex && ex.newapi_image !== undefined) dbFrontNewapiImage = Number(ex.newapi_image);
     } catch {
       /* extra 非法 JSON 时忽略, 不臆造分流值 */
     }
@@ -365,12 +370,13 @@ export async function collectTaskEvidence(
   const dbBackendLine = dbVolcRow?.line !== undefined ? Number(dbVolcRow.line) : undefined;
   const dbGatewayChannelId =
     dbNewapiLogRow && Number(dbNewapiLogRow.channel_id) > 0 ? Number(dbNewapiLogRow.channel_id) : undefined;
-  // 三选一为真即视为"真实经网关分流": 网关日志有真实渠道 / 后台线=10(NewAPI) / 前台 extra.diversion=10。
-  // 三者皆有明确直连信号 (line=1 且 diversion=0 且无网关日志) 则判定"实际直连"。
+  // 任一为真即视为"真实经网关分流": 网关日志有真实渠道 / 后台线=10(NewAPI) / 前台视频标记 extra.diversion=10
+  //   / 前台图片标记 extra.newapi_image=1。
+  // 存在明确直连信号 (line≠10 或 diversion=0 或 newapi_image=0, 且无网关日志) 则判定"实际直连"。
   const dbActualDiverted: boolean | undefined =
-    dbGatewayChannelId !== undefined || dbBackendLine === 10 || dbFrontDiversion === 10
+    dbGatewayChannelId !== undefined || dbBackendLine === 10 || dbFrontDiversion === 10 || dbFrontNewapiImage === 1
       ? true
-      : dbBackendLine !== undefined || dbFrontDiversion !== undefined
+      : dbBackendLine !== undefined || dbFrontDiversion !== undefined || dbFrontNewapiImage !== undefined
         ? false
         : undefined;
 
@@ -812,7 +818,9 @@ export async function collectTaskEvidence(
     ctx.contract.routing.value.willDivert && dbActualDiverted === false
       ? `契约预测走 NewAPI 网关分流 (willDivert=true)，但真实落库为直连 (extra.diversion=${
           dbFrontDiversion ?? 'n/a'
-        }, line=${dbBackendLine ?? 'n/a'}, 无网关调用日志)——分流实际未发生 [ROUTING_PREDICTION_MISMATCH]`
+        }, extra.newapi_image=${dbFrontNewapiImage ?? 'n/a'}, line=${
+          dbBackendLine ?? 'n/a'
+        }, 无网关调用日志)——分流实际未发生 [ROUTING_PREDICTION_MISMATCH]`
       : undefined;
 
   // 网关渠道核验要求：视频分流一律要求；图片分流**在提供了网关快照时**也要求（校验机器是媒体无关的）。

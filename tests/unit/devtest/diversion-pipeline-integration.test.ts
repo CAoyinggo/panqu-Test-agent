@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { verify } from '../../../src/devtest/core-kernel.js';
 import { resolveVerifyContext, buildAutoDiversionEligibility } from '../../../src/devtest/verify-pipeline.js';
+import { collectTaskEvidence } from '../../../src/devtest/evidence-collectors.js';
 import type { DiversionConfigRawCollection } from '../../../src/devtest/diversion-config-reader.js';
 import {
   DiversionEligibilityProducer,
@@ -326,5 +327,70 @@ describe('absettingPricing 支持分辨率名（自动转码，无需整数码�
       },
     });
     expect(c.customPoints).toBe(15);
+  });
+});
+
+// ── dbActualDiverted 媒体感知回归：图片分流标记 extra.newapi_image ──────────────
+// 落库分流标记按媒体分：视频=extra.diversion=10，图片=extra.newapi_image=1。
+// evidence-collectors.ts 的 dbActualDiverted 曾只读 extra.diversion，对图片分流漏采，
+// 会把「真实经网关分流的图片」误判为直连(false)，进而误报 ROUTING_PREDICTION_MISMATCH
+// 并放松 isGatewayChannelRequired（假 PASS 向量）。以下用例锁死修复，且守卫视频路径不变。
+describe('dbActualDiverted 媒体感知（图片 extra.newapi_image 必须计入真实分流判定）', () => {
+  // 图片前台源表用 pq_aivideo_goods（视频才用 pq_aivideo_new）；不放 pq_aivideo_new 以命中图片解析分支。
+  function imageDbWith(extra: Record<string, unknown>): DatabaseRawCollection {
+    return {
+      status: 'VERIFIED',
+      taskId: '700',
+      recordsFound: { pq_aivideo_goods: { id: 700, task_status: 2, extra: JSON.stringify(extra) } },
+    } as unknown as DatabaseRawCollection;
+  }
+
+  async function routingFactsFor(
+    mediaType: 'video' | 'image',
+    extra: Record<string, unknown>,
+    line?: number,
+  ) {
+    const options = {
+      taskId: 700,
+      modelId: mediaType === 'image' ? 1201 : 78,
+      mediaType,
+      terminalStatus: 'SUCCESS' as const,
+      dbRawCollection: mediaType === 'image' ? imageDbWith(extra) : dbWith(extra, line),
+    };
+    const c = await resolveVerifyContext(options);
+    // 契约预测分流（willDivert=true）：只有预测分流时 routingPredictionMismatch 才可能触发，
+    // 用 spread 重建避免原地改动可能被冻结的嵌套对象。
+    const ctx = {
+      ...c,
+      contract: {
+        ...c.contract,
+        routing: { ...c.contract.routing, value: { ...c.contract.routing.value, willDivert: true } },
+      },
+    };
+    const res = await collectTaskEvidence(ctx, options as never);
+    return res.routingFacts;
+  }
+
+  it('回归(核心漏洞): 图片 extra={diversion:0, newapi_image:1} → 判真实分流(true)，不再误报 ROUTING_PREDICTION_MISMATCH', async () => {
+    const rf = await routingFactsFor('image', { diversion: 0, newapi_image: 1 });
+    expect(rf.actualDivertedFromDb).toBe(true);
+    expect(rf.routingPredictionMismatch).toBeUndefined();
+  });
+
+  it('图片 extra={newapi_image:1}（仅图片标记，无 diversion/无 line）→ 真实分流 true', async () => {
+    const rf = await routingFactsFor('image', { newapi_image: 1 });
+    expect(rf.actualDivertedFromDb).toBe(true);
+  });
+
+  it('图片直连 extra={newapi_image:0} → 明确直连 false；预测分流时如实标注 mismatch（含 newapi_image=0）', async () => {
+    const rf = await routingFactsFor('image', { newapi_image: 0 });
+    expect(rf.actualDivertedFromDb).toBe(false);
+    expect(rf.routingPredictionMismatch).toBeDefined();
+    expect(rf.routingPredictionMismatch).toContain('newapi_image=0');
+  });
+
+  it('守卫: 视频路径不受影响 — extra.diversion=10 → true；extra.diversion=0 → false', async () => {
+    expect((await routingFactsFor('video', { diversion: 10 }, 10)).actualDivertedFromDb).toBe(true);
+    expect((await routingFactsFor('video', { diversion: 0 })).actualDivertedFromDb).toBe(false);
   });
 });
